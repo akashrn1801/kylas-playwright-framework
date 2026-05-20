@@ -1,0 +1,37 @@
+{
+  "name": "kylas-playwright-framework",
+  "version": "1.0.0",
+  "description": "Enterprise-grade Playwright automation framework for Kylas Sales CRM",
+  "author": "akashrn1801",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:ui": "playwright test --project=ui",
+    "test:api": "playwright test --project=api",
+    "report": "playwright show-report",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write .",
+    "clean": "rm -rf test-results playwright-report allure-results"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "testing",
+    "kylas",
+    "crm",
+    "enterprise"
+  ],
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}
