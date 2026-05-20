@@ -51,6 +51,13 @@ export default defineConfig({
 
     // Headless mode from config
     headless: config.browser.headless,
+
+
+      launchOptions: {
+    args: ['--start-maximized'],
+  },
+  viewport: null, // 👈 Also add this — tells Playwright not to override the window size
+
   },
 
   // Test projects (browsers)

@@ -50,7 +50,7 @@ export const config = {
   },
 
   execution: {
-    workers: Number(process.env.WORKERS) || 4,
+    workers: Number(process.env.WORKERS) || 1,
     retryCount: Number(process.env.RETRY_COUNT) || 1,
   },
 };
