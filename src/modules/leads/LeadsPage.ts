@@ -184,16 +184,15 @@ private readonly editIconButton = () =>
   }
 
   // ─── Search & Open ────────────────────────────────────────
-
 async searchAndOpenLead(firstName: string): Promise<void> {
   logger.info(`Searching for lead: ${firstName}`);
   await this.navigateTo('https://app.kylas.io/sales/leads/list');
   await this.waitForUrl(/leads\/list/);
-  await this.page.waitForLoadState('networkidle');
+  await this.page.waitForTimeout(2000);
 
   await this.fill(this.searchInput(), firstName, 'search input');
-  await this.click(this.page.locator('#Ic_Search'), 'search icon'); // 👈 fix here too
-  await this.page.waitForLoadState('networkidle');
+  await this.click(this.page.locator('#Ic_Search'), 'search icon');
+  await this.page.waitForTimeout(3000); // 👈 fixed wait
 
   const nameCell = this.page.locator('.rt-tr-group .clip-text')
     .filter({ hasText: firstName })
