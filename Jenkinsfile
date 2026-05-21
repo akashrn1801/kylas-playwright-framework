@@ -8,15 +8,23 @@ pipeline {
 
     environment {
         CI       = 'true'
-        ENV      = 'prod'
+        ENV      = "${params.ENV ?: 'prod'}"
         HEADLESS = 'true'
+    }
+
+    parameters {
+        choice(
+            name: 'ENV',
+            choices: ['prod', 'qa', 'staging'],
+            description: 'Environment to run tests against'
+        )
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out code...'
+                echo "Checking out code..."
                 checkout scm
             }
         }
@@ -31,10 +39,9 @@ pipeline {
 
         stage('Setup Environment') {
             steps {
-                echo 'Setting up environment...'
+                echo "Setting up environment for: ${ENV}"
                 withCredentials([file(credentialsId: 'kylas-env-file', variable: 'ENV_FILE')]) {
                     sh '''
-                        chmod 777 .
                         cp $ENV_FILE .env
                         chmod 644 .env
                     '''
@@ -44,9 +51,9 @@ pipeline {
 
         stage('Run Playwright Tests') {
             steps {
-                echo 'Running Playwright tests...'
+                echo "Running Playwright tests on ${ENV}..."
                 sh 'rm -rf src/auth/storageStates/'
-                sh 'npx playwright test --project=chromium --workers=1 tests/ui'
+                sh "ENV=${ENV} npx playwright test --project=chromium --workers=2 tests/ui"
             }
         }
 
