@@ -16,7 +16,7 @@ export class AuthManager {
   private browser: Browser;
   private storageStatePath = path.join(__dirname, 'storageStates');
 
-  // Per-role mutex: prevents two workers writing same file simultaneously
+  // Prevent parallel login race conditions
   private static loginInProgress: Map<string, Promise<void>> = new Map();
 
   constructor(browser: Browser) {
@@ -38,7 +38,6 @@ export class AuthManager {
     return config.users[role];
   }
 
-  // Validate appUrl is not empty — fail fast with clear message
   private validateAppUrl(): void {
     if (!config.appUrl || config.appUrl.trim() === '') {
       throw new Error(
@@ -51,77 +50,173 @@ export class AuthManager {
   private async dismissPopupIfPresent(page: Page): Promise<void> {
     try {
       const doItLater = page.getByText("I'll do it later");
-      const isVisible = await doItLater.isVisible({ timeout: 5000 });
+
+      const isVisible = await doItLater.isVisible({
+        timeout: 5000,
+      });
+
       if (isVisible) {
         logger.info('Marketplace popup detected — dismissing');
+
         await doItLater.click();
-        await doItLater.waitFor({ state: 'hidden', timeout: 5000 });
-        logger.info('Popup dismissed');
+
+        await doItLater.waitFor({
+          state: 'hidden',
+          timeout: 5000,
+        });
+
+        logger.info('Marketplace popup dismissed');
+
         return;
       }
     } catch {
-      logger.debug('No marketplace popup — continuing');
+      logger.debug('No marketplace popup found');
     }
+
     try {
       const dismissButton = page.locator('#cancel[data-dismiss="modal"]');
-      const isVisible = await dismissButton.isVisible({ timeout: 3000 });
+
+      const isVisible = await dismissButton.isVisible({
+        timeout: 3000,
+      });
+
       if (isVisible) {
         logger.info('Modal popup detected — dismissing');
+
         await dismissButton.click();
-        await dismissButton.waitFor({ state: 'hidden', timeout: 5000 });
-        logger.info('Popup dismissed');
+
+        await dismissButton.waitFor({
+          state: 'hidden',
+          timeout: 5000,
+        });
+
+        logger.info('Modal popup dismissed');
       }
     } catch {
-      logger.debug('No popup found — continuing');
+      logger.debug('No modal popup found');
+    }
+  }
+
+  private async navigateToLoginPage(page: Page): Promise<void> {
+    let navigationSuccess = false;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        logger.info(
+          `Navigation attempt ${attempt} to: ${config.appUrl}`
+        );
+
+        await page.goto(config.appUrl, {
+          waitUntil: 'commit',
+          timeout: 60000,
+        });
+
+        logger.info('Application responded successfully');
+
+        await page.waitForLoadState('domcontentloaded', {
+          timeout: 30000,
+        });
+
+        logger.info('DOM content loaded');
+
+        await page.locator('#input_email').waitFor({
+          state: 'visible',
+          timeout: 60000,
+        });
+
+        logger.info('Login page loaded successfully');
+
+        navigationSuccess = true;
+        break;
+      } catch (error) {
+        lastError = error;
+
+        logger.warn(
+          `Navigation attempt ${attempt} failed: ${String(error)}`
+        );
+
+        logger.warn(`Current URL: ${page.url()}`);
+
+        try {
+          const title = await page.title();
+          logger.warn(`Current page title: ${title}`);
+        } catch {
+          logger.warn('Could not retrieve page title');
+        }
+
+        if (attempt < 3) {
+          logger.info('Retrying navigation in 3 seconds...');
+          await page.waitForTimeout(3000);
+        }
+      }
+    }
+
+    if (!navigationSuccess) {
+      throw new Error(
+        `Failed to load login page after 3 attempts. ` +
+        `Last error: ${String(lastError)}`
+      );
     }
   }
 
   private async isSessionValid(stateFile: string): Promise<boolean> {
     let context: BrowserContext | null = null;
-    try {
-      context = await this.browser.newContext({ storageState: stateFile });
-      const page = await context.newPage();
 
-      // Use a SHORT timeout — we just want to know if session is valid
-      // not wait forever. If it times out, session is invalid.
-      await page.goto(config.appUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000,  // 15s max — not 60s
+    try {
+      context = await this.browser.newContext({
+        storageState: stateFile,
       });
 
-      // Wait for redirect to settle — max 5s
+      const page = await context.newPage();
+
+      logger.info('Validating existing session');
+
+      await page.goto(config.appUrl, {
+        waitUntil: 'commit',
+        timeout: 30000,
+      });
+
       try {
-        await page.waitForURL(/sales\//, { timeout: 5000 });
+        await page.waitForURL(/sales\//, {
+          timeout: 10000,
+        });
       } catch {
-        // didn't land on sales/ — session invalid
+        logger.warn('Did not redirect to sales page');
         return false;
       }
 
       const currentUrl = page.url();
-      logger.info(`Session check URL: ${currentUrl}`);
 
-      // Valid if landed anywhere under /sales/ — not just /sales/home
+      logger.info(`Session validation URL: ${currentUrl}`);
+
       return currentUrl.includes('/sales/');
     } catch (error) {
-      logger.warn(`Session validation error: ${error}`);
+      logger.warn(`Session validation failed: ${String(error)}`);
       return false;
     } finally {
-      if (context) await context.close();
+      if (context) {
+        await context.close();
+      }
     }
   }
 
   async loginAndSaveState(role: UserRole): Promise<void> {
-    // If another worker is already logging in for this role, wait for it
-    // instead of running a parallel login that causes a file write race
     const existing = AuthManager.loginInProgress.get(role);
+
     if (existing) {
-      logger.info(`Login already in progress for ${role}, waiting...`);
+      logger.info(
+        `Login already in progress for role: ${role}. Waiting...`
+      );
+
       await existing;
       return;
     }
 
     const loginPromise = this._doLogin(role);
+
     AuthManager.loginInProgress.set(role, loginPromise);
+
     try {
       await loginPromise;
     } finally {
@@ -131,7 +226,9 @@ export class AuthManager {
 
   private async _doLogin(role: UserRole): Promise<void> {
     this.validateAppUrl();
-    logger.info(`Logging in as: ${role}`);
+
+    logger.info(`Logging in as role: ${role}`);
+
     const credentials = this.getCredentials(role);
 
     if (!credentials.email || !credentials.password) {
@@ -141,50 +238,77 @@ export class AuthManager {
       );
     }
 
-    const context = await this.browser.newContext();
+    const context = await this.browser.newContext({
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+    });
+
     const page = await context.newPage();
 
     try {
-      // Navigate with explicit timeout
-      await page.goto(config.appUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
+      await this.navigateToLoginPage(page);
 
-      // Wait for React to hydrate — wait for actual element, not blind sleep
-      await page.locator('#input_email').waitFor({
-        state: 'visible',
-        timeout: 30000,
-      });
+      logger.info('Entering user credentials');
 
-      // Clear then fill — more reliable than pressSequentially in CI
-      await page.locator('#input_email').clear();
-      await page.locator('#input_email').fill(credentials.email);
+      const emailInput = page.locator('#input_email');
 
-      await page.locator('#input_password').clear();
-      await page.locator('#input_password').fill(credentials.password);
+      await emailInput.clear();
+      await emailInput.fill(credentials.email);
 
-      // Wait for button enabled state
+      const passwordInput = page.locator('#input_password');
+
+      await passwordInput.clear();
+      await passwordInput.fill(credentials.password);
+
+      logger.info('Waiting for login button');
+
       await page.locator('#loginBtn:not([disabled])').waitFor({
         state: 'visible',
-        timeout: 10000,
+        timeout: 15000,
       });
+
+      logger.info('Clicking login button');
+
       await page.locator('#loginBtn').click();
 
-      // Wait for successful navigation to sales area
+      logger.info('Waiting for successful login redirect');
+
       await page.waitForURL(/sales\//, {
-        timeout: config.timeouts.navigation,
+        timeout: 90000,
       });
 
       logger.info(`Login successful for role: ${role}`);
 
-      // Dismiss any post-login popups
       await this.dismissPopupIfPresent(page);
 
-      // Save storage state
       const stateFile = this.getStorageStateFile(role);
-      await context.storageState({ path: stateFile });
-      logger.info(`Storage state saved for role: ${role}`);
+
+      await context.storageState({
+        path: stateFile,
+      });
+
+      logger.info(`Storage state saved: ${stateFile}`);
+    } catch (error) {
+      logger.error(`Login failed for role ${role}: ${String(error)}`);
+
+      try {
+        const screenshotPath = `test-results/login-failure-${role}.png`;
+
+        await page.screenshot({
+          path: screenshotPath,
+          fullPage: true,
+        });
+
+        logger.error(
+          `Failure screenshot captured: ${screenshotPath}`
+        );
+      } catch {
+        logger.error('Failed to capture screenshot');
+      }
+
+      throw error;
     } finally {
       await context.close();
     }
@@ -192,42 +316,59 @@ export class AuthManager {
 
   async getContextForRole(role: UserRole): Promise<BrowserContext> {
     this.validateAppUrl();
+
     const stateFile = this.getStorageStateFile(role);
 
     if (fs.existsSync(stateFile)) {
-      logger.info(`Validating existing session for role: ${role}`);
+      logger.info(`Existing storage state found for role: ${role}`);
+
       const valid = await this.isSessionValid(stateFile);
 
       if (!valid) {
-        logger.warn(`Session expired for ${role}, logging in fresh`);
+        logger.warn(
+          `Session expired or invalid for role: ${role}`
+        );
+
         await this.loginAndSaveState(role);
       } else {
-        logger.info(`Session still valid for role: ${role}`);
+        logger.info(`Session is still valid for role: ${role}`);
       }
     } else {
-      logger.warn(`No storage state found for ${role}. Logging in fresh.`);
+      logger.warn(
+        `No storage state found for role: ${role}. Logging in fresh.`
+      );
+
       await this.loginAndSaveState(role);
     }
 
-    logger.info(`Creating context for role: ${role}`);
+    logger.info(`Creating authenticated browser context for role: ${role}`);
+
     return await this.browser.newContext({
-      storageState: this.getStorageStateFile(role),
+      storageState: stateFile,
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
     });
   }
 
   async clearStorageState(role: UserRole): Promise<void> {
     const stateFile = this.getStorageStateFile(role);
+
     if (fs.existsSync(stateFile)) {
       fs.unlinkSync(stateFile);
+
       logger.info(`Storage state cleared for role: ${role}`);
     }
   }
 
   async clearAllStorageStates(): Promise<void> {
     const files = fs.readdirSync(this.storageStatePath);
+
     files.forEach((file) => {
       fs.unlinkSync(path.join(this.storageStatePath, file));
     });
+
     logger.info('All storage states cleared');
   }
 }
