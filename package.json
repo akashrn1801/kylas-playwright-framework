@@ -8,17 +8,22 @@
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
   },
-  "scripts": {
+"scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
-    "test:ui": "playwright test --project=ui",
-    "test:api": "playwright test --project=api",
-    "report": "playwright show-report",
+    "test:ui": "playwright test --project=chromium",
+    "test:leads": "playwright test tests/ui/leads/ --project=chromium",
+    "test:rbac": "playwright test tests/rbac/ --project=chromium",
+    "test:login": "playwright test tests/ui/dashboard/ --project=chromium",
+    "report:playwright": "playwright show-report reports/playwright-report",
+    "report:allure:generate": "allure generate reports/allure-results --clean -o reports/allure-report",
+    "report:allure:open": "allure open reports/allure-report",
+    "report:allure": "npm run report:allure:generate && npm run report:allure:open",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
-    "clean": "rm -rf test-results playwright-report allure-results"
+    "clean": "rm -rf test-results reports/playwright-report reports/allure-results reports/allure-report"
   },
   "keywords": [
     "playwright",
@@ -34,6 +39,8 @@
     "@types/node": "^25.9.1",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
+    "allure-commandline": "^2.41.0",
+    "allure-playwright": "^3.9.0",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.3",

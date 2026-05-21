@@ -46,7 +46,7 @@ export const config = {
 
   browser: {
     name: process.env.BROWSER || 'chromium',
-    headless: process.env.HEADLESS !== 'false',
+    headless: process.env.HEADLESS === 'true' || false,
   },
 
   execution: {
