@@ -1,15 +1,17 @@
 import { defineConfig, devices } from '@playwright/test';
 import { config } from './config/config';
 
+const isCI = !!process.env.CI;
+
 export default defineConfig({
   // Directory where tests are located
   testDir: './tests',
 
   // Run tests in files in parallel
-  fullyParallel: true,
+  fullyParallel: !isCI,
 
   // Fail the build on CI if test.only is accidentally left in source
-  forbidOnly: !!process.env.CI,
+  forbidOnly: isCI,
 
   // Retry failed tests
   retries: config.execution.retryCount,
@@ -18,19 +20,19 @@ export default defineConfig({
   workers: config.execution.workers,
 
   // Timeout for each test
-  timeout: config.timeouts.default,
+  timeout: isCI ? 120000 : config.timeouts.default,
 
   // Timeout for each expect assertion
   expect: {
-    timeout: config.timeouts.expect,
+    timeout: isCI ? 20000 : config.timeouts.expect,
   },
 
   // Reporters
-reporter: [
+  reporter: [
     ['list'],
     ['html', { outputFolder: 'reports/playwright-report', open: 'never' }],
     ['json', { outputFile: 'reports/playwright-report/results.json' }],
-    ['allure-playwright', { resultsDir: 'reports/allure-results' }],
+    ['allure-playwright', { resultsDir: 'allure-results' }],
   ],
 
   // Shared settings for all projects
@@ -39,7 +41,7 @@ reporter: [
     baseURL: config.appUrl,
 
     // Navigation timeout
-    navigationTimeout: config.timeouts.navigation,
+    navigationTimeout: isCI ? 90000 : config.timeouts.navigation,
 
     // Collect trace on first retry
     trace: 'on-first-retry',
@@ -53,12 +55,20 @@ reporter: [
     // Headless mode from config
     headless: config.browser.headless,
 
+    // Viewport — fixed size for consistency in headless
+    viewport: isCI ? { width: 1920, height: 1080 } : null,
 
-      launchOptions: {
-    args: ['--start-maximized'],
-  },
-  viewport: null, // 👈 Also add this — tells Playwright not to override the window size
-
+    // Browser launch options
+    launchOptions: {
+      args: isCI
+        ? [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--window-size=1920,1080',
+          ]
+        : ['--start-maximized'],
+    },
   },
 
   // Test projects (browsers)
