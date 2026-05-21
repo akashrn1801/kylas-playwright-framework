@@ -42,15 +42,13 @@ pipeline {
             }
         }
 
-        stage('Run Playwright Tests') {
-            steps {
-                echo 'Running Playwright tests...'
-                sh 'rm -rf src/auth/storageStates/'
-                sh 'npx playwright test --project=chromium --workers=1'
-            }
-        }
-
+    stage('Run Playwright Tests') {
+    steps {
+        echo 'Running Playwright tests...'
+        sh 'rm -rf src/auth/storageStates/'
+        sh 'npx playwright test --project=chromium --workers=1 tests/ui'
     }
+}
 
     post {
         always {
