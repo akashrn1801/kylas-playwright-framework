@@ -50,14 +50,12 @@ pipeline {
     }
 }
 
-        stage('Generate Allure Report') {
-            steps {
-                echo 'Generating Allure report...'
-                sh 'npx allure generate allure-results --clean -o allure-report'
-            }
-        }
-
+     stage('Generate Allure Report') {
+    steps {
+        echo 'Generating Allure report...'
+        sh '$ALLURE_HOME/bin/allure generate allure-results --clean -o allure-report'
     }
+}
 
     post {
         always {
