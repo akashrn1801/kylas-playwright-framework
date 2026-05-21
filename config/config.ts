@@ -20,6 +20,39 @@ const urls: Record<Environment, { appUrl: string; apiBaseUrl: string }> = {
   },
 };
 
+const users: Record<Environment, { admin: { email: string; password: string }; restricted: { email: string; password: string } }> = {
+  qa: {
+    admin: {
+      email: process.env.QA_ADMIN_EMAIL || '',
+      password: process.env.QA_ADMIN_PASSWORD || '',
+    },
+    restricted: {
+      email: process.env.QA_RESTRICTED_EMAIL || '',
+      password: process.env.QA_RESTRICTED_PASSWORD || '',
+    },
+  },
+  staging: {
+    admin: {
+      email: process.env.STAGING_ADMIN_EMAIL || '',
+      password: process.env.STAGING_ADMIN_PASSWORD || '',
+    },
+    restricted: {
+      email: process.env.STAGING_RESTRICTED_EMAIL || '',
+      password: process.env.STAGING_RESTRICTED_PASSWORD || '',
+    },
+  },
+  prod: {
+    admin: {
+      email: process.env.PROD_ADMIN_EMAIL || '',
+      password: process.env.PROD_ADMIN_PASSWORD || '',
+    },
+    restricted: {
+      email: process.env.PROD_RESTRICTED_EMAIL || '',
+      password: process.env.PROD_RESTRICTED_PASSWORD || '',
+    },
+  },
+};
+
 export const config = {
   env: ENV,
   appUrl: urls[ENV].appUrl,
@@ -27,13 +60,11 @@ export const config = {
 
   users: {
     admin: {
-      email: process.env.ADMIN_EMAIL || '',
-      password: process.env.ADMIN_PASSWORD || '',
+      ...users[ENV].admin,
       role: 'admin',
     },
     restricted: {
-      email: process.env.RESTRICTED_EMAIL || '',
-      password: process.env.RESTRICTED_PASSWORD || '',
+      ...users[ENV].restricted,
       role: 'restricted',
     },
   },
@@ -46,7 +77,7 @@ export const config = {
 
   browser: {
     name: process.env.BROWSER || 'chromium',
-    headless: process.env.HEADLESS === 'true' || false,
+    headless: process.env.HEADLESS !== 'false',
   },
 
   execution: {

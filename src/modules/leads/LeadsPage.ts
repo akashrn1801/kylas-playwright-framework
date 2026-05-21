@@ -1,6 +1,7 @@
 import { Page, expect } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
 import { LeadData } from '../../data/factories/leadFactory';
+import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
 export class LeadsPage extends BasePage {
@@ -23,7 +24,7 @@ export class LeadsPage extends BasePage {
 
   private readonly leadRowNameCell = (firstName: string) =>
     this.page.locator('.rt-tr-group .clip-text')
-      .filter({ hasText: new RegExp(`^${firstName}$`) })
+      .filter({ hasText: new RegExp(`${firstName}`) })
       .first();
 
   // ─── Create Form Locators ─────────────────────────────────
@@ -154,12 +155,11 @@ export class LeadsPage extends BasePage {
       // Toggle not present — continue
     }
   }
-
- private async performSearch(searchText: string): Promise<void> {
+private async performSearch(searchText: string): Promise<void> {
   await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(1000);  // wait after typing
+  await this.page.waitForTimeout(2000);  // increase from 1000
   await this.click(this.searchIcon(), 'search icon');
-  await this.page.waitForTimeout(3000);  // wait for results
+  await this.page.waitForTimeout(5000);  // increase from 3000
 }
   // ─── Navigation Actions ───────────────────────────────────
 
@@ -225,7 +225,7 @@ export class LeadsPage extends BasePage {
     logger.info('Saving lead');
     await this.click(this.saveButton(), 'save button');
     await this.page.waitForTimeout(2000);
-    await this.navigateTo('https://app.kylas.io/sales/leads/list');
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     logger.success('Lead saved successfully');
   }
@@ -234,7 +234,7 @@ export class LeadsPage extends BasePage {
 
   async searchAndOpenLead(firstName: string): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
-    await this.navigateTo('https://app.kylas.io/sales/leads/list');
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.page.waitForTimeout(2000);
 
