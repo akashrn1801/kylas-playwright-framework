@@ -186,38 +186,41 @@ private readonly editIconButton = () =>
   // ─── Search & Open ────────────────────────────────────────
 
 async searchAndOpenLead(firstName: string): Promise<void> {
-    logger.info(`Searching for lead: ${firstName}`);
-    await this.navigateTo('https://app.kylas.io/sales/leads/list');
-    await this.waitForUrl(/leads\/list/);
-    await this.fill(this.searchInput(), firstName, 'search input');
-    await this.page.keyboard.press('Enter');
-    await this.page.waitForTimeout(2500);
+  logger.info(`Searching for lead: ${firstName}`);
+  await this.navigateTo('https://app.kylas.io/sales/leads/list');
+  await this.waitForUrl(/leads\/list/);
+  await this.page.waitForLoadState('networkidle');
 
-    // Click the first name cell directly
-    const nameCell = this.page.locator('.rt-tr-group .clip-text')
-      .filter({ hasText: new RegExp(`^${firstName}$`) })
-      .first();
-    await nameCell.waitFor({ state: 'visible', timeout: 20000 });
-    await nameCell.click();
-    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 15000 });
-    logger.success(`Opened lead: ${firstName}`);
-  }
+  await this.fill(this.searchInput(), firstName, 'search input');
+  await this.click(this.page.locator('#Ic_Search'), 'search icon'); // 👈 fix here too
+  await this.page.waitForLoadState('networkidle');
+
+  const nameCell = this.page.locator('.rt-tr-group .clip-text')
+    .filter({ hasText: firstName })
+    .first();
+  await nameCell.waitFor({ state: 'visible', timeout: 20000 });
+  await nameCell.click();
+  await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 15000 });
+  logger.success(`Opened lead: ${firstName}`);
+}
   // ─── List Assertion ───────────────────────────────────────
 
 async assertLeadExistsInList(firstName: string, lastName: string): Promise<void> {
-    logger.info(`Asserting lead in list: ${firstName} ${lastName}`);
-    await this.waitForUrl(/leads\/list/);
-    await this.page.waitForTimeout(1000);
-    await this.fill(this.searchInput(), firstName, 'search input');
-    await this.page.keyboard.press('Enter');
-    await this.page.waitForTimeout(3000);
+  logger.info(`Asserting lead in list: ${firstName} ${lastName}`);
+  await this.waitForUrl(/leads\/list/);
+  await this.page.waitForLoadState('networkidle');
+  
+  await this.fill(this.searchInput(), firstName, 'search input');
+  await this.click(this.page.locator('#Ic_Search'), 'search icon'); // 👈 click icon not Enter
+  await this.page.waitForLoadState('networkidle');
+  await this.page.waitForTimeout(2000);
 
-    const nameCell = this.page.locator('.rt-tr-group .clip-text')
-      .filter({ hasText: new RegExp(`^${firstName}$`) })
-      .first();
-    await expect(nameCell).toBeVisible({ timeout: 15000 });
-    logger.success(`Lead found in list: ${firstName} ${lastName}`);
-  }
+  const nameCell = this.page.locator('.rt-tr-group .clip-text')
+    .filter({ hasText: new RegExp(`^${firstName}$`) })
+    .first();
+  await expect(nameCell).toBeVisible({ timeout: 20000 });
+  logger.success(`Lead found in list: ${firstName} ${lastName}`);
+}
   // ─── Edit Lead ────────────────────────────────────────────
 
   async clickEditIcon(): Promise<void> {
