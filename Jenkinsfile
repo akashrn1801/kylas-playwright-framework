@@ -40,10 +40,10 @@ pipeline {
             }
         }
 
-     stage('Run Playwright Tests') {
+  stage('Run Playwright Tests') {
     steps {
         echo 'Running Playwright tests...'
-        sh 'HEADLESS=true npx playwright test --project=chromium'
+        sh 'npx playwright test --project=chromium --workers=1'
     }
 }
 
