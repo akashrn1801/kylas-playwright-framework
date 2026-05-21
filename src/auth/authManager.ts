@@ -93,18 +93,27 @@ export class AuthManager {
     const context = await this.browser.newContext();
     const page = await context.newPage();
 
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+  await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
 
-    // Wait for login form to be ready
-    await page.getByRole('textbox', { name: 'Email' }).waitFor({ state: 'visible', timeout: 60000 });
+// Wait for email input
+await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
 
-    // Fill login form
-    await page.getByRole('textbox', { name: 'Email' }).fill(credentials.email);
-    await page.getByRole('textbox', { name: 'Password' }).fill(credentials.password);
-    await page.getByRole('button', { name: 'Sign In' }).click();
+// Type credentials to trigger React onChange events
+await page.locator('#input_email').click();
+await page.locator('#input_email').pressSequentially(credentials.email, { delay: 50 });
+await page.waitForTimeout(300);
 
-    // Wait for successful login
-    await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
+await page.locator('#input_password').click();
+await page.locator('#input_password').pressSequentially(credentials.password, { delay: 50 });
+await page.waitForTimeout(500);
+
+// Wait for button to become enabled then click
+await page.locator('#loginBtn:not([disabled])').waitFor({ state: 'visible', timeout: 10000 });
+await page.locator('#loginBtn').click();
+
+// Wait for successful login
+await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     logger.success(`Login successful for role: ${role}`);
 
     // Dismiss marketplace popup if it appears
