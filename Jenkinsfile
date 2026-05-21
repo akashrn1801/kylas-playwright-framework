@@ -31,7 +31,11 @@ pipeline {
             steps {
                 echo 'Setting up environment...'
                 withCredentials([file(credentialsId: 'kylas-env-file', variable: 'ENV_FILE')]) {
-                    sh 'cp $ENV_FILE .env'
+                    sh '''
+                        chmod 777 .
+                        cp $ENV_FILE .env
+                        chmod 644 .env
+                    '''
                 }
             }
         }
