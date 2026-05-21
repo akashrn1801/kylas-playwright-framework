@@ -26,10 +26,11 @@ export default defineConfig({
   },
 
   // Reporters
-  reporter: [
+reporter: [
     ['list'],
     ['html', { outputFolder: 'reports/playwright-report', open: 'never' }],
     ['json', { outputFile: 'reports/playwright-report/results.json' }],
+    ['allure-playwright', { resultsDir: 'reports/allure-results' }],
   ],
 
   // Shared settings for all projects

@@ -1,0 +1,8 @@
+[2026-05-20T12:44:11.129Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:44:11.130Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:44:18.424Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:18.481Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:21.765Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:21.768Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:21.768Z] [INFO] Asserting URL: /leads\/list/
+[2026-05-20T12:44:21.892Z] [INFO] Tearing down restricted page fixture

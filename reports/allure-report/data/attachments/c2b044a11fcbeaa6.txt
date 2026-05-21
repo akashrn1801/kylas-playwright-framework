@@ -1,0 +1,41 @@
+[2026-05-20T12:40:05.574Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:40:05.575Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:40:11.027Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:11.095Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:14.155Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:14.157Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:14.157Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:40:14.158Z] [INFO] Clicking: add lead button
+[2026-05-20T12:40:16.230Z] [INFO] Filling lead creation form
+[2026-05-20T12:40:16.304Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:40:18.299Z] [INFO] Filling first name with: Sandy
+[2026-05-20T12:40:18.436Z] [INFO] Filling last name with: Dach
+[2026-05-20T12:40:18.717Z] [INFO] Clicking: add email button
+[2026-05-20T12:40:19.200Z] [INFO] Filling email with: Sandy.Dach@hotmail.com
+[2026-05-20T12:40:19.371Z] [INFO] Clicking: add phone button
+[2026-05-20T12:40:20.201Z] [INFO] Filling phone with: 9447423756
+[2026-05-20T12:40:20.371Z] [INFO] Filling address with: 59952 Sadie Burgs
+[2026-05-20T12:40:20.618Z] [INFO] Filling city with: Sparks
+[2026-05-20T12:40:20.745Z] [INFO] Filling state with: North Dakota
+[2026-05-20T12:40:20.910Z] [INFO] Filling zipcode with: 67343
+[2026-05-20T12:40:21.134Z] [INFO] Filling facebook with: https://facebook.com/sandy.dach
+[2026-05-20T12:40:21.310Z] [INFO] Filling twitter with: https://twitter.com/sandy.dach
+[2026-05-20T12:40:21.577Z] [INFO] Filling linkedin with: https://linkedin.com/in/sandy.dach
+[2026-05-20T12:40:21.778Z] [INFO] Filling company name with: Wisoky Inc
+[2026-05-20T12:40:21.917Z] [INFO] Filling department with: Computers
+[2026-05-20T12:40:22.110Z] [INFO] Filling designation with: Internal Integration Administrator
+[2026-05-20T12:40:22.317Z] [INFO] Filling company address with: 482 Trey Unions
+[2026-05-20T12:40:22.561Z] [INFO] Filling company city with: Sherylside
+[2026-05-20T12:40:22.754Z] [INFO] Filling company state with: Oregon
+[2026-05-20T12:40:22.934Z] [INFO] Filling company zipcode with: 22389
+[2026-05-20T12:40:23.265Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:40:23.265Z] [INFO] Saving lead
+[2026-05-20T12:40:23.265Z] [INFO] Clicking: save button
+[2026-05-20T12:40:26.218Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:26.742Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:26.763Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:40:26.763Z] [INFO] Asserting lead in list: Sandy Dach
+[2026-05-20T12:40:26.764Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:28.454Z] [INFO] Filling search input with: Sandy
+[2026-05-20T12:40:31.919Z] [SUCCESS] Lead found in list: Sandy Dach
+[2026-05-20T12:40:31.921Z] [INFO] Tearing down restricted page fixture

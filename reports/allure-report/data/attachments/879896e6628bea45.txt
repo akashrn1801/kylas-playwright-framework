@@ -1,0 +1,59 @@
+[2026-05-20T12:42:03.170Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:42:03.170Z] [INFO] Creating context for role: admin
+[2026-05-20T12:42:07.554Z] [INFO] Navigating to Leads list
+[2026-05-20T12:42:07.679Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:42:10.783Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:10.785Z] [SUCCESS] On Leads list page
+[2026-05-20T12:42:10.786Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:42:10.786Z] [INFO] Clicking: add lead button
+[2026-05-20T12:42:16.062Z] [INFO] Filling lead creation form
+[2026-05-20T12:42:16.121Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:42:17.683Z] [INFO] Filling first name with: Angelo
+[2026-05-20T12:42:18.080Z] [INFO] Filling last name with: Ziemann
+[2026-05-20T12:42:18.736Z] [INFO] Clicking: add email button
+[2026-05-20T12:42:19.501Z] [INFO] Filling email with: Angelo_Ziemann@hotmail.com
+[2026-05-20T12:42:19.956Z] [INFO] Clicking: add phone button
+[2026-05-20T12:42:20.990Z] [INFO] Filling phone with: 9214700791
+[2026-05-20T12:42:21.367Z] [INFO] Filling address with: 6782 Cartwright Motorway
+[2026-05-20T12:42:21.812Z] [INFO] Filling city with: West Palm Beach
+[2026-05-20T12:42:22.232Z] [INFO] Filling state with: New Hampshire
+[2026-05-20T12:42:22.686Z] [INFO] Filling zipcode with: 29679
+[2026-05-20T12:42:23.297Z] [INFO] Filling facebook with: https://facebook.com/angelo.ziemann
+[2026-05-20T12:42:23.707Z] [INFO] Filling twitter with: https://twitter.com/angelo.ziemann
+[2026-05-20T12:42:24.121Z] [INFO] Filling linkedin with: https://linkedin.com/in/angelo.ziemann
+[2026-05-20T12:42:24.523Z] [INFO] Filling company name with: Schaefer, Stamm and Gulgowski
+[2026-05-20T12:42:24.939Z] [INFO] Filling department with: Tools
+[2026-05-20T12:42:25.384Z] [INFO] Filling designation with: Future Accounts Supervisor
+[2026-05-20T12:42:25.806Z] [INFO] Filling company address with: 840 Littel Mall
+[2026-05-20T12:42:26.250Z] [INFO] Filling company city with: South Emmy
+[2026-05-20T12:42:26.706Z] [INFO] Filling company state with: Rhode Island
+[2026-05-20T12:42:27.177Z] [INFO] Filling company zipcode with: 64995
+[2026-05-20T12:42:27.678Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:42:27.679Z] [INFO] Saving lead
+[2026-05-20T12:42:27.679Z] [INFO] Clicking: save button
+[2026-05-20T12:42:31.369Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:42:32.959Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:32.960Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:42:32.960Z] [INFO] Searching for lead: Angelo
+[2026-05-20T12:42:32.960Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:42:34.220Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:39.327Z] [INFO] Filling search input with: Angelo
+[2026-05-20T12:42:41.203Z] [SUCCESS] Opened lead: Angelo
+[2026-05-20T12:42:41.203Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:42:41.377Z] [INFO] Clicking edit icon
+[2026-05-20T12:42:41.378Z] [INFO] Clicking: edit icon
+[2026-05-20T12:42:42.732Z] [SUCCESS] Edit form opened
+[2026-05-20T12:42:42.732Z] [INFO] Filling edit form
+[2026-05-20T12:42:42.732Z] [INFO] Filling first name with: Lonnie
+[2026-05-20T12:42:43.205Z] [INFO] Filling last name with: Gislason
+[2026-05-20T12:42:43.722Z] [SUCCESS] Edit form filled
+[2026-05-20T12:42:43.722Z] [INFO] Saving edited lead
+[2026-05-20T12:42:43.722Z] [INFO] Clicking: save button
+[2026-05-20T12:42:46.072Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:42:46.072Z] [INFO] Navigating to Leads list
+[2026-05-20T12:42:46.100Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:42:46.252Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:46.253Z] [SUCCESS] On Leads list page
+[2026-05-20T12:42:46.254Z] [INFO] Asserting lead in list: Lonnie Gislason
+[2026-05-20T12:42:46.254Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:43:33.232Z] [INFO] Tearing down admin page fixture

@@ -1,0 +1,45 @@
+[2026-05-20T12:40:05.598Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:40:05.599Z] [INFO] Creating context for role: admin
+[2026-05-20T12:40:13.356Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:40:13.356Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:40:18.324Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:18.357Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:18.503Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:18.505Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:18.505Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:40:18.505Z] [INFO] Clicking: add lead button
+[2026-05-20T12:40:21.970Z] [INFO] Filling lead creation form
+[2026-05-20T12:40:22.391Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:40:25.048Z] [INFO] Filling first name with: Tanya
+[2026-05-20T12:40:25.213Z] [INFO] Filling last name with: Kerluke
+[2026-05-20T12:40:25.503Z] [INFO] Clicking: add email button
+[2026-05-20T12:40:26.106Z] [INFO] Filling email with: Tanya_Kerluke9@gmail.com
+[2026-05-20T12:40:26.333Z] [INFO] Clicking: add phone button
+[2026-05-20T12:40:27.202Z] [INFO] Filling phone with: 8303525271
+[2026-05-20T12:40:27.400Z] [INFO] Filling address with: 506 Homer River
+[2026-05-20T12:40:27.734Z] [INFO] Filling city with: Sanfordmouth
+[2026-05-20T12:40:28.151Z] [INFO] Filling state with: Ohio
+[2026-05-20T12:40:28.410Z] [INFO] Filling zipcode with: 89534
+[2026-05-20T12:40:28.762Z] [INFO] Filling facebook with: https://facebook.com/tanya.kerluke
+[2026-05-20T12:40:29.140Z] [INFO] Filling twitter with: https://twitter.com/tanya.kerluke
+[2026-05-20T12:40:29.476Z] [INFO] Filling linkedin with: https://linkedin.com/in/tanya.kerluke
+[2026-05-20T12:40:29.918Z] [INFO] Filling company name with: Luettgen, Watsica and Marquardt
+[2026-05-20T12:40:30.222Z] [INFO] Filling department with: Books
+[2026-05-20T12:40:30.504Z] [INFO] Filling designation with: Corporate Response Officer
+[2026-05-20T12:40:30.826Z] [INFO] Filling company address with: 39717 Marlene Summit
+[2026-05-20T12:40:31.163Z] [INFO] Filling company city with: Vickieport
+[2026-05-20T12:40:31.473Z] [INFO] Filling company state with: Massachusetts
+[2026-05-20T12:40:31.835Z] [INFO] Filling company zipcode with: 35932
+[2026-05-20T12:40:32.202Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:40:32.203Z] [INFO] Saving lead
+[2026-05-20T12:40:32.203Z] [INFO] Clicking: save button
+[2026-05-20T12:40:35.044Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:37.220Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:37.242Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:40:37.242Z] [INFO] Searching for lead: Tanya
+[2026-05-20T12:40:37.242Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:37.818Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:43.302Z] [INFO] Filling search input with: Tanya
+[2026-05-20T12:40:45.681Z] [SUCCESS] Opened lead: Tanya
+[2026-05-20T12:40:48.245Z] [INFO] Tearing down restricted page fixture
+[2026-05-20T12:40:48.383Z] [INFO] Tearing down admin page fixture

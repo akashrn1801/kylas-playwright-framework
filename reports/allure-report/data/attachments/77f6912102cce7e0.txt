@@ -1,0 +1,41 @@
+[2026-05-20T12:37:04.381Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:37:04.382Z] [INFO] Creating context for role: admin
+[2026-05-20T12:37:08.343Z] [INFO] Navigating to Leads list
+[2026-05-20T12:37:08.379Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:37:10.177Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:10.181Z] [SUCCESS] On Leads list page
+[2026-05-20T12:37:10.182Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:37:10.182Z] [INFO] Clicking: add lead button
+[2026-05-20T12:37:12.432Z] [INFO] Filling lead creation form
+[2026-05-20T12:37:12.731Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:37:14.647Z] [INFO] Filling first name with: Anita
+[2026-05-20T12:37:14.995Z] [INFO] Filling last name with: Littel
+[2026-05-20T12:37:15.737Z] [INFO] Clicking: add email button
+[2026-05-20T12:37:16.452Z] [INFO] Filling email with: Anita.Littel@gmail.com
+[2026-05-20T12:37:16.878Z] [INFO] Clicking: add phone button
+[2026-05-20T12:37:17.968Z] [INFO] Filling phone with: 8592858888
+[2026-05-20T12:37:18.563Z] [INFO] Filling address with: 50941 Howell Forest
+[2026-05-20T12:37:19.280Z] [INFO] Filling city with: East Edgarstad
+[2026-05-20T12:37:19.898Z] [INFO] Filling state with: New Jersey
+[2026-05-20T12:37:20.921Z] [INFO] Filling zipcode with: 39454
+[2026-05-20T12:37:21.714Z] [INFO] Filling facebook with: https://facebook.com/anita.littel
+[2026-05-20T12:37:22.464Z] [INFO] Filling twitter with: https://twitter.com/anita.littel
+[2026-05-20T12:37:22.929Z] [INFO] Filling linkedin with: https://linkedin.com/in/anita.littel
+[2026-05-20T12:37:23.618Z] [INFO] Filling company name with: Hahn LLC
+[2026-05-20T12:37:24.246Z] [INFO] Filling department with: Toys
+[2026-05-20T12:37:24.792Z] [INFO] Filling designation with: Senior Implementation Facilitator
+[2026-05-20T12:37:25.315Z] [INFO] Filling company address with: 3740 Mosciski Burgs
+[2026-05-20T12:37:25.781Z] [INFO] Filling company city with: Cristmouth
+[2026-05-20T12:37:26.417Z] [INFO] Filling company state with: Nevada
+[2026-05-20T12:37:26.895Z] [INFO] Filling company zipcode with: 38967
+[2026-05-20T12:37:27.411Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:37:27.411Z] [INFO] Saving lead
+[2026-05-20T12:37:27.411Z] [INFO] Clicking: save button
+[2026-05-20T12:37:30.994Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:37:32.919Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:32.921Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:37:32.921Z] [INFO] Asserting lead in list: Anita Littel
+[2026-05-20T12:37:32.921Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:34.008Z] [INFO] Filling search input with: Anita
+[2026-05-20T12:37:40.839Z] [SUCCESS] Lead found in list: Anita Littel
+[2026-05-20T12:37:40.841Z] [INFO] Tearing down admin page fixture

@@ -1,0 +1,61 @@
+[2026-05-20T12:37:12.600Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:37:12.600Z] [INFO] Creating context for role: admin
+[2026-05-20T12:37:16.689Z] [INFO] Navigating to Leads list
+[2026-05-20T12:37:16.752Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:37:18.982Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:18.985Z] [SUCCESS] On Leads list page
+[2026-05-20T12:37:18.985Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:37:18.985Z] [INFO] Clicking: add lead button
+[2026-05-20T12:37:24.863Z] [INFO] Filling lead creation form
+[2026-05-20T12:37:24.993Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:37:27.346Z] [INFO] Filling first name with: Electa
+[2026-05-20T12:37:27.829Z] [INFO] Filling last name with: Klein
+[2026-05-20T12:37:28.519Z] [INFO] Clicking: add email button
+[2026-05-20T12:37:29.345Z] [INFO] Filling email with: Electa_Klein41@yahoo.com
+[2026-05-20T12:37:29.853Z] [INFO] Clicking: add phone button
+[2026-05-20T12:37:31.154Z] [INFO] Filling phone with: 8780923220
+[2026-05-20T12:37:31.668Z] [INFO] Filling address with: 37002 Scotty Shoals
+[2026-05-20T12:37:32.166Z] [INFO] Filling city with: Langborough
+[2026-05-20T12:37:32.699Z] [INFO] Filling state with: Illinois
+[2026-05-20T12:37:33.365Z] [INFO] Filling zipcode with: 47068
+[2026-05-20T12:37:33.996Z] [INFO] Filling facebook with: https://facebook.com/electa.klein
+[2026-05-20T12:37:34.582Z] [INFO] Filling twitter with: https://twitter.com/electa.klein
+[2026-05-20T12:37:35.222Z] [INFO] Filling linkedin with: https://linkedin.com/in/electa.klein
+[2026-05-20T12:37:35.787Z] [INFO] Filling company name with: Murazik, Crist and Reichert
+[2026-05-20T12:37:36.342Z] [INFO] Filling department with: Beauty
+[2026-05-20T12:37:36.885Z] [INFO] Filling designation with: Human Configuration Developer
+[2026-05-20T12:37:37.672Z] [INFO] Filling company address with: 956 Crescent Road
+[2026-05-20T12:37:38.493Z] [INFO] Filling company city with: Beahanland
+[2026-05-20T12:37:39.145Z] [INFO] Filling company state with: Washington
+[2026-05-20T12:37:39.664Z] [INFO] Filling company zipcode with: 09456
+[2026-05-20T12:37:40.182Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:37:40.183Z] [INFO] Saving lead
+[2026-05-20T12:37:40.183Z] [INFO] Clicking: save button
+[2026-05-20T12:37:43.867Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:37:45.470Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:45.473Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:37:45.473Z] [INFO] Searching for lead: Electa
+[2026-05-20T12:37:45.474Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:37:46.581Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:46.583Z] [INFO] Filling search input with: Electa
+[2026-05-20T12:37:50.979Z] [SUCCESS] Opened lead: Electa
+[2026-05-20T12:37:50.979Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:37:51.058Z] [INFO] Clicking edit icon
+[2026-05-20T12:37:51.058Z] [INFO] Clicking: edit icon
+[2026-05-20T12:37:52.386Z] [SUCCESS] Edit form opened
+[2026-05-20T12:37:52.386Z] [INFO] Filling edit form
+[2026-05-20T12:37:52.386Z] [INFO] Filling first name with: Troy
+[2026-05-20T12:37:52.640Z] [INFO] Filling last name with: Pfannerstill
+[2026-05-20T12:37:53.116Z] [SUCCESS] Edit form filled
+[2026-05-20T12:37:53.116Z] [INFO] Saving edited lead
+[2026-05-20T12:37:53.116Z] [INFO] Clicking: save button
+[2026-05-20T12:37:55.418Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:37:55.418Z] [INFO] Navigating to Leads list
+[2026-05-20T12:37:55.442Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:37:55.582Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:55.583Z] [SUCCESS] On Leads list page
+[2026-05-20T12:37:55.583Z] [INFO] Asserting lead in list: Troy Pfannerstill
+[2026-05-20T12:37:55.583Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:37:56.632Z] [INFO] Filling search input with: Troy
+[2026-05-20T12:37:59.825Z] [SUCCESS] Lead found in list: Troy Pfannerstill
+[2026-05-20T12:37:59.827Z] [INFO] Tearing down admin page fixture

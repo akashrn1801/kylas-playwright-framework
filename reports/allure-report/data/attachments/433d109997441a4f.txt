@@ -1,0 +1,40 @@
+[2026-05-20T12:36:20.232Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:36:20.232Z] [INFO] Creating context for role: admin
+[2026-05-20T12:36:24.171Z] [INFO] Navigating to Leads list
+[2026-05-20T12:36:24.226Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:36:27.099Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:27.102Z] [SUCCESS] On Leads list page
+[2026-05-20T12:36:27.102Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:36:27.103Z] [INFO] Clicking: add lead button
+[2026-05-20T12:36:33.867Z] [INFO] Filling lead creation form
+[2026-05-20T12:36:34.073Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:36:35.862Z] [INFO] Filling first name with: Robyn
+[2026-05-20T12:36:36.068Z] [INFO] Filling last name with: Robel
+[2026-05-20T12:36:36.326Z] [INFO] Clicking: add email button
+[2026-05-20T12:36:36.865Z] [INFO] Filling email with: Robyn_Robel82@yahoo.com
+[2026-05-20T12:36:37.051Z] [INFO] Clicking: add phone button
+[2026-05-20T12:36:37.877Z] [INFO] Filling phone with: 9921282079
+[2026-05-20T12:36:38.002Z] [INFO] Filling address with: 223 Kira Stream
+[2026-05-20T12:36:38.157Z] [INFO] Filling city with: Mitchelborough
+[2026-05-20T12:36:38.324Z] [INFO] Filling state with: Minnesota
+[2026-05-20T12:36:38.443Z] [INFO] Filling zipcode with: 72655
+[2026-05-20T12:36:38.576Z] [INFO] Filling facebook with: https://facebook.com/robyn.robel
+[2026-05-20T12:36:38.733Z] [INFO] Filling twitter with: https://twitter.com/robyn.robel
+[2026-05-20T12:36:38.921Z] [INFO] Filling linkedin with: https://linkedin.com/in/robyn.robel
+[2026-05-20T12:36:39.097Z] [INFO] Filling company name with: Lockman - Corwin
+[2026-05-20T12:36:39.279Z] [INFO] Filling department with: Music
+[2026-05-20T12:36:39.495Z] [INFO] Filling designation with: Lead Communications Producer
+[2026-05-20T12:36:39.682Z] [INFO] Filling company address with: 9231 Beech Close
+[2026-05-20T12:36:39.852Z] [INFO] Filling company city with: Port Salvatore
+[2026-05-20T12:36:40.105Z] [INFO] Filling company state with: New Jersey
+[2026-05-20T12:36:40.312Z] [INFO] Filling company zipcode with: 19863
+[2026-05-20T12:36:40.498Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:36:40.498Z] [INFO] Saving lead
+[2026-05-20T12:36:40.498Z] [INFO] Clicking: save button
+[2026-05-20T12:36:43.036Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:36:43.450Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:43.466Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:36:43.466Z] [INFO] Asserting lead in list: Robyn Robel
+[2026-05-20T12:36:43.467Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:44.470Z] [INFO] Filling search input with: Robyn
+[2026-05-20T12:37:03.833Z] [INFO] Tearing down admin page fixture

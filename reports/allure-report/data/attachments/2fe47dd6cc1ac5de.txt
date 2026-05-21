@@ -1,0 +1,41 @@
+[2026-05-20T12:44:11.209Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:44:11.210Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:44:19.830Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:19.921Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:22.377Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:22.379Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:22.379Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:44:22.379Z] [INFO] Clicking: add lead button
+[2026-05-20T12:44:26.564Z] [INFO] Filling lead creation form
+[2026-05-20T12:44:26.580Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:44:28.910Z] [INFO] Filling first name with: Curtis
+[2026-05-20T12:44:29.083Z] [INFO] Filling last name with: Kohler
+[2026-05-20T12:44:29.316Z] [INFO] Clicking: add email button
+[2026-05-20T12:44:29.883Z] [INFO] Filling email with: Curtis.Kohler44@hotmail.com
+[2026-05-20T12:44:30.119Z] [INFO] Clicking: add phone button
+[2026-05-20T12:44:31.068Z] [INFO] Filling phone with: 8729071538
+[2026-05-20T12:44:31.328Z] [INFO] Filling address with: 7484 Auer Estates
+[2026-05-20T12:44:31.560Z] [INFO] Filling city with: Elizabeth
+[2026-05-20T12:44:31.819Z] [INFO] Filling state with: Indiana
+[2026-05-20T12:44:32.057Z] [INFO] Filling zipcode with: 48320
+[2026-05-20T12:44:32.309Z] [INFO] Filling facebook with: https://facebook.com/curtis.kohler
+[2026-05-20T12:44:32.516Z] [INFO] Filling twitter with: https://twitter.com/curtis.kohler
+[2026-05-20T12:44:32.733Z] [INFO] Filling linkedin with: https://linkedin.com/in/curtis.kohler
+[2026-05-20T12:44:32.975Z] [INFO] Filling company name with: Beahan - Stark
+[2026-05-20T12:44:33.199Z] [INFO] Filling department with: Jewelry
+[2026-05-20T12:44:33.410Z] [INFO] Filling designation with: Internal Configuration Representative
+[2026-05-20T12:44:33.650Z] [INFO] Filling company address with: 309 Lee Street
+[2026-05-20T12:44:34.010Z] [INFO] Filling company city with: West Matthewview
+[2026-05-20T12:44:34.356Z] [INFO] Filling company state with: Virginia
+[2026-05-20T12:44:34.670Z] [INFO] Filling company zipcode with: 93474
+[2026-05-20T12:44:35.054Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:44:35.054Z] [INFO] Saving lead
+[2026-05-20T12:44:35.054Z] [INFO] Clicking: save button
+[2026-05-20T12:44:38.227Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:39.702Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:39.723Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:44:39.723Z] [INFO] Asserting lead in list: Curtis Kohler
+[2026-05-20T12:44:39.723Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:42.030Z] [INFO] Filling search input with: Curtis
+[2026-05-20T12:44:44.262Z] [SUCCESS] Lead found in list: Curtis Kohler
+[2026-05-20T12:44:44.263Z] [INFO] Tearing down restricted page fixture

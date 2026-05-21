@@ -1,0 +1,41 @@
+[2026-05-20T12:57:42.012Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:57:42.013Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:57:47.517Z] [INFO] Navigating to Leads list
+[2026-05-20T12:57:47.615Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:57:50.194Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:57:50.196Z] [SUCCESS] On Leads list page
+[2026-05-20T12:57:50.197Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:57:50.197Z] [INFO] Clicking: add lead button
+[2026-05-20T12:57:53.674Z] [INFO] Filling lead creation form
+[2026-05-20T12:57:53.695Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:57:55.384Z] [INFO] Filling first name with: Alexander
+[2026-05-20T12:57:55.600Z] [INFO] Filling last name with: Bashirian
+[2026-05-20T12:57:55.903Z] [INFO] Clicking: add email button
+[2026-05-20T12:57:56.614Z] [INFO] Filling email with: Alexander.Bashirian@gmail.com
+[2026-05-20T12:57:56.869Z] [INFO] Clicking: add phone button
+[2026-05-20T12:57:57.845Z] [INFO] Filling phone with: 9323732531
+[2026-05-20T12:57:58.062Z] [INFO] Filling address with: 63534 Cronin-Labadie Lane
+[2026-05-20T12:57:58.390Z] [INFO] Filling city with: Rochester Hills
+[2026-05-20T12:57:58.659Z] [INFO] Filling state with: Georgia
+[2026-05-20T12:57:58.886Z] [INFO] Filling zipcode with: 09833
+[2026-05-20T12:57:59.103Z] [INFO] Filling facebook with: https://facebook.com/alexander.bashirian
+[2026-05-20T12:57:59.331Z] [INFO] Filling twitter with: https://twitter.com/alexander.bashirian
+[2026-05-20T12:57:59.562Z] [INFO] Filling linkedin with: https://linkedin.com/in/alexander.bashirian
+[2026-05-20T12:57:59.851Z] [INFO] Filling company name with: Predovic, Heaney and Barton
+[2026-05-20T12:58:00.077Z] [INFO] Filling department with: Music
+[2026-05-20T12:58:00.401Z] [INFO] Filling designation with: International Accounts Analyst
+[2026-05-20T12:58:00.772Z] [INFO] Filling company address with: 3856 Bailey Point
+[2026-05-20T12:58:01.069Z] [INFO] Filling company city with: Michaelboro
+[2026-05-20T12:58:01.402Z] [INFO] Filling company state with: Utah
+[2026-05-20T12:58:01.759Z] [INFO] Filling company zipcode with: 07213
+[2026-05-20T12:58:01.943Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:58:01.943Z] [INFO] Saving lead
+[2026-05-20T12:58:01.943Z] [INFO] Clicking: save button
+[2026-05-20T12:58:05.147Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:07.198Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:07.242Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:58:07.243Z] [INFO] Asserting lead in list: Alexander Bashirian
+[2026-05-20T12:58:07.243Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:12.963Z] [INFO] Filling search input with: Alexander
+[2026-05-20T12:58:14.579Z] [SUCCESS] Lead found in list: Alexander Bashirian
+[2026-05-20T12:58:14.582Z] [INFO] Tearing down restricted page fixture

@@ -1,0 +1,61 @@
+[2026-05-20T12:57:42.452Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:57:42.454Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:57:52.664Z] [INFO] Navigating to Leads list
+[2026-05-20T12:57:52.804Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:57:54.699Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:57:54.701Z] [SUCCESS] On Leads list page
+[2026-05-20T12:57:54.702Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:57:54.702Z] [INFO] Clicking: add lead button
+[2026-05-20T12:57:57.398Z] [INFO] Filling lead creation form
+[2026-05-20T12:57:57.412Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:57:59.159Z] [INFO] Filling first name with: Asia
+[2026-05-20T12:57:59.339Z] [INFO] Filling last name with: McGlynn
+[2026-05-20T12:57:59.690Z] [INFO] Clicking: add email button
+[2026-05-20T12:58:00.475Z] [INFO] Filling email with: Asia_McGlynn8@hotmail.com
+[2026-05-20T12:58:00.835Z] [INFO] Clicking: add phone button
+[2026-05-20T12:58:01.775Z] [INFO] Filling phone with: 7604613796
+[2026-05-20T12:58:01.927Z] [INFO] Filling address with: 94338 Kuhn Junction
+[2026-05-20T12:58:02.171Z] [INFO] Filling city with: West Amber
+[2026-05-20T12:58:02.367Z] [INFO] Filling state with: Wisconsin
+[2026-05-20T12:58:02.679Z] [INFO] Filling zipcode with: 37652
+[2026-05-20T12:58:02.910Z] [INFO] Filling facebook with: https://facebook.com/asia.mcglynn
+[2026-05-20T12:58:03.217Z] [INFO] Filling twitter with: https://twitter.com/asia.mcglynn
+[2026-05-20T12:58:03.505Z] [INFO] Filling linkedin with: https://linkedin.com/in/asia.mcglynn
+[2026-05-20T12:58:03.741Z] [INFO] Filling company name with: Gorczany, Heller and Morissette
+[2026-05-20T12:58:03.987Z] [INFO] Filling department with: Games
+[2026-05-20T12:58:04.267Z] [INFO] Filling designation with: National Web Manager
+[2026-05-20T12:58:04.579Z] [INFO] Filling company address with: 981 Abdiel Groves
+[2026-05-20T12:58:04.920Z] [INFO] Filling company city with: Rhondaland
+[2026-05-20T12:58:05.237Z] [INFO] Filling company state with: Illinois
+[2026-05-20T12:58:05.588Z] [INFO] Filling company zipcode with: 56978
+[2026-05-20T12:58:05.934Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:58:05.934Z] [INFO] Saving lead
+[2026-05-20T12:58:05.934Z] [INFO] Clicking: save button
+[2026-05-20T12:58:09.333Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:12.199Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:12.242Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:58:12.243Z] [INFO] Searching for lead: Asia
+[2026-05-20T12:58:12.243Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:12.918Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:15.083Z] [INFO] Filling search input with: Asia
+[2026-05-20T12:58:19.176Z] [SUCCESS] Opened lead: Asia
+[2026-05-20T12:58:19.177Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:58:19.367Z] [INFO] Clicking edit icon
+[2026-05-20T12:58:19.367Z] [INFO] Clicking: edit icon
+[2026-05-20T12:58:20.839Z] [SUCCESS] Edit form opened
+[2026-05-20T12:58:20.839Z] [INFO] Filling edit form
+[2026-05-20T12:58:20.839Z] [INFO] Filling first name with: Shelia
+[2026-05-20T12:58:21.729Z] [INFO] Filling last name with: Wolff
+[2026-05-20T12:58:22.639Z] [SUCCESS] Edit form filled
+[2026-05-20T12:58:22.640Z] [INFO] Saving edited lead
+[2026-05-20T12:58:22.640Z] [INFO] Clicking: save button
+[2026-05-20T12:58:25.319Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:58:25.319Z] [INFO] Navigating to Leads list
+[2026-05-20T12:58:25.327Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:58:25.555Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:25.558Z] [SUCCESS] On Leads list page
+[2026-05-20T12:58:25.558Z] [INFO] Asserting lead in list: Shelia Wolff
+[2026-05-20T12:58:25.558Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:26.707Z] [INFO] Filling search input with: Shelia
+[2026-05-20T12:58:27.217Z] [SUCCESS] Lead found in list: Shelia Wolff
+[2026-05-20T12:58:27.219Z] [INFO] Tearing down restricted page fixture

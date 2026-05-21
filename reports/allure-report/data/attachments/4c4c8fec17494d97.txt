@@ -1,0 +1,8 @@
+[2026-05-20T12:36:11.192Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:36:11.192Z] [INFO] Creating context for role: admin
+[2026-05-20T12:36:16.768Z] [INFO] Navigating to Leads list
+[2026-05-20T12:36:16.829Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:36:19.563Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:19.565Z] [SUCCESS] On Leads list page
+[2026-05-20T12:36:19.565Z] [INFO] Asserting URL: /leads\/list/
+[2026-05-20T12:36:19.644Z] [INFO] Tearing down admin page fixture

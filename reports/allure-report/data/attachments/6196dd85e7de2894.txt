@@ -1,0 +1,41 @@
+[2026-05-20T12:58:01.113Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:58:01.113Z] [INFO] Creating context for role: admin
+[2026-05-20T12:58:05.110Z] [INFO] Navigating to Leads list
+[2026-05-20T12:58:05.214Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:58:08.492Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:08.495Z] [SUCCESS] On Leads list page
+[2026-05-20T12:58:08.495Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:58:08.495Z] [INFO] Clicking: add lead button
+[2026-05-20T12:58:14.750Z] [INFO] Filling lead creation form
+[2026-05-20T12:58:14.773Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:58:16.955Z] [INFO] Filling first name with: Larissa
+[2026-05-20T12:58:17.203Z] [INFO] Filling last name with: Jerde
+[2026-05-20T12:58:17.615Z] [INFO] Clicking: add email button
+[2026-05-20T12:58:18.451Z] [INFO] Filling email with: Larissa_Jerde97@gmail.com
+[2026-05-20T12:58:18.702Z] [INFO] Clicking: add phone button
+[2026-05-20T12:58:19.827Z] [INFO] Filling phone with: 9359225996
+[2026-05-20T12:58:20.104Z] [INFO] Filling address with: 5132 Woodlands Avenue
+[2026-05-20T12:58:20.488Z] [INFO] Filling city with: Fort Justus
+[2026-05-20T12:58:20.844Z] [INFO] Filling state with: Tennessee
+[2026-05-20T12:58:21.190Z] [INFO] Filling zipcode with: 33389
+[2026-05-20T12:58:21.494Z] [INFO] Filling facebook with: https://facebook.com/larissa.jerde
+[2026-05-20T12:58:21.784Z] [INFO] Filling twitter with: https://twitter.com/larissa.jerde
+[2026-05-20T12:58:22.120Z] [INFO] Filling linkedin with: https://linkedin.com/in/larissa.jerde
+[2026-05-20T12:58:22.540Z] [INFO] Filling company name with: Runolfsdottir, Vandervort and Swaniawski
+[2026-05-20T12:58:22.918Z] [INFO] Filling department with: Movies
+[2026-05-20T12:58:23.362Z] [INFO] Filling designation with: Customer Identity Assistant
+[2026-05-20T12:58:23.772Z] [INFO] Filling company address with: 7329 Runte Loop
+[2026-05-20T12:58:24.290Z] [INFO] Filling company city with: New Zita
+[2026-05-20T12:58:24.638Z] [INFO] Filling company state with: Illinois
+[2026-05-20T12:58:24.973Z] [INFO] Filling company zipcode with: 08100
+[2026-05-20T12:58:25.356Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:58:25.356Z] [INFO] Saving lead
+[2026-05-20T12:58:25.356Z] [INFO] Clicking: save button
+[2026-05-20T12:58:28.722Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:30.602Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:30.623Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:58:30.623Z] [INFO] Asserting lead in list: Larissa Jerde
+[2026-05-20T12:58:30.623Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:36.591Z] [INFO] Filling search input with: Larissa
+[2026-05-20T12:58:37.308Z] [SUCCESS] Lead found in list: Larissa Jerde
+[2026-05-20T12:58:37.308Z] [INFO] Tearing down admin page fixture

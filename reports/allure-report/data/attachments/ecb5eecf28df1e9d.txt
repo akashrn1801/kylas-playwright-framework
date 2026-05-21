@@ -1,0 +1,59 @@
+[2026-05-20T12:44:10.999Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:44:11.000Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:44:16.537Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:16.613Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:19.526Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:19.530Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:19.531Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:44:19.531Z] [INFO] Clicking: add lead button
+[2026-05-20T12:44:23.037Z] [INFO] Filling lead creation form
+[2026-05-20T12:44:23.058Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:44:23.963Z] [INFO] Filling first name with: Beth
+[2026-05-20T12:44:25.613Z] [INFO] Filling last name with: Hilpert
+[2026-05-20T12:44:25.897Z] [INFO] Clicking: add email button
+[2026-05-20T12:44:26.509Z] [INFO] Filling email with: Beth.Hilpert38@yahoo.com
+[2026-05-20T12:44:26.817Z] [INFO] Clicking: add phone button
+[2026-05-20T12:44:27.996Z] [INFO] Filling phone with: 7068666181
+[2026-05-20T12:44:28.214Z] [INFO] Filling address with: 3099 Sanford Rue
+[2026-05-20T12:44:28.540Z] [INFO] Filling city with: Port Addisonworth
+[2026-05-20T12:44:28.807Z] [INFO] Filling state with: North Carolina
+[2026-05-20T12:44:29.103Z] [INFO] Filling zipcode with: 81643
+[2026-05-20T12:44:29.323Z] [INFO] Filling facebook with: https://facebook.com/beth.hilpert
+[2026-05-20T12:44:29.584Z] [INFO] Filling twitter with: https://twitter.com/beth.hilpert
+[2026-05-20T12:44:29.840Z] [INFO] Filling linkedin with: https://linkedin.com/in/beth.hilpert
+[2026-05-20T12:44:30.100Z] [INFO] Filling company name with: Pollich-Denesik, McCullough and Lakin
+[2026-05-20T12:44:30.317Z] [INFO] Filling department with: Beauty
+[2026-05-20T12:44:30.600Z] [INFO] Filling designation with: Customer Optimization Agent
+[2026-05-20T12:44:30.799Z] [INFO] Filling company address with: 6051 E Washington Street
+[2026-05-20T12:44:31.086Z] [INFO] Filling company city with: North Jaidenville
+[2026-05-20T12:44:31.367Z] [INFO] Filling company state with: New York
+[2026-05-20T12:44:31.683Z] [INFO] Filling company zipcode with: 72630
+[2026-05-20T12:44:31.980Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:44:31.981Z] [INFO] Saving lead
+[2026-05-20T12:44:31.981Z] [INFO] Clicking: save button
+[2026-05-20T12:44:34.891Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:35.682Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:35.718Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:44:35.718Z] [INFO] Searching for lead: Beth
+[2026-05-20T12:44:35.718Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:36.367Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:41.490Z] [INFO] Filling search input with: Beth
+[2026-05-20T12:44:42.970Z] [SUCCESS] Opened lead: Beth
+[2026-05-20T12:44:42.970Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:44:43.091Z] [INFO] Clicking edit icon
+[2026-05-20T12:44:43.091Z] [INFO] Clicking: edit icon
+[2026-05-20T12:44:45.135Z] [SUCCESS] Edit form opened
+[2026-05-20T12:44:45.136Z] [INFO] Filling edit form
+[2026-05-20T12:44:45.136Z] [INFO] Filling first name with: Grady
+[2026-05-20T12:44:45.531Z] [INFO] Filling last name with: Waters
+[2026-05-20T12:44:45.931Z] [SUCCESS] Edit form filled
+[2026-05-20T12:44:45.931Z] [INFO] Saving edited lead
+[2026-05-20T12:44:45.931Z] [INFO] Clicking: save button
+[2026-05-20T12:44:48.317Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:44:48.317Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:48.321Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:48.485Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:48.487Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:48.487Z] [INFO] Asserting lead in list: Grady Waters
+[2026-05-20T12:44:48.487Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:45:41.082Z] [INFO] Tearing down restricted page fixture

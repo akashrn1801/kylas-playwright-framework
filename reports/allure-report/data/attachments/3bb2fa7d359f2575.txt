@@ -1,0 +1,45 @@
+[2026-05-20T12:44:11.286Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:44:11.287Z] [INFO] Creating context for role: admin
+[2026-05-20T12:44:18.204Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:44:18.204Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:44:22.687Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:22.725Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:22.854Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:22.856Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:22.857Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:44:22.857Z] [INFO] Clicking: add lead button
+[2026-05-20T12:44:28.185Z] [INFO] Filling lead creation form
+[2026-05-20T12:44:28.198Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:44:30.177Z] [INFO] Filling first name with: Ferne
+[2026-05-20T12:44:30.395Z] [INFO] Filling last name with: Kemmer
+[2026-05-20T12:44:30.768Z] [INFO] Clicking: add email button
+[2026-05-20T12:44:31.466Z] [INFO] Filling email with: Ferne_Kemmer@gmail.com
+[2026-05-20T12:44:31.664Z] [INFO] Clicking: add phone button
+[2026-05-20T12:44:32.574Z] [INFO] Filling phone with: 8171444008
+[2026-05-20T12:44:32.815Z] [INFO] Filling address with: 8258 Amy Crossing
+[2026-05-20T12:44:33.104Z] [INFO] Filling city with: New Chanellecester
+[2026-05-20T12:44:33.407Z] [INFO] Filling state with: South Carolina
+[2026-05-20T12:44:33.694Z] [INFO] Filling zipcode with: 36051
+[2026-05-20T12:44:33.974Z] [INFO] Filling facebook with: https://facebook.com/ferne.kemmer
+[2026-05-20T12:44:34.321Z] [INFO] Filling twitter with: https://twitter.com/ferne.kemmer
+[2026-05-20T12:44:34.540Z] [INFO] Filling linkedin with: https://linkedin.com/in/ferne.kemmer
+[2026-05-20T12:44:34.840Z] [INFO] Filling company name with: Kulas, Mante and Little
+[2026-05-20T12:44:35.150Z] [INFO] Filling department with: Garden
+[2026-05-20T12:44:35.500Z] [INFO] Filling designation with: District Identity Director
+[2026-05-20T12:44:35.764Z] [INFO] Filling company address with: 964 Littel Overpass
+[2026-05-20T12:44:36.059Z] [INFO] Filling company city with: McDermottville
+[2026-05-20T12:44:36.370Z] [INFO] Filling company state with: Illinois
+[2026-05-20T12:44:36.694Z] [INFO] Filling company zipcode with: 26064
+[2026-05-20T12:44:37.096Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:44:37.096Z] [INFO] Saving lead
+[2026-05-20T12:44:37.097Z] [INFO] Clicking: save button
+[2026-05-20T12:44:40.246Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:42.394Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:42.429Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:44:42.429Z] [INFO] Searching for lead: Ferne
+[2026-05-20T12:44:42.429Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:42.904Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:48.183Z] [INFO] Filling search input with: Ferne
+[2026-05-20T12:44:49.608Z] [SUCCESS] Opened lead: Ferne
+[2026-05-20T12:44:52.367Z] [INFO] Tearing down restricted page fixture
+[2026-05-20T12:44:52.480Z] [INFO] Tearing down admin page fixture

@@ -1,0 +1,41 @@
+[2026-05-20T12:44:28.776Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:44:28.776Z] [INFO] Creating context for role: admin
+[2026-05-20T12:44:33.373Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:33.503Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:36.412Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:36.414Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:36.414Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:44:36.414Z] [INFO] Clicking: add lead button
+[2026-05-20T12:44:38.648Z] [INFO] Filling lead creation form
+[2026-05-20T12:44:39.669Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:44:43.216Z] [INFO] Filling first name with: Dariana
+[2026-05-20T12:44:43.466Z] [INFO] Filling last name with: Waters
+[2026-05-20T12:44:44.170Z] [INFO] Clicking: add email button
+[2026-05-20T12:44:44.877Z] [INFO] Filling email with: Dariana_Waters13@gmail.com
+[2026-05-20T12:44:45.063Z] [INFO] Clicking: add phone button
+[2026-05-20T12:44:45.919Z] [INFO] Filling phone with: 6150904506
+[2026-05-20T12:44:46.096Z] [INFO] Filling address with: 50062 Zieme Flats
+[2026-05-20T12:44:46.276Z] [INFO] Filling city with: Terryton
+[2026-05-20T12:44:46.472Z] [INFO] Filling state with: Michigan
+[2026-05-20T12:44:46.680Z] [INFO] Filling zipcode with: 86158
+[2026-05-20T12:44:46.872Z] [INFO] Filling facebook with: https://facebook.com/dariana.waters
+[2026-05-20T12:44:47.101Z] [INFO] Filling twitter with: https://twitter.com/dariana.waters
+[2026-05-20T12:44:47.340Z] [INFO] Filling linkedin with: https://linkedin.com/in/dariana.waters
+[2026-05-20T12:44:47.634Z] [INFO] Filling company name with: Hoppe-Swift, Pagac and Schmeler-Daugherty
+[2026-05-20T12:44:47.889Z] [INFO] Filling department with: Automotive
+[2026-05-20T12:44:48.061Z] [INFO] Filling designation with: National Program Technician
+[2026-05-20T12:44:48.265Z] [INFO] Filling company address with: 3074 Caleigh Shoals
+[2026-05-20T12:44:48.490Z] [INFO] Filling company city with: Eribertohaven
+[2026-05-20T12:44:48.711Z] [INFO] Filling company state with: Colorado
+[2026-05-20T12:44:49.067Z] [INFO] Filling company zipcode with: 24965
+[2026-05-20T12:44:49.439Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:44:49.439Z] [INFO] Saving lead
+[2026-05-20T12:44:49.439Z] [INFO] Clicking: save button
+[2026-05-20T12:44:52.423Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:44:53.498Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:53.526Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:44:53.526Z] [INFO] Asserting lead in list: Dariana Waters
+[2026-05-20T12:44:53.526Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:58.542Z] [INFO] Filling search input with: Dariana
+[2026-05-20T12:44:59.243Z] [SUCCESS] Lead found in list: Dariana Waters
+[2026-05-20T12:44:59.244Z] [INFO] Tearing down admin page fixture

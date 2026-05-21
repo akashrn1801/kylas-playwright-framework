@@ -1,0 +1,41 @@
+[2026-05-20T12:40:23.546Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:40:23.546Z] [INFO] Creating context for role: admin
+[2026-05-20T12:40:28.157Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:28.257Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:31.333Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:31.335Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:31.336Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:40:31.336Z] [INFO] Clicking: add lead button
+[2026-05-20T12:40:34.726Z] [INFO] Filling lead creation form
+[2026-05-20T12:40:34.850Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:40:37.229Z] [INFO] Filling first name with: Georgia
+[2026-05-20T12:40:37.419Z] [INFO] Filling last name with: Larson
+[2026-05-20T12:40:37.739Z] [INFO] Clicking: add email button
+[2026-05-20T12:40:38.508Z] [INFO] Filling email with: Georgia_Larson@gmail.com
+[2026-05-20T12:40:38.859Z] [INFO] Clicking: add phone button
+[2026-05-20T12:40:39.766Z] [INFO] Filling phone with: 8215714089
+[2026-05-20T12:40:39.999Z] [INFO] Filling address with: 97934 3rd Street
+[2026-05-20T12:40:40.234Z] [INFO] Filling city with: West Russ
+[2026-05-20T12:40:40.447Z] [INFO] Filling state with: Hawaii
+[2026-05-20T12:40:40.663Z] [INFO] Filling zipcode with: 03951
+[2026-05-20T12:40:40.921Z] [INFO] Filling facebook with: https://facebook.com/georgia.larson
+[2026-05-20T12:40:41.116Z] [INFO] Filling twitter with: https://twitter.com/georgia.larson
+[2026-05-20T12:40:41.392Z] [INFO] Filling linkedin with: https://linkedin.com/in/georgia.larson
+[2026-05-20T12:40:41.650Z] [INFO] Filling company name with: Stokes - Breitenberg
+[2026-05-20T12:40:41.867Z] [INFO] Filling department with: Beauty
+[2026-05-20T12:40:42.147Z] [INFO] Filling designation with: Internal Markets Executive
+[2026-05-20T12:40:42.416Z] [INFO] Filling company address with: 411 Desiree Overpass
+[2026-05-20T12:40:42.793Z] [INFO] Filling company city with: Kerluketown
+[2026-05-20T12:40:43.127Z] [INFO] Filling company state with: Iowa
+[2026-05-20T12:40:43.448Z] [INFO] Filling company zipcode with: 43841
+[2026-05-20T12:40:43.718Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:40:43.718Z] [INFO] Saving lead
+[2026-05-20T12:40:43.718Z] [INFO] Clicking: save button
+[2026-05-20T12:40:46.835Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:48.572Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:48.591Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:40:48.592Z] [INFO] Asserting lead in list: Georgia Larson
+[2026-05-20T12:40:48.592Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:53.199Z] [INFO] Filling search input with: Georgia
+[2026-05-20T12:40:53.846Z] [SUCCESS] Lead found in list: Georgia Larson
+[2026-05-20T12:40:53.846Z] [INFO] Tearing down admin page fixture

@@ -1,0 +1,59 @@
+[2026-05-20T12:40:32.034Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:40:32.034Z] [INFO] Creating context for role: admin
+[2026-05-20T12:40:37.115Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:37.258Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:40.298Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:40.300Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:40.301Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:40:40.301Z] [INFO] Clicking: add lead button
+[2026-05-20T12:40:45.629Z] [INFO] Filling lead creation form
+[2026-05-20T12:40:45.639Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:40:47.376Z] [INFO] Filling first name with: Lambert
+[2026-05-20T12:40:47.618Z] [INFO] Filling last name with: Mayert
+[2026-05-20T12:40:48.005Z] [INFO] Clicking: add email button
+[2026-05-20T12:40:48.657Z] [INFO] Filling email with: Lambert.Mayert@gmail.com
+[2026-05-20T12:40:48.871Z] [INFO] Clicking: add phone button
+[2026-05-20T12:40:49.688Z] [INFO] Filling phone with: 7957777346
+[2026-05-20T12:40:49.824Z] [INFO] Filling address with: 3733 Emard Branch
+[2026-05-20T12:40:49.972Z] [INFO] Filling city with: New Lucillechester
+[2026-05-20T12:40:50.120Z] [INFO] Filling state with: Louisiana
+[2026-05-20T12:40:50.276Z] [INFO] Filling zipcode with: 15585
+[2026-05-20T12:40:50.462Z] [INFO] Filling facebook with: https://facebook.com/lambert.mayert
+[2026-05-20T12:40:50.668Z] [INFO] Filling twitter with: https://twitter.com/lambert.mayert
+[2026-05-20T12:40:50.832Z] [INFO] Filling linkedin with: https://linkedin.com/in/lambert.mayert
+[2026-05-20T12:40:50.984Z] [INFO] Filling company name with: Hudson, Bednar and Kunde-Blick
+[2026-05-20T12:40:51.226Z] [INFO] Filling department with: Home
+[2026-05-20T12:40:51.391Z] [INFO] Filling designation with: Corporate Creative Specialist
+[2026-05-20T12:40:51.572Z] [INFO] Filling company address with: 8748 Carroll Keys
+[2026-05-20T12:40:51.755Z] [INFO] Filling company city with: St. Peters
+[2026-05-20T12:40:51.917Z] [INFO] Filling company state with: New Mexico
+[2026-05-20T12:40:52.118Z] [INFO] Filling company zipcode with: 49584
+[2026-05-20T12:40:52.388Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:40:52.388Z] [INFO] Saving lead
+[2026-05-20T12:40:52.388Z] [INFO] Clicking: save button
+[2026-05-20T12:40:55.007Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:55.413Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:55.425Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:40:55.425Z] [INFO] Searching for lead: Lambert
+[2026-05-20T12:40:55.425Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:55.659Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:41:00.173Z] [INFO] Filling search input with: Lambert
+[2026-05-20T12:41:01.017Z] [SUCCESS] Opened lead: Lambert
+[2026-05-20T12:41:01.017Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:41:01.083Z] [INFO] Clicking edit icon
+[2026-05-20T12:41:01.083Z] [INFO] Clicking: edit icon
+[2026-05-20T12:41:02.432Z] [SUCCESS] Edit form opened
+[2026-05-20T12:41:02.432Z] [INFO] Filling edit form
+[2026-05-20T12:41:02.432Z] [INFO] Filling first name with: Kirk
+[2026-05-20T12:41:02.554Z] [INFO] Filling last name with: Miller
+[2026-05-20T12:41:02.792Z] [SUCCESS] Edit form filled
+[2026-05-20T12:41:02.792Z] [INFO] Saving edited lead
+[2026-05-20T12:41:02.792Z] [INFO] Clicking: save button
+[2026-05-20T12:41:05.053Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:41:05.053Z] [INFO] Navigating to Leads list
+[2026-05-20T12:41:05.061Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:41:05.179Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:41:05.181Z] [SUCCESS] On Leads list page
+[2026-05-20T12:41:05.181Z] [INFO] Asserting lead in list: Kirk Miller
+[2026-05-20T12:41:05.181Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:02.103Z] [INFO] Tearing down admin page fixture

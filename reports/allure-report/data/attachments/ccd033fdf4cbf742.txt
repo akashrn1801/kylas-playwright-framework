@@ -1,0 +1,59 @@
+[2026-05-20T12:45:41.685Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:45:41.685Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:45:45.590Z] [INFO] Navigating to Leads list
+[2026-05-20T12:45:45.630Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:45:47.506Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:45:47.507Z] [SUCCESS] On Leads list page
+[2026-05-20T12:45:47.508Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:45:47.508Z] [INFO] Clicking: add lead button
+[2026-05-20T12:45:50.216Z] [INFO] Filling lead creation form
+[2026-05-20T12:45:50.251Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:45:51.782Z] [INFO] Filling first name with: Mario
+[2026-05-20T12:45:52.009Z] [INFO] Filling last name with: Greenholt
+[2026-05-20T12:45:52.331Z] [INFO] Clicking: add email button
+[2026-05-20T12:45:52.937Z] [INFO] Filling email with: Mario_Greenholt@gmail.com
+[2026-05-20T12:45:53.194Z] [INFO] Clicking: add phone button
+[2026-05-20T12:45:54.040Z] [INFO] Filling phone with: 8911651873
+[2026-05-20T12:45:54.330Z] [INFO] Filling address with: 56738 S Monroe Street
+[2026-05-20T12:45:54.588Z] [INFO] Filling city with: New Fernemouth
+[2026-05-20T12:45:54.954Z] [INFO] Filling state with: Minnesota
+[2026-05-20T12:45:55.239Z] [INFO] Filling zipcode with: 01689
+[2026-05-20T12:45:55.547Z] [INFO] Filling facebook with: https://facebook.com/mario.greenholt
+[2026-05-20T12:45:55.822Z] [INFO] Filling twitter with: https://twitter.com/mario.greenholt
+[2026-05-20T12:45:56.092Z] [INFO] Filling linkedin with: https://linkedin.com/in/mario.greenholt
+[2026-05-20T12:45:56.385Z] [INFO] Filling company name with: Kirlin, Schowalter and Yundt
+[2026-05-20T12:45:56.774Z] [INFO] Filling department with: Computers
+[2026-05-20T12:45:57.041Z] [INFO] Filling designation with: Future Metrics Engineer
+[2026-05-20T12:45:57.389Z] [INFO] Filling company address with: 8889 Kathleen Forges
+[2026-05-20T12:45:57.728Z] [INFO] Filling company city with: Kamrenborough
+[2026-05-20T12:45:58.012Z] [INFO] Filling company state with: Delaware
+[2026-05-20T12:45:58.312Z] [INFO] Filling company zipcode with: 31741
+[2026-05-20T12:45:58.595Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:45:58.595Z] [INFO] Saving lead
+[2026-05-20T12:45:58.595Z] [INFO] Clicking: save button
+[2026-05-20T12:46:01.218Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:46:02.449Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:46:02.451Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:46:02.451Z] [INFO] Searching for lead: Mario
+[2026-05-20T12:46:02.452Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:46:03.473Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:46:06.271Z] [INFO] Filling search input with: Mario
+[2026-05-20T12:46:08.232Z] [SUCCESS] Opened lead: Mario
+[2026-05-20T12:46:08.232Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:46:08.321Z] [INFO] Clicking edit icon
+[2026-05-20T12:46:08.321Z] [INFO] Clicking: edit icon
+[2026-05-20T12:46:09.837Z] [SUCCESS] Edit form opened
+[2026-05-20T12:46:09.837Z] [INFO] Filling edit form
+[2026-05-20T12:46:09.837Z] [INFO] Filling first name with: Marquis
+[2026-05-20T12:46:10.222Z] [INFO] Filling last name with: Murazik
+[2026-05-20T12:46:10.599Z] [SUCCESS] Edit form filled
+[2026-05-20T12:46:10.599Z] [INFO] Saving edited lead
+[2026-05-20T12:46:10.599Z] [INFO] Clicking: save button
+[2026-05-20T12:46:12.937Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:46:12.937Z] [INFO] Navigating to Leads list
+[2026-05-20T12:46:12.974Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:46:13.130Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:46:13.131Z] [SUCCESS] On Leads list page
+[2026-05-20T12:46:13.131Z] [INFO] Asserting lead in list: Marquis Murazik
+[2026-05-20T12:46:13.131Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:47:11.789Z] [INFO] Tearing down restricted page fixture

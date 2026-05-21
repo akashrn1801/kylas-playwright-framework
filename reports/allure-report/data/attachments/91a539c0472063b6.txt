@@ -1,0 +1,61 @@
+[2026-05-20T12:35:54.965Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:35:54.966Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:36:05.596Z] [INFO] Navigating to Leads list
+[2026-05-20T12:36:05.641Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:36:10.124Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:10.125Z] [SUCCESS] On Leads list page
+[2026-05-20T12:36:10.126Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:36:10.126Z] [INFO] Clicking: add lead button
+[2026-05-20T12:36:13.183Z] [INFO] Filling lead creation form
+[2026-05-20T12:36:13.212Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:36:14.597Z] [INFO] Filling first name with: Kimberly
+[2026-05-20T12:36:14.741Z] [INFO] Filling last name with: Hansen
+[2026-05-20T12:36:14.941Z] [INFO] Clicking: add email button
+[2026-05-20T12:36:15.516Z] [INFO] Filling email with: Kimberly.Hansen@hotmail.com
+[2026-05-20T12:36:15.673Z] [INFO] Clicking: add phone button
+[2026-05-20T12:36:16.525Z] [INFO] Filling phone with: 7961236668
+[2026-05-20T12:36:16.649Z] [INFO] Filling address with: 21789 Freda Cliffs
+[2026-05-20T12:36:16.855Z] [INFO] Filling city with: Walnut Creek
+[2026-05-20T12:36:17.063Z] [INFO] Filling state with: North Dakota
+[2026-05-20T12:36:17.282Z] [INFO] Filling zipcode with: 77408
+[2026-05-20T12:36:17.494Z] [INFO] Filling facebook with: https://facebook.com/kimberly.hansen
+[2026-05-20T12:36:17.714Z] [INFO] Filling twitter with: https://twitter.com/kimberly.hansen
+[2026-05-20T12:36:18.006Z] [INFO] Filling linkedin with: https://linkedin.com/in/kimberly.hansen
+[2026-05-20T12:36:18.294Z] [INFO] Filling company name with: Stanton Group
+[2026-05-20T12:36:18.584Z] [INFO] Filling department with: Shoes
+[2026-05-20T12:36:18.902Z] [INFO] Filling designation with: Internal Accounts Consultant
+[2026-05-20T12:36:19.113Z] [INFO] Filling company address with: 73141 Breitenberg Loaf
+[2026-05-20T12:36:19.361Z] [INFO] Filling company city with: East Sylvester
+[2026-05-20T12:36:19.739Z] [INFO] Filling company state with: Kansas
+[2026-05-20T12:36:20.101Z] [INFO] Filling company zipcode with: 10364
+[2026-05-20T12:36:20.380Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:36:20.380Z] [INFO] Saving lead
+[2026-05-20T12:36:20.380Z] [INFO] Clicking: save button
+[2026-05-20T12:36:23.393Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:36:24.436Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:24.456Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:36:24.456Z] [INFO] Searching for lead: Kimberly
+[2026-05-20T12:36:24.456Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:36:24.936Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:24.960Z] [INFO] Filling search input with: Kimberly
+[2026-05-20T12:36:29.191Z] [SUCCESS] Opened lead: Kimberly
+[2026-05-20T12:36:29.192Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:36:29.300Z] [INFO] Clicking edit icon
+[2026-05-20T12:36:29.300Z] [INFO] Clicking: edit icon
+[2026-05-20T12:36:31.276Z] [SUCCESS] Edit form opened
+[2026-05-20T12:36:31.276Z] [INFO] Filling edit form
+[2026-05-20T12:36:31.276Z] [INFO] Filling first name with: Reyes
+[2026-05-20T12:36:32.403Z] [INFO] Filling last name with: Okuneva
+[2026-05-20T12:36:33.074Z] [SUCCESS] Edit form filled
+[2026-05-20T12:36:33.074Z] [INFO] Saving edited lead
+[2026-05-20T12:36:33.075Z] [INFO] Clicking: save button
+[2026-05-20T12:36:35.588Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:36:35.588Z] [INFO] Navigating to Leads list
+[2026-05-20T12:36:35.593Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:36:35.689Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:35.691Z] [SUCCESS] On Leads list page
+[2026-05-20T12:36:35.691Z] [INFO] Asserting lead in list: Reyes Okuneva
+[2026-05-20T12:36:35.691Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:36.694Z] [INFO] Filling search input with: Reyes
+[2026-05-20T12:36:39.808Z] [SUCCESS] Lead found in list: Reyes Okuneva
+[2026-05-20T12:36:39.809Z] [INFO] Tearing down restricted page fixture

@@ -1,0 +1,59 @@
+[2026-05-20T12:41:36.435Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:41:36.436Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:41:40.515Z] [INFO] Navigating to Leads list
+[2026-05-20T12:41:40.575Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:41:42.141Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:41:42.143Z] [SUCCESS] On Leads list page
+[2026-05-20T12:41:42.143Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:41:42.143Z] [INFO] Clicking: add lead button
+[2026-05-20T12:41:45.900Z] [INFO] Filling lead creation form
+[2026-05-20T12:41:45.959Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:41:47.457Z] [INFO] Filling first name with: Ed
+[2026-05-20T12:41:47.683Z] [INFO] Filling last name with: Tremblay
+[2026-05-20T12:41:48.007Z] [INFO] Clicking: add email button
+[2026-05-20T12:41:48.624Z] [INFO] Filling email with: Ed.Tremblay8@gmail.com
+[2026-05-20T12:41:48.920Z] [INFO] Clicking: add phone button
+[2026-05-20T12:41:49.824Z] [INFO] Filling phone with: 8700344690
+[2026-05-20T12:41:50.093Z] [INFO] Filling address with: 84546 Willow Street
+[2026-05-20T12:41:50.365Z] [INFO] Filling city with: Port Clay
+[2026-05-20T12:41:50.636Z] [INFO] Filling state with: Kentucky
+[2026-05-20T12:41:50.907Z] [INFO] Filling zipcode with: 40692
+[2026-05-20T12:41:51.174Z] [INFO] Filling facebook with: https://facebook.com/ed.tremblay
+[2026-05-20T12:41:51.464Z] [INFO] Filling twitter with: https://twitter.com/ed.tremblay
+[2026-05-20T12:41:51.755Z] [INFO] Filling linkedin with: https://linkedin.com/in/ed.tremblay
+[2026-05-20T12:41:52.048Z] [INFO] Filling company name with: Jacobi - Thiel
+[2026-05-20T12:41:52.339Z] [INFO] Filling department with: Grocery
+[2026-05-20T12:41:52.781Z] [INFO] Filling designation with: Investor Factors Producer
+[2026-05-20T12:41:53.053Z] [INFO] Filling company address with: 13841 Hazel Close
+[2026-05-20T12:41:53.341Z] [INFO] Filling company city with: Elyria
+[2026-05-20T12:41:53.609Z] [INFO] Filling company state with: North Dakota
+[2026-05-20T12:41:53.897Z] [INFO] Filling company zipcode with: 14238
+[2026-05-20T12:41:54.193Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:41:54.194Z] [INFO] Saving lead
+[2026-05-20T12:41:54.194Z] [INFO] Clicking: save button
+[2026-05-20T12:41:56.820Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:41:57.949Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:41:57.950Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:41:57.950Z] [INFO] Searching for lead: Ed
+[2026-05-20T12:41:57.950Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:41:58.880Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:01.871Z] [INFO] Filling search input with: Ed
+[2026-05-20T12:42:03.864Z] [SUCCESS] Opened lead: Ed
+[2026-05-20T12:42:03.865Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:42:03.943Z] [INFO] Clicking edit icon
+[2026-05-20T12:42:03.943Z] [INFO] Clicking: edit icon
+[2026-05-20T12:42:06.563Z] [SUCCESS] Edit form opened
+[2026-05-20T12:42:06.563Z] [INFO] Filling edit form
+[2026-05-20T12:42:06.563Z] [INFO] Filling first name with: Lionel
+[2026-05-20T12:42:06.931Z] [INFO] Filling last name with: Zulauf
+[2026-05-20T12:42:07.456Z] [SUCCESS] Edit form filled
+[2026-05-20T12:42:07.456Z] [INFO] Saving edited lead
+[2026-05-20T12:42:07.456Z] [INFO] Clicking: save button
+[2026-05-20T12:42:10.034Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:42:10.034Z] [INFO] Navigating to Leads list
+[2026-05-20T12:42:10.078Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:42:10.337Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:42:10.339Z] [SUCCESS] On Leads list page
+[2026-05-20T12:42:10.339Z] [INFO] Asserting lead in list: Lionel Zulauf
+[2026-05-20T12:42:10.340Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:43:06.504Z] [INFO] Tearing down restricted page fixture

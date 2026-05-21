@@ -1,0 +1,59 @@
+[2026-05-20T12:44:44.401Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:44:44.401Z] [INFO] Creating context for role: admin
+[2026-05-20T12:44:47.994Z] [INFO] Navigating to Leads list
+[2026-05-20T12:44:48.066Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:44:50.957Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:44:50.959Z] [SUCCESS] On Leads list page
+[2026-05-20T12:44:50.959Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:44:50.959Z] [INFO] Clicking: add lead button
+[2026-05-20T12:44:55.337Z] [INFO] Filling lead creation form
+[2026-05-20T12:44:55.352Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:44:56.832Z] [INFO] Filling first name with: Francisco
+[2026-05-20T12:44:56.950Z] [INFO] Filling last name with: McDermott
+[2026-05-20T12:44:57.142Z] [INFO] Clicking: add email button
+[2026-05-20T12:44:57.699Z] [INFO] Filling email with: Francisco.McDermott@yahoo.com
+[2026-05-20T12:44:57.845Z] [INFO] Clicking: add phone button
+[2026-05-20T12:44:58.606Z] [INFO] Filling phone with: 8286263426
+[2026-05-20T12:44:58.753Z] [INFO] Filling address with: 63854 Alex Drives
+[2026-05-20T12:44:58.879Z] [INFO] Filling city with: Dachville
+[2026-05-20T12:44:59.032Z] [INFO] Filling state with: Alaska
+[2026-05-20T12:44:59.145Z] [INFO] Filling zipcode with: 38133
+[2026-05-20T12:44:59.282Z] [INFO] Filling facebook with: https://facebook.com/francisco.mcdermott
+[2026-05-20T12:44:59.427Z] [INFO] Filling twitter with: https://twitter.com/francisco.mcdermott
+[2026-05-20T12:44:59.567Z] [INFO] Filling linkedin with: https://linkedin.com/in/francisco.mcdermott
+[2026-05-20T12:44:59.807Z] [INFO] Filling company name with: Gleason and Sons
+[2026-05-20T12:44:59.986Z] [INFO] Filling department with: Computers
+[2026-05-20T12:45:00.136Z] [INFO] Filling designation with: Lead Brand Representative
+[2026-05-20T12:45:00.280Z] [INFO] Filling company address with: 4475 Springfield Road
+[2026-05-20T12:45:00.432Z] [INFO] Filling company city with: East Emiliotown
+[2026-05-20T12:45:00.582Z] [INFO] Filling company state with: New Hampshire
+[2026-05-20T12:45:00.734Z] [INFO] Filling company zipcode with: 16792
+[2026-05-20T12:45:00.901Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:45:00.901Z] [INFO] Saving lead
+[2026-05-20T12:45:00.901Z] [INFO] Clicking: save button
+[2026-05-20T12:45:03.364Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:45:04.156Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:45:04.169Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:45:04.169Z] [INFO] Searching for lead: Francisco
+[2026-05-20T12:45:04.169Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:45:04.396Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:45:08.706Z] [INFO] Filling search input with: Francisco
+[2026-05-20T12:45:09.519Z] [SUCCESS] Opened lead: Francisco
+[2026-05-20T12:45:09.519Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:45:09.584Z] [INFO] Clicking edit icon
+[2026-05-20T12:45:09.584Z] [INFO] Clicking: edit icon
+[2026-05-20T12:45:10.841Z] [SUCCESS] Edit form opened
+[2026-05-20T12:45:10.842Z] [INFO] Filling edit form
+[2026-05-20T12:45:10.842Z] [INFO] Filling first name with: Liliana
+[2026-05-20T12:45:10.970Z] [INFO] Filling last name with: Jacobs
+[2026-05-20T12:45:11.234Z] [SUCCESS] Edit form filled
+[2026-05-20T12:45:11.234Z] [INFO] Saving edited lead
+[2026-05-20T12:45:11.234Z] [INFO] Clicking: save button
+[2026-05-20T12:45:13.492Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:45:13.492Z] [INFO] Navigating to Leads list
+[2026-05-20T12:45:13.499Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:45:13.625Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:45:13.627Z] [SUCCESS] On Leads list page
+[2026-05-20T12:45:13.627Z] [INFO] Asserting lead in list: Liliana Jacobs
+[2026-05-20T12:45:13.627Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:46:13.686Z] [INFO] Tearing down admin page fixture

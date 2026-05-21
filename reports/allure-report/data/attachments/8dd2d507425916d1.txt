@@ -1,0 +1,45 @@
+[2026-05-20T12:35:54.964Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:35:54.965Z] [INFO] Creating context for role: admin
+[2026-05-20T12:36:04.443Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:36:04.443Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:36:09.576Z] [INFO] Navigating to Leads list
+[2026-05-20T12:36:09.632Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:36:09.814Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:09.816Z] [SUCCESS] On Leads list page
+[2026-05-20T12:36:09.817Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:36:09.817Z] [INFO] Clicking: add lead button
+[2026-05-20T12:36:12.285Z] [INFO] Filling lead creation form
+[2026-05-20T12:36:12.657Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:36:14.781Z] [INFO] Filling first name with: Alfonso
+[2026-05-20T12:36:14.914Z] [INFO] Filling last name with: Schneider
+[2026-05-20T12:36:15.289Z] [INFO] Clicking: add email button
+[2026-05-20T12:36:15.911Z] [INFO] Filling email with: Alfonso.Schneider1@hotmail.com
+[2026-05-20T12:36:16.066Z] [INFO] Clicking: add phone button
+[2026-05-20T12:36:16.830Z] [INFO] Filling phone with: 7464563248
+[2026-05-20T12:36:17.091Z] [INFO] Filling address with: 429 S Main
+[2026-05-20T12:36:17.397Z] [INFO] Filling city with: Timmyburgh
+[2026-05-20T12:36:17.689Z] [INFO] Filling state with: Wyoming
+[2026-05-20T12:36:17.950Z] [INFO] Filling zipcode with: 16114
+[2026-05-20T12:36:18.253Z] [INFO] Filling facebook with: https://facebook.com/alfonso.schneider
+[2026-05-20T12:36:18.570Z] [INFO] Filling twitter with: https://twitter.com/alfonso.schneider
+[2026-05-20T12:36:18.965Z] [INFO] Filling linkedin with: https://linkedin.com/in/alfonso.schneider
+[2026-05-20T12:36:19.285Z] [INFO] Filling company name with: Mitchell and Sons
+[2026-05-20T12:36:19.635Z] [INFO] Filling department with: Garden
+[2026-05-20T12:36:19.961Z] [INFO] Filling designation with: Customer Markets Analyst
+[2026-05-20T12:36:20.258Z] [INFO] Filling company address with: 6751 Tyrone Viaduct
+[2026-05-20T12:36:20.611Z] [INFO] Filling company city with: Sabrinaborough
+[2026-05-20T12:36:20.884Z] [INFO] Filling company state with: Oregon
+[2026-05-20T12:36:21.203Z] [INFO] Filling company zipcode with: 60091
+[2026-05-20T12:36:21.550Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:36:21.551Z] [INFO] Saving lead
+[2026-05-20T12:36:21.551Z] [INFO] Clicking: save button
+[2026-05-20T12:36:24.433Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:36:26.092Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:26.124Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:36:26.124Z] [INFO] Searching for lead: Alfonso
+[2026-05-20T12:36:26.124Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:36:26.532Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:36:26.559Z] [INFO] Filling search input with: Alfonso
+[2026-05-20T12:36:30.502Z] [SUCCESS] Opened lead: Alfonso
+[2026-05-20T12:36:34.019Z] [INFO] Tearing down restricted page fixture
+[2026-05-20T12:36:34.213Z] [INFO] Tearing down admin page fixture

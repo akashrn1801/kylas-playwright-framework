@@ -1,0 +1,45 @@
+[2026-05-20T12:57:42.074Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:57:42.075Z] [INFO] Creating context for role: admin
+[2026-05-20T12:57:50.009Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:57:50.009Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:57:56.659Z] [INFO] Navigating to Leads list
+[2026-05-20T12:57:56.703Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:57:56.929Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:57:56.932Z] [SUCCESS] On Leads list page
+[2026-05-20T12:57:56.932Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:57:56.933Z] [INFO] Clicking: add lead button
+[2026-05-20T12:58:01.601Z] [INFO] Filling lead creation form
+[2026-05-20T12:58:01.627Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:58:03.810Z] [INFO] Filling first name with: Charley
+[2026-05-20T12:58:04.027Z] [INFO] Filling last name with: Powlowski
+[2026-05-20T12:58:04.346Z] [INFO] Clicking: add email button
+[2026-05-20T12:58:05.127Z] [INFO] Filling email with: Charley_Powlowski7@gmail.com
+[2026-05-20T12:58:05.551Z] [INFO] Clicking: add phone button
+[2026-05-20T12:58:06.830Z] [INFO] Filling phone with: 7067573203
+[2026-05-20T12:58:07.277Z] [INFO] Filling address with: 66950 Manor Close
+[2026-05-20T12:58:07.644Z] [INFO] Filling city with: Carson
+[2026-05-20T12:58:08.077Z] [INFO] Filling state with: North Carolina
+[2026-05-20T12:58:08.530Z] [INFO] Filling zipcode with: 60208
+[2026-05-20T12:58:08.902Z] [INFO] Filling facebook with: https://facebook.com/charley.powlowski
+[2026-05-20T12:58:09.374Z] [INFO] Filling twitter with: https://twitter.com/charley.powlowski
+[2026-05-20T12:58:09.688Z] [INFO] Filling linkedin with: https://linkedin.com/in/charley.powlowski
+[2026-05-20T12:58:10.037Z] [INFO] Filling company name with: Kulas - Zemlak-Schaden
+[2026-05-20T12:58:10.441Z] [INFO] Filling department with: Outdoors
+[2026-05-20T12:58:10.874Z] [INFO] Filling designation with: Lead Identity Analyst
+[2026-05-20T12:58:11.303Z] [INFO] Filling company address with: 17749 Kihn Coves
+[2026-05-20T12:58:11.771Z] [INFO] Filling company city with: South Isabelton
+[2026-05-20T12:58:12.302Z] [INFO] Filling company state with: Utah
+[2026-05-20T12:58:12.718Z] [INFO] Filling company zipcode with: 64029
+[2026-05-20T12:58:13.158Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:58:13.159Z] [INFO] Saving lead
+[2026-05-20T12:58:13.159Z] [INFO] Clicking: save button
+[2026-05-20T12:58:16.524Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:18.623Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:18.657Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:58:18.657Z] [INFO] Searching for lead: Charley
+[2026-05-20T12:58:18.657Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:19.441Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:22.713Z] [INFO] Filling search input with: Charley
+[2026-05-20T12:58:27.679Z] [SUCCESS] Opened lead: Charley
+[2026-05-20T12:58:30.620Z] [INFO] Tearing down restricted page fixture
+[2026-05-20T12:58:30.721Z] [INFO] Tearing down admin page fixture

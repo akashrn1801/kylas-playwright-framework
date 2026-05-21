@@ -1,0 +1,61 @@
+[2026-05-20T12:58:14.750Z] [INFO] Setting up admin page fixture
+[2026-05-20T12:58:14.750Z] [INFO] Creating context for role: admin
+[2026-05-20T12:58:19.223Z] [INFO] Navigating to Leads list
+[2026-05-20T12:58:19.343Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:58:22.286Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:22.291Z] [SUCCESS] On Leads list page
+[2026-05-20T12:58:22.291Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:58:22.291Z] [INFO] Clicking: add lead button
+[2026-05-20T12:58:26.704Z] [INFO] Filling lead creation form
+[2026-05-20T12:58:26.725Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:58:28.787Z] [INFO] Filling first name with: Antoinette
+[2026-05-20T12:58:29.057Z] [INFO] Filling last name with: Fisher
+[2026-05-20T12:58:29.483Z] [INFO] Clicking: add email button
+[2026-05-20T12:58:30.242Z] [INFO] Filling email with: Antoinette_Fisher30@yahoo.com
+[2026-05-20T12:58:30.468Z] [INFO] Clicking: add phone button
+[2026-05-20T12:58:31.584Z] [INFO] Filling phone with: 9756944510
+[2026-05-20T12:58:31.818Z] [INFO] Filling address with: 54702 Heath Road
+[2026-05-20T12:58:32.084Z] [INFO] Filling city with: West Martina
+[2026-05-20T12:58:32.340Z] [INFO] Filling state with: Michigan
+[2026-05-20T12:58:32.550Z] [INFO] Filling zipcode with: 12858
+[2026-05-20T12:58:32.745Z] [INFO] Filling facebook with: https://facebook.com/antoinette.fisher
+[2026-05-20T12:58:32.992Z] [INFO] Filling twitter with: https://twitter.com/antoinette.fisher
+[2026-05-20T12:58:33.258Z] [INFO] Filling linkedin with: https://linkedin.com/in/antoinette.fisher
+[2026-05-20T12:58:33.525Z] [INFO] Filling company name with: Streich - Collins
+[2026-05-20T12:58:33.795Z] [INFO] Filling department with: Industrial
+[2026-05-20T12:58:34.038Z] [INFO] Filling designation with: Chief Communications Director
+[2026-05-20T12:58:34.259Z] [INFO] Filling company address with: 3508 Broadway
+[2026-05-20T12:58:34.537Z] [INFO] Filling company city with: Christyhaven
+[2026-05-20T12:58:34.788Z] [INFO] Filling company state with: Oregon
+[2026-05-20T12:58:35.015Z] [INFO] Filling company zipcode with: 51892
+[2026-05-20T12:58:35.217Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:58:35.217Z] [INFO] Saving lead
+[2026-05-20T12:58:35.217Z] [INFO] Clicking: save button
+[2026-05-20T12:58:37.813Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:38.358Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:38.372Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:58:38.372Z] [INFO] Searching for lead: Antoinette
+[2026-05-20T12:58:38.372Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:58:38.645Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:44.826Z] [INFO] Filling search input with: Antoinette
+[2026-05-20T12:58:45.881Z] [SUCCESS] Opened lead: Antoinette
+[2026-05-20T12:58:45.881Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:58:45.954Z] [INFO] Clicking edit icon
+[2026-05-20T12:58:45.954Z] [INFO] Clicking: edit icon
+[2026-05-20T12:58:47.243Z] [SUCCESS] Edit form opened
+[2026-05-20T12:58:47.243Z] [INFO] Filling edit form
+[2026-05-20T12:58:47.243Z] [INFO] Filling first name with: Catherine
+[2026-05-20T12:58:47.491Z] [INFO] Filling last name with: Upton-Kulas
+[2026-05-20T12:58:48.026Z] [SUCCESS] Edit form filled
+[2026-05-20T12:58:48.027Z] [INFO] Saving edited lead
+[2026-05-20T12:58:48.027Z] [INFO] Clicking: save button
+[2026-05-20T12:58:50.266Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:58:50.266Z] [INFO] Navigating to Leads list
+[2026-05-20T12:58:50.274Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:58:50.401Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:50.403Z] [SUCCESS] On Leads list page
+[2026-05-20T12:58:50.403Z] [INFO] Asserting lead in list: Catherine Upton-Kulas
+[2026-05-20T12:58:50.403Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:58:51.390Z] [INFO] Filling search input with: Catherine
+[2026-05-20T12:58:51.932Z] [SUCCESS] Lead found in list: Catherine Upton-Kulas
+[2026-05-20T12:58:51.934Z] [INFO] Tearing down admin page fixture

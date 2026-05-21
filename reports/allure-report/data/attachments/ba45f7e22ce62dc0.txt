@@ -1,0 +1,59 @@
+[2026-05-20T12:40:05.685Z] [INFO] Setting up restricted page fixture
+[2026-05-20T12:40:05.685Z] [INFO] Creating context for role: restricted
+[2026-05-20T12:40:14.626Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:14.716Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:17.547Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:17.549Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:17.549Z] [INFO] Clicking Add Lead button
+[2026-05-20T12:40:17.550Z] [INFO] Clicking: add lead button
+[2026-05-20T12:40:21.373Z] [INFO] Filling lead creation form
+[2026-05-20T12:40:21.384Z] [INFO] Disabling Show Required & Important Fields toggle
+[2026-05-20T12:40:23.153Z] [INFO] Filling first name with: Blake
+[2026-05-20T12:40:23.303Z] [INFO] Filling last name with: Kris
+[2026-05-20T12:40:23.629Z] [INFO] Clicking: add email button
+[2026-05-20T12:40:24.303Z] [INFO] Filling email with: Blake_Kris@yahoo.com
+[2026-05-20T12:40:24.573Z] [INFO] Clicking: add phone button
+[2026-05-20T12:40:25.573Z] [INFO] Filling phone with: 9769981086
+[2026-05-20T12:40:25.811Z] [INFO] Filling address with: 104 Claremont Road
+[2026-05-20T12:40:25.955Z] [INFO] Filling city with: Lake Micheal
+[2026-05-20T12:40:26.091Z] [INFO] Filling state with: Texas
+[2026-05-20T12:40:26.248Z] [INFO] Filling zipcode with: 82785
+[2026-05-20T12:40:26.411Z] [INFO] Filling facebook with: https://facebook.com/blake.kris
+[2026-05-20T12:40:26.664Z] [INFO] Filling twitter with: https://twitter.com/blake.kris
+[2026-05-20T12:40:26.942Z] [INFO] Filling linkedin with: https://linkedin.com/in/blake.kris
+[2026-05-20T12:40:27.163Z] [INFO] Filling company name with: D'Amore, Osinski and Nolan
+[2026-05-20T12:40:27.465Z] [INFO] Filling department with: Sports
+[2026-05-20T12:40:27.693Z] [INFO] Filling designation with: Internal Web Administrator
+[2026-05-20T12:40:28.079Z] [INFO] Filling company address with: 6943 Samantha Dam
+[2026-05-20T12:40:28.343Z] [INFO] Filling company city with: West Misaelbury
+[2026-05-20T12:40:28.593Z] [INFO] Filling company state with: Georgia
+[2026-05-20T12:40:28.883Z] [INFO] Filling company zipcode with: 75420
+[2026-05-20T12:40:29.326Z] [SUCCESS] Lead form filled successfully
+[2026-05-20T12:40:29.326Z] [INFO] Saving lead
+[2026-05-20T12:40:29.326Z] [INFO] Clicking: save button
+[2026-05-20T12:40:32.655Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:34.285Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:34.305Z] [SUCCESS] Lead saved successfully
+[2026-05-20T12:40:34.306Z] [INFO] Searching for lead: Blake
+[2026-05-20T12:40:34.306Z] [INFO] Navigating to: https://app.kylas.io/sales/leads/list
+[2026-05-20T12:40:34.833Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:39.861Z] [INFO] Filling search input with: Blake
+[2026-05-20T12:40:41.510Z] [SUCCESS] Opened lead: Blake
+[2026-05-20T12:40:41.511Z] [INFO] Asserting URL: /sales\/leads\/details\//
+[2026-05-20T12:40:41.694Z] [INFO] Clicking edit icon
+[2026-05-20T12:40:41.694Z] [INFO] Clicking: edit icon
+[2026-05-20T12:40:43.339Z] [SUCCESS] Edit form opened
+[2026-05-20T12:40:43.339Z] [INFO] Filling edit form
+[2026-05-20T12:40:43.339Z] [INFO] Filling first name with: Jude
+[2026-05-20T12:40:43.706Z] [INFO] Filling last name with: Fadel
+[2026-05-20T12:40:44.312Z] [SUCCESS] Edit form filled
+[2026-05-20T12:40:44.313Z] [INFO] Saving edited lead
+[2026-05-20T12:40:44.313Z] [INFO] Clicking: save button
+[2026-05-20T12:40:46.811Z] [SUCCESS] Lead updated successfully
+[2026-05-20T12:40:46.811Z] [INFO] Navigating to Leads list
+[2026-05-20T12:40:46.818Z] [INFO] Clicking: leads nav icon
+[2026-05-20T12:40:46.934Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:40:46.936Z] [SUCCESS] On Leads list page
+[2026-05-20T12:40:46.936Z] [INFO] Asserting lead in list: Jude Fadel
+[2026-05-20T12:40:46.936Z] [INFO] Waiting for URL: /leads\/list/
+[2026-05-20T12:41:35.809Z] [INFO] Tearing down restricted page fixture

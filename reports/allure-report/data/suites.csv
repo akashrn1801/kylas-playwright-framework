@@ -1,0 +1,8 @@
+"DESCRIPTION","DURATION IN MS","NAME","PARENT SUITE","START TIME","STATUS","STOP TIME","SUB SUITE","SUITE","TEST CLASS","TEST METHOD"
+"","10875","Restricted user can navigate to leads list","chromium","2026-05-20","passed","2026-05-20","Leads RBAC","rbac/leads.rbac.spec.ts","",""
+"","44990","Restricted user can edit own lead","chromium","2026-05-20","passed","2026-05-20","Leads RBAC","rbac/leads.rbac.spec.ts","",""
+"","32709","Restricted user can create a lead","chromium","2026-05-20","passed","2026-05-20","Leads RBAC","rbac/leads.rbac.spec.ts","",""
+"","7817","Admin should navigate to leads list page","chromium","2026-05-20","passed","2026-05-20","Leads Module","ui/leads/leads.spec.ts","",""
+"","36295","Admin should create a new lead with all fields","chromium","2026-05-20","passed","2026-05-20","Leads Module","ui/leads/leads.spec.ts","",""
+"","48797","Restricted user cannot access admin lead","chromium","2026-05-20","passed","2026-05-20","Leads RBAC","rbac/leads.rbac.spec.ts","",""
+"","37361","Admin should update a created lead","chromium","2026-05-20","passed","2026-05-20","Leads Module","ui/leads/leads.spec.ts","",""
