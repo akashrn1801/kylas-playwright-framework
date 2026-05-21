@@ -16,6 +16,9 @@ export class AuthManager {
   private browser: Browser;
   private storageStatePath = path.join(__dirname, 'storageStates');
 
+  // Per-role mutex: prevents two workers writing same file simultaneously
+  private static loginInProgress: Map<string, Promise<void>> = new Map();
+
   constructor(browser: Browser) {
     this.browser = browser;
     this.ensureStorageStateDir();
@@ -35,6 +38,16 @@ export class AuthManager {
     return config.users[role];
   }
 
+  // Validate appUrl is not empty — fail fast with clear message
+  private validateAppUrl(): void {
+    if (!config.appUrl || config.appUrl.trim() === '') {
+      throw new Error(
+        `config.appUrl is empty. ENV=${config.env}. ` +
+        `Check that ${config.env.toUpperCase()}_APP_URL is set in .env or Jenkins environment.`
+      );
+    }
+  }
+
   private async dismissPopupIfPresent(page: Page): Promise<void> {
     try {
       const doItLater = page.getByText("I'll do it later");
@@ -43,7 +56,7 @@ export class AuthManager {
         logger.info('Marketplace popup detected — dismissing');
         await doItLater.click();
         await doItLater.waitFor({ state: 'hidden', timeout: 5000 });
-        logger.success('Popup dismissed');
+        logger.info('Popup dismissed');
         return;
       }
     } catch {
@@ -56,7 +69,7 @@ export class AuthManager {
         logger.info('Modal popup detected — dismissing');
         await dismissButton.click();
         await dismissButton.waitFor({ state: 'hidden', timeout: 5000 });
-        logger.success('Popup dismissed');
+        logger.info('Popup dismissed');
       }
     } catch {
       logger.debug('No popup found — continuing');
@@ -69,16 +82,26 @@ export class AuthManager {
       context = await this.browser.newContext({ storageState: stateFile });
       const page = await context.newPage();
 
-      // Navigate and wait for final URL to settle
-      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+      // Use a SHORT timeout — we just want to know if session is valid
+      // not wait forever. If it times out, session is invalid.
+      await page.goto(config.appUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,  // 15s max — not 60s
+      });
 
-      // Wait a bit for any redirects to complete
-      await page.waitForTimeout(3000);
+      // Wait for redirect to settle — max 5s
+      try {
+        await page.waitForURL(/sales\//, { timeout: 5000 });
+      } catch {
+        // didn't land on sales/ — session invalid
+        return false;
+      }
 
       const currentUrl = page.url();
       logger.info(`Session check URL: ${currentUrl}`);
 
-      return currentUrl.includes('sales/home');
+      // Valid if landed anywhere under /sales/ — not just /sales/home
+      return currentUrl.includes('/sales/');
     } catch (error) {
       logger.warn(`Session validation error: ${error}`);
       return false;
@@ -88,46 +111,87 @@ export class AuthManager {
   }
 
   async loginAndSaveState(role: UserRole): Promise<void> {
+    // If another worker is already logging in for this role, wait for it
+    // instead of running a parallel login that causes a file write race
+    const existing = AuthManager.loginInProgress.get(role);
+    if (existing) {
+      logger.info(`Login already in progress for ${role}, waiting...`);
+      await existing;
+      return;
+    }
+
+    const loginPromise = this._doLogin(role);
+    AuthManager.loginInProgress.set(role, loginPromise);
+    try {
+      await loginPromise;
+    } finally {
+      AuthManager.loginInProgress.delete(role);
+    }
+  }
+
+  private async _doLogin(role: UserRole): Promise<void> {
+    this.validateAppUrl();
     logger.info(`Logging in as: ${role}`);
     const credentials = this.getCredentials(role);
+
+    if (!credentials.email || !credentials.password) {
+      throw new Error(
+        `Credentials missing for role: ${role}, ENV: ${config.env}. ` +
+        `Check ${config.env.toUpperCase()}_${role.toUpperCase()}_EMAIL and PASSWORD in .env`
+      );
+    }
+
     const context = await this.browser.newContext();
     const page = await context.newPage();
 
-  await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(3000);
+    try {
+      // Navigate with explicit timeout
+      await page.goto(config.appUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
 
-// Wait for email input
-await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
+      // Wait for React to hydrate — wait for actual element, not blind sleep
+      await page.locator('#input_email').waitFor({
+        state: 'visible',
+        timeout: 30000,
+      });
 
-// Type credentials to trigger React onChange events
-await page.locator('#input_email').click();
-await page.locator('#input_email').pressSequentially(credentials.email, { delay: 50 });
-await page.waitForTimeout(300);
+      // Clear then fill — more reliable than pressSequentially in CI
+      await page.locator('#input_email').clear();
+      await page.locator('#input_email').fill(credentials.email);
 
-await page.locator('#input_password').click();
-await page.locator('#input_password').pressSequentially(credentials.password, { delay: 50 });
-await page.waitForTimeout(500);
+      await page.locator('#input_password').clear();
+      await page.locator('#input_password').fill(credentials.password);
 
-// Wait for button to become enabled then click
-await page.locator('#loginBtn:not([disabled])').waitFor({ state: 'visible', timeout: 10000 });
-await page.locator('#loginBtn').click();
+      // Wait for button enabled state
+      await page.locator('#loginBtn:not([disabled])').waitFor({
+        state: 'visible',
+        timeout: 10000,
+      });
+      await page.locator('#loginBtn').click();
 
-// Wait for successful login
-await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-    logger.success(`Login successful for role: ${role}`);
+      // Wait for successful navigation to sales area
+      await page.waitForURL(/sales\//, {
+        timeout: config.timeouts.navigation,
+      });
 
-    // Dismiss marketplace popup if it appears
-    await this.dismissPopupIfPresent(page);
+      logger.info(`Login successful for role: ${role}`);
 
-    // Save storage state after popup is handled
-    const stateFile = this.getStorageStateFile(role);
-    await context.storageState({ path: stateFile });
-    logger.success(`Storage state saved for role: ${role}`);
+      // Dismiss any post-login popups
+      await this.dismissPopupIfPresent(page);
 
-    await context.close();
+      // Save storage state
+      const stateFile = this.getStorageStateFile(role);
+      await context.storageState({ path: stateFile });
+      logger.info(`Storage state saved for role: ${role}`);
+    } finally {
+      await context.close();
+    }
   }
 
   async getContextForRole(role: UserRole): Promise<BrowserContext> {
+    this.validateAppUrl();
     const stateFile = this.getStorageStateFile(role);
 
     if (fs.existsSync(stateFile)) {
@@ -138,7 +202,7 @@ await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
         logger.warn(`Session expired for ${role}, logging in fresh`);
         await this.loginAndSaveState(role);
       } else {
-        logger.success(`Session still valid for role: ${role}`);
+        logger.info(`Session still valid for role: ${role}`);
       }
     } else {
       logger.warn(`No storage state found for ${role}. Logging in fresh.`);
