@@ -42,12 +42,12 @@ pipeline {
             }
         }
 
-        stage('Run Playwright Tests') {
-            steps {
-                echo 'Running Playwright tests...'
-                sh 'npx playwright test --project=chromium --ignore=tests/rbac --workers=1'
-            }
-        }
+      stage('Run Playwright Tests') {
+    steps {
+        echo 'Running Playwright tests...'
+        sh 'npx playwright test --project=chromium --workers=1 tests/ui'
+    }
+}
 
         stage('Generate Allure Report') {
             steps {
