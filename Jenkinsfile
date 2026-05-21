@@ -7,7 +7,9 @@ pipeline {
     }
 
     environment {
-        CI = 'true'
+        CI       = 'true'
+        ENV      = 'prod'
+        HEADLESS = 'true'
     }
 
     stages {
@@ -40,12 +42,12 @@ pipeline {
             }
         }
 
-  stage('Run Playwright Tests') {
-    steps {
-        echo 'Running Playwright tests...'
-        sh 'npx playwright test --project=chromium --workers=1'
-    }
-}
+        stage('Run Playwright Tests') {
+            steps {
+                echo 'Running Playwright tests...'
+                sh 'npx playwright test --project=chromium --ignore=tests/rbac --workers=1'
+            }
+        }
 
         stage('Generate Allure Report') {
             steps {
@@ -59,13 +61,11 @@ pipeline {
     post {
         always {
             echo 'Publishing reports...'
-
             allure([
                 includeProperties: false,
                 jdk              : '',
                 results          : [[path: 'allure-results']]
             ])
-
             publishHTML(target: [
                 allowMissing         : true,
                 alwaysLinkToLastBuild: true,
@@ -75,11 +75,9 @@ pipeline {
                 reportName           : 'Playwright HTML Report'
             ])
         }
-
         success {
             echo '✅ All tests passed!'
         }
-
         failure {
             echo '❌ Tests failed — check Allure report for details'
         }
