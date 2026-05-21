@@ -23,7 +23,7 @@ pipeline {
             steps {
                 echo 'Installing dependencies...'
                 sh 'npm ci'
-                sh 'npx playwright install chromium --with-deps'
+                sh 'npx playwright install chromium'
             }
         }
 
@@ -63,7 +63,7 @@ pipeline {
             ])
 
             publishHTML(target: [
-                allowMissing         : false,
+                allowMissing         : true,
                 alwaysLinkToLastBuild: true,
                 keepAll              : true,
                 reportDir            : 'reports/playwright-report',
