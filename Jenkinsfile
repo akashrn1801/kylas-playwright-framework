@@ -80,9 +80,9 @@ pipeline {
 
                 echo 'Installing Playwright browsers and Linux dependencies...'
 
-                sh '''
-                    npx playwright install chromium --with-deps
-                '''
+              sh '''
+    npx playwright install chromium
+'''
 
                 echo 'Installed Playwright browsers successfully'
             }
