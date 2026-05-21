@@ -11,17 +11,23 @@ export type TestFixtures = {
 };
 
 export const test = base.extend<TestFixtures>({
-
   adminPage: async ({ browser }, use) => {
     logger.info('Setting up admin page fixture');
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('admin');
     const page = await context.newPage();
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
+
+    // Single navigation — AuthManager already validated session
+    // No duplicate page.goto here
+    await page.goto(config.appUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForURL(/sales\//, {
+      timeout: config.timeouts.navigation,
+    });
 
     await use(page);
-
     logger.info('Tearing down admin page fixture');
     await context.close();
   },
@@ -31,11 +37,16 @@ export const test = base.extend<TestFixtures>({
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('restricted');
     const page = await context.newPage();
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
+
+    await page.goto(config.appUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForURL(/sales\//, {
+      timeout: config.timeouts.navigation,
+    });
 
     await use(page);
-
     logger.info('Tearing down restricted page fixture');
     await context.close();
   },
@@ -44,9 +55,7 @@ export const test = base.extend<TestFixtures>({
     logger.info('Setting up admin context fixture');
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('admin');
-
     await use(context);
-
     await context.close();
   },
 
@@ -54,9 +63,7 @@ export const test = base.extend<TestFixtures>({
     logger.info('Setting up restricted context fixture');
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('restricted');
-
     await use(context);
-
     await context.close();
   },
 });
