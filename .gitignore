@@ -4,5 +4,15 @@ reports/
 playwright-report/
 allure-results/
 src/auth/storageStates/
+src/auth/storageStates/*.json
 .env
 *.json.bak
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+.vscode/launch.json
+logs/
+*.log
+npm-debug.log*
+*.tmp
+*.temp
