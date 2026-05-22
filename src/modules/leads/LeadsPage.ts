@@ -120,10 +120,28 @@ export class LeadsPage extends BasePage {
     }
   }
 private async performSearch(searchText: string): Promise<void> {
-  await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(2000);  // increase from 1000
-  await this.click(this.searchIcon(), 'search icon');
-  await this.page.waitForTimeout(5000);  // increase from 3000
+  logger.info(`Filling search input with: ${searchText}`);
+  await this.searchInput().waitFor({ state: 'visible', timeout: 10000 });
+  await this.searchInput().clear();
+  await this.searchInput().fill(searchText);
+  // WHY: press Enter to trigger search
+  await this.searchInput().press('Enter');
+  // WHY: wait for the counter to update — this confirms the search API
+  // responded with fresh results, not cached/stale ones
+  // We wait for hidden first (counter disappears during loading)
+  // then visible again (counter reappears with new count)
+  await this.page.locator('text=/\\d+ items?/i')
+    .waitFor({ state: 'hidden', timeout: 5000 })
+    .catch(() => {
+      // Counter may not hide on fast responses — that's fine
+    });
+  await this.page.locator('text=/\\d+ items?/i')
+    .waitFor({ state: 'visible', timeout: 20000 })
+    .catch(async () => {
+      await this.page.locator('text=/no rows found/i')
+        .waitFor({ state: 'visible', timeout: 10000 })
+        .catch(() => {});
+    });
 }
 
   // ─── Navigation ───────────────────────────────────────────
@@ -193,8 +211,7 @@ async goToLeadsList(): Promise<void> {
   }
 
   // ─── Search & Open ────────────────────────────────────────
-
-  async searchAndOpenLead(firstName: string): Promise<void> {
+async searchAndOpenLead(firstName: string): Promise<void> {
   logger.info(`Searching for lead: ${firstName}`);
   await this.navigateTo(`${config.appUrl}/sales/leads/list`);
   await this.waitForUrl(/leads\/list/);
@@ -203,14 +220,15 @@ async goToLeadsList(): Promise<void> {
 
   const nameCell = this.leadRowNameCell(firstName);
 
-  // WHY: on slow CI servers the row renders after the counter updates
-  // We retry the search up to 3 times waiting for the specific row
-  // This is not a sleep — each attempt actively waits for the element
+  // WHY: retry search if row not visible — handles slow search indexing
+  // Each retry waits 3s before searching again giving the server time
   let found = false;
   for (let attempt = 1; attempt <= 3; attempt++) {
     found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
     if (found) break;
     logger.info(`Row not visible yet — retrying search (${attempt}/3)`);
+    // WHY: wait 3 seconds before retry — gives search index time to catch up
+    await this.page.waitForTimeout(3000);
     await this.performSearch(firstName);
   }
 
