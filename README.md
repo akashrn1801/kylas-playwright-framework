@@ -566,4 +566,4 @@ Fixed — `config.ts` only validates the active environment at startup.
 ### Jenkins build fails immediately (2-3 seconds)
 
 Check the `tools` block in `Jenkinsfile` — `nodejs 'Node22'` must match
-exactly the name configured in `Jenkins → Manage Jenkins → Tools → NodeJS`.
+exactly the name configured in `Jenkins → Manage Jenkins → Tools → NodeJS`.# test trigger
