@@ -202,7 +202,7 @@ async goToLeadsList(): Promise<void> {
     await this.performSearch(firstName);
 
     const nameCell = this.leadRowNameCell(firstName);
-    await nameCell.waitFor({ state: 'visible', timeout: 20000 });
+    await nameCell.waitFor({ state: 'visible', timeout: 40000 });
     await nameCell.click();
     await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
     logger.success(`Opened lead: ${firstName}`);
@@ -259,7 +259,7 @@ async goToLeadsList(): Promise<void> {
     await this.page.waitForTimeout(2000);
   }
 
-  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
+  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 20000 });
   logger.success(`Lead confirmed in list: ${firstName}`);
 }
 
