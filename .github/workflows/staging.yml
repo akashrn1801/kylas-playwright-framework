@@ -50,7 +50,7 @@ jobs:
     name: Approval Gate — Prod
     needs: test-staging
     runs-on: ubuntu-latest
-    environment: production
+    environment: production-approval
     steps:
       - name: Approved for Prod
         run: echo "Approved — promoting to prod"

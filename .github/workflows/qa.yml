@@ -52,7 +52,7 @@ jobs:
     name: Approval Gate — Staging
     needs: test-qa
     runs-on: ubuntu-latest
-    environment: staging
+    environment: staging-approval-approval
     steps:
       - name: Approved for Staging
         run: echo "Approved — promoting to staging"
