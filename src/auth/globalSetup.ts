@@ -1,4 +1,3 @@
-// src/auth/globalSetup.ts
 import { chromium, FullConfig } from '@playwright/test';
 import { config } from '../../config/config';
 import * as fs from 'fs';
@@ -10,9 +9,7 @@ const STORAGE_STATE_DIR = path.join(__dirname, 'storageStates', config.env);
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
-
   const browser = await chromium.launch({ headless: true });
-
   try {
     await setupRole('admin', browser);
     await setupRole('restricted', browser);
@@ -28,8 +25,9 @@ async function setupRole(
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
   const credentials = config.users[role];
 
-  // WHY: skip login if state is fresh (under 8 hours old) — speeds up local re-runs
-  if (fs.existsSync(stateFile)) {
+  // WHY: in CI always force fresh login — cached state from previous
+  // builds may be expired or from a different environment
+  if (fs.existsSync(stateFile) && !process.env.CI) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
     if (age < 8 * 60 * 60 * 1000) {
       console.log(`[globalSetup] Reusing fresh state for: ${role}`);
@@ -47,7 +45,13 @@ async function setupRole(
     await page.locator('#input_email').fill(credentials.email);
     await page.locator('#input_password').fill(credentials.password);
     await page.locator('#loginBtn').click();
-    await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
+    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+
+    // WHY: validate we actually landed on the app not redirected back to login
+    const currentUrl = page.url();
+    if (currentUrl.includes('signIn') || currentUrl.includes('login')) {
+      throw new Error(`[globalSetup] Login failed for ${role} — redirected to ${currentUrl}. Check credentials for ENV=${config.env}`);
+    }
 
     try {
       const dismissBtn = page.locator('#cancel[data-dismiss="modal"]');
