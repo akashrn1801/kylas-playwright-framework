@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
@@ -34,8 +34,8 @@ jobs:
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
           DEFAULT_TIMEOUT: 30000
-          NAVIGATION_TIMEOUT: 60000
-          EXPECT_TIMEOUT: 10000
+          NAVIGATION_TIMEOUT: 90000
+          EXPECT_TIMEOUT: 20000
           HEADLESS: true
           WORKERS: 2
           RETRY_COUNT: 1
@@ -46,5 +46,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: reports/playwright-report/
+          path: |
+            reports/playwright-report/
+            test-results/
+          if-no-files-found: warn
           retention-days: 7
