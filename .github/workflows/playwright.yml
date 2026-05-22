@@ -10,12 +10,14 @@ jobs:
   playwright-tests:
     name: playwright-tests
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # WHY: using Node 24 — Node 20 actions are deprecated from June 2026
+          node-version: 24
           cache: 'npm'
 
       - name: Install dependencies
@@ -26,6 +28,9 @@ jobs:
 
       - name: Run tests
         env:
+          # WHY: CI=true enables CI-specific behaviour in playwright.config.ts
+          # and prevents globalSetup from reusing stale local cache
+          CI: true
           ENV: qa
           QA_APP_URL: ${{ secrets.QA_APP_URL }}
           QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
@@ -39,9 +44,10 @@ jobs:
           HEADLESS: true
           WORKERS: 2
           RETRY_COUNT: 1
-        run: npx playwright test --project=chromium --reporter=line
+        run: npx playwright test --project=chromium --reporter=line,html
 
       - name: Upload test report
+        # WHY: always upload even on failure — needed for debugging
         if: always()
         uses: actions/upload-artifact@v4
         with:
