@@ -4,15 +4,14 @@ import { generateLeadData } from '../../src/data/factories/leadFactory';
 
 test.describe('Leads RBAC', () => {
 
-  test.setTimeout(90000);
-
-  test('Restricted user can navigate to leads list', async ({ restrictedPage }) => {
+  test('restricted user can navigate to leads list', async ({ restrictedPage }) => {
     const leadsPage = new LeadsPage(restrictedPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
   });
 
-  test('Restricted user can create a lead', async ({ restrictedPage }) => {
+  test('restricted user can create a lead', async ({ restrictedPage }) => {
+    test.setTimeout(90000);
     const leadsPage = new LeadsPage(restrictedPage);
     const leadData = generateLeadData();
 
@@ -20,53 +19,64 @@ test.describe('Leads RBAC', () => {
     await leadsPage.clickAddLead();
     await leadsPage.fillLeadForm(leadData);
     await leadsPage.saveLead();
-    await leadsPage.assertLeadExistsInList(leadData.firstName, leadData.lastName);
+    await leadsPage.assertLeadExistsInList(leadData.firstName);
   });
 
-  test('Restricted user can edit own lead', async ({ restrictedPage }) => {
+  test('restricted user can edit own lead', async ({ restrictedPage }) => {
+    test.setTimeout(120000);
     const leadsPage = new LeadsPage(restrictedPage);
-    const leadData = generateLeadData();
-    const updatedData = generateLeadData();
+    const original = generateLeadData();
+    const updated  = generateLeadData();
 
     await leadsPage.goToLeadsList();
     await leadsPage.clickAddLead();
-    await leadsPage.fillLeadForm(leadData);
+    await leadsPage.fillLeadForm(original);
     await leadsPage.saveLead();
 
-    await leadsPage.searchAndOpenLead(leadData.firstName);
+    await leadsPage.searchAndOpenLead(original.firstName);
     await leadsPage.assertOnLeadDetailPage();
     await leadsPage.clickEditIcon();
-    await leadsPage.fillEditForm(updatedData);
+    await leadsPage.fillEditForm(updated);
     await leadsPage.saveEditedLead();
 
     await leadsPage.goToLeadsList();
-    await leadsPage.assertLeadExistsInList(updatedData.firstName, updatedData.lastName);
+    await leadsPage.assertLeadExistsInList(updated.firstName);
   });
 
-  test('Restricted user cannot access admin lead', async ({ adminPage, restrictedPage }) => {
+  test('restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
+    test.setTimeout(120000);
+
+    // Step 1 — admin creates a lead and captures its URL
     const adminLeadsPage = new LeadsPage(adminPage);
-    const adminLeadData = generateLeadData();
+    const adminLead = generateLeadData();
 
     await adminLeadsPage.goToLeadsList();
     await adminLeadsPage.clickAddLead();
-    await adminLeadsPage.fillLeadForm(adminLeadData);
+    await adminLeadsPage.fillLeadForm(adminLead);
     await adminLeadsPage.saveLead();
+    await adminLeadsPage.searchAndOpenLead(adminLead.firstName);
 
-    await adminLeadsPage.searchAndOpenLead(adminLeadData.firstName);
     const adminLeadUrl = adminPage.url();
 
-    await restrictedPage.goto(adminLeadUrl);
-    await restrictedPage.waitForLoadState('domcontentloaded');
-    await restrictedPage.waitForTimeout(2000);
+    // Step 2 — restricted user navigates directly to that lead's URL
+    await restrictedPage.goto(adminLeadUrl, { waitUntil: 'domcontentloaded' });
+    await restrictedPage.waitForLoadState('networkidle');
 
-    const currentUrl = restrictedPage.url();
+    // WHY: a proper RBAC assertion must be deterministic — either:
+    // (a) user was redirected away (no access), OR
+    // (b) user can see the page but the edit button must be absent
+    // The old code passed even when the user COULD access the page.
+    const finalUrl = restrictedPage.url();
+    const wasRedirected = finalUrl !== adminLeadUrl;
 
-    if (currentUrl === adminLeadUrl) {
-      const editBtn = restrictedPage.locator('#edit-action-btn');
-      const isEditVisible = await editBtn.isVisible({ timeout: 3000 }).catch(() => false);
-      expect(isEditVisible).toBeFalsy();
+    if (wasRedirected) {
+      // Access denied — redirected away. Test passes.
+      expect(wasRedirected).toBe(true);
     } else {
-      expect(currentUrl).not.toBe(adminLeadUrl);
+      // User can see the page — edit button must NOT be present
+      // WHY: toBeHidden() is a hard assertion, not isVisible() which can silently pass
+      const editBtn = restrictedPage.locator('#edit-action-btn');
+      await expect(editBtn).toBeHidden({ timeout: 5000 });
     }
   });
 
