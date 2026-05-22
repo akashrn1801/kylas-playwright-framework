@@ -4,22 +4,25 @@ dotenv.config();
 type Environment = 'qa' | 'staging' | 'prod';
 const ENV = (process.env.ENV || 'qa') as Environment;
 
-// WHY: silent empty string → hard to debug failures 30 steps into a test
 function requireEnv(key: string): string {
   const val = process.env[key];
   if (!val) throw new Error(`Missing required environment variable: ${key}`);
   return val;
 }
 
-// WHY: prefix resolves to 'QA' | 'STAGING' | 'PROD' — drives both URL
-// and credential lookups so switching ENV= is the only change needed
 const ENV_PREFIX = ENV.toUpperCase();
 
 const urls: Record<Environment, { appUrl: string; apiBaseUrl: string }> = {
-  qa:      { appUrl: requireEnv('QA_APP_URL'),      apiBaseUrl: process.env.QA_API_BASE_URL || '' },
-  staging: { appUrl: requireEnv('STAGING_APP_URL'), apiBaseUrl: process.env.STAGING_API_BASE_URL || '' },
-  prod:    { appUrl: requireEnv('PROD_APP_URL'),     apiBaseUrl: process.env.PROD_API_BASE_URL || '' },
+  qa:      { appUrl: process.env.QA_APP_URL      || '', apiBaseUrl: process.env.QA_API_BASE_URL      || '' },
+  staging: { appUrl: process.env.STAGING_APP_URL || '', apiBaseUrl: process.env.STAGING_API_BASE_URL || '' },
+  prod:    { appUrl: process.env.PROD_APP_URL     || '', apiBaseUrl: process.env.PROD_API_BASE_URL     || '' },
 };
+
+// WHY: only validate the active environment — other envs may not have
+// secrets configured in CI and should not cause startup failures
+if (!urls[ENV].appUrl) {
+  throw new Error(`Missing required environment variable: ${ENV_PREFIX}_APP_URL`);
+}
 
 export const config = {
   env: ENV,
