@@ -121,9 +121,9 @@ export class LeadsPage extends BasePage {
   }
 private async performSearch(searchText: string): Promise<void> {
   await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(2000);  // increase from 1000
+  await this.page.waitForTimeout(3000);
   await this.click(this.searchIcon(), 'search icon');
-  await this.page.waitForTimeout(5000);  // increase from 3000
+  await this.page.waitForTimeout(8000);  // WHY: CI search index can lag up to 8s
 }
 
   // ─── Navigation ───────────────────────────────────────────
