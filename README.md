@@ -568,3 +568,4 @@ Fixed — `config.ts` only validates the active environment at startup.
 Check the `tools` block in `Jenkinsfile` — `nodejs 'Node22'` must match
 exactly the name configured in `Jenkins → Manage Jenkins → Tools → NodeJS`.# test trigger
 # retrigger
+# retrigger 2
