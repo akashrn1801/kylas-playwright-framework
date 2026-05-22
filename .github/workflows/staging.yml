@@ -1,0 +1,76 @@
+name: Staging Pipeline
+
+on:
+  push:
+    branches: [staging]
+
+jobs:
+  test-staging:
+    name: Run Staging Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run tests against Staging
+        env:
+          CI: true
+          ENV: staging
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          DEFAULT_TIMEOUT: 30000
+          NAVIGATION_TIMEOUT: 90000
+          EXPECT_TIMEOUT: 20000
+          HEADLESS: true
+          WORKERS: 2
+          RETRY_COUNT: 1
+        run: npx playwright test --project=chromium
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-playwright-report
+          path: |
+            reports/playwright-report/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  promote-to-prod:
+    name: Promote to Prod
+    needs: test-staging
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge staging into prod
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin
+          git checkout prod
+          git merge origin/staging --no-ff -m "chore: auto-promote staging to prod [skip ci]"
+          git push origin prod
