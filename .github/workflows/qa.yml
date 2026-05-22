@@ -74,5 +74,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin
           git checkout staging
-          git merge origin/qa --no-ff -m "chore: auto-promote qa to staging [skip ci]"
+          git merge origin/qa --no-ff -m "chore: auto-promote qa to staging"
           git push origin staging
