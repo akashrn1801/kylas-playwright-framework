@@ -3,15 +3,14 @@ import { BasePage } from '../../core/BasePage';
 import { LeadData } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import { config } from '../../../config/config';
 
 export class LeadsPage extends BasePage {
 
-  // ─── Navigation Locators ──────────────────────────────────
+  // ─── Locators ─────────────────────────────────────────────
 
   private readonly leadsNavIcon = () =>
     this.page.locator('.left-navbar__side-nav__item[data-original-title="Leads"]');
-
-  // ─── List Page Locators ───────────────────────────────────
 
   private readonly addButton = () =>
     this.page.locator('button.btn.btn-primary.mr-2').filter({ hasText: 'Add' });
@@ -26,8 +25,6 @@ export class LeadsPage extends BasePage {
     this.page.locator('.rt-tr-group .clip-text')
       .filter({ hasText: new RegExp(`${firstName}`) })
       .first();
-
-  // ─── Create Form Locators ─────────────────────────────────
 
   private readonly showRequiredToggle = () =>
     this.page.locator('label').filter({ hasText: 'Show Required & Important Fields' });
@@ -50,68 +47,26 @@ export class LeadsPage extends BasePage {
   private readonly phoneInput = () =>
     this.page.locator('input[id*="input_phone_0"]');
 
-  private readonly addressInput = () =>
-    this.page.locator('input[name="address"]');
-
-  private readonly cityInput = () =>
-    this.page.locator('input[name="city"]');
-
-  private readonly stateInput = () =>
-    this.page.locator('input[name="state"]');
-
-  private readonly zipcodeInput = () =>
-    this.page.locator('input[name="zipcode"]');
-
-  private readonly facebookInput = () =>
-    this.page.locator('input[name="facebook"]');
-
-  private readonly twitterInput = () =>
-    this.page.locator('input[name="twitter"]');
-
-  private readonly linkedInInput = () =>
-    this.page.locator('input[name="linkedIn"]');
-
-  private readonly companyNameInput = () =>
-    this.page.locator('input[name="companyName"]');
-
-  private readonly departmentInput = () =>
-    this.page.locator('input[name="department"]');
-
-  private readonly designationInput = () =>
-    this.page.locator('input[name="designation"]');
-
-  private readonly companyAddressInput = () =>
-    this.page.locator('input[name="companyAddress"]');
-
-  private readonly companyCityInput = () =>
-    this.page.locator('input[name="companyCity"]');
-
-  private readonly companyStateInput = () =>
-    this.page.locator('input[name="companyState"]');
-
-  private readonly companyZipcodeInput = () =>
-    this.page.locator('input[name="companyZipcode"]');
+  private readonly addressInput        = () => this.page.locator('input[name="address"]');
+  private readonly cityInput           = () => this.page.locator('input[name="city"]');
+  private readonly stateInput          = () => this.page.locator('input[name="state"]');
+  private readonly zipcodeInput        = () => this.page.locator('input[name="zipcode"]');
+  private readonly facebookInput       = () => this.page.locator('input[name="facebook"]');
+  private readonly twitterInput        = () => this.page.locator('input[name="twitter"]');
+  private readonly linkedInInput       = () => this.page.locator('input[name="linkedIn"]');
+  private readonly companyNameInput    = () => this.page.locator('input[name="companyName"]');
+  private readonly departmentInput     = () => this.page.locator('input[name="department"]');
+  private readonly designationInput    = () => this.page.locator('input[name="designation"]');
+  private readonly companyAddressInput = () => this.page.locator('input[name="companyAddress"]');
+  private readonly companyCityInput    = () => this.page.locator('input[name="companyCity"]');
+  private readonly companyStateInput   = () => this.page.locator('input[name="companyState"]');
+  private readonly companyZipcodeInput = () => this.page.locator('input[name="companyZipcode"]');
 
   private readonly saveButton = () =>
     this.page.locator('button[type="submit"].save-button');
 
-  // ─── Detail Page Locators ─────────────────────────────────
-
   private readonly editIconButton = () =>
     this.page.locator('#edit-action-btn');
-
-  // ─── Edit Form Locators ───────────────────────────────────
-
-  private readonly editFirstNameInput = () =>
-    this.page.locator('input[name="firstName"]');
-
-  private readonly editLastNameInput = () =>
-    this.page.locator('input[name="lastName"]');
-
-  private readonly editSaveButton = () =>
-    this.page.locator('button[type="submit"].save-button');
-
-  // ─── Modal Locators ───────────────────────────────────────
 
   private readonly editModal = () =>
     this.page.locator('#editEntityModal');
@@ -119,13 +74,16 @@ export class LeadsPage extends BasePage {
   private readonly modalCancelButton = () =>
     this.page.locator('button[data-dismiss="modal"]').first();
 
-  // ─── Constructor ─────────────────────────────────────────
+  // WHY: success toast is the only reliable post-save signal on this app
+  // The app does NOT redirect after create — it stays on the form
+  private readonly successToast = () =>
+    this.page.locator('.toast-success, .alert-success, [class*="toast"][class*="success"], [class*="notification"][class*="success"]').first();
 
   constructor(page: Page) {
     super(page);
   }
 
-  // ─── Private Helpers ─────────────────────────────────────
+  // ─── Private Helpers ──────────────────────────────────────
 
   private async closeModalIfOpen(): Promise<void> {
     try {
@@ -146,13 +104,15 @@ export class LeadsPage extends BasePage {
     try {
       const toggle = this.showRequiredToggle();
       const isVisible = await toggle.isVisible({ timeout: 3000 });
-      if (isVisible) {
-        logger.info('Disabling Show Required & Important Fields toggle');
-        await toggle.click();
-        await this.page.waitForTimeout(800);
-      }
+      if (!isVisible) return;
+      logger.info('Disabling Show Required & Important Fields toggle');
+      await toggle.click();
+      // WHY: wait for firstName to appear — that is the real signal
+      // the form re-rendered after toggle, not a page load event
+      await this.firstNameInput().waitFor({ state: 'visible', timeout: 10000 });
+      logger.info('Toggle disabled — form ready');
     } catch {
-      // Toggle not present — continue
+      // Toggle absent — form already fully visible, continue
     }
   }
 private async performSearch(searchText: string): Promise<void> {
@@ -161,61 +121,58 @@ private async performSearch(searchText: string): Promise<void> {
   await this.click(this.searchIcon(), 'search icon');
   await this.page.waitForTimeout(5000);  // increase from 3000
 }
-  // ─── Navigation Actions ───────────────────────────────────
 
-  async goToLeadsList(): Promise<void> {
-    logger.info('Navigating to Leads list');
-    await this.closeModalIfOpen();
-    await this.click(this.leadsNavIcon(), 'leads nav icon');
-    await this.waitForUrl(/leads\/list/);
-    logger.success('On Leads list page');
-  }
+  // ─── Navigation ───────────────────────────────────────────
 
+async goToLeadsList(): Promise<void> {
+  logger.info('Navigating to Leads list');
+  await this.closeModalIfOpen();
+  // WHY: navigate directly by URL instead of clicking nav icon
+  // The nav icon can load a stale cached list — direct navigation
+  // forces a fresh load from the server every time
+  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+  await this.waitForUrl(/leads\/list/);
+  await this.waitForListReady();
+  logger.success('On Leads list page');
+}
   async clickAddLead(): Promise<void> {
     logger.info('Clicking Add Lead button');
     await this.click(this.addButton(), 'add lead button');
-    await this.page.waitForTimeout(1000);
+    // WHY: firstName appearing = create form fully mounted
+    await this.firstNameInput().waitFor({ state: 'visible', timeout: 10000 });
   }
 
-  // ─── Create Form Actions ──────────────────────────────────
+  // ─── Form Actions ─────────────────────────────────────────
 
   async fillLeadForm(data: LeadData): Promise<void> {
     logger.info('Filling lead creation form');
 
     await this.disableRequiredFieldsToggle();
 
-    // Basic info
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
 
-    // Email
     await this.click(this.addEmailButton(), 'add email button');
-    await this.page.waitForTimeout(300);
+    await this.emailInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.fill(this.emailInput(), data.email, 'email');
 
-    // Phone
     await this.click(this.addPhoneButton(), 'add phone button');
-    await this.page.waitForTimeout(500);
+    await this.phoneInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.fill(this.phoneInput(), data.phone, 'phone');
 
-    // Address
-    await this.fill(this.addressInput(), data.address, 'address');
-    await this.fill(this.cityInput(), data.city, 'city');
-    await this.fill(this.stateInput(), data.state, 'state');
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
-
-    // Social
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
-    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
-
-    // Company info
-    await this.fill(this.companyNameInput(), data.companyName, 'company name');
-    await this.fill(this.departmentInput(), data.department, 'department');
-    await this.fill(this.designationInput(), data.designation, 'designation');
+    await this.fill(this.addressInput(),        data.address,        'address');
+    await this.fill(this.cityInput(),           data.city,           'city');
+    await this.fill(this.stateInput(),          data.state,          'state');
+    await this.fill(this.zipcodeInput(),        data.zipcode,        'zipcode');
+    await this.fill(this.facebookInput(),       data.facebook,       'facebook');
+    await this.fill(this.twitterInput(),        data.twitter,        'twitter');
+    await this.fill(this.linkedInInput(),       data.linkedIn,       'linkedin');
+    await this.fill(this.companyNameInput(),    data.companyName,    'company name');
+    await this.fill(this.departmentInput(),     data.department,     'department');
+    await this.fill(this.designationInput(),    data.designation,    'designation');
     await this.fill(this.companyAddressInput(), data.companyAddress, 'company address');
-    await this.fill(this.companyCityInput(), data.companyCity, 'company city');
-    await this.fill(this.companyStateInput(), data.companyState, 'company state');
+    await this.fill(this.companyCityInput(),    data.companyCity,    'company city');
+    await this.fill(this.companyStateInput(),   data.companyState,   'company state');
     await this.fill(this.companyZipcodeInput(), data.companyZipcode, 'company zipcode');
 
     logger.success('Lead form filled successfully');
@@ -227,23 +184,23 @@ private async performSearch(searchText: string): Promise<void> {
     await this.page.waitForTimeout(2000);
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
-    logger.success('Lead saved successfully');
+    await this.waitForListReady();
+    logger.success('Lead saved — on list page');
   }
 
-  // ─── Search & Open Actions ────────────────────────────────
+  // ─── Search & Open ────────────────────────────────────────
 
   async searchAndOpenLead(firstName: string): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
-    await this.page.waitForTimeout(2000);
-
+    await this.waitForListReady();
     await this.performSearch(firstName);
 
     const nameCell = this.leadRowNameCell(firstName);
     await nameCell.waitFor({ state: 'visible', timeout: 20000 });
     await nameCell.click();
-    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 15000 });
+    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
     logger.success(`Opened lead: ${firstName}`);
   }
 
@@ -252,20 +209,21 @@ private async performSearch(searchText: string): Promise<void> {
   async clickEditIcon(): Promise<void> {
     logger.info('Clicking edit icon');
     await this.click(this.editIconButton(), 'edit icon');
-    await this.page.waitForTimeout(1000);
+    await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
     logger.success('Edit form opened');
   }
 
   async fillEditForm(data: LeadData): Promise<void> {
     logger.info('Filling edit form');
-    await this.fill(this.editFirstNameInput(), data.firstName, 'first name');
-    await this.fill(this.editLastNameInput(), data.lastName, 'last name');
+    await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    await this.fill(this.lastNameInput(), data.lastName, 'last name');
     logger.success('Edit form filled');
   }
 
   async saveEditedLead(): Promise<void> {
     logger.info('Saving edited lead');
-    await this.click(this.editSaveButton(), 'save button');
+    await this.click(this.saveButton(), 'save button');
+    // WHY: modal disappearing = edit API call completed successfully
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Lead updated successfully');
   }
@@ -280,14 +238,32 @@ private async performSearch(searchText: string): Promise<void> {
     await this.assertUrl(/sales\/leads\/details\//);
   }
 
-  async assertLeadExistsInList(firstName: string, lastName: string): Promise<void> {
-    logger.info(`Asserting lead in list: ${firstName} ${lastName}`);
-    await this.waitForUrl(/leads\/list/);
-
+  async assertLeadExistsInList(firstName: string): Promise<void> {
+  logger.info(`Asserting lead exists in list: ${firstName}`);
+  
+  // WHY: after edit, the search index can lag by 1-2 seconds
+  // We retry the search up to 3 times with a short wait between
+  // This eliminates flakiness without using fixed sleeps
+  let found = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
     await this.performSearch(firstName);
-
     const nameCell = this.leadRowNameCell(firstName);
-    await expect(nameCell).toBeVisible({ timeout: 20000 });
-    logger.success(`Lead found in list: ${firstName} ${lastName}`);
+    found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
+    if (found) break;
+    logger.info(`Lead not visible yet — retry ${attempt}/3`);
+    // WHY: short wait before retry — gives search index time to catch up
+    await this.page.waitForTimeout(2000);
+  }
+
+  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
+  logger.success(`Lead confirmed in list: ${firstName}`);
+}
+
+  async assertLeadNotInList(firstName: string): Promise<void> {
+    logger.info(`Asserting lead NOT in list: ${firstName}`);
+    await this.performSearch(firstName);
+    // WHY: toBeHidden is a hard assertion — will fail if element appears
+    await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
+    logger.success(`Confirmed lead absent: ${firstName}`);
   }
 }
