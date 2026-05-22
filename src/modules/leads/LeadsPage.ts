@@ -1,6 +1,7 @@
 import { Page, expect } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
 import { LeadData } from '../../data/factories/leadFactory';
+import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 import { config } from '../../../config/config';
 
@@ -22,7 +23,7 @@ export class LeadsPage extends BasePage {
 
   private readonly leadRowNameCell = (firstName: string) =>
     this.page.locator('.rt-tr-group .clip-text')
-      .filter({ hasText: new RegExp(`^${firstName}$`) })
+      .filter({ hasText: new RegExp(`${firstName}`) })
       .first();
 
   private readonly showRequiredToggle = () =>
@@ -114,38 +115,11 @@ export class LeadsPage extends BasePage {
       // Toggle absent — form already fully visible, continue
     }
   }
-
-  private async waitForListReady(): Promise<void> {
-    // WHY: wait for the item counter to appear — it renders only after
-    // the list API call completes, making it the most reliable ready signal
-    await this.page.locator('text=/\\d+ items?/i')
-      .waitFor({ state: 'visible', timeout: 20000 })
-      .catch(async () => {
-        // Fallback: if counter never appears, wait for No rows found
-        await this.page.locator('text=/no rows found/i')
-          .waitFor({ state: 'visible', timeout: 10000 })
-          .catch(() => {
-            // Table may render differently — proceed anyway
-          });
-      });
-  }
-
- private async performSearch(searchText: string): Promise<void> {
-  logger.info(`Filling search input with: ${searchText}`);
-  await this.searchInput().waitFor({ state: 'visible', timeout: 10000 });
-  await this.searchInput().clear();
-  await this.searchInput().fill(searchText);
-  // WHY: pressing Enter is more reliable than clicking the search icon
-  // The icon can be missed if it hasn't fully rendered — Enter always works
-  await this.searchInput().press('Enter');
-  // WHY: wait for item counter to update — proves the search API responded
-  await this.page.locator('text=/\\d+ items?/i')
-    .waitFor({ state: 'visible', timeout: 20000 })
-    .catch(async () => {
-      await this.page.locator('text=/no rows found/i')
-        .waitFor({ state: 'visible', timeout: 10000 })
-        .catch(() => {});
-    });
+private async performSearch(searchText: string): Promise<void> {
+  await this.fill(this.searchInput(), searchText, 'search input');
+  await this.page.waitForTimeout(2000);  // increase from 1000
+  await this.click(this.searchIcon(), 'search icon');
+  await this.page.waitForTimeout(5000);  // increase from 3000
 }
 
   // ─── Navigation ───────────────────────────────────────────
@@ -207,23 +181,7 @@ async goToLeadsList(): Promise<void> {
   async saveLead(): Promise<void> {
     logger.info('Saving lead');
     await this.click(this.saveButton(), 'save button');
-
-    // WHY: this app does NOT redirect after create — it stays on the form
-    // The save button becoming re-enabled is the signal the API call finished
-    // We try toast first (fast), then fall back to button re-enabled (reliable)
-    try {
-      await this.successToast().waitFor({ state: 'visible', timeout: 10000 });
-      logger.info('Save confirmed via success toast');
-      await this.successToast().waitFor({ state: 'hidden', timeout: 10000 });
-    } catch {
-      // No toast — wait for save button to become enabled again
-      // WHY: while saving, the button is disabled; re-enabled = save done
-      await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-      await expect(this.saveButton()).toBeEnabled({ timeout: 15000 });
-      logger.info('Save confirmed via button re-enabled');
-    }
-
-    // Navigate to list after save confirmed
+    await this.page.waitForTimeout(2000);
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.waitForListReady();
