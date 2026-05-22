@@ -195,18 +195,33 @@ async goToLeadsList(): Promise<void> {
   // ─── Search & Open ────────────────────────────────────────
 
   async searchAndOpenLead(firstName: string): Promise<void> {
-    logger.info(`Searching for lead: ${firstName}`);
-    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
-    await this.waitForUrl(/leads\/list/);
-    await this.waitForListReady();
-    await this.performSearch(firstName);
+  logger.info(`Searching for lead: ${firstName}`);
+  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+  await this.waitForUrl(/leads\/list/);
+  await this.waitForListReady();
+  await this.performSearch(firstName);
 
-    const nameCell = this.leadRowNameCell(firstName);
-    await nameCell.waitFor({ state: 'visible', timeout: 20000 });
-    await nameCell.click();
-    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
-    logger.success(`Opened lead: ${firstName}`);
+  const nameCell = this.leadRowNameCell(firstName);
+
+  // WHY: on slow CI servers the row renders after the counter updates
+  // We retry the search up to 3 times waiting for the specific row
+  // This is not a sleep — each attempt actively waits for the element
+  let found = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
+    if (found) break;
+    logger.info(`Row not visible yet — retrying search (${attempt}/3)`);
+    await this.performSearch(firstName);
   }
+
+  if (!found) {
+    throw new Error(`Lead "${firstName}" not found in list after 3 search attempts`);
+  }
+
+  await nameCell.click();
+  await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+  logger.success(`Opened lead: ${firstName}`);
+}
 
   // ─── Edit Actions ─────────────────────────────────────────
 
@@ -244,22 +259,21 @@ async goToLeadsList(): Promise<void> {
 
   async assertLeadExistsInList(firstName: string): Promise<void> {
   logger.info(`Asserting lead exists in list: ${firstName}`);
-  
-  // WHY: after edit, the search index can lag by 1-2 seconds
-  // We retry the search up to 3 times with a short wait between
-  // This eliminates flakiness without using fixed sleeps
+  await this.performSearch(firstName);
+
+  const nameCell = this.leadRowNameCell(firstName);
+
+  // WHY: same retry pattern — search index on staging/CI lags behind
+  // the save API response by 1-3 seconds
   let found = false;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    await this.performSearch(firstName);
-    const nameCell = this.leadRowNameCell(firstName);
-    found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
+    found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
     if (found) break;
-    logger.info(`Lead not visible yet — retry ${attempt}/3`);
-    // WHY: short wait before retry — gives search index time to catch up
-    await this.page.waitForTimeout(2000);
+    logger.info(`Lead not visible yet — retrying search (${attempt}/3)`);
+    await this.performSearch(firstName);
   }
 
-  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
+  await expect(nameCell).toBeVisible({ timeout: 10000 });
   logger.success(`Lead confirmed in list: ${firstName}`);
 }
 
