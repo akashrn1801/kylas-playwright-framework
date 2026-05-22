@@ -1,7 +1,11 @@
 import { test as base, Page, BrowserContext } from '@playwright/test';
-import { AuthManager, UserRole } from '../auth/authManager';
 import { config } from '../../config/config';
-import { logger } from '../utils/logger';
+import * as path from 'path';
+
+// WHY: per-env subdirectory matches globalSetup — ensures fixtures always
+// load the state file that matches the currently running environment
+const stateFor = (role: string) =>
+  path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
 
 export type TestFixtures = {
   adminPage: Page;
@@ -12,9 +16,7 @@ export type TestFixtures = {
 
 export const test = base.extend<TestFixtures>({
   adminPage: async ({ browser }, use) => {
-    logger.info('Setting up admin page fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('admin');
+    const context = await browser.newContext({ storageState: stateFor('admin') });
     const page = await context.newPage();
 
     // Single navigation — AuthManager already validated session
@@ -33,9 +35,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   restrictedPage: async ({ browser }, use) => {
-    logger.info('Setting up restricted page fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('restricted');
+    const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
 
     await page.goto(config.appUrl, {
@@ -69,4 +69,4 @@ export const test = base.extend<TestFixtures>({
 });
 
 export { expect } from '@playwright/test';
-export type { UserRole };
+export type { UserRole } from '../auth/authManager';
