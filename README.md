@@ -570,3 +570,4 @@ exactly the name configured in `Jenkins → Manage Jenkins → Tools → NodeJS`
 # retrigger
 # retrigger 2
 # trigger
+# retrigger
