@@ -3,7 +3,6 @@ import { BasePage } from '../../core/BasePage';
 import { LeadData } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
-import { config } from '../../../config/config';
 
 export class LeadsPage extends BasePage {
 
@@ -78,6 +77,11 @@ export class LeadsPage extends BasePage {
   // The app does NOT redirect after create — it stays on the form
   private readonly successToast = () =>
     this.page.locator('.toast-success, .alert-success, [class*="toast"][class*="success"], [class*="notification"][class*="success"]').first();
+
+  private async waitForListReady(): Promise<void> {
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+    await this.page.waitForTimeout(1000);
+  }
 
   constructor(page: Page) {
     super(page);
