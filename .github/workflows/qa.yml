@@ -1,0 +1,78 @@
+name: QA Pipeline
+
+on:
+  push:
+    branches: [qa]
+  pull_request:
+    branches: [qa]
+
+jobs:
+  test-qa:
+    name: Run QA Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run tests against QA
+        env:
+          CI: true
+          ENV: qa
+          QA_APP_URL: ${{ secrets.QA_APP_URL }}
+          QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
+          QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
+          DEFAULT_TIMEOUT: 30000
+          NAVIGATION_TIMEOUT: 90000
+          EXPECT_TIMEOUT: 20000
+          HEADLESS: true
+          WORKERS: 2
+          RETRY_COUNT: 1
+        run: npx playwright test --project=chromium
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-playwright-report
+          path: |
+            reports/playwright-report/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # WHY: only auto-promote to staging when tests pass on a direct push
+  # not on PRs — prevents promoting unreviewed code
+  promote-to-staging:
+    name: Promote to Staging
+    needs: test-qa
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/qa'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge qa into staging
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin
+          git checkout staging
+          git merge origin/qa --no-ff -m "chore: auto-promote qa to staging [skip ci]"
+          git push origin staging
