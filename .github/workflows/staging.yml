@@ -1,3 +1,4 @@
+cat > .github/workflows/staging.yml << 'EOF'
 name: Staging Pipeline
 
 on:
@@ -8,7 +9,6 @@ jobs:
   test-staging:
     name: Run Staging Tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -52,14 +52,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  approve-prod:
+    name: Approval Gate — Prod
+    needs: test-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approved for Prod
+        run: echo "✅ Approved — promoting to prod"
+
   promote-to-prod:
     name: Promote to Prod
-    needs: test-staging
-    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    needs: approve-prod
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,3 +81,4 @@ jobs:
           git checkout prod
           git merge origin/staging --no-ff -m "chore: auto-promote staging to prod [skip ci]"
           git push origin prod
+EOF
