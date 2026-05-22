@@ -54,17 +54,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # WHY: only auto-promote to staging when tests pass on a direct push
-  # not on PRs — prevents promoting unreviewed code
- promote-to-staging:
+  promote-to-staging:
     name: Promote to Staging
     needs: test-qa
     if: success() && github.event_name == 'push' && github.ref == 'refs/heads/qa'
     runs-on: ubuntu-latest
-
-    # WHY: explicitly grant write permission to contents so the job
-    # can push the merge commit — GITHUB_TOKEN is read-only by default
-    # even when repo settings allow write, the job must declare it
     permissions:
       contents: write
 
