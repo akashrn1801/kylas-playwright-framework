@@ -1,7 +1,11 @@
 import { test as base, Page, BrowserContext } from '@playwright/test';
-import { AuthManager, UserRole } from '../auth/authManager';
 import { config } from '../../config/config';
-import { logger } from '../utils/logger';
+import * as path from 'path';
+
+// WHY: per-env subdirectory matches globalSetup — ensures fixtures always
+// load the state file that matches the currently running environment
+const stateFor = (role: string) =>
+  path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
 
 export type TestFixtures = {
   adminPage: Page;
@@ -13,53 +17,51 @@ export type TestFixtures = {
 export const test = base.extend<TestFixtures>({
 
   adminPage: async ({ browser }, use) => {
-    logger.info('Setting up admin page fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('admin');
+    const context = await browser.newContext({ storageState: stateFor('admin') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
-
+    try {
+      const popup = page.locator('#cancel[data-dismiss="modal"]');
+      await popup.waitFor({ state: 'visible', timeout: 3000 });
+      await popup.click();
+      await popup.waitFor({ state: 'hidden', timeout: 3000 });
+    } catch {
+      // No popup — continue
+    }
     await use(page);
-
-    logger.info('Tearing down admin page fixture');
     await context.close();
   },
 
   restrictedPage: async ({ browser }, use) => {
-    logger.info('Setting up restricted page fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('restricted');
+    const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForURL(/sales\/home/, { timeout: config.timeouts.navigation });
-
+    try {
+      const popup = page.locator('#cancel[data-dismiss="modal"]');
+      await popup.waitFor({ state: 'visible', timeout: 3000 });
+      await popup.click();
+      await popup.waitFor({ state: 'hidden', timeout: 3000 });
+    } catch {
+      // No popup — continue
+    }
     await use(page);
-
-    logger.info('Tearing down restricted page fixture');
     await context.close();
   },
 
   adminContext: async ({ browser }, use) => {
-    logger.info('Setting up admin context fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('admin');
-
+    const context = await browser.newContext({ storageState: stateFor('admin') });
     await use(context);
-
     await context.close();
   },
 
   restrictedContext: async ({ browser }, use) => {
-    logger.info('Setting up restricted context fixture');
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('restricted');
-
+    const context = await browser.newContext({ storageState: stateFor('restricted') });
     await use(context);
-
     await context.close();
   },
 });
 
 export { expect } from '@playwright/test';
-export type { UserRole };
+export type { UserRole } from '../auth/authManager';
