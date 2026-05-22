@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        nodejs 'Node20'
+        nodejs 'Node22'
         allure 'Allure'
     }
 
