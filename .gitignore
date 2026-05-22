@@ -1,37 +1,8 @@
-# Dependencies
 node_modules/
-
-# Environment files (contains secrets)
-.env
-.env.local
-.env.*.local
-
-# Build output
-dist/
-
-# Playwright test results
 test-results/
+reports/
 playwright-report/
-reports/playwright-report/
-reports/allure-results/
 allure-results/
-
-# Auth storage states (contains session tokens)
-src/auth/storageStates/*.json
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# VS Code
-.vscode/settings.json
-.vscode/launch.json
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# Temp files
-*.tmp
-*.temp
+src/auth/storageStates/
+.env
+*.json.bak

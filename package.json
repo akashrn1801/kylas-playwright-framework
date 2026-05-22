@@ -23,7 +23,7 @@
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
-    "clean": "rm -rf test-results reports/playwright-report reports/allure-results reports/allure-report"
+    "clean": "rm -rf test-results reports/ allure-results"
   },
   "keywords": [
     "playwright",
