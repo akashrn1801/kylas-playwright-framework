@@ -9,7 +9,12 @@ const STORAGE_STATE_DIR = path.join(__dirname, 'storageStates', config.env);
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  // WHY: --no-sandbox is required inside Docker/Jenkins containers
+// Without it Chromium cannot create a sandbox process and times out
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+});
   try {
     await setupRole('admin', browser);
     await setupRole('restricted', browser);
