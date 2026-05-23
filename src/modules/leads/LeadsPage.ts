@@ -121,9 +121,11 @@ export class LeadsPage extends BasePage {
   }
 private async performSearch(searchText: string): Promise<void> {
   await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(3000);
+  await this.page.waitForTimeout(2000);
   await this.click(this.searchIcon(), 'search icon');
-  await this.page.waitForTimeout(8000);  // WHY: CI search index can lag up to 8s
+  // WHY: wait for network to settle after search — more reliable than fixed sleep
+  await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  await this.page.waitForTimeout(3000);
 }
 
   // ─── Navigation ───────────────────────────────────────────
@@ -185,7 +187,16 @@ async goToLeadsList(): Promise<void> {
   async saveLead(): Promise<void> {
     logger.info('Saving lead');
     await this.click(this.saveButton(), 'save button');
-    await this.page.waitForTimeout(2000);
+    // WHY: wait for success toast — confirms save API completed before navigating
+    // Without this, we navigate before the lead is indexed in the database
+    try {
+      await this.successToast().waitFor({ state: 'visible', timeout: 10000 });
+      logger.info('Save confirmed via success toast');
+      await this.successToast().waitFor({ state: 'hidden', timeout: 10000 });
+    } catch {
+      // Toast may have appeared and disappeared too fast — continue
+      await this.page.waitForTimeout(3000);
+    }
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.waitForListReady();
@@ -252,11 +263,11 @@ async goToLeadsList(): Promise<void> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     await this.performSearch(firstName);
     const nameCell = this.leadRowNameCell(firstName);
-    found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
+    found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
     if (found) break;
     logger.info(`Lead not visible yet — retry ${attempt}/3`);
-    // WHY: short wait before retry — gives search index time to catch up
-    await this.page.waitForTimeout(2000);
+    // WHY: longer wait on staging — search index can lag significantly
+    await this.page.waitForTimeout(5000);
   }
 
   await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 20000 });
