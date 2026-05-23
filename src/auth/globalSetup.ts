@@ -47,7 +47,9 @@ async function setupRole(
   try {
     // WHY: Jenkins server is slower than local — 30s default is not enough
 // for the initial page load on a memory-constrained CI server
-await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+// WHY: 'commit' fires on first byte received — more reliable than
+// 'domcontentloaded' in headless Docker where JS may hang on load
+await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
     await page.locator('#input_email').fill(credentials.email);
     await page.locator('#input_password').fill(credentials.password);
