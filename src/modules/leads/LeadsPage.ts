@@ -207,16 +207,25 @@ async goToLeadsList(): Promise<void> {
 
   async searchAndOpenLead(firstName: string): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
-    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
-    await this.waitForUrl(/leads\/list/);
-    await this.waitForListReady();
-    await this.performSearch(firstName);
-
-    const nameCell = this.leadRowNameCell(firstName);
-    await nameCell.waitFor({ state: 'visible', timeout: 40000 });
-    await nameCell.click();
-    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
-    logger.success(`Opened lead: ${firstName}`);
+    let found = false;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      // WHY: reload list before each attempt — forces fresh data, bypasses cache
+      await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+      await this.waitForUrl(/leads\/list/);
+      await this.waitForListReady();
+      await this.performSearch(firstName);
+      const nameCell = this.leadRowNameCell(firstName);
+      found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
+      if (found) {
+        await nameCell.click();
+        await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+        logger.success(`Opened lead: ${firstName}`);
+        return;
+      }
+      logger.info(`Lead not visible yet — retry ${attempt}/6`);
+      await this.page.waitForTimeout(5000);
+    }
+    throw new Error(`Lead not found after 6 attempts: ${firstName}`);
   }
 
   // ─── Edit Actions ─────────────────────────────────────────
