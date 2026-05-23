@@ -40,7 +40,9 @@ async function setupRole(
   const page = await context.newPage();
 
   try {
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+    // WHY: Jenkins server is slower than local — 30s default is not enough
+// for the initial page load on a memory-constrained CI server
+await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
     await page.locator('#input_email').fill(credentials.email);
     await page.locator('#input_password').fill(credentials.password);

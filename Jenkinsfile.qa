@@ -48,7 +48,6 @@ pipeline {
             --project=chromium \
             --workers=1 \
             --reporter=line,allure-playwright
-            --timeout=120000
         '''
       }
       post {
