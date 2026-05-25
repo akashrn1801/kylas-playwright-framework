@@ -1,0 +1,45 @@
+name: CI — stage (full suite)
+
+on:
+  push:
+    branches: [stage]
+  pull_request:
+    branches: [stage]
+  workflow_dispatch:
+
+jobs:
+  run-tests:
+    name: playwright-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run full suite
+        env:
+          ENV: staging
+          CI: true
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+        run: npx playwright test --project=chromium --workers=2 --timeout=90000
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-stage
+          path: playwright-report/
+          retention-days: 14

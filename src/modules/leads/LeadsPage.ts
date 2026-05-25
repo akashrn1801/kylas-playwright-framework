@@ -121,11 +121,9 @@ export class LeadsPage extends BasePage {
   }
 private async performSearch(searchText: string): Promise<void> {
   await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(2000);
+  await this.page.waitForTimeout(2000);  // increase from 1000
   await this.click(this.searchIcon(), 'search icon');
-  // WHY: wait for network to settle after search — more reliable than fixed sleep
-  await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  await this.page.waitForTimeout(3000);
+  await this.page.waitForTimeout(5000);  // increase from 3000
 }
 
   // ─── Navigation ───────────────────────────────────────────
@@ -187,16 +185,7 @@ async goToLeadsList(): Promise<void> {
   async saveLead(): Promise<void> {
     logger.info('Saving lead');
     await this.click(this.saveButton(), 'save button');
-    // WHY: wait for success toast — confirms save API completed before navigating
-    // Without this, we navigate before the lead is indexed in the database
-    try {
-      await this.successToast().waitFor({ state: 'visible', timeout: 10000 });
-      logger.info('Save confirmed via success toast');
-      await this.successToast().waitFor({ state: 'hidden', timeout: 10000 });
-    } catch {
-      // Toast may have appeared and disappeared too fast — continue
-      await this.page.waitForTimeout(3000);
-    }
+    await this.page.waitForTimeout(2000);
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.waitForListReady();
@@ -207,25 +196,27 @@ async goToLeadsList(): Promise<void> {
 
   async searchAndOpenLead(firstName: string): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
+
+    // WHY: search index can lag after creation (especially cross-user in parallel workers)
+    // Retry up to 5x with fresh navigation each time before giving up
     let found = false;
-    for (let attempt = 1; attempt <= 6; attempt++) {
-      // WHY: reload list before each attempt — forces fresh data, bypasses cache
+    for (let attempt = 1; attempt <= 5; attempt++) {
       await this.navigateTo(`${config.appUrl}/sales/leads/list`);
       await this.waitForUrl(/leads\/list/);
       await this.waitForListReady();
       await this.performSearch(firstName);
       const nameCell = this.leadRowNameCell(firstName);
-      found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
-      if (found) {
-        await nameCell.click();
-        await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
-        logger.success(`Opened lead: ${firstName}`);
-        return;
-      }
-      logger.info(`Lead not visible yet — retry ${attempt}/6`);
-      await this.page.waitForTimeout(5000);
+      found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
+      if (found) break;
+      logger.info(`Lead not visible yet — retry ${attempt}/5`);
+      try { await this.page.waitForTimeout(2000); } catch { break; }
     }
-    throw new Error(`Lead not found after 6 attempts: ${firstName}`);
+
+    const nameCell = this.leadRowNameCell(firstName);
+    await nameCell.waitFor({ state: 'visible', timeout: 10000 });
+    await nameCell.click();
+    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+    logger.success(`Opened lead: ${firstName}`);
   }
 
   // ─── Edit Actions ─────────────────────────────────────────
@@ -264,22 +255,22 @@ async goToLeadsList(): Promise<void> {
 
   async assertLeadExistsInList(firstName: string): Promise<void> {
   logger.info(`Asserting lead exists in list: ${firstName}`);
-  
-  // WHY: after edit, the search index can lag by 1-2 seconds
-  // We retry the search up to 3 times with a short wait between
-  // This eliminates flakiness without using fixed sleeps
+
+  // WHY: search index can lag 3-8s after save; navigate fresh + retry up to 5x
   let found = false;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+    await this.waitForUrl(/leads\/list/);
+    await this.waitForListReady();
     await this.performSearch(firstName);
     const nameCell = this.leadRowNameCell(firstName);
-    found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
+    found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
     if (found) break;
-    logger.info(`Lead not visible yet — retry ${attempt}/3`);
-    // WHY: longer wait on staging — search index can lag significantly
-    await this.page.waitForTimeout(5000);
+    logger.info(`Lead not visible yet — retry ${attempt}/5`);
+    await this.page.waitForTimeout(3000);
   }
 
-  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 20000 });
+  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
   logger.success(`Lead confirmed in list: ${firstName}`);
 }
 
@@ -289,5 +280,44 @@ async goToLeadsList(): Promise<void> {
     // WHY: toBeHidden is a hard assertion — will fail if element appears
     await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
     logger.success(`Confirmed lead absent: ${firstName}`);
+  }
+
+  // ─── High-level workflow wrappers ────────────────────────
+
+  async createLead(data: LeadData): Promise<void> {
+    await this.clickAddLead();
+    await this.fillLeadForm(data);
+    await this.saveLead();
+  }
+
+  async updateLead(newData: LeadData, originalFirstName?: string): Promise<void> {
+    const searchName = originalFirstName ?? newData.firstName;
+    await this.searchAndOpenLead(searchName);
+    await this.clickEditIcon();
+    await this.fillEditForm(newData);
+    await this.saveEditedLead();
+  }
+
+  async assertLeadCreated(data: LeadData): Promise<void> {
+    await this.assertLeadExistsInList(data.firstName);
+  }
+
+  async assertLeadUpdated(data: LeadData): Promise<void> {
+    // WHY: after saveEditedLead the page stays on detail view; navigate to list
+    // before searching so the search input is available
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+    await this.waitForUrl(/leads\/list/);
+    await this.waitForListReady();
+    await this.assertLeadExistsInList(data.firstName);
+  }
+
+  async assertCannotEditAdminLead(data: LeadData): Promise<void> {
+    logger.info(`Asserting restricted user cannot edit admin lead: ${data.firstName}`);
+    // WHY: lead was created by admin in a parallel worker; allow index time to sync
+    // On CI runners search index lag is worse — wait longer
+    await this.page.waitForTimeout(10000);
+    await this.searchAndOpenLead(data.firstName);
+    await expect(this.editIconButton()).toBeHidden({ timeout: 5000 });
+    logger.success('Confirmed edit icon not visible for admin-owned lead');
   }
 }
