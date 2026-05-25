@@ -256,9 +256,13 @@ async goToLeadsList(): Promise<void> {
   async assertLeadExistsInList(firstName: string): Promise<void> {
   logger.info(`Asserting lead exists in list: ${firstName}`);
 
-  // WHY: search index can lag 3-8s after save; navigate fresh + retry up to 5x
+  // WHY: search index lag varies by environment
+  // staging index can take 60-90s; qa is faster
+  const isStaging = config.env === 'staging';
+  const maxRetries = isStaging ? 10 : 5;
+  const retryWait = isStaging ? 15000 : 3000;
   let found = false;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.waitForListReady();
@@ -266,8 +270,8 @@ async goToLeadsList(): Promise<void> {
     const nameCell = this.leadRowNameCell(firstName);
     found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
     if (found) break;
-    logger.info(`Lead not visible yet — retry ${attempt}/5`);
-    await this.page.waitForTimeout(3000);
+    logger.info(`Lead not visible yet — retry ${attempt}/${maxRetries}`);
+    try { await this.page.waitForTimeout(retryWait); } catch { break; }
   }
 
   await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });

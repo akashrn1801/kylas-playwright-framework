@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 import { LoginPage } from '../../../src/modules/dashboard/LoginPage';
+import { config } from '../../../config/config';
 
 test.describe('Login', () => {
 
@@ -12,14 +13,14 @@ test.describe('Login', () => {
   test('@smoke @regression admin credentials should log in successfully', async ({ page }) => {
     const loginPage = new LoginPage(page);
     await loginPage.navigateTo('/');
-    await loginPage.loginWithCredentials(process.env.QA_ADMIN_EMAIL!, process.env.QA_ADMIN_PASSWORD!);
+    await loginPage.loginWithCredentials(config.users.admin.email, config.users.admin.password);
     await loginPage.assertLoggedIn();
   });
 
   test('@regression restricted credentials should log in successfully', async ({ page }) => {
     const loginPage = new LoginPage(page);
     await loginPage.navigateTo('/');
-    await loginPage.loginWithCredentials(process.env.QA_RESTRICTED_EMAIL!, process.env.QA_RESTRICTED_PASSWORD!);
+    await loginPage.loginWithCredentials(config.users.restricted.email, config.users.restricted.password);
     await loginPage.assertLoggedIn();
   });
 
