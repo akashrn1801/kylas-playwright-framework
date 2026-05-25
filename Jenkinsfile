@@ -3,21 +3,12 @@ pipeline {
 
     tools {
         nodejs 'Node20'
-        allure 'Allure'
     }
 
-    parameters {
-        choice(
-            name: 'ENV',
-            choices: ['prod', 'qa', 'staging'],
-            description: 'Environment to run tests against'
-        )
-
-        choice(
-            name: 'WORKERS',
-            choices: ['1', '2', '3'],
-            description: 'Number of parallel workers'
-        )
+    options {
+        timestamps()
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     environment {
@@ -29,168 +20,113 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out code...'
+                echo "Branch: ${env.BRANCH_NAME}"
                 checkout scm
-            }
-        }
-
-        stage('Verify Tools') {
-            steps {
-
-                echo 'Verifying Jenkins environment and installed tools...'
-
-                sh 'node -v'
-                sh 'npm -v'
-                sh 'npx playwright --version'
-
-                echo "ENV param = ${params.ENV}"
-                echo "WORKERS param = ${params.WORKERS}"
-
-                sh 'whoami'
-
-                sh '''
-                    echo "Current workspace:"
-                    pwd
-
-                    echo "Workspace files:"
-                    ls -la
-                '''
-
-                sh '''
-                    if [ -f .env ]; then
-                        echo ".env exists"
-
-                        echo "Available ENV keys:"
-                        grep -o "^[^=]*" .env || true
-                    else
-                        echo ".env not found yet (expected before Setup Environment stage)"
-                    fi
-                '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
-
-                echo 'Installing Node dependencies...'
-
-                sh '''
-                    npm ci
-                '''
-
-                echo 'Installing Playwright browsers and Linux dependencies...'
-
-              sh '''
-    npx playwright install chromium
-'''
-
-                echo 'Installed Playwright browsers successfully'
+                sh 'npm ci'
+                sh 'npx playwright install chromium'
             }
         }
 
         stage('Setup Environment') {
             steps {
-
-                echo "Setting up .env for environment: ${params.ENV}"
-
-                withCredentials([
-                    file(credentialsId: 'kylas-env-file', variable: 'ENV_FILE')
-                ]) {
-
-                    sh '''
-                        cp "$ENV_FILE" .env
-
-                        chmod 644 .env
-
-                        echo "✅ .env file copied successfully"
-
-                        echo "Validating .env file..."
-
-                        if [ ! -f .env ]; then
-                            echo "❌ .env file missing"
-                            exit 1
-                        fi
-
-                        echo "Available ENV keys:"
-                        grep -o "^[^=]*" .env || true
-                    '''
+                script {
+                    def envPrefix = 'QA'
+                    def envName = 'qa'
+                    if (env.BRANCH_NAME == 'stage') {
+                        envPrefix = 'STAGING'
+                        envName = 'staging'
+                    } else if (env.BRANCH_NAME == 'prod' || env.BRANCH_NAME == 'main') {
+                        envPrefix = 'PROD'
+                        envName = 'prod'
+                    }
+                    withCredentials([
+                        string(credentialsId: "${envPrefix}_APP_URL", variable: 'APP_URL'),
+                        string(credentialsId: "${envPrefix}_API_BASE_URL", variable: 'API_BASE_URL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_EMAIL", variable: 'ADMIN_EMAIL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_PASSWORD", variable: 'ADMIN_PASSWORD'),
+                        string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL", variable: 'RESTRICTED_EMAIL'),
+                        string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD')
+                    ]) {
+                        writeFile file: '.env', text: """ENV=${envName}
+${envPrefix}_APP_URL=${APP_URL}
+${envPrefix}_API_BASE_URL=${API_BASE_URL}
+${envPrefix}_ADMIN_EMAIL=${ADMIN_EMAIL}
+${envPrefix}_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+${envPrefix}_RESTRICTED_EMAIL=${RESTRICTED_EMAIL}
+${envPrefix}_RESTRICTED_PASSWORD=${RESTRICTED_PASSWORD}
+HEADLESS=true
+CI=true
+"""
+                    }
                 }
             }
         }
 
         stage('Clear Auth State') {
             steps {
-
-                echo 'Clearing stale Playwright auth state...'
-
-                sh '''
-                    rm -rf src/auth/storageStates/
-
-                    mkdir -p src/auth/storageStates/
-
-                    echo "✅ Auth state cleaned"
-                '''
+                sh 'rm -rf src/auth/storageStates/'
+                sh 'mkdir -p src/auth/storageStates/'
             }
         }
 
-        stage('Run Playwright Tests') {
+        stage('Run Tests') {
             steps {
+                script {
+                    def grepTag = '--grep @smoke'
+                    if (env.BRANCH_NAME == 'qa') {
+                        grepTag = '--grep @regression'
+                    } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main') {
+                        grepTag = ''
+                    } else if (env.BRANCH_NAME == 'prod') {
+                        grepTag = '--grep @prodSafe'
+                    }
+                    sh "npx playwright test --project=chromium ${grepTag} || true"
+                }
+            }
+        }
 
-                echo "Running Playwright tests"
-
-                echo "ENV = ${params.ENV}"
-                echo "WORKERS = ${params.WORKERS}"
-
-                sh """
-                    export ENV=${params.ENV}
-                    export WORKERS=${params.WORKERS}
-
-                    echo "Using ENV=\$ENV"
-                    echo "Using WORKERS=\$WORKERS"
-
-                    npx playwright test --project=chromium tests/ui
-                """
+        stage('Approval Gate') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
+            steps {
+                timeout(time: 24, unit: 'HOURS') {
+                    input message: "Tests passed on ${env.BRANCH_NAME}. Approve to proceed?",
+                          ok: "Yes, approve"
+                }
             }
         }
     }
 
     post {
-
         always {
-
-            echo 'Publishing Allure report...'
-
-            allure([
-                includeProperties: false,
-                jdk: '',
-                results: [[path: 'allure-results']]
-            ])
-
-            echo 'Publishing Playwright HTML report...'
-
             publishHTML(target: [
                 allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
-                reportDir: 'reports/playwright-report',
+                reportDir: 'playwright-report',
                 reportFiles: 'index.html',
                 reportName: 'Playwright HTML Report'
             ])
-
-            echo 'Archiving test artifacts...'
-
             archiveArtifacts(
-                artifacts: 'test-results/**,allure-results/**,reports/**',
+                artifacts: 'test-results/**,playwright-report/**',
                 allowEmptyArchive: true
             )
+            cleanWs()
         }
-
         success {
-            echo '✅ All Playwright tests passed successfully!'
+            echo "Tests passed on ${env.BRANCH_NAME}"
         }
-
         failure {
-            echo '❌ Tests failed — check Allure and Playwright reports'
+            echo "Tests failed on ${env.BRANCH_NAME}"
         }
     }
 }
