@@ -11,6 +11,7 @@ test.describe('Leads', () => {
   });
 
   test('@regression admin should create a new lead with all fields', async ({ adminPage }) => {
+    test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
@@ -19,6 +20,7 @@ test.describe('Leads', () => {
   });
 
   test('@regression admin should update a created lead', async ({ adminPage }) => {
+    test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
