@@ -113,14 +113,14 @@ CI=true
     post {
         always {
             archiveArtifacts(
-                artifacts: 'test-results/**,playwright-report/**',
+                artifacts: 'reports/**,test-results/**',
                 allowEmptyArchive: true
             )
             publishHTML(target: [
                 allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
-                reportDir: 'playwright-report',
+                reportDir: 'reports/playwright-report',
                 reportFiles: 'index.html',
                 reportName: 'Playwright HTML Report'
             ])
