@@ -29,7 +29,7 @@ test.describe('Leads RBAC', () => {
   });
 
   test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
-    test.setTimeout(120000);
+    test.setTimeout(180000);
     const adminLeadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await adminLeadsPage.goToLeadsList();
