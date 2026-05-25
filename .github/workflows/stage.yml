@@ -34,7 +34,7 @@ jobs:
           STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium
+        run: npx playwright test --project=chromium --workers=2 --timeout=90000
 
       - uses: actions/upload-artifact@v4
         if: always()
