@@ -1,0 +1,84 @@
+pipeline {
+  agent any
+  tools { nodejs 'Node22' }
+
+  options {
+    ansiColor('xterm')
+    timestamps()
+    timeout(time: 60, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  environment {
+    CI                          = 'true'
+    STAGING_APP_URL             = credentials('STAGING_APP_URL')
+    STAGING_API_BASE_URL        = credentials('STAGING_API_BASE_URL')
+    STAGING_ADMIN_EMAIL         = credentials('STAGING_ADMIN_EMAIL')
+    STAGING_ADMIN_PASSWORD      = credentials('STAGING_ADMIN_PASSWORD')
+    STAGING_RESTRICTED_EMAIL    = credentials('STAGING_RESTRICTED_EMAIL')
+    STAGING_RESTRICTED_PASSWORD = credentials('STAGING_RESTRICTED_PASSWORD')
+    DEFAULT_TIMEOUT             = '30000'
+    NAVIGATION_TIMEOUT          = '90000'
+    EXPECT_TIMEOUT              = '20000'
+    HEADLESS                    = 'true'
+    WORKERS                     = '1'
+    RETRY_COUNT                 = '1'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        echo "Branch: ${env.GIT_BRANCH} | Commit: ${env.GIT_COMMIT}"
+      }
+    }
+
+    stage('Install') {
+      steps {
+        sh 'node --version'
+        sh 'npm ci'
+        sh 'npx playwright install chromium'
+      }
+    }
+
+    stage('Approval — Run Staging?') {
+      steps {
+        timeout(time: 24, unit: 'HOURS') {
+          input message: '▶️ Run tests against STAGING?',
+                ok: 'Yes, run Staging tests',
+                submitter: 'akashrn1801'
+        }
+      }
+    }
+
+    stage('Test — Staging') {
+      steps {
+        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+          sh '''
+            ENV=staging npx playwright test \
+              --project=chromium \
+              --workers=1 \
+              --reporter=line,allure-playwright
+          '''
+        }
+      }
+      post {
+        always {
+          sh 'mv allure-results allure-results-staging || true'
+          allure([
+            includeProperties: false,
+            jdk: '',
+            results: [[path: 'allure-results-staging']]
+          ])
+        }
+      }
+    }
+  }
+
+  post {
+    success  { echo '✅ Staging tests passed' }
+    unstable { echo '⚠️ Staging tests have failures — check Allure report' }
+    failure  { echo '❌ Staging pipeline failed' }
+    always   { cleanWs() }
+  }
+}

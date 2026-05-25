@@ -10,21 +10,16 @@ jobs:
   test-qa:
     name: Run QA Tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: 'npm'
-
       - name: Install dependencies
         run: npm ci
-
       - name: Install Playwright browsers
         run: npx playwright install chromium
-
       - name: Run tests against QA
         env:
           CI: true
@@ -41,8 +36,7 @@ jobs:
           HEADLESS: true
           WORKERS: 2
           RETRY_COUNT: 1
-        run: npx playwright test --project=chromium
-
+        run: npx playwright test --project=chromium --workers=1
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,25 +48,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  approve-staging:
+    name: Approval Gate — Staging
+    needs: test-qa
+    runs-on: ubuntu-latest
+    environment: staging-approval-approval
+    steps:
+      - name: Approved for Staging
+        run: echo "Approved — promoting to staging"
+
   promote-to-staging:
     name: Promote to Staging
-    needs: test-qa
-    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/qa'
+    needs: approve-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/qa'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
+          token: ${{ secrets.PIPELINE_TOKEN }}
       - name: Merge qa into staging
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin
           git checkout staging
-          git merge origin/qa --no-ff -m "chore: auto-promote qa to staging [skip ci]"
+          git merge origin/qa --no-ff -m "chore: auto-promote qa to staging"
           git push origin staging
