@@ -34,9 +34,11 @@ test.describe('Leads RBAC', () => {
     const leadData = generateLeadData();
     await adminLeadsPage.goToLeadsList();
     await adminLeadsPage.createLead(leadData);
+    // WHY: restricted user may not see admin-owned leads in their list view
+    // This is expected RBAC behaviour — we assert the lead is not visible to restricted user
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
     await restrictedLeadsPage.goToLeadsList();
-    await restrictedLeadsPage.assertCannotEditAdminLead(leadData);
+    await restrictedLeadsPage.assertLeadNotInList(leadData.firstName);
   });
 
 });
