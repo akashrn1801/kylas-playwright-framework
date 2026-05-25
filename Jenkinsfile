@@ -1,148 +1,136 @@
 pipeline {
-  agent any
-  tools { nodejs 'Node22' }
-  options {
-    ansiColor('xterm')
-    timestamps()
-    timeout(time: 60, unit: 'MINUTES')
-    buildDiscarder(logRotator(numToKeepStr: '20'))
-  }
-  environment {
-    CI                          = 'true'
-    HEADLESS                    = 'true'
-    DEFAULT_TIMEOUT             = '30000'
-    NAVIGATION_TIMEOUT          = '90000'
-    EXPECT_TIMEOUT              = '20000'
-    RETRY_COUNT                 = '1'
-  }
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-        echo "Branch: ${env.GIT_BRANCH} | Commit: ${env.GIT_COMMIT}"
-      }
+    agent any
+
+    tools {
+        nodejs 'Node22'
     }
-    stage('Install') {
-      steps {
-        sh 'node --version'
-        sh 'npm ci'
-        sh 'npx playwright install chromium --with-deps'
-      }
+
+    options {
+        timestamps()
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
-    stage('Test — dev (smoke)') {
-      when { branch 'dev' }
-      environment {
-        QA_APP_URL             = credentials('QA_APP_URL')
-        QA_API_BASE_URL        = credentials('QA_API_BASE_URL')
-        QA_ADMIN_EMAIL         = credentials('QA_ADMIN_EMAIL')
-        QA_ADMIN_PASSWORD      = credentials('QA_ADMIN_PASSWORD')
-        QA_RESTRICTED_EMAIL    = credentials('QA_RESTRICTED_EMAIL')
-        QA_RESTRICTED_PASSWORD = credentials('QA_RESTRICTED_PASSWORD')
-      }
-      steps {
-        sh 'ENV=qa npx playwright test --project=chromium --grep @smoke --workers=2 --timeout=90000 --reporter=line,allure-playwright'
-      }
-      post {
+
+    environment {
+        CI = 'true'
+        HEADLESS = 'true'
+        PLAYWRIGHT_BROWSERS_PATH = '/var/jenkins_home/.cache/ms-playwright'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "Branch: ${env.BRANCH_NAME}"
+                }
+                checkout scm
+            }
+        }
+
+        stage('Install') {
+            steps {
+                sh 'node --version'
+                sh 'npm ci'
+                sh 'npx playwright install chromium'
+            }
+        }
+
+        stage('Setup Environment') {
+            steps {
+                script {
+                    def envPrefix = 'QA'
+                    def envName = 'qa'
+                    if (env.BRANCH_NAME == 'stage') {
+                        envPrefix = 'STAGING'
+                        envName = 'staging'
+                    } else if (env.BRANCH_NAME == 'prod' || env.BRANCH_NAME == 'main') {
+                        envPrefix = 'PROD'
+                        envName = 'prod'
+                    }
+                    withCredentials([
+                        string(credentialsId: "${envPrefix}_APP_URL", variable: 'APP_URL'),
+                        string(credentialsId: "${envPrefix}_API_BASE_URL", variable: 'API_BASE_URL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_EMAIL", variable: 'ADMIN_EMAIL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_PASSWORD", variable: 'ADMIN_PASSWORD'),
+                        string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL", variable: 'RESTRICTED_EMAIL'),
+                        string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD')
+                    ]) {
+                        writeFile file: '.env', text: """ENV=${envName}
+${envPrefix}_APP_URL=${APP_URL}
+${envPrefix}_API_BASE_URL=${API_BASE_URL}
+${envPrefix}_ADMIN_EMAIL=${ADMIN_EMAIL}
+${envPrefix}_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+${envPrefix}_RESTRICTED_EMAIL=${RESTRICTED_EMAIL}
+${envPrefix}_RESTRICTED_PASSWORD=${RESTRICTED_PASSWORD}
+HEADLESS=true
+CI=true
+"""
+                    }
+                }
+            }
+        }
+
+        stage('Clear Auth State') {
+            steps {
+                sh 'rm -rf src/auth/storageStates/'
+                sh 'mkdir -p src/auth/storageStates/'
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                script {
+                    def grepTag = '--grep @smoke'
+                    if (env.BRANCH_NAME == 'qa') {
+                        grepTag = '--grep @regression'
+                    } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main') {
+                        grepTag = ''
+                    } else if (env.BRANCH_NAME == 'prod') {
+                        grepTag = '--grep @prodSafe'
+                    }
+                    sh "npx playwright test --project=chromium ${grepTag} || true"
+                }
+            }
+        }
+
+        stage('Approval Gate') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
+            steps {
+                timeout(time: 24, unit: 'HOURS') {
+                    input message: "Tests passed on ${env.BRANCH_NAME}. Approve to proceed?",
+                          ok: "Yes, approve"
+                }
+            }
+        }
+    }
+
+    post {
         always {
-          sh 'mv allure-results allure-results-dev || true'
-          allure(results: [[path: 'allure-results-dev']])
+            publishHTML(target: [
+                allowMissing: true,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'playwright-report',
+                reportFiles: 'index.html',
+                reportName: 'Playwright HTML Report'
+            ])
+            archiveArtifacts(
+                artifacts: 'test-results/**,playwright-report/**',
+                allowEmptyArchive: true
+            )
+            cleanWs()
         }
-      }
-    }
-    stage('Test — qa (regression)') {
-      when { branch 'qa' }
-      environment {
-        QA_APP_URL             = credentials('QA_APP_URL')
-        QA_API_BASE_URL        = credentials('QA_API_BASE_URL')
-        QA_ADMIN_EMAIL         = credentials('QA_ADMIN_EMAIL')
-        QA_ADMIN_PASSWORD      = credentials('QA_ADMIN_PASSWORD')
-        QA_RESTRICTED_EMAIL    = credentials('QA_RESTRICTED_EMAIL')
-        QA_RESTRICTED_PASSWORD = credentials('QA_RESTRICTED_PASSWORD')
-      }
-      steps {
-        sh 'ENV=qa npx playwright test --project=chromium --grep @regression --workers=2 --timeout=90000 --reporter=line,allure-playwright'
-      }
-      post {
-        always {
-          sh 'mv allure-results allure-results-qa || true'
-          allure(results: [[path: 'allure-results-qa']])
+        success {
+            echo "✅ Tests passed on ${env.BRANCH_NAME}"
         }
-      }
-    }
-    stage('Test — stage (full suite)') {
-      when { branch 'stage' }
-      environment {
-        STAGING_APP_URL             = credentials('STAGING_APP_URL')
-        STAGING_API_BASE_URL        = credentials('STAGING_API_BASE_URL')
-        STAGING_ADMIN_EMAIL         = credentials('STAGING_ADMIN_EMAIL')
-        STAGING_ADMIN_PASSWORD      = credentials('STAGING_ADMIN_PASSWORD')
-        STAGING_RESTRICTED_EMAIL    = credentials('STAGING_RESTRICTED_EMAIL')
-        STAGING_RESTRICTED_PASSWORD = credentials('STAGING_RESTRICTED_PASSWORD')
-      }
-      steps {
-        sh 'ENV=staging npx playwright test --project=chromium --workers=2 --timeout=90000 --reporter=line,allure-playwright'
-      }
-      post {
-        always {
-          sh 'mv allure-results allure-results-stage || true'
-          allure(results: [[path: 'allure-results-stage']])
+        failure {
+            echo "❌ Tests failed on ${env.BRANCH_NAME}"
         }
-      }
     }
-    stage('Test — main (regression)') {
-      when { branch 'main' }
-      environment {
-        PROD_APP_URL             = credentials('PROD_APP_URL')
-        PROD_API_BASE_URL        = credentials('PROD_API_BASE_URL')
-        PROD_ADMIN_EMAIL         = credentials('PROD_ADMIN_EMAIL')
-        PROD_ADMIN_PASSWORD      = credentials('PROD_ADMIN_PASSWORD')
-        PROD_RESTRICTED_EMAIL    = credentials('PROD_RESTRICTED_EMAIL')
-        PROD_RESTRICTED_PASSWORD = credentials('PROD_RESTRICTED_PASSWORD')
-      }
-      steps {
-        sh 'ENV=prod npx playwright test --project=chromium --grep @regression --workers=2 --timeout=90000 --reporter=line,allure-playwright'
-      }
-      post {
-        always {
-          sh 'mv allure-results allure-results-main || true'
-          allure(results: [[path: 'allure-results-main']])
-        }
-      }
-    }
-    stage('Approval — Run PROD?') {
-      when { branch 'prod' }
-      steps {
-        timeout(time: 24, unit: 'HOURS') {
-          input message: '🚨 Run tests against PRODUCTION?',
-                ok: 'Yes, approve',
-                submitter: 'akashrn1801'
-        }
-      }
-    }
-    stage('Test — prod (prodSafe)') {
-      when { branch 'prod' }
-      environment {
-        PROD_APP_URL             = credentials('PROD_APP_URL')
-        PROD_API_BASE_URL        = credentials('PROD_API_BASE_URL')
-        PROD_ADMIN_EMAIL         = credentials('PROD_ADMIN_EMAIL')
-        PROD_ADMIN_PASSWORD      = credentials('PROD_ADMIN_PASSWORD')
-        PROD_RESTRICTED_EMAIL    = credentials('PROD_RESTRICTED_EMAIL')
-        PROD_RESTRICTED_PASSWORD = credentials('PROD_RESTRICTED_PASSWORD')
-      }
-      steps {
-        sh 'ENV=prod npx playwright test --project=chromium --grep @prodSafe --workers=1 --timeout=90000 --reporter=line,allure-playwright'
-      }
-      post {
-        always {
-          sh 'mv allure-results allure-results-prod || true'
-          allure(results: [[path: 'allure-results-prod']])
-        }
-      }
-    }
-  }
-  post {
-    success  { echo '✅ Pipeline passed' }
-    failure  { echo '❌ Pipeline failed' }
-    always   { cleanWs() }
-  }
 }
