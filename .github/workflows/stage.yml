@@ -5,6 +5,7 @@ on:
     branches: [stage]
   pull_request:
     branches: [stage]
+  workflow_dispatch:
 
 jobs:
   run-tests:
