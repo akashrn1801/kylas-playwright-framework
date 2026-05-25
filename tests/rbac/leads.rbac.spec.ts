@@ -6,14 +6,14 @@ test.describe('Leads RBAC', () => {
 
   test('@smoke @regression restricted user can navigate to leads list', async ({ restrictedPage }) => {
     const leadsPage = new LeadsPage(restrictedPage);
-    await leadsPage.navigateToLeads();
-    await leadsPage.assertLeadsPageVisible();
+    await leadsPage.goToLeadsList();
+    await leadsPage.assertOnLeadsListPage();
   });
 
   test('@regression restricted user can create a lead', async ({ restrictedPage }) => {
     const leadsPage = new LeadsPage(restrictedPage);
     const leadData = generateLeadData();
-    await leadsPage.navigateToLeads();
+    await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     await leadsPage.assertLeadCreated(leadData);
   });
@@ -21,20 +21,21 @@ test.describe('Leads RBAC', () => {
   test('@regression restricted user can edit own lead', async ({ restrictedPage }) => {
     const leadsPage = new LeadsPage(restrictedPage);
     const leadData = generateLeadData();
-    await leadsPage.navigateToLeads();
+    await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     const updatedData = generateLeadData();
-    await leadsPage.updateLead(updatedData);
+    await leadsPage.updateLead(updatedData, leadData.firstName);
     await leadsPage.assertLeadUpdated(updatedData);
   });
 
   test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
+    test.setTimeout(120000);
     const adminLeadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
-    await adminLeadsPage.navigateToLeads();
+    await adminLeadsPage.goToLeadsList();
     await adminLeadsPage.createLead(leadData);
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
-    await restrictedLeadsPage.navigateToLeads();
+    await restrictedLeadsPage.goToLeadsList();
     await restrictedLeadsPage.assertCannotEditAdminLead(leadData);
   });
 

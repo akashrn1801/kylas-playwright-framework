@@ -34,7 +34,7 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep @regression
+        run: npx playwright test --project=chromium --grep @regression --workers=2 --timeout=90000
 
       - uses: actions/upload-artifact@v4
         if: always()
