@@ -1,0 +1,57 @@
+name: Prod Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you running against Prod?'
+        required: true
+        default: 'Manual verification'
+
+jobs:
+  test-prod:
+    name: Run Prod Tests
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run tests against Prod
+        env:
+          CI: true
+          ENV: prod
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
+          PROD_ADMIN_EMAIL: ${{ secrets.PROD_ADMIN_EMAIL }}
+          PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
+          PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
+          PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
+          DEFAULT_TIMEOUT: 30000
+          NAVIGATION_TIMEOUT: 90000
+          EXPECT_TIMEOUT: 20000
+          HEADLESS: true
+          WORKERS: 1
+          RETRY_COUNT: 1
+        run: npx playwright test --project=chromium
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-playwright-report
+          path: |
+            reports/playwright-report/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 14
