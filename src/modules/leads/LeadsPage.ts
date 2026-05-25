@@ -198,9 +198,9 @@ async goToLeadsList(): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
 
     // WHY: search index can lag after creation (especially cross-user in parallel workers)
-    // Retry up to 5x with fresh navigation each time before giving up
+    // Retry up to 8x with fresh navigation each time before giving up
     let found = false;
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= 8; attempt++) {
       await this.navigateTo(`${config.appUrl}/sales/leads/list`);
       await this.waitForUrl(/leads\/list/);
       await this.waitForListReady();
@@ -208,8 +208,8 @@ async goToLeadsList(): Promise<void> {
       const nameCell = this.leadRowNameCell(firstName);
       found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
       if (found) break;
-      logger.info(`Lead not visible yet — retry ${attempt}/5`);
-      try { await this.page.waitForTimeout(2000); } catch { break; }
+      logger.info(`Lead not visible yet — retry ${attempt}/8`);
+      try { await this.page.waitForTimeout(3000); } catch { break; }
     }
 
     const nameCell = this.leadRowNameCell(firstName);
@@ -256,9 +256,10 @@ async goToLeadsList(): Promise<void> {
   async assertLeadExistsInList(firstName: string): Promise<void> {
   logger.info(`Asserting lead exists in list: ${firstName}`);
 
-  // WHY: search index can lag 3-8s after save; navigate fresh + retry up to 5x
+  // WHY: search index can lag 3-8s after save; navigate fresh + retry up to 8x
+  // On staging/CI environments the lag can be longer
   let found = false;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  for (let attempt = 1; attempt <= 8; attempt++) {
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
     await this.waitForUrl(/leads\/list/);
     await this.waitForListReady();
@@ -266,8 +267,8 @@ async goToLeadsList(): Promise<void> {
     const nameCell = this.leadRowNameCell(firstName);
     found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
     if (found) break;
-    logger.info(`Lead not visible yet — retry ${attempt}/5`);
-    await this.page.waitForTimeout(3000);
+    logger.info(`Lead not visible yet — retry ${attempt}/8`);
+    await this.page.waitForTimeout(5000);
   }
 
   await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
