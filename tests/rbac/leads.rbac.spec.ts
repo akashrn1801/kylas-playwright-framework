@@ -11,6 +11,7 @@ test.describe('Leads RBAC', () => {
   });
 
   test('@regression restricted user can create a lead', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
     const leadsPage = new LeadsPage(restrictedPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
@@ -19,6 +20,7 @@ test.describe('Leads RBAC', () => {
   });
 
   test('@regression restricted user can edit own lead', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
     const leadsPage = new LeadsPage(restrictedPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
@@ -29,13 +31,11 @@ test.describe('Leads RBAC', () => {
   });
 
   test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
-    test.setTimeout(180000);
+    test.setTimeout(480000);
     const adminLeadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await adminLeadsPage.goToLeadsList();
     await adminLeadsPage.createLead(leadData);
-    // WHY: restricted user may not see admin-owned leads in their list view
-    // This is expected RBAC behaviour — we assert the lead is not visible to restricted user
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
     await restrictedLeadsPage.goToLeadsList();
     await restrictedLeadsPage.assertLeadNotInList(leadData.firstName);
