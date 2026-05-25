@@ -10,12 +10,14 @@ jobs:
   playwright-tests:
     name: playwright-tests
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # WHY: Node 24 — Node 20 actions deprecated from June 2026
+          node-version: 24
           cache: 'npm'
 
       - name: Install dependencies
@@ -26,6 +28,9 @@ jobs:
 
       - name: Run tests
         env:
+          # WHY: CI=true activates CI behaviour in playwright.config.ts
+          # and forces globalSetup to always login fresh
+          CI: true
           ENV: qa
           QA_APP_URL: ${{ secrets.QA_APP_URL }}
           QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
@@ -39,9 +44,24 @@ jobs:
           HEADLESS: true
           WORKERS: 2
           RETRY_COUNT: 1
+        # WHY: --reporter=line only on CLI — html reporter is already
+        # defined in playwright.config.ts with the correct output folder
+        # Adding html here overrides config and writes to wrong default path
         run: npx playwright test --project=chromium --reporter=line
 
+      - name: List report files
+        # WHY: always run so we can debug missing artifacts even on failure
+        if: always()
+        run: |
+          echo "=== reports/ ==="
+          ls -la reports/ 2>/dev/null || echo "reports/ not found"
+          echo "=== reports/playwright-report/ ==="
+          ls -la reports/playwright-report/ 2>/dev/null || echo "reports/playwright-report/ not found"
+          echo "=== test-results/ ==="
+          ls -la test-results/ 2>/dev/null || echo "test-results/ not found"
+
       - name: Upload test report
+        # WHY: always upload even on failure — needed for debugging flaky tests
         if: always()
         uses: actions/upload-artifact@v4
         with:
