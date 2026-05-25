@@ -112,6 +112,10 @@ CI=true
 
     post {
         always {
+            archiveArtifacts(
+                artifacts: 'test-results/**,playwright-report/**',
+                allowEmptyArchive: true
+            )
             publishHTML(target: [
                 allowMissing: true,
                 alwaysLinkToLastBuild: true,
@@ -120,10 +124,6 @@ CI=true
                 reportFiles: 'index.html',
                 reportName: 'Playwright HTML Report'
             ])
-            archiveArtifacts(
-                artifacts: 'test-results/**,playwright-report/**',
-                allowEmptyArchive: true
-            )
             cleanWs()
         }
         success {
