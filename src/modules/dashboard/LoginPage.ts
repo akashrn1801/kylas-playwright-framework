@@ -65,4 +65,9 @@ export class LoginPage extends BasePage {
   async assertErrorMessage(expectedText: string): Promise<void> {
     await this.assertText(this.errorMessage(), expectedText);
   }
+
+  async assertLoggedIn(): Promise<void> {
+    await this.waitForUrl(/sales\/home/, 15000);
+    logger.success('User is logged in');
+  }
 }
