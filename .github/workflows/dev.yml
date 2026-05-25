@@ -1,53 +1,44 @@
-name: Playwright Tests
+name: CI — dev (smoke)
 
 on:
-  pull_request:
-    branches: [main, develop]
   push:
-    branches: [develop]
+    branches: [dev]
+  pull_request:
+    branches: [dev]
 
 jobs:
-  playwright-tests:
-    name: playwright-tests
+  run-tests:
+    name: playwright-ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install chromium
+        run: npx playwright install chromium --with-deps
 
-      - name: Run tests
+      - name: Run smoke tests
         env:
           ENV: qa
+          CI: true
           QA_APP_URL: ${{ secrets.QA_APP_URL }}
           QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
           QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
-          DEFAULT_TIMEOUT: 30000
-          NAVIGATION_TIMEOUT: 90000
-          EXPECT_TIMEOUT: 20000
-          HEADLESS: true
-          WORKERS: 2
-          RETRY_COUNT: 1
-        run: npx playwright test --project=chromium --reporter=line
+        run: npx playwright test --project=chromium --grep @smoke
 
-      - name: Upload test report
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: |
-            reports/playwright-report/
-            test-results/
-          if-no-files-found: warn
+          name: playwright-report-dev
+          path: playwright-report/
           retention-days: 7
