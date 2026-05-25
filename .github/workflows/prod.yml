@@ -1,6 +1,10 @@
 name: Prod Pipeline
 
 on:
+  push:
+    branches: [prod]
+  pull_request:
+    branches: [prod]
   workflow_dispatch:
     inputs:
       reason:
