@@ -60,7 +60,7 @@ test.describe('Leads RBAC', () => {
 
     // Step 2 — restricted user navigates directly to that lead's URL
     await restrictedPage.goto(adminLeadUrl, { waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForLoadState('networkidle');
+    await restrictedPage.waitForLoadState('domcontentloaded');
 
     // WHY: a proper RBAC assertion must be deterministic — either:
     // (a) user was redirected away (no access), OR
