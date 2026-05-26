@@ -259,8 +259,8 @@ async goToLeadsList(): Promise<void> {
   // WHY: search index lag varies by environment
   // staging index can take 60-90s; qa is faster
   const isStaging = config.env === 'staging';
-  const maxRetries = isStaging ? 10 : 5;
-  const retryWait = isStaging ? 15000 : 3000;
+  const maxRetries = isStaging ? 12 : 5;
+  const retryWait = isStaging ? 30000 : 3000;
   let found = false;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     await this.navigateTo(`${config.appUrl}/sales/leads/list`);
@@ -280,7 +280,12 @@ async goToLeadsList(): Promise<void> {
 
   async assertLeadNotInList(firstName: string): Promise<void> {
     logger.info(`Asserting lead NOT in list: ${firstName}`);
+    // WHY: on staging, search index lag means results take longer to settle
+    // Wait for search to fully complete before asserting absence
+    const isStaging = config.env === 'staging';
+    const waitAfterSearch = isStaging ? 15000 : 3000;
     await this.performSearch(firstName);
+    await this.page.waitForTimeout(waitAfterSearch);
     // WHY: toBeHidden is a hard assertion — will fail if element appears
     await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
     logger.success(`Confirmed lead absent: ${firstName}`);
