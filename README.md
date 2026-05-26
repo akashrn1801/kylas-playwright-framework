@@ -572,4 +572,3 @@ exactly the name configured in `Jenkins → Manage Jenkins → Tools → NodeJS`
 # trigger
 # retrigger
 # webhook test
-
