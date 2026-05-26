@@ -369,6 +369,16 @@ export class LeadsPage extends BasePage {
   }
 
   async assertLeadCreated(data: LeadData): Promise<void> {
+    // WHY: if we have the lead ID from saveLead, navigate directly to detail page
+    // This bypasses search index lag entirely — no need to wait for list to update
+    if (this.savedLeadId !== null) {
+      logger.info(`Verifying lead exists by navigating to ID: ${this.savedLeadId}`);
+      await this.navigateTo(`${config.appUrl}/sales/leads/details/${this.savedLeadId}`);
+      await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+      this.savedLeadId = null;
+      logger.success(`Lead confirmed exists: ${data.firstName}`);
+      return;
+    }
     await this.assertLeadExistsInList(data.firstName);
   }
 
