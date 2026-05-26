@@ -259,7 +259,7 @@ async goToLeadsList(): Promise<void> {
   // WHY: search index lag varies by environment
   // staging index can take 60-90s; qa is faster
   const isStaging = config.env === 'staging';
-  const maxRetries = isStaging ? 12 : 5;
+  const maxRetries = isStaging ? 3 : 5;
   const retryWait = isStaging ? 30000 : 3000;
   let found = false;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
