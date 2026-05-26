@@ -35,7 +35,7 @@ jobs:
           PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
           PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
           PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep @prodSafe --workers=1 --timeout=90000
+        run: npx playwright test --project=chromium --workers=2 --timeout=90000
       - uses: actions/upload-artifact@v4
         if: always()
         with:
