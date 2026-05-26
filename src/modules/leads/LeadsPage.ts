@@ -323,8 +323,10 @@ async goToLeadsList(): Promise<void> {
   async assertCannotEditAdminLead(data: LeadData): Promise<void> {
     logger.info(`Asserting restricted user cannot edit admin lead: ${data.firstName}`);
     // WHY: lead was created by admin in a parallel worker; allow index time to sync
-    // On CI runners search index lag is worse — wait longer
-    await this.page.waitForTimeout(10000);
+    // On staging, search index lag is worse — wait longer before searching
+    const isStaging = config.env === 'staging';
+    const waitBeforeSearch = isStaging ? 45000 : 10000;
+    await this.page.waitForTimeout(waitBeforeSearch);
     await this.searchAndOpenLead(data.firstName);
     await expect(this.editIconButton()).toBeHidden({ timeout: 5000 });
     logger.success('Confirmed edit icon not visible for admin-owned lead');
