@@ -1,15 +1,11 @@
-name: CI — prod (prod-safe tests)
+name: CI — main (full validation)
+
 on:
   push:
-    branches: [prod]
+    branches: [main]
   pull_request:
-    branches: [prod]
-  workflow_dispatch:
-    inputs:
-      reason:
-        description: 'Why are you running against Prod?'
-        required: true
-        default: 'Manual verification'
+    branches: [main]
+
 jobs:
   run-tests:
     name: playwright-ci
@@ -17,15 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
+
       - name: Install dependencies
         run: npm ci
+
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
-      - name: Run prod-safe tests
+
+      - name: Run full validation suite
         env:
           ENV: prod
           CI: true
@@ -35,10 +35,11 @@ jobs:
           PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
           PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
           PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep @prodSafe --workers=1 --timeout=90000
+        run: npx playwright test --project=chromium --grep "@regression" --workers=2 --timeout=90000
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report-prod
+          name: playwright-report-main
           path: playwright-report/
-          retention-days: 30
+          retention-days: 90

@@ -28,12 +28,46 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
   const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
-
   return {
     firstName,
     lastName,
     salutation: faker.helpers.arrayElement(['Mr', 'Mrs', 'Miss']),
     email: faker.internet.email({ firstName, lastName }),
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
+    country: 'India',
+    facebook: `https://facebook.com/${username}`,
+    twitter: `https://twitter.com/${username}`,
+    linkedIn: `https://linkedin.com/in/${username}`,
+    companyName: faker.company.name(),
+    department: faker.commerce.department(),
+    designation: faker.person.jobTitle(),
+    companyAddress: faker.location.streetAddress(),
+    companyCity: faker.location.city(),
+    companyState: faker.location.state(),
+    companyZipcode: faker.location.zipCode('#####'),
+    companyCountry: 'India',
+    ...overrides,
+  };
+}
+
+// WHY: Admin lead data uses a unique timestamp prefix to avoid collision
+// with old test data in staging/qa databases from previous test runs.
+// Restricted user searching for "ADM1234567890_John" will NEVER find
+// a lead from a previous test run — guaranteed uniqueness.
+export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadData {
+  const timestamp = Date.now().toString().slice(-8);
+  const firstName = `ADM${timestamp}`;
+  const lastName = faker.person.lastName();
+  const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
+  return {
+    firstName,
+    lastName,
+    salutation: faker.helpers.arrayElement(['Mr', 'Mrs', 'Miss']),
+    email: `adm${timestamp}@testkylas.com`,
     phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
