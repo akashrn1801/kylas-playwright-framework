@@ -315,8 +315,9 @@ export class LeadsPage extends BasePage {
     // WHY: search index lag varies by environment
     // staging index can take 60-90s; qa is faster
     const isStaging = config.env === 'staging';
-    const maxRetries = isStaging ? 3 : 5;
-    const retryWait = isStaging ? 30000 : 3000;
+    const isProd = config.env === 'prod';
+    const maxRetries = (isStaging || isProd) ? 8 : 5;
+    const retryWait = (isStaging || isProd) ? 15000 : 3000;
     let found = false;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       await this.navigateTo(`${config.appUrl}/sales/leads/list`);
@@ -330,7 +331,9 @@ export class LeadsPage extends BasePage {
       try { await this.page.waitForTimeout(retryWait); } catch { break; }
     }
 
-    await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
+    if (!found) {
+      throw new Error(`Lead "${firstName}" not found in list after ${maxRetries} retries`);
+    }
     logger.success(`Lead confirmed in list: ${firstName}`);
   }
 
