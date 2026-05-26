@@ -38,7 +38,7 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.createLead(leadData);
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
     await restrictedLeadsPage.goToLeadsList();
-    await restrictedLeadsPage.assertLeadNotInList(leadData.firstName);
+    await restrictedLeadsPage.assertCannotEditAdminLead(leadData);
   });
 
 });
