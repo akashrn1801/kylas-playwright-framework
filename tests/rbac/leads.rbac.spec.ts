@@ -1,6 +1,6 @@
 import { test } from '../../src/fixtures/index';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
-import { generateLeadData } from '../../src/data/factories/leadFactory';
+import { generateLeadData, generateAdminLeadData } from '../../src/data/factories/leadFactory';
 
 test.describe('Leads RBAC', () => {
 
@@ -32,8 +32,10 @@ test.describe('Leads RBAC', () => {
 
   test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
     test.setTimeout(480000);
+    // WHY: generateAdminLeadData uses timestamp prefix (ADM12345678)
+    // guarantees this lead name has never existed before — no collision with old test data
     const adminLeadsPage = new LeadsPage(adminPage);
-    const leadData = generateLeadData();
+    const leadData = generateAdminLeadData();
     await adminLeadsPage.goToLeadsList();
     await adminLeadsPage.createLead(leadData);
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
