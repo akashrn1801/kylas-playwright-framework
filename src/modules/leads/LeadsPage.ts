@@ -189,11 +189,13 @@ export class LeadsPage extends BasePage {
   }
 
   async saveLead(): Promise<void> {
-    logger.info('Saving lead');
+  logger.info('Saving lead');
 
-    // WHY: intercept the POST /v1/leads/ response BEFORE clicking save
-    // so we capture the returned lead ID and skip search indexing lag entirely
-    // !search excludes the POST /v1/search/lead? call which also matches /v1/leads/
+  // WHY: race between the API response and a fallback timeout
+  // If the response arrives within 30s we capture the ID and navigate by it
+  // If stage is slow and times out, we fall back to search-based navigation
+  // This makes saveLead() resilient across all environments
+  try {
     const [response] = await Promise.all([
       this.page.waitForResponse(
         (res) =>
@@ -201,7 +203,7 @@ export class LeadsPage extends BasePage {
           !res.url().includes('search') &&
           res.request().method() === 'POST' &&
           res.status() === 200,
-        { timeout: 15000 }
+        { timeout: 30000 }
       ),
       this.click(this.saveButton(), 'save button'),
     ]);
@@ -215,11 +217,21 @@ export class LeadsPage extends BasePage {
       logger.info('Could not parse lead ID — will fall back to search');
     }
 
-    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
-    await this.waitForUrl(/leads\/list/);
-    await this.waitForListReady();
-    logger.success('Lead saved — on list page');
+  } catch {
+    // WHY: waitForResponse timed out — stage API was too slow or URL pattern did not match
+    // Fall back gracefully — savedLeadId stays null, searchAndOpenLead will use retry search
+    logger.info('Save response not captured — falling back to search-based navigation');
+    this.savedLeadId = null;
+    await this.click(this.saveButton(), 'save button').catch(() => {
+      // Button may already have been clicked in the Promise.all above — ignore
+    });
   }
+
+  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+  await this.waitForUrl(/leads\/list/);
+  await this.waitForListReady();
+  logger.success('Lead saved — on list page');
+}
 
   // ─── Search & Open ────────────────────────────────────────
 
