@@ -78,6 +78,10 @@ export class LeadsPage extends BasePage {
   private readonly successToast = () =>
     this.page.locator('.toast-success, .alert-success, [class*="toast"][class*="success"], [class*="notification"][class*="success"]').first();
 
+  // WHY: stores the lead ID captured from the save API response
+  // so we can navigate directly to the detail page and bypass search index lag
+  private savedLeadId: number | null = null;
+
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded', { timeout: 10000 });
     await this.page.waitForTimeout(1000);
@@ -119,28 +123,28 @@ export class LeadsPage extends BasePage {
       // Toggle absent — form already fully visible, continue
     }
   }
-private async performSearch(searchText: string): Promise<void> {
-  await this.fill(this.searchInput(), searchText, 'search input');
-  await this.page.waitForTimeout(2000);
-  await this.click(this.searchIcon(), 'search icon');
-  // WHY: wait for network to settle after search — more reliable than fixed sleep
-  await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  await this.page.waitForTimeout(3000);
-}
+
+  private async performSearch(searchText: string): Promise<void> {
+    await this.fill(this.searchInput(), searchText, 'search input');
+    await this.page.waitForTimeout(2000);
+    await this.click(this.searchIcon(), 'search icon');
+    await this.page.waitForTimeout(5000);
+  }
 
   // ─── Navigation ───────────────────────────────────────────
 
-async goToLeadsList(): Promise<void> {
-  logger.info('Navigating to Leads list');
-  await this.closeModalIfOpen();
-  // WHY: navigate directly by URL instead of clicking nav icon
-  // The nav icon can load a stale cached list — direct navigation
-  // forces a fresh load from the server every time
-  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
-  await this.waitForUrl(/leads\/list/);
-  await this.waitForListReady();
-  logger.success('On Leads list page');
-}
+  async goToLeadsList(): Promise<void> {
+    logger.info('Navigating to Leads list');
+    await this.closeModalIfOpen();
+    // WHY: navigate directly by URL instead of clicking nav icon
+    // The nav icon can load a stale cached list — direct navigation
+    // forces a fresh load from the server every time
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+    await this.waitForUrl(/leads\/list/);
+    await this.waitForListReady();
+    logger.success('On Leads list page');
+  }
+
   async clickAddLead(): Promise<void> {
     logger.info('Clicking Add Lead button');
     await this.click(this.addButton(), 'add lead button');
@@ -185,47 +189,90 @@ async goToLeadsList(): Promise<void> {
   }
 
   async saveLead(): Promise<void> {
-    logger.info('Saving lead');
-    await this.click(this.saveButton(), 'save button');
-    // WHY: wait for success toast — confirms save API completed before navigating
-    // Without this, we navigate before the lead is indexed in the database
+  logger.info('Saving lead');
+
+  // WHY: race between the API response and a fallback timeout
+  // If the response arrives within 30s we capture the ID and navigate by it
+  // If stage is slow and times out, we fall back to search-based navigation
+  // This makes saveLead() resilient across all environments
+  try {
+    const [response] = await Promise.all([
+      this.page.waitForResponse(
+        (res) =>
+          res.url().includes('/v1/leads/') &&
+          !res.url().includes('search') &&
+          res.request().method() === 'POST' &&
+          res.status() === 200,
+        { timeout: 30000 }
+      ),
+      this.click(this.saveButton(), 'save button'),
+    ]);
+
     try {
-      await this.successToast().waitFor({ state: 'visible', timeout: 10000 });
-      logger.info('Save confirmed via success toast');
-      await this.successToast().waitFor({ state: 'hidden', timeout: 10000 });
+      const body = await response.json();
+      this.savedLeadId = body?.id ?? body?.data?.id ?? null;
+      logger.info(`Captured lead ID from save response: ${this.savedLeadId}`);
     } catch {
-      // Toast may have appeared and disappeared too fast — continue
-      await this.page.waitForTimeout(3000);
+      this.savedLeadId = null;
+      logger.info('Could not parse lead ID — will fall back to search');
     }
-    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
-    await this.waitForUrl(/leads\/list/);
-    await this.waitForListReady();
-    logger.success('Lead saved — on list page');
+
+  } catch {
+    // WHY: waitForResponse timed out — stage API was too slow or URL pattern did not match
+    // Fall back gracefully — savedLeadId stays null, searchAndOpenLead will use retry search
+    logger.info('Save response not captured — falling back to search-based navigation');
+    this.savedLeadId = null;
+    await this.click(this.saveButton(), 'save button').catch(() => {
+      // Button may already have been clicked in the Promise.all above — ignore
+    });
   }
+
+  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+  await this.waitForUrl(/leads\/list/);
+  await this.waitForListReady();
+  logger.success('Lead saved — on list page');
+}
 
   // ─── Search & Open ────────────────────────────────────────
 
   async searchAndOpenLead(firstName: string): Promise<void> {
     logger.info(`Searching for lead: ${firstName}`);
+
+    // WHY: if we have the lead ID from the save response, navigate directly
+    // to the detail page — bypasses search index lag entirely
+    if (this.savedLeadId !== null) {
+      logger.info(`Navigating directly to lead by ID: ${this.savedLeadId}`);
+      await this.navigateTo(`${config.appUrl}/sales/leads/details/${this.savedLeadId}`);
+      await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+      this.savedLeadId = null; // reset after use
+      logger.success(`Opened lead by ID: ${firstName}`);
+      return;
+    }
+
+    // WHY: fallback — no ID available (e.g. admin-created lead opened by restricted user)
+    // Retry search up to 8x with increasing wait to handle staging index lag
     let found = false;
-    for (let attempt = 1; attempt <= 6; attempt++) {
-      // WHY: reload list before each attempt — forces fresh data, bypasses cache
+    for (let attempt = 1; attempt <= 8; attempt++) {
       await this.navigateTo(`${config.appUrl}/sales/leads/list`);
       await this.waitForUrl(/leads\/list/);
       await this.waitForListReady();
       await this.performSearch(firstName);
       const nameCell = this.leadRowNameCell(firstName);
       found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
-      if (found) {
-        await nameCell.click();
-        await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
-        logger.success(`Opened lead: ${firstName}`);
-        return;
-      }
-      logger.info(`Lead not visible yet — retry ${attempt}/6`);
-      await this.page.waitForTimeout(5000);
+      if (found) break;
+      logger.info(`Lead not visible yet — retry ${attempt}/8`);
+      const wait = attempt <= 3 ? 3000 : 8000;
+      try { await this.page.waitForTimeout(wait); } catch { break; }
     }
-    throw new Error(`Lead not found after 6 attempts: ${firstName}`);
+
+    if (!found) {
+      throw new Error(`Lead "${firstName}" not found in list after 8 retries`);
+    }
+
+    const nameCell = this.leadRowNameCell(firstName);
+    await nameCell.click();
+    await this.page.waitForURL(/sales\/leads\/details\//, { timeout: 20000 });
+    logger.success(`Opened lead: ${firstName}`);
   }
 
   // ─── Edit Actions ─────────────────────────────────────────
@@ -263,31 +310,83 @@ async goToLeadsList(): Promise<void> {
   }
 
   async assertLeadExistsInList(firstName: string): Promise<void> {
-  logger.info(`Asserting lead exists in list: ${firstName}`);
-  
-  // WHY: after edit, the search index can lag by 1-2 seconds
-  // We retry the search up to 3 times with a short wait between
-  // This eliminates flakiness without using fixed sleeps
-  let found = false;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    await this.performSearch(firstName);
-    const nameCell = this.leadRowNameCell(firstName);
-    found = await nameCell.isVisible({ timeout: 8000 }).catch(() => false);
-    if (found) break;
-    logger.info(`Lead not visible yet — retry ${attempt}/3`);
-    // WHY: longer wait on staging — search index can lag significantly
-    await this.page.waitForTimeout(5000);
+    logger.info(`Asserting lead exists in list: ${firstName}`);
+
+    // WHY: search index lag varies by environment
+    // staging index can take 60-90s; qa is faster
+    const isStaging = config.env === 'staging';
+    const maxRetries = isStaging ? 3 : 5;
+    const retryWait = isStaging ? 30000 : 3000;
+    let found = false;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+      await this.waitForUrl(/leads\/list/);
+      await this.waitForListReady();
+      await this.performSearch(firstName);
+      const nameCell = this.leadRowNameCell(firstName);
+      found = await nameCell.isVisible({ timeout: 5000 }).catch(() => false);
+      if (found) break;
+      logger.info(`Lead not visible yet — retry ${attempt}/${maxRetries}`);
+      try { await this.page.waitForTimeout(retryWait); } catch { break; }
+    }
+
+    await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 10000 });
+    logger.success(`Lead confirmed in list: ${firstName}`);
   }
 
-  await expect(this.leadRowNameCell(firstName)).toBeVisible({ timeout: 20000 });
-  logger.success(`Lead confirmed in list: ${firstName}`);
+ async assertLeadNotInList(firstName: string): Promise<void> {
+  logger.info(`Asserting lead NOT in list: ${firstName}`);
+
+  // WHY: restricted user should never see admin-owned leads at all
+  // Just navigate fresh to list and search — no need for long waits
+  // because absence should be immediate, not eventually consistent
+  await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+  await this.waitForUrl(/leads\/list/);
+  await this.waitForListReady();
+  await this.performSearch(firstName);
+
+  await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
+  logger.success(`Confirmed lead absent: ${firstName}`);
 }
 
-  async assertLeadNotInList(firstName: string): Promise<void> {
-    logger.info(`Asserting lead NOT in list: ${firstName}`);
-    await this.performSearch(firstName);
-    // WHY: toBeHidden is a hard assertion — will fail if element appears
-    await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
-    logger.success(`Confirmed lead absent: ${firstName}`);
+  // ─── High-level workflow wrappers ────────────────────────
+
+  async createLead(data: LeadData): Promise<void> {
+    await this.clickAddLead();
+    await this.fillLeadForm(data);
+    await this.saveLead();
   }
+
+  async updateLead(newData: LeadData, originalFirstName?: string): Promise<void> {
+    const searchName = originalFirstName ?? newData.firstName;
+    await this.searchAndOpenLead(searchName);
+    await this.clickEditIcon();
+    await this.fillEditForm(newData);
+    await this.saveEditedLead();
+  }
+
+  async assertLeadCreated(data: LeadData): Promise<void> {
+    await this.assertLeadExistsInList(data.firstName);
+  }
+
+  async assertLeadUpdated(data: LeadData): Promise<void> {
+    // WHY: after saveEditedLead the page stays on detail view; navigate to list
+    // before searching so the search input is available
+    await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+    await this.waitForUrl(/leads\/list/);
+    await this.waitForListReady();
+    await this.assertLeadExistsInList(data.firstName);
+  }
+
+  // async assertCannotEditAdminLead(data: LeadData): Promise<void> {
+  //   logger.info(`Asserting restricted user cannot edit admin lead: ${data.firstName}`);
+  //   // WHY: lead was created by admin in a parallel worker; allow index time to sync
+  //   // On staging, search index lag is worse — wait longer before searching
+  //   const isStaging = config.env === 'staging';
+  //   const waitBeforeSearch = isStaging ? 45000 : 10000;
+  //   await this.page.waitForTimeout(waitBeforeSearch);
+  //   await this.searchAndOpenLead(data.firstName);
+  //   await expect(this.editIconButton()).toBeHidden({ timeout: 5000 });
+  //   logger.success('Confirmed edit icon not visible for admin-owned lead');
+  // }
 }

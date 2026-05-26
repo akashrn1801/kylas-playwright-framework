@@ -2,7 +2,7 @@ name: Staging Pipeline
 
 on:
   push:
-    branches: [staging]
+    branches: [stage]
 
 jobs:
   test-staging:

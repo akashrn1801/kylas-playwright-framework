@@ -1,10 +1,10 @@
-name: CI — qa (regression)
+name: CI — dev (smoke)
 
 on:
   push:
-    branches: [qa]
+    branches: [dev]
   pull_request:
-    branches: [qa]
+    branches: [dev]
 
 jobs:
   run-tests:
@@ -24,7 +24,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run regression tests
+      - name: Run smoke tests
         env:
           ENV: qa
           CI: true
@@ -34,11 +34,11 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep @regression --workers=2 --timeout=90000
+        run: npx playwright test --project=chromium --grep @smoke --workers=2 --timeout=90000
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report-qa
+          name: playwright-report-dev
           path: playwright-report/
-          retention-days: 14
+          retention-days: 7
