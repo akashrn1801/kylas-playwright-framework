@@ -280,13 +280,13 @@ async goToLeadsList(): Promise<void> {
 
   async assertLeadNotInList(firstName: string): Promise<void> {
     logger.info(`Asserting lead NOT in list: ${firstName}`);
-    // WHY: on staging, search index lag means results take longer to settle
-    // Wait for search to fully complete before asserting absence
     const isStaging = config.env === 'staging';
+    // WHY: on staging, wait before searching to let index settle
+    const waitBeforeSearch = isStaging ? 30000 : 2000;
     const waitAfterSearch = isStaging ? 15000 : 3000;
+    await this.page.waitForTimeout(waitBeforeSearch);
     await this.performSearch(firstName);
     await this.page.waitForTimeout(waitAfterSearch);
-    // WHY: toBeHidden is a hard assertion — will fail if element appears
     await expect(this.leadRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
     logger.success(`Confirmed lead absent: ${firstName}`);
   }
