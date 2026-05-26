@@ -89,7 +89,7 @@ CI=true
                     } else if (env.BRANCH_NAME == 'prod') {
                         grepTag = '--grep @prodSafe'
                     }
-                    sh "npx playwright test --project=chromium ${grepTag} || true"
+                    sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
                 }
             }
         }
