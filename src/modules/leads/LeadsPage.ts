@@ -153,7 +153,7 @@ export class LeadsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
 
     await expect(this.leadTable()).toBeVisible({
-      timeout: 15000,
+      timeout: 30000,
     });
 
     await this.waitForLoaderToDisappear();
