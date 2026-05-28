@@ -5,6 +5,7 @@ on:
     branches: [stage]
   pull_request:
     branches: [stage]
+  workflow_dispatch:
 
 jobs:
   run-tests:
@@ -34,7 +35,11 @@ jobs:
           STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --workers=2 --timeout=90000
+          QA_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+        run: npx playwright test --project=chromium --workers=1 --timeout=300000
 
       - uses: actions/upload-artifact@v4
         if: always()
