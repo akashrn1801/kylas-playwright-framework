@@ -34,7 +34,7 @@ async function setupRole(
   // builds may be expired or from a different environment
   if (fs.existsSync(stateFile) && !process.env.CI) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
-    if (age < 8 * 60 * 60 * 1000) {
+   if (age < 1 * 60 * 60 * 1000) {
       console.log(`[globalSetup] Reusing fresh state for: ${role}`);
       return;
     }

@@ -39,44 +39,44 @@ export default defineConfig({
 
   projects: isCI
     ? [
-        {
-          name: 'chromium',
-          use: {
-            ...devices['Desktop Chrome'],
-            viewport: { width: 1920, height: 1080 },
-            launchOptions: {
-              args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1920,1080'],
-            },
+      {
+        name: 'chromium',
+        use: {
+          ...devices['Desktop Chrome'],
+          viewport: { width: 1920, height: 1080 },
+          launchOptions: {
+            args: ['--start-maximized'],
           },
         },
-      ]
+      },
+    ]
     : [
-        {
-          name: 'chromium',
-          use: {
-            ...devices['Desktop Chrome'],
-            viewport: { width: 1920, height: 1080 },
-          },
+      {
+        name: 'chromium',
+        use: {
+          ...devices['Desktop Chrome'],
+          viewport: { width: 1920, height: 1080 },
         },
-        {
-          name: 'firefox',
-          use: {
-            ...devices['Desktop Firefox'],
-            viewport: { width: 1920, height: 1080 },
-          },
+      },
+      {
+        name: 'firefox',
+        use: {
+          ...devices['Desktop Firefox'],
+          viewport: { width: 1920, height: 1080 },
         },
-        {
-          name: 'webkit',
-          use: {
-            ...devices['Desktop Safari'],
-            viewport: { width: 1920, height: 1080 },
-          },
+      },
+      {
+        name: 'webkit',
+        use: {
+          ...devices['Desktop Safari'],
+          viewport: { width: 1920, height: 1080 },
         },
-        {
-          name: 'mobile-chrome',
-          use: { ...devices['Pixel 5'] },
-        },
-      ],
+      },
+      {
+        name: 'mobile-chrome',
+        use: { ...devices['Pixel 5'] },
+      },
+    ],
 
   outputDir: 'test-results/',
 });

@@ -106,4 +106,50 @@ export class BasePage {
     await locator.waitFor({ state: 'visible' });
     return (await locator.textContent()) || '';
   }
+  async assertNoFormErrors(context = 'form'): Promise<void> {
+  logger.info(`Checking for validation errors in ${context}`);
+
+  // WHY: Wait briefly for any error messages to appear after save action
+  await this.page.waitForTimeout(1500);
+
+  // Field level errors
+  const fieldErrors = await this.page
+    .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
+    .evaluateAll((els: any[]) =>
+      els.map(el => el.name || el.id || 'unknown')
+    );
+
+  // Inline validation messages
+  const inlineErrors = await this.page
+    .locator('.invalid-feedback, .text-danger, .error-message, .alert-danger')
+    .allTextContents();
+
+  // Toast/notification errors
+  const toastErrors = await this.page
+    .locator('.toast, .toast-error, .toast-danger, .notification-error, [class*="toast"][class*="error"], [class*="alert"][class*="error"], .Toastify__toast--error, .swal2-error')
+    .allTextContents();
+
+  // Any visible error containers
+  const errorContainers = await this.page
+    .locator('[class*="error"]:visible, [class*="Error"]:visible, [class*="danger"]:visible')
+    .allTextContents();
+
+  const allErrors = [
+    ...inlineErrors,
+    ...toastErrors,
+    ...errorContainers,
+  ]
+    .map(e => e.trim())
+    .filter(e => e.length > 0);
+
+  if (allErrors.length > 0 || fieldErrors.length > 0) {
+    throw new Error(
+      `Validation errors found in ${context}:\n` +
+      `Fields with errors: ${fieldErrors.join(', ')}\n` +
+      `Error messages: ${allErrors.join(' | ')}`
+    );
+  }
+
+  logger.success(`No validation errors found in ${context}`);
+}
 }
