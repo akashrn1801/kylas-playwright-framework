@@ -12,8 +12,8 @@ pipeline {
     }
 
     environment {
-        CI = 'true'
-        HEADLESS = 'true'
+        CI                       = 'true'
+        HEADLESS                 = 'true'
         PLAYWRIGHT_BROWSERS_PATH = '/var/jenkins_home/.cache/ms-playwright'
     }
 
@@ -21,9 +21,7 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                script {
-                    echo "Branch: ${env.BRANCH_NAME}"
-                }
+                echo "Branch: ${env.BRANCH_NAME}"
                 checkout scm
             }
         }
@@ -40,23 +38,25 @@ pipeline {
             steps {
                 script {
                     def envPrefix = 'QA'
-                    def envName = 'qa'
+                    def envName   = 'qa'
                     if (env.BRANCH_NAME == 'stage') {
                         envPrefix = 'STAGING'
-                        envName = 'staging'
+                        envName   = 'staging'
                     } else if (env.BRANCH_NAME == 'prod' || env.BRANCH_NAME == 'main') {
                         envPrefix = 'PROD'
-                        envName = 'prod'
+                        envName   = 'prod'
                     }
+
                     withCredentials([
-                        string(credentialsId: "${envPrefix}_APP_URL", variable: 'APP_URL'),
-                        string(credentialsId: "${envPrefix}_API_BASE_URL", variable: 'API_BASE_URL'),
-                        string(credentialsId: "${envPrefix}_ADMIN_EMAIL", variable: 'ADMIN_EMAIL'),
-                        string(credentialsId: "${envPrefix}_ADMIN_PASSWORD", variable: 'ADMIN_PASSWORD'),
-                        string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL", variable: 'RESTRICTED_EMAIL'),
+                        string(credentialsId: "${envPrefix}_APP_URL",             variable: 'APP_URL'),
+                        string(credentialsId: "${envPrefix}_API_BASE_URL",        variable: 'API_BASE_URL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_EMAIL",         variable: 'ADMIN_EMAIL'),
+                        string(credentialsId: "${envPrefix}_ADMIN_PASSWORD",      variable: 'ADMIN_PASSWORD'),
+                        string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL",    variable: 'RESTRICTED_EMAIL'),
                         string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD')
                     ]) {
-                        writeFile file: '.env', text: """ENV=${envName}
+                        writeFile file: '.env', text: """\
+ENV=${envName}
 ${envPrefix}_APP_URL=${APP_URL}
 ${envPrefix}_API_BASE_URL=${API_BASE_URL}
 ${envPrefix}_ADMIN_EMAIL=${ADMIN_EMAIL}
@@ -78,6 +78,21 @@ CI=true
             }
         }
 
+        stage('Approval Gate') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
+            steps {
+                timeout(time: 24, unit: 'HOURS') {
+                    input message: "🚨 You are about to run tests against ${env.BRANCH_NAME}. Approve to proceed?",
+                          ok: 'Yes, approve'
+                }
+            }
+        }
+
         stage('Run Tests') {
             steps {
                 script {
@@ -92,20 +107,6 @@ CI=true
             }
         }
 
-        stage('Approval Gate') {
-            when {
-                anyOf {
-                    branch 'prod'
-                    branch 'main'
-                }
-            }
-            steps {
-                timeout(time: 24, unit: 'HOURS') {
-                    input message: "Tests passed on ${env.BRANCH_NAME}. Approve to proceed?",
-                          ok: "Yes, approve"
-                }
-            }
-        }
     }
 
     post {
@@ -115,12 +116,12 @@ CI=true
                 allowEmptyArchive: true
             )
             publishHTML(target: [
-                allowMissing: true,
+                allowMissing         : true,
                 alwaysLinkToLastBuild: true,
-                keepAll: true,
-                reportDir: 'reports/playwright-report',
-                reportFiles: 'index.html',
-                reportName: 'Playwright HTML Report'
+                keepAll              : true,
+                reportDir            : 'reports/playwright-report',
+                reportFiles          : 'index.html',
+                reportName           : 'Playwright HTML Report'
             ])
             cleanWs()
         }
