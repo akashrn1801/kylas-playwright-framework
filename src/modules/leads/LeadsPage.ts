@@ -540,9 +540,12 @@ export class LeadsPage extends BasePage {
       this.captureLeadIdFromResponse();
 
     await this.click(
+      
       this.saveButton(),
       'save button'
+      
     );
+    await this.assertNoFormErrors('lead create form');
 
     const leadId = await leadIdPromise;
 
@@ -641,6 +644,8 @@ export class LeadsPage extends BasePage {
       this.saveButton(),
       'save button'
     );
+
+    await this.assertNoFormErrors('lead edit form');
 
     await expect(
       this.editModal()

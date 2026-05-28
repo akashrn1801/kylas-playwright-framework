@@ -59,7 +59,7 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
 // Restricted user searching for "ADM1234567890_John" will NEVER find
 // a lead from a previous test run — guaranteed uniqueness.
 export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadData {
-  const timestamp = Date.now().toString().slice(-8);
+  const timestamp = Date.now().toString();
   const firstName = `ADM${timestamp}`;
   const lastName = faker.person.lastName();
   const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
