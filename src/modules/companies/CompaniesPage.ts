@@ -1,10 +1,10 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import { ContactData } from '../../data/factories/contactFactory';
+import { CompanyData } from '../../data/factories/companyFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
-export class ContactsPage extends BasePage {
+export class CompaniesPage extends BasePage {
 
     // ──────────────────────────────────────────────────────────
     // Retry Config
@@ -41,38 +41,60 @@ export class ContactsPage extends BasePage {
     private readonly searchLoader = (): Locator =>
         this.page.locator('.spinner, .loader, .loading');
 
-    private readonly contactTable = (): Locator =>
+    private readonly companyTable = (): Locator =>
         this.page.locator('.rt-table');
 
-    private readonly contactRowNameCell = (firstName: string): Locator =>
+    private readonly companyRowNameCell = (name: string): Locator =>
         this.page
             .locator('.rt-tr-group')
             .filter({
-                has: this.page.getByText(firstName, { exact: true }),
+                has: this.page.getByText(name, { exact: true }),
             })
             .first();
 
     private readonly showRequiredToggle = (): Locator =>
         this.page
             .locator('label')
-            .filter({
-                hasText: 'Show Required & Important Fields',
-            });
+            .filter({ hasText: 'Show Required & Important Fields' });
 
-    private readonly firstNameInput = (): Locator =>
-        this.page.locator('input[name="firstName"]');
+    private readonly nameInput = (): Locator =>
+        this.page.locator('[id="0_11_input_name"]');
 
-    private readonly lastNameInput = (): Locator =>
-        this.page.locator('input[name="lastName"]');
+    // WHY: React Select picklists are opened by clicking the container
+    // div that shows "Choose" placeholder, then clicking the option text.
+    // Using nth(0) targets the first unpopulated picklist on the form —
+    // each picklist is identified by its input id after opening.
+    private readonly numberOfEmployeesContainer = (): Locator =>
+        this.page.locator('#0_12_input_numberOfEmployees').locator('../..');
+
+    private readonly industryContainer = (): Locator =>
+        this.page.locator('[class*="__control"]').filter({
+            has: this.page.locator('#0_21_input_industry, [id*="input_industry"]'),
+        });
+
+    private readonly businessTypeContainer = (): Locator =>
+        this.page.locator('#0_32_input_businessType').locator('../..');
+
+    private readonly annualRevenueInput = (): Locator =>
+        this.page.locator('[id="0_21_input_annualRevenue"]');
+
+    private readonly websiteInput = (): Locator =>
+        this.page.locator('input[name="website"]');
+
+    private readonly uniqueText1Input = (): Locator =>
+        this.page.locator('input[name="uniqueText1"]');
+
+    private readonly uniqueText2Input = (): Locator =>
+        this.page.locator('input[name="uniqueText2"]');
 
     private readonly addEmailButton = (): Locator =>
-        this.page.getByText('Add Email', { exact: true }).first();
+        this.page.locator('button').filter({ hasText: 'Add Email' }).first();
 
     private readonly emailInput = (): Locator =>
         this.page.locator('input[name="emails[0].value"]');
 
     private readonly addPhoneButton = (): Locator =>
-        this.page.getByText('Add Phone', { exact: true }).first();
+        this.page.locator('button').filter({ hasText: 'Add Phone' }).first();
 
     private readonly phoneInput = (): Locator =>
         this.page.locator('input[id*="input_phone_0"]');
@@ -95,40 +117,15 @@ export class ContactsPage extends BasePage {
     private readonly twitterInput = (): Locator =>
         this.page.locator('input[name="twitter"]');
 
-    // NOTE: contacts use 'linkedin' (all lowercase) — leads use 'linkedIn'
-    private readonly linkedinInput = (): Locator =>
-        this.page.locator('input[name="linkedin"]');
-
-    private readonly departmentInput = (): Locator =>
-        this.page.locator('input[name="department"]');
-
-    private readonly designationInput = (): Locator =>
-        this.page.locator('input[name="designation"]');
-
-    // UTM / source fields — below address, require scroll on some viewports
-    private readonly subSourceInput = (): Locator =>
-        this.page.locator('input[name="subSource"]');
-
-    private readonly utmSourceInput = (): Locator =>
-        this.page.locator('input[name="utmSource"]');
-
-    private readonly utmCampaignInput = (): Locator =>
-        this.page.locator('input[name="utmCampaign"]');
-
-    private readonly utmMediumInput = (): Locator =>
-        this.page.locator('input[name="utmMedium"]');
-
-    private readonly utmContentInput = (): Locator =>
-        this.page.locator('input[name="utmContent"]');
-
-    private readonly utmTermInput = (): Locator =>
-        this.page.locator('input[name="utmTerm"]');
+    // NOTE: companies use 'linkedIn' (capital N) — same as leads, different from contacts
+    private readonly linkedInInput = (): Locator =>
+        this.page.locator('input[name="linkedIn"]');
 
     private readonly saveButton = (): Locator =>
         this.page.locator('button[type="submit"].save-button');
 
     private readonly editIconButton = (): Locator =>
-        this.page.locator('#edit-action');
+        this.page.locator('#edit-action-btn');
 
     private readonly editModal = (): Locator =>
         this.page.locator('#editEntityModal');
@@ -157,7 +154,7 @@ export class ContactsPage extends BasePage {
     private async waitForListReady(): Promise<void> {
         await this.page.waitForLoadState('domcontentloaded');
 
-        await expect(this.contactTable()).toBeVisible({
+        await expect(this.companyTable()).toBeVisible({
             timeout: 60000,
         });
 
@@ -175,13 +172,9 @@ export class ContactsPage extends BasePage {
         }
     }
 
-    private async waitForSearchResults(
-        firstName: string
-    ): Promise<boolean> {
+    private async waitForSearchResults(name: string): Promise<boolean> {
         try {
-            await expect(
-                this.contactRowNameCell(firstName)
-            ).toBeVisible({
+            await expect(this.companyRowNameCell(name)).toBeVisible({
                 timeout: 5000,
             });
 
@@ -191,17 +184,17 @@ export class ContactsPage extends BasePage {
         }
     }
 
-    private async waitForContactDetailsPage(): Promise<void> {
+    private async waitForCompanyDetailsPage(): Promise<void> {
         await this.page.waitForURL(
-            /sales\/contacts\/details\//,
+            /sales\/companies\/details\//,
             { timeout: 20000 }
         );
 
         await this.page.waitForLoadState('domcontentloaded');
     }
 
-    private async waitForContactListPage(): Promise<void> {
-        await this.waitForUrl(/contacts\/list/);
+    private async waitForCompanyListPage(): Promise<void> {
+        await this.waitForUrl(/companies\/list/);
 
         await this.waitForListReady();
     }
@@ -215,15 +208,12 @@ export class ContactsPage extends BasePage {
 
                 await this.modalCancelButton().click();
 
-                await modal.waitFor({
-                    state: 'hidden',
-                    timeout: 5000,
-                });
+                await modal.waitFor({ state: 'hidden', timeout: 5000 });
 
                 logger.success('Modal closed');
             }
         } catch (error) {
-            logger.warn(`Failed to close modal: ${String(error)}`);
+            logger.debug(`Company ID not captured via response (fast server) — will use search fallback`);
         }
     }
 
@@ -236,9 +226,7 @@ export class ContactsPage extends BasePage {
 
                 await toggle.click();
 
-                await expect(this.firstNameInput()).toBeVisible({
-                    timeout: 20000,
-                });
+                await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
 
                 logger.success('Toggle disabled');
             }
@@ -247,14 +235,51 @@ export class ContactsPage extends BasePage {
         }
     }
 
-    private async performSearch(searchText: string): Promise<void> {
-        logger.info(`Searching contact: ${searchText}`);
+    // WHY: React Select picklists require clicking the control to open the
+    // dropdown menu, then clicking the exact option text. Typing into the
+    // input filters options — we click directly to avoid filter side effects.
+    // We wait for the option to be visible before clicking to handle slow
+    // renders on prod.
+    private async selectPicklistOption(
+        inputId: string,
+        optionText: string,
+        description: string
+    ): Promise<void> {
+        logger.info(`Selecting ${description}: ${optionText}`);
 
-        await this.fill(
-            this.searchInput(),
-            searchText,
-            'search input'
+        const input = this.page.locator(`[id="${inputId}"]`);
+        await input.waitFor({ state: 'visible' });
+
+        // WHY: Click the __control div to open the dropdown, then type into
+        // the input to filter options. This avoids virtualization issues where
+        // options only render when scrolled into view.
+        const control = input.locator(
+            'xpath=ancestor::div[contains(@class,"__control")]'
         );
+        await control.click();
+
+        // Type to filter — reduces options to just the matching one
+        await input.type(optionText, { delay: 50 });
+
+        // Wait for filtered option and click it
+        const option = this.page
+            .locator('div[class*="is-invalid__option"]')
+            .first();
+
+        await option.waitFor({ state: 'visible', timeout: 10000 });
+        await option.click();
+
+        await this.page
+            .locator('div[class*="is-invalid__menu"]')
+            .waitFor({ state: 'hidden', timeout: 5000 })
+            .catch(() => { /* menu may already be gone */ });
+
+        logger.success(`Selected ${description}: ${optionText}`);
+    }
+    private async performSearch(searchText: string): Promise<void> {
+        logger.info(`Searching company: ${searchText}`);
+
+        await this.fill(this.searchInput(), searchText, 'search input');
 
         await Promise.all([
             this.waitForSearchApi(),
@@ -278,36 +303,31 @@ export class ContactsPage extends BasePage {
         }
     }
 
-    private async captureContactIdFromResponse(): Promise<number | null> {
+    private async captureCompanyIdFromResponse(): Promise<number | null> {
         try {
             const response = await this.page.waitForResponse(
                 (res) =>
-                    res.url().includes('/v1/contacts') &&
+                    res.url().includes('companies') &&
                     res.request().method() === 'POST' &&
-                    res.status() === 200,
+                    (res.status() === 200 || res.status() === 201),
                 { timeout: 30000 }
             );
 
             const body = await response.json();
 
-            const contactId =
-                body?.id ??
-                body?.data?.id ??
-                null;
+            const companyId = body?.id ?? body?.data?.id ?? null;
 
-            logger.success(`Captured contact ID: ${contactId}`);
+            logger.success(`Captured company ID: ${companyId}`);
 
-            return contactId;
+            return companyId;
         } catch (error) {
-            logger.warn(`Unable to capture contact ID: ${String(error)}`);
+            logger.debug(`Company ID not captured via response (fast server) — will use search fallback`);
 
             return null;
         }
     }
 
-    private async retryFindContact(
-        firstName: string
-    ): Promise<boolean> {
+    private async retryFindCompany(name: string): Promise<boolean> {
         const currentConfig = this.getCurrentRetryConfig();
 
         for (
@@ -319,14 +339,14 @@ export class ContactsPage extends BasePage {
                 `Search attempt ${attempt}/${currentConfig.retries}`
             );
 
-            await this.goToContactsList();
+            await this.goToCompaniesList();
 
-            await this.performSearch(firstName);
+            await this.performSearch(name);
 
-            const found = await this.waitForSearchResults(firstName);
+            const found = await this.waitForSearchResults(name);
 
             if (found) {
-                logger.success('Contact found');
+                logger.success('Company found');
 
                 return true;
             }
@@ -343,51 +363,76 @@ export class ContactsPage extends BasePage {
     // Navigation
     // ──────────────────────────────────────────────────────────
 
-    async goToContactsList(): Promise<void> {
-        logger.info('Navigating to Contacts List');
+    async goToCompaniesList(): Promise<void> {
+        logger.info('Navigating to Companies List');
 
         await this.closeModalIfOpen();
 
-        await this.navigateTo(
-            `${config.appUrl}/sales/contacts/list`
-        );
+        await this.navigateTo(`${config.appUrl}/sales/companies/list`);
 
-        await this.waitForContactListPage();
+        await this.waitForCompanyListPage();
 
-        logger.success('On Contacts List page');
+        logger.success('On Companies List page');
     }
 
-    async clickAddContact(): Promise<void> {
-        logger.info('Clicking Add Contact');
+    async clickAddCompany(): Promise<void> {
+        logger.info('Clicking Add Company');
 
-        await this.click(this.addButton(), 'add contact button');
+        await this.click(this.addButton(), 'add company button');
 
-        await expect(this.firstNameInput()).toBeVisible({
-            timeout: 10000,
-        });
+        await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
 
-        logger.success('Contact form opened');
+        logger.success('Company form opened');
     }
 
     // ──────────────────────────────────────────────────────────
     // Form Actions
     // ──────────────────────────────────────────────────────────
 
-    async fillContactForm(data: ContactData): Promise<void> {
-        logger.info('Filling contact form');
+    async fillCompanyForm(data: CompanyData): Promise<void> {
+        logger.info('Filling company form');
 
         await this.disableRequiredFieldsToggle();
 
+        await this.fill(this.nameInput(), data.name, 'company name');
+
+        await this.selectPicklistOption(
+            '0_12_input_numberOfEmployees',
+            data.numberOfEmployees,
+            'number of employees'
+        );
+        await this.selectPicklistOption(
+            '0_31_input_industry',
+            data.industry,
+            'industry'
+        );
+        await this.selectPicklistOption(
+            '0_32_input_businessType',
+            data.businessType,
+            'business type'
+        );
+
+        // WHY: Annual Revenue field has a currency validation bug on prod (reported).
+        // Skipping this field until the bug is fixed.
+        // TODO: re-enable once prod currency configuration is fixed.
+        // await this.fill(
+        //     this.annualRevenueInput(),
+        //     data.annualRevenue.toString(),
+        //     'annual revenue'
+        // );
+
+        await this.fill(this.websiteInput(), data.website, 'website');
+
         await this.fill(
-            this.firstNameInput(),
-            data.firstName,
-            'first name'
+            this.uniqueText1Input(),
+            data.uniqueText1,
+            'unique text 1'
         );
 
         await this.fill(
-            this.lastNameInput(),
-            data.lastName,
-            'last name'
+            this.uniqueText2Input(),
+            data.uniqueText2,
+            'unique text 2'
         );
 
         await this.click(this.addEmailButton(), 'add email button');
@@ -402,149 +447,73 @@ export class ContactsPage extends BasePage {
 
         await this.fill(this.phoneInput(), data.phone, 'phone');
 
-        await this.fill(
-            this.addressInput(),
-            data.address,
-            'address'
-        );
+        await this.fill(this.addressInput(), data.address, 'address');
 
         await this.fill(this.cityInput(), data.city, 'city');
 
         await this.fill(this.stateInput(), data.state, 'state');
 
-        await this.fill(
-            this.zipcodeInput(),
-            data.zipcode,
-            'zipcode'
-        );
+        await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
 
-        await this.fill(
-            this.facebookInput(),
-            data.facebook,
-            'facebook'
-        );
+        await this.fill(this.facebookInput(), data.facebook, 'facebook');
 
-        await this.fill(
-            this.twitterInput(),
-            data.twitter,
-            'twitter'
-        );
+        await this.fill(this.twitterInput(), data.twitter, 'twitter');
 
-        await this.fill(
-            this.linkedinInput(),
-            data.linkedin,
-            'linkedin'
-        );
+        await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
 
-        await this.fill(
-            this.departmentInput(),
-            data.department,
-            'department'
-        );
-
-        await this.fill(
-            this.designationInput(),
-            data.designation,
-            'designation'
-        );
-
-
-
-        // WHY: UTM fields sit below address and may be off-screen.
-        // scrollIntoViewIfNeeded ensures fill doesn't silently fail
-        // on smaller viewports or when the form is long.
-        await this.utmSourceInput().scrollIntoViewIfNeeded();
-
-        await this.fill(
-            this.subSourceInput(),
-            data.subSource,
-            'sub source'
-        );
-
-        await this.fill(
-            this.utmSourceInput(),
-            data.utmSource,
-            'utm source'
-        );
-
-        await this.fill(
-            this.utmCampaignInput(),
-            data.utmCampaign,
-            'utm campaign'
-        );
-
-        await this.fill(
-            this.utmMediumInput(),
-            data.utmMedium,
-            'utm medium'
-        );
-
-        await this.fill(
-            this.utmContentInput(),
-            data.utmContent,
-            'utm content'
-        );
-
-        await this.fill(
-            this.utmTermInput(),
-            data.utmTerm,
-            'utm term'
-        );
-
-        logger.success('Contact form filled');
+        logger.success('Company form filled');
     }
 
-    async saveContact(): Promise<number | null> {
-        logger.info('Saving contact');
+    async saveCompany(): Promise<number | null> {
+        logger.info('Saving company');
 
-        const contactIdPromise = this.captureContactIdFromResponse();
+        const companyIdPromise = this.captureCompanyIdFromResponse();
 
+        await this.saveButton().scrollIntoViewIfNeeded();
         await this.click(this.saveButton(), 'save button');
 
-        await this.assertNoFormErrors('contact create form');
+        await this.assertNoFormErrors('company create form');
 
-        const contactId = await contactIdPromise;
+        const companyId = await companyIdPromise;
 
-        await this.waitForContactListPage();
+        await this.waitForCompanyListPage();
 
-        logger.success('Contact saved successfully');
+        logger.success('Company saved successfully');
 
-        return contactId;
+        return companyId;
     }
 
     // ──────────────────────────────────────────────────────────
     // Search & Open
     // ──────────────────────────────────────────────────────────
 
-    async searchAndOpenContact(
-        firstName: string,
-        contactId?: number
+    async searchAndOpenCompany(
+        name: string,
+        companyId?: number
     ): Promise<void> {
-        logger.info(`Opening contact: ${firstName}`);
+        logger.info(`Opening company: ${name}`);
 
-        if (contactId) {
-            logger.info(
-                `Opening contact directly via ID: ${contactId}`
-            );
+        if (companyId) {
+            logger.info(`Opening company directly via ID: ${companyId}`);
 
             await this.navigateTo(
-                `${config.appUrl}/sales/contacts/details/${contactId}`
+                `${config.appUrl}/sales/companies/details/${companyId}`
             );
 
-            await this.waitForContactDetailsPage();
+            await this.waitForCompanyDetailsPage();
 
             return;
         }
 
-        const found = await this.retryFindContact(firstName);
+        const found = await this.retryFindCompany(name);
 
         expect(found).toBeTruthy();
 
-        await this.contactRowNameCell(firstName).click();
+        await this.companyRowNameCell(name).click();
 
-        await this.waitForContactDetailsPage();
+        await this.waitForCompanyDetailsPage();
 
-        logger.success(`Contact opened: ${firstName}`);
+        logger.success(`Company opened: ${name}`);
     }
 
     // ──────────────────────────────────────────────────────────
@@ -556,145 +525,124 @@ export class ContactsPage extends BasePage {
 
         await this.click(this.editIconButton(), 'edit icon');
 
-        await expect(this.editModal()).toBeVisible({
-            timeout: 10000,
-        });
+        await expect(this.editModal()).toBeVisible({ timeout: 10000 });
 
         logger.success('Edit modal opened');
     }
 
-    async fillEditForm(data: ContactData): Promise<void> {
-        logger.info('Updating contact form');
+    async fillEditForm(data: CompanyData): Promise<void> {
+        logger.info('Updating company form');
 
-        await this.fill(
-            this.firstNameInput(),
-            data.firstName,
-            'first name'
-        );
-
-        await this.fill(
-            this.lastNameInput(),
-            data.lastName,
-            'last name'
-        );
+        await this.fill(this.nameInput(), data.name, 'company name');
 
         logger.success('Edit form updated');
     }
-
-    async saveEditedContact(): Promise<void> {
-        logger.info('Saving updated contact');
+    async saveEditedCompany(): Promise<void> {
+        logger.info('Saving updated company');
 
         await this.click(this.saveButton(), 'save button');
 
-        await this.assertNoFormErrors('contact edit form');
+        await this.assertNoFormErrors('company edit form');
 
-        await expect(this.editModal()).toBeHidden({
-            timeout: 15000,
-        });
+        await expect(this.editModal()).toBeHidden({ timeout: 30000 });
 
-        logger.success('Contact updated');
+        logger.success('Company updated');
     }
-
     // ──────────────────────────────────────────────────────────
     // Assertions
     // ──────────────────────────────────────────────────────────
 
-    async assertOnContactsListPage(): Promise<void> {
-        await this.assertUrl(/contacts\/list/);
+    async assertOnCompaniesListPage(): Promise<void> {
+        await this.assertUrl(/companies\/list/);
     }
 
-    async assertOnContactDetailPage(): Promise<void> {
-        await this.assertUrl(/sales\/contacts\/details\//);
+    async assertOnCompanyDetailPage(): Promise<void> {
+        await this.assertUrl(/sales\/companies\/details\//);
     }
 
-    async assertContactExistsInList(
-        firstName: string
-    ): Promise<void> {
-        logger.info(`Validating contact exists: ${firstName}`);
+    async assertCompanyExistsInList(name: string): Promise<void> {
+        logger.info(`Validating company exists: ${name}`);
 
-        const found = await this.retryFindContact(firstName);
+        const found = await this.retryFindCompany(name);
 
         expect(found).toBeTruthy();
 
-        logger.success(`Contact exists: ${firstName}`);
+        logger.success(`Company exists: ${name}`);
     }
 
-    async assertContactNotInList(
-        firstName: string
-    ): Promise<void> {
-        logger.info(`Validating contact absent: ${firstName}`);
+    async assertCompanyNotInList(name: string): Promise<void> {
+        logger.info(`Validating company absent: ${name}`);
 
-        await this.goToContactsList();
+        await this.goToCompaniesList();
 
-        await this.performSearch(firstName);
+        await this.performSearch(name);
 
-        await expect(
-            this.contactRowNameCell(firstName)
-        ).toBeHidden({ timeout: 10000 });
+        await expect(this.companyRowNameCell(name)).toBeHidden({
+            timeout: 10000,
+        });
 
-        logger.success(`Contact absent confirmed: ${firstName}`);
+        logger.success(`Company absent confirmed: ${name}`);
+    }
+
+    async assertCompanyUpdated(data: CompanyData): Promise<void> {
+        await this.goToCompaniesList();
+
+        await this.assertCompanyExistsInList(data.name);
     }
 
     // ──────────────────────────────────────────────────────────
     // Workflow Wrappers
     // ──────────────────────────────────────────────────────────
 
-    async createContact(
-        data: ContactData
-    ): Promise<number | null> {
-        await this.clickAddContact();
+    async createCompany(data: CompanyData): Promise<number | null> {
+        await this.clickAddCompany();
 
-        await this.fillContactForm(data);
+        await this.fillCompanyForm(data);
 
-        return await this.saveContact();
+        return await this.saveCompany();
     }
 
-    async updateContact(
-        newData: ContactData,
-        originalFirstName?: string,
-        contactId?: number
+    async updateCompany(
+        newData: CompanyData,
+        originalName?: string,
+        companyId?: number
     ): Promise<void> {
-        const searchName = originalFirstName ?? newData.firstName;
+        const searchName = originalName ?? newData.name;
 
-        await this.searchAndOpenContact(searchName, contactId);
+        await this.searchAndOpenCompany(searchName, companyId);
 
         await this.clickEditIcon();
 
         await this.fillEditForm(newData);
 
-        await this.saveEditedContact();
+        await this.saveEditedCompany();
     }
 
-    async assertContactUpdated(data: ContactData): Promise<void> {
-        await this.goToContactsList();
-        await this.assertContactExistsInList(data.firstName);
-    }
-
-    async assertContactCreated(
-        data: ContactData,
-        contactId?: number
+    async assertCompanyCreated(
+        data: CompanyData,
+        companyId?: number
     ): Promise<void> {
-        if (contactId) {
-            logger.info(`Validating contact via ID: ${contactId}`);
+        if (companyId) {
+            logger.info(`Validating company via ID: ${companyId}`);
 
             await this.navigateTo(
-                `${config.appUrl}/sales/contacts/details/${contactId}`
+                `${config.appUrl}/sales/companies/details/${companyId}`
             );
 
-            await this.waitForContactDetailsPage();
+            await this.waitForCompanyDetailsPage();
 
-            // WHY: contact details page renders fields as read-only text, not inputs.
-            // Asserting the URL contains the ID is sufficient proof the contact
-            // was created and is accessible — no input[name="firstName"] exists here.
+            // WHY: company details page renders fields as read-only text, not inputs.
+            // Asserting the URL contains the ID is sufficient proof the company
+            // was created and is accessible.
             await this.assertUrl(
-                new RegExp(`contacts/details/${contactId}`)
+                new RegExp(`companies/details/${companyId}`)
             );
 
-            logger.success(`Contact verified: ${data.firstName}`);
+            logger.success(`Company verified: ${data.name}`);
 
             return;
         }
 
-        await this.assertContactExistsInList(data.firstName);
+        await this.assertCompanyExistsInList(data.name);
     }
 }

@@ -77,7 +77,7 @@ export function generateContactData(
 export function generateAdminContactData(
   overrides: Partial<ContactData> = {}
 ): ContactData {
-  const timestamp = Date.now().toString().slice(-8);
+  const timestamp = Date.now().toString();
   const firstName = `ADM${timestamp}`;
   const lastName = faker.person.lastName();
   const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
