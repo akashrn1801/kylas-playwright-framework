@@ -1,5 +1,25 @@
 import { faker } from '@faker-js/faker';
 
+export type LeadPipelineStage =
+  | 'Open'
+  | 'Prospect/Contacted'
+  | 'Requirements Gathered'
+  | 'Demo/Meeting Conducted'
+  | 'Won'
+  | 'Closed Unqualified'
+  | 'Closed Lost';
+
+export const LEAD_PIPELINE_STAGES: LeadPipelineStage[] = [
+  'Open',
+  'Prospect/Contacted',
+  'Requirements Gathered',
+  'Demo/Meeting Conducted',
+  'Won',
+  'Closed Unqualified',
+  'Closed Lost',
+];
+
+
 export interface LeadData {
   firstName: string;
   lastName: string;
@@ -22,6 +42,7 @@ export interface LeadData {
   companyState: string;
   companyZipcode: string;
   companyCountry: string;
+  pipelineStage?: LeadPipelineStage;
 }
 
 export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
@@ -50,6 +71,7 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
     companyState: faker.location.state(),
     companyZipcode: faker.location.zipCode('#####'),
     companyCountry: 'India',
+    pipelineStage: 'Open' as LeadPipelineStage,
     ...overrides,
   };
 }
@@ -85,6 +107,7 @@ export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadDa
     companyState: faker.location.state(),
     companyZipcode: faker.location.zipCode('#####'),
     companyCountry: 'India',
+    pipelineStage: 'Open' as LeadPipelineStage,
     ...overrides,
   };
 }
