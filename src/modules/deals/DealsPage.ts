@@ -145,6 +145,32 @@ export class DealsPage extends BasePage {
   private readonly modalCancelButton = (): Locator =>
     this.page.locator('button[data-dismiss="modal"]').first();
 
+  // ── Deal details page locators ────────────────────────────
+
+  private readonly dealActualValueEl = (): Locator =>
+    this.page.locator('#actualValue .title span').first();
+
+  private readonly dealInProgressStage = (): Locator =>
+    this.page.locator('.in-progress-stage .stage-name').first();
+
+  private readonly partPaymentsLink = (): Locator =>
+    this.page.locator('#partPayments .link-primary');
+
+  private readonly partPaymentsModal = (): Locator =>
+    this.page.locator('.modal-content').filter({ hasText: 'Part Payment' });
+
+  // ── Edit form — pipeline stage ────────────────────────────
+
+  private readonly pipelineStageDropdownIndicator = (): Locator =>
+    this.page.locator('[id="0_32_input_pipelineStage"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]')
+      .locator('.is-invalid__dropdown-indicator');
+
+  private readonly stageReasonDropdownIndicator = (): Locator =>
+    this.page.locator('#stage_reason')
+      .locator('xpath=ancestor::div[contains(@class,"container")]')
+      .locator('[class*="indicator"]:not([class*="separator"])').last();
+
   // ──────────────────────────────────────────────────────────
   // Constructor
   // ──────────────────────────────────────────────────────────
@@ -816,5 +842,129 @@ export class DealsPage extends BasePage {
   async assertDealUpdated(data: DealData): Promise<void> {
     await this.goToDealsList();
     await this.assertDealExistsInList(data.name);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Pipeline Stage methods
+  // ──────────────────────────────────────────────────────────
+
+  async assertPipelineStageOnDetails(expectedStage: string): Promise<void> {
+    logger.info(`Asserting pipeline stage: ${expectedStage}`);
+    const stageEl = this.dealInProgressStage();
+    await stageEl.waitFor({ state: 'visible', timeout: 10000 });
+    const stageText = (await stageEl.textContent())?.trim() ?? '';
+    // WHY: Stage text includes percentage e.g. "Open(0%)" — extract just name
+    const stageName = stageText.split('(')[0].trim();
+    expect(stageName).toBe(expectedStage);
+    logger.success(`Pipeline stage verified: ${stageName}`);
+  }
+
+  async changePipelineStageInEdit(
+    newStage: string,
+    stageReason?: string,
+  ): Promise<void> {
+    logger.info(`Changing pipeline stage to: ${newStage}`);
+
+    const indicator = this.pipelineStageDropdownIndicator();
+    await indicator.waitFor({ state: 'visible', timeout: 10000 });
+    await indicator.scrollIntoViewIfNeeded();
+    await indicator.click();
+
+    const stageOption = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: newStage })
+      .first();
+    await stageOption.waitFor({ state: 'visible', timeout: 10000 });
+    await stageOption.click();
+    logger.success(`Pipeline stage changed to: ${newStage}`);
+
+    // WHY: Closed Lost and Closed Unqualified require a stage reason
+    if (newStage === 'Closed Lost' || newStage === 'Closed Unqualified') {
+      logger.info(`Selecting stage reason for ${newStage}`);
+      const reasonIndicator = this.stageReasonDropdownIndicator();
+      await reasonIndicator.waitFor({ state: 'visible', timeout: 10000 });
+      await reasonIndicator.click();
+
+      const reasonText = stageReason ?? (
+        newStage === 'Closed Lost' ? 'No followup' : 'Budget does not match'
+      );
+      const reasonOption = this.page
+        .locator('.is-invalid__option')
+        .filter({ hasText: reasonText })
+        .first();
+      try {
+        await reasonOption.waitFor({ state: 'visible', timeout: 5000 });
+        await reasonOption.click();
+        logger.success(`Stage reason selected: ${reasonText}`);
+      } catch {
+        const firstReason = this.page.locator('.is-invalid__option').first();
+        await firstReason.waitFor({ state: 'visible', timeout: 5000 });
+        const fallback = (await firstReason.textContent())?.trim() ?? '';
+        await firstReason.click();
+        logger.success(`Stage reason selected (fallback): ${fallback}`);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Deal details assertions
+  // ──────────────────────────────────────────────────────────
+
+  async assertActualValueContainsINR(): Promise<void> {
+    logger.info('Asserting actual value contains INR currency');
+    const valueEl = this.dealActualValueEl();
+    await valueEl.waitFor({ state: 'visible', timeout: 10000 });
+    const tooltipValue = await valueEl.getAttribute('data-original-title');
+    const displayValue = (await valueEl.textContent())?.trim() ?? '';
+    const valueToCheck = tooltipValue ?? displayValue;
+    logger.info(`Actual value: ${valueToCheck}`);
+    expect(valueToCheck).toContain('INR');
+    expect(
+      parseFloat(valueToCheck.replace(/INR\s*/i, '').replace(/,/g, ''))
+    ).toBeGreaterThan(0);
+    logger.success(`INR currency verified: ${valueToCheck}`);
+  }
+
+  async assertPartPaymentsSummaryOnDetails(): Promise<void> {
+    logger.info('Asserting part payments summary on deal details');
+
+    const partPaymentsLink = this.partPaymentsLink();
+    await partPaymentsLink.waitFor({ state: 'visible', timeout: 10000 });
+    await partPaymentsLink.click();
+
+    const modal = this.partPaymentsModal();
+    await modal.waitFor({ state: 'visible', timeout: 10000 });
+
+    const totalEl = modal.locator('.summary-card--total .summary-card__value span');
+    const receivedEl = modal.locator('.summary-card--received .summary-card__value span');
+    const remainingEl = modal.locator('.summary-card--remaining .summary-card__value span');
+    await totalEl.waitFor({ state: 'visible', timeout: 5000 });
+
+    const totalVal = await totalEl.getAttribute('data-original-title') ?? await totalEl.textContent() ?? '';
+    const receivedVal = await receivedEl.getAttribute('data-original-title') ?? await receivedEl.textContent() ?? '';
+    const remainingVal = await remainingEl.getAttribute('data-original-title') ?? await remainingEl.textContent() ?? '';
+
+    logger.info(`Total: ${totalVal} | Received: ${receivedVal} | Remaining: ${remainingVal}`);
+
+    // Verify INR currency in all values
+    expect(totalVal).toContain('INR');
+    expect(receivedVal).toContain('INR');
+    expect(remainingVal).toContain('INR');
+    logger.success('INR currency verified in all summary values');
+
+    // Verify math: Total - Received = Remaining (±1 rounding)
+    const parseINR = (text: string): number =>
+      parseFloat(text.replace(/INR\s*/i, '').replace(/,/g, '').trim()) || 0;
+
+    const total = parseINR(totalVal);
+    const received = parseINR(receivedVal);
+    const remaining = parseINR(remainingVal);
+    const diff = Math.abs(total - received - remaining);
+    expect(diff).toBeLessThanOrEqual(1);
+    logger.success(`Payment math: ${total} - ${received} = ${remaining} (diff: ${diff})`);
+
+    await modal.locator('button[aria-label="Close"]').click();
+    await modal.waitFor({ state: 'hidden', timeout: 5000 });
+    logger.success('Part payments summary verified');
   }
 }
