@@ -1,6 +1,8 @@
 import { test } from '../../../src/fixtures/index';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
-import { generateDealData } from '../../../src/data/factories/dealFactory';
+import { generateDealData, CLOSED_LOST_REASONS, CLOSED_UNQUALIFIED_REASONS } from '../../../src/data/factories/dealFactory';
+import { faker } from '@faker-js/faker';
+import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Deals', () => {
@@ -84,6 +86,140 @@ test.describe('Deals', () => {
 
     await dealsPage.saveEditedDeal();
     logger.success('Payment math verified: Total - Received = Remaining (±1 rounding tolerance) — amounts are correct. Deal saved successfully.');
+  });
+
+
+  // ──────────────────────────────────────────────────────────
+  // Pipeline Stage verification on deal details
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should verify pipeline stage is Open after deal creation', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    await adminPage.goto(
+      `${config.appUrl}/sales/deals/details/${dealId}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+
+    // WHY: Default stage after creation is always Open
+    await dealsPage.assertPipelineStageOnDetails('Open');
+    await dealsPage.assertActualValueContainsINR();
+    logger.success('Pipeline stage Open and INR currency verified after deal creation');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Pipeline Stage change to Negotiation
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should change pipeline stage to Negotiation in edit', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    await dealsPage.searchAndOpenDeal(dealData.name, dealId ?? undefined);
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm(dealData);
+    await dealsPage.changePipelineStageInEdit('Negotiation');
+    await dealsPage.assertPaymentReceivedAfterEdit();
+    await dealsPage.saveEditedDeal();
+
+    // Verify stage changed on details page
+    await adminPage.goto(
+      `${config.appUrl}/sales/deals/details/${dealId}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await dealsPage.assertPipelineStageOnDetails('Negotiation');
+    logger.success('Pipeline stage changed to Negotiation and verified');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Closed Lost with stage reason
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should change pipeline stage to Closed Lost with random reason', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    await dealsPage.searchAndOpenDeal(dealData.name, dealId ?? undefined);
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm(dealData);
+
+    // WHY: Pick random Closed Lost reason from valid options
+    const closedLostReason = faker.helpers.arrayElement(CLOSED_LOST_REASONS);
+    logger.info(`Selected Closed Lost reason: ${closedLostReason}`);
+    await dealsPage.changePipelineStageInEdit('Closed Lost', closedLostReason);
+    await dealsPage.assertPaymentReceivedAfterEdit();
+    await dealsPage.saveEditedDeal();
+    logger.success(`Deal closed as Lost with reason: ${closedLostReason}`);
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Closed Unqualified with stage reason
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should change pipeline stage to Closed Unqualified with random reason', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    await dealsPage.searchAndOpenDeal(dealData.name, dealId ?? undefined);
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm(dealData);
+
+    // WHY: Pick random Closed Unqualified reason from valid options
+    const closedUnqualifiedReason = faker.helpers.arrayElement(CLOSED_UNQUALIFIED_REASONS);
+    logger.info(`Selected Closed Unqualified reason: ${closedUnqualifiedReason}`);
+    await dealsPage.changePipelineStageInEdit('Closed Unqualified', closedUnqualifiedReason);
+    await dealsPage.assertPaymentReceivedAfterEdit();
+    await dealsPage.saveEditedDeal();
+    logger.success(`Deal closed as Unqualified with reason: ${closedUnqualifiedReason}`);
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Part payments summary on deal details with INR verification
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should verify part payments summary on deal details with INR currency and correct math', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    // WHY: Fixed 3 installments for predictable math verification
+    const dealData = generateDealData({ numberOfInstallments: 3 });
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    // Mark first payment as received
+    const updatedData = generateDealData({ numberOfInstallments: 3 });
+    await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
+
+    // Navigate to deal details and verify part payments summary
+    await adminPage.goto(
+      `${config.appUrl}/sales/deals/details/${dealId}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await dealsPage.assertPartPaymentsSummaryOnDetails();
   });
 
 });
