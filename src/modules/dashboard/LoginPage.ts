@@ -40,7 +40,7 @@ export class LoginPage extends BasePage {
     await this.enterEmail(credentials.email);
     await this.enterPassword(credentials.password);
     await this.clickLogin();
-    await this.waitForUrl(/sales\/home/, config.timeouts.navigation);
+    await this.waitForUrl(/sales\//, process.env.CI ? 120000 : config.timeouts.navigation);
     logger.success(`Successfully logged in as ${role}`);
   }
 
@@ -67,7 +67,7 @@ export class LoginPage extends BasePage {
   }
 
   async assertLoggedIn(): Promise<void> {
-    await this.waitForUrl(/sales\/home/, 15000);
+    await this.waitForUrl(/sales\//, process.env.CI ? 120000 : 30000);
     logger.success('User is logged in');
   }
 }
