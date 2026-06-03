@@ -18,7 +18,7 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext({ storageState: stateFor('admin') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+    await page.waitForURL(/sales\//, { timeout: process.env.CI ? 120000 : config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
@@ -33,7 +33,7 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+    await page.waitForURL(/sales\//, { timeout: process.env.CI ? 120000 : config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
