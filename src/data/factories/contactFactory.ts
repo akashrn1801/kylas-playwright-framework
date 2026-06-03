@@ -40,9 +40,10 @@ export function generateContactData(
     city: faker.location.city(),
     state: faker.location.state(),
     zipcode: faker.location.zipCode('#####'),
-    facebook: `https://facebook.com/${username}`,
-    twitter: `https://twitter.com/${username}`,
-    linkedin: `https://linkedin.com/in/${username}`,
+    // WHY: Sanitize username — remove special chars that fail URL validation on staging
+    facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    linkedin: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: faker.helpers.arrayElement([
@@ -93,9 +94,10 @@ export function generateAdminContactData(
     city: faker.location.city(),
     state: faker.location.state(),
     zipcode: faker.location.zipCode('#####'),
-    facebook: `https://facebook.com/${username}`,
-    twitter: `https://twitter.com/${username}`,
-    linkedin: `https://linkedin.com/in/${username}`,
+    // WHY: Sanitize username — remove special chars that fail URL validation on staging
+    facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    linkedin: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: 'organic',
