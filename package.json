@@ -9,6 +9,7 @@
     "npm": ">=10.0.0"
   },
 "scripts": {
+    "pretest": "if [ -z \"$CI\" ]; then bash scripts/rotate-reports.sh; fi",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
