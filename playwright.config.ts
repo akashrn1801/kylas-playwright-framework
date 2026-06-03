@@ -19,9 +19,9 @@ export default defineConfig({
 
   reporter: [
     ['list'],
-    ['html', { outputFolder: `reports/${config.env}/latest/playwright-report`, open: 'never' }],
-    ['json', { outputFile: `reports/${config.env}/latest/playwright-report/results.json` }],
-    ['allure-playwright', { resultsDir: `reports/${config.env}/latest/allure-results` }],
+    ['html', { outputFolder: process.env.CI ? 'reports/playwright-report' : `reports/${config.env}/latest/playwright-report`, open: 'never' }],
+    ['json', { outputFile: process.env.CI ? 'reports/playwright-report/results.json' : `reports/${config.env}/latest/playwright-report/results.json` }],
+    ['allure-playwright', { resultsDir: process.env.CI ? 'reports/allure-results' : `reports/${config.env}/latest/allure-results` }],
   ],
 
   use: {

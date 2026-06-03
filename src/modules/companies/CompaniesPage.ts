@@ -412,14 +412,11 @@ export class CompaniesPage extends BasePage {
             'business type'
         );
 
-        // WHY: Annual Revenue field has a currency validation bug on prod (reported).
-        // Skipping this field until the bug is fixed.
-        // TODO: re-enable once prod currency configuration is fixed.
-        // await this.fill(
-        //     this.annualRevenueInput(),
-        //     data.annualRevenue.toString(),
-        //     'annual revenue'
-        // );
+        await this.fill(
+            this.annualRevenueInput(),
+            data.annualRevenue.toString(),
+            'annual revenue'
+        );
 
         await this.fill(this.websiteInput(), data.website, 'website');
 

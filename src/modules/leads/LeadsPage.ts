@@ -397,6 +397,24 @@ export class LeadsPage extends BasePage {
   // Form Actions
   // ──────────────────────────────────────────────────────────
 
+  // Pipeline stage locators
+  private readonly pipelineInput = (): Locator =>
+    this.page.locator('[id="0_21_input_pipeline"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+
+  private readonly pipelineStageInput = (): Locator =>
+    this.page.locator('[id="0_22_input_pipelineStage"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+
+  private readonly pipelineStageDropdownIndicator = (): Locator =>
+    this.page.locator('[id="0_22_input_pipelineStage"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]')
+      .locator('.is-invalid__dropdown-indicator');
+
+  private readonly pipelineStageSingleValue = (): Locator =>
+    // WHY: On details page, current stage uses .in-progress-stage .stage-name
+    this.page.locator('.in-progress-stage .stage-name').first();
+
   async fillLeadForm(
     data: LeadData
   ): Promise<void> {
@@ -415,6 +433,23 @@ export class LeadsPage extends BasePage {
       data.lastName,
       'last name'
     );
+
+    // WHY: Pipeline must be selected before Pipeline Stage —
+    // Stage options depend on the selected pipeline.
+    logger.info('Selecting pipeline');
+    const pipelineIndicator = this.pipelineInput()
+      .locator('.is-invalid__dropdown-indicator');
+    try {
+      await pipelineIndicator.waitFor({ state: 'visible', timeout: 5000 });
+      await pipelineIndicator.click();
+      const pipelineOption = this.page.locator('.is-invalid__option').first();
+      await pipelineOption.waitFor({ state: 'visible', timeout: 5000 });
+      await pipelineOption.click();
+      logger.success('Pipeline selected');
+    } catch {
+      logger.info('Pipeline already selected or not available — skipping');
+    }
+
 
     await this.click(
       this.addEmailButton(),
@@ -530,7 +565,50 @@ export class LeadsPage extends BasePage {
       'company zipcode'
     );
 
+
+    // Pipeline Stage (optional)
+    if (data.pipelineStage) {
+      logger.info(`Selecting pipeline stage: ${data.pipelineStage}`);
+      const indicator = this.pipelineStageDropdownIndicator();
+      await indicator.waitFor({ state: 'visible', timeout: 10000 });
+      await indicator.scrollIntoViewIfNeeded();
+      await indicator.click();
+      const stageOption = this.page
+        .locator('.is-invalid__option')
+        .filter({ hasText: data.pipelineStage })
+        .first();
+      await stageOption.waitFor({ state: 'visible', timeout: 10000 });
+      await stageOption.click();
+      logger.success(`Pipeline stage selected: ${data.pipelineStage}`);
+    }
     logger.success('Lead form filled');
+  }
+
+
+  async assertPipelineStageOnDetails(expectedStage: string): Promise<void> {
+    logger.info(`Asserting pipeline stage: ${expectedStage}`);
+    const stageEl = this.pipelineStageSingleValue();
+    await stageEl.waitFor({ state: 'visible', timeout: 10000 });
+    const stageText = (await stageEl.textContent())?.trim() ?? '';
+    // WHY: Stage text includes percentage e.g. "Open(0%)" — extract just the name
+    const stageName = stageText.split('(')[0].trim();
+    expect(stageName).toBe(expectedStage);
+    logger.success(`Pipeline stage verified: ${stageName}`);
+  }
+
+  async changePipelineStageInEdit(newStage: string): Promise<void> {
+    logger.info(`Changing pipeline stage to: ${newStage}`);
+    const indicator = this.pipelineStageDropdownIndicator();
+    await indicator.waitFor({ state: 'visible', timeout: 10000 });
+    await indicator.scrollIntoViewIfNeeded();
+    await indicator.click();
+    const stageOption = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: newStage })
+      .first();
+    await stageOption.waitFor({ state: 'visible', timeout: 10000 });
+    await stageOption.click();
+    logger.success(`Pipeline stage changed to: ${newStage}`);
   }
 
   async saveLead(): Promise<number | null> {
