@@ -54,20 +54,12 @@ await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.locator('#input_email').fill(credentials.email);
     await page.locator('#input_password').fill(credentials.password);
     await page.locator('#loginBtn').click();
-    // WHY: CI environments (GitHub Actions) are slower — use 120s timeout
-    const navTimeout = process.env.CI ? 120000 : config.timeouts.navigation;
-    console.log(`[globalSetup] After login click, current URL: ${page.url()}`);
+    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
 
-    // WHY: Use networkidle — QA app goes through multiple redirects
-    // before landing on /sales/home. waitForURL misses intermediate redirects.
-    await page.waitForLoadState('networkidle', { timeout: navTimeout });
+    // WHY: validate we actually landed on the app not redirected back to login
     const currentUrl = page.url();
-    console.log(`[globalSetup] URL after networkidle: ${currentUrl}`);
-
-    // Verify not back on login page
     if (currentUrl.includes('signIn') || currentUrl.includes('login')) {
-      await page.screenshot({ path: `test-results/login-failure-${role}.png` });
-      throw new Error(`[globalSetup] Login failed for ${role} — still on login page. Check credentials for ENV=${config.env}`);
+      throw new Error(`[globalSetup] Login failed for ${role} — redirected to ${currentUrl}. Check credentials for ENV=${config.env}`);
     }
 
     try {

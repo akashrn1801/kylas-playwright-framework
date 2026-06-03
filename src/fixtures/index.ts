@@ -18,12 +18,7 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext({ storageState: stateFor('admin') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    // WHY: CI app may redirect through multiple URLs — use networkidle + loose URL check
-    await page.waitForLoadState('networkidle', { timeout: process.env.CI ? 120000 : config.timeouts.navigation });
-    const currentUrl = page.url();
-    if (!currentUrl.includes('/sales/') && !currentUrl.includes(config.appUrl)) {
-      throw new Error(`Fixture: unexpected URL after navigation: ${currentUrl}`);
-    }
+    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
@@ -38,12 +33,7 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    // WHY: CI app may redirect through multiple URLs — use networkidle + loose URL check
-    await page.waitForLoadState('networkidle', { timeout: process.env.CI ? 120000 : config.timeouts.navigation });
-    const currentUrl = page.url();
-    if (!currentUrl.includes('/sales/') && !currentUrl.includes(config.appUrl)) {
-      throw new Error(`Fixture: unexpected URL after navigation: ${currentUrl}`);
-    }
+    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
