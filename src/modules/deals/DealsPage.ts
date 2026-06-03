@@ -656,9 +656,13 @@ export class DealsPage extends BasePage {
     // Wait for options then click Received by text
     const receivedOption = this.page.locator('.is-invalid__option').filter({ hasText: 'Received' }).first();
     await receivedOption.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Use dispatchEvent for reliable click — dropdown may close
+    // before a normal click registers on slower CI environments
+    await receivedOption.scrollIntoViewIfNeeded();
     await receivedOption.dispatchEvent('mousedown');
+    await this.page.waitForTimeout(100);
     await receivedOption.dispatchEvent('mouseup');
-    await receivedOption.click({ force: true });
+    await receivedOption.dispatchEvent('click');
     logger.info('Clicked Received option');
 
     // WHY: Two #confirm buttons exist in DOM — one hidden (pipeline warning modal)
