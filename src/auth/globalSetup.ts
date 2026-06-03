@@ -80,3 +80,4 @@ await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
 }
 
 export default globalSetup;
+# CI timeout fix
