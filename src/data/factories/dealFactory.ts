@@ -1,17 +1,54 @@
 import { faker } from '@faker-js/faker';
+// ──────────────────────────────────────────────────────────
+// Enums — must match exact app-rendered option text
+// ──────────────────────────────────────────────────────────
+
+export type DealPipelineStage =
+  | 'Open'
+  | 'Proposal Sent'
+  | 'Negotiation'
+  | 'Won'
+  | 'Closed Unqualified'
+  | 'Closed Lost';
+
+export type DealClosedLostReason =
+  | 'No followup'
+  | 'Not interested'
+  | 'Booked with competitor'
+  | 'Not answering/responding'
+  | 'Bought product/service with competitor';
+
+export type DealClosedUnqualifiedReason =
+  | 'Budget does not match'
+  | 'False enquiry'
+  | 'Wrong number'
+  | 'Customer already bought the product/service'
+  | 'Bought product/service with competitor';
+
+export type DealPipelineStageReason = DealClosedLostReason | DealClosedUnqualifiedReason;
+
+export const CLOSED_LOST_REASONS: DealClosedLostReason[] = [
+  'No followup',
+  'Not interested',
+  'Booked with competitor',
+  'Not answering/responding',
+  'Bought product/service with competitor',
+];
+
+export const CLOSED_UNQUALIFIED_REASONS: DealClosedUnqualifiedReason[] = [
+  'Budget does not match',
+  'False enquiry',
+  'Wrong number',
+  'Customer already bought the product/service',
+  'Bought product/service with competitor',
+];
+
 
 // ──────────────────────────────────────────────────────────
 // Enums — must match exact app-rendered option text
 // ──────────────────────────────────────────────────────────
 
-// WHY: Pipeline stage reason only appears when stage is Closed Lost or Closed Unqualified.
-// Keep these as a union so TypeScript enforces valid combinations.
-export type DealPipelineStageReason =
-  | 'Price'
-  | 'Product'
-  | 'Competition'
-  | 'Relationship'
-  | 'Other';
+
 
 // ──────────────────────────────────────────────────────────
 // Interface
