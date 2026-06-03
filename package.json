@@ -9,7 +9,6 @@
     "npm": ">=10.0.0"
   },
 "scripts": {
-    "pretest": "bash scripts/rotate-reports.sh",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
@@ -18,9 +17,9 @@
     "test:rbac": "playwright test tests/rbac/ --project=chromium",
     "test:login": "playwright test tests/ui/dashboard/ --project=chromium",
     "test:deals": "playwright test tests/ui/deals/ tests/rbac/deals.rbac.spec.ts --project=chromium",
-    "report:playwright": "playwright show-report reports/${ENV:-qa}/latest/playwright-report",
-    "report:allure:generate": "allure generate reports/${ENV:-qa}/latest/allure-results --clean -o reports/${ENV:-qa}/latest/allure-report",
-    "report:allure:open": "allure open reports/${ENV:-qa}/latest/allure-report",
+    "report:playwright": "playwright show-report reports/playwright-report",
+    "report:allure:generate": "allure generate reports/allure-results --clean -o reports/allure-report",
+    "report:allure:open": "allure open reports/allure-report",
     "report:allure": "npm run report:allure:generate && npm run report:allure:open",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
