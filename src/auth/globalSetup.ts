@@ -54,7 +54,9 @@ await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.locator('#input_email').fill(credentials.email);
     await page.locator('#input_password').fill(credentials.password);
     await page.locator('#loginBtn').click();
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+    // WHY: CI environments (GitHub Actions) are slower — use 120s timeout
+    const navTimeout = process.env.CI ? 120000 : config.timeouts.navigation;
+    await page.waitForURL(/sales\//, { timeout: navTimeout });
 
     // WHY: validate we actually landed on the app not redirected back to login
     const currentUrl = page.url();
