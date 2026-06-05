@@ -53,7 +53,9 @@ pipeline {
                         string(credentialsId: "${envPrefix}_ADMIN_EMAIL",         variable: 'ADMIN_EMAIL'),
                         string(credentialsId: "${envPrefix}_ADMIN_PASSWORD",      variable: 'ADMIN_PASSWORD'),
                         string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL",    variable: 'RESTRICTED_EMAIL'),
-                        string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD')
+                        string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD'),
+                        string(credentialsId: 'ZOHO_APP_PASSWORD', variable: 'ZOHO_APP_PASSWORD'),
+                        string(credentialsId: 'ZOHO_SMTP_USER',    variable: 'ZOHO_SMTP_USER')
                     ]) {
                         writeFile file: '.env', text: """\
 ENV=${envName}
@@ -65,6 +67,12 @@ ${envPrefix}_RESTRICTED_EMAIL=${RESTRICTED_EMAIL}
 ${envPrefix}_RESTRICTED_PASSWORD=${RESTRICTED_PASSWORD}
 HEADLESS=true
 CI=true
+ZOHO_APP_PASSWORD=${ZOHO_APP_PASSWORD}
+ZOHO_SMTP_USER=${ZOHO_SMTP_USER}
+ZOHO_SMTP_HOST=smtp.zoho.in
+ZOHO_SMTP_PORT=465
+NOTIFY_ENABLED=true
+REPORT_PATH=reports/playwright-report/results.json
 """
                     }
                 }
@@ -123,6 +131,13 @@ CI=true
                 reportFiles          : 'index.html',
                 reportName           : 'Playwright HTML Report'
             ])
+            script {
+                try {
+                    sh 'npm run notify || true'
+                } catch (e) {
+                    echo 'Notification failed — continuing'
+                }
+            }
             cleanWs()
         }
         success {
