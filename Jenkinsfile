@@ -53,13 +53,9 @@ pipeline {
                         string(credentialsId: "${envPrefix}_ADMIN_EMAIL",         variable: 'ADMIN_EMAIL'),
                         string(credentialsId: "${envPrefix}_ADMIN_PASSWORD",      variable: 'ADMIN_PASSWORD'),
                         string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL",    variable: 'RESTRICTED_EMAIL'),
-<<<<<<< HEAD
-                        string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD')
-=======
                         string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD'),
                         string(credentialsId: 'GMAIL_APP_PASSWORD', variable: 'GMAIL_APP_PASSWORD'),
                         string(credentialsId: 'GMAIL_USER',    variable: 'GMAIL_USER')
->>>>>>> 5efde3a (fix: switch to Gmail SMTP, fix env loading for notifications)
                     ]) {
                         writeFile file: '.env', text: """\
 ENV=${envName}
@@ -71,15 +67,12 @@ ${envPrefix}_RESTRICTED_EMAIL=${RESTRICTED_EMAIL}
 ${envPrefix}_RESTRICTED_PASSWORD=${RESTRICTED_PASSWORD}
 HEADLESS=true
 CI=true
-<<<<<<< HEAD
-=======
 GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
 GMAIL_USER=${GMAIL_USER}
 GMAIL_SMTP_HOST=smtp.gmail.com
 GMAIL_SMTP_PORT=587
 NOTIFY_ENABLED=true
 REPORT_PATH=reports/playwright-report/results.json
->>>>>>> 5efde3a (fix: switch to Gmail SMTP, fix env loading for notifications)
 """
                     }
                 }
