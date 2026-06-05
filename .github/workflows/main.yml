@@ -41,10 +41,10 @@ jobs:
         if: always()
         env:
           ENV: qa
-          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
-          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
-          ZOHO_SMTP_HOST: smtp.zoho.in
-          ZOHO_SMTP_PORT: '465'
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_SMTP_HOST: smtp.gmail.com
+          GMAIL_SMTP_PORT: '587'
           NOTIFY_ENABLED: 'true'
           REPORT_PATH: reports/playwright-report/results.json
         run: npm run notify || true
