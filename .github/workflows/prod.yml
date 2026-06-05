@@ -35,7 +35,18 @@ jobs:
           PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
           PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
           PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --workers=2 --timeout=90000
+        run: npx playwright test --project=chromium --grep @prodSafe --workers=1 --timeout=90000
+      - name: Send notification email
+        if: always()
+        env:
+          ENV: prod
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_SMTP_HOST: smtp.gmail.com
+          GMAIL_SMTP_PORT: '587'
+          NOTIFY_ENABLED: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run notify || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
