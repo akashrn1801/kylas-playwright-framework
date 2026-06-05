@@ -23,10 +23,13 @@ export class NotificationService {
       console.log('[Notification] Notifications disabled — skipping');
       return;
     }
-    if (!notificationConfig.smtp.password) {
-      console.warn('[Notification] ZOHO_APP_PASSWORD not set — skipping email');
+    const password = process.env.GMAIL_APP_PASSWORD || process.env.ZOHO_APP_PASSWORD || '';
+    if (!password) {
+      console.warn('[Notification] Email password not set — skipping email');
       return;
     }
+    notificationConfig.smtp.password = password;
+    notificationConfig.smtp.user = process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
     console.log('[Notification] Parsing test report...');
     const report = this.parser.parse(input.jsonReportPath);
     console.log(`[Notification] Results — Total: ${report.total}, Passed: ${report.passed}, Failed: ${report.failed}, Flaky: ${report.flaky}`);

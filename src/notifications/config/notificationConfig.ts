@@ -24,7 +24,7 @@ const QA_TEAM = ['akash.nakhate@kylas.io', 'akshay.gunshetti@kylas.io'];
 export const notificationConfig: NotificationConfig = {
   enabled: process.env.NOTIFY_ENABLED !== 'false',
   smtp: {
-    host:     process.env.ZOHO_SMTP_HOST || 'smtp.zoho.in',
+    host:     process.env.GMAIL_SMTP_HOST || 'smtp.gmail.com',
     port:     parseInt(process.env.ZOHO_SMTP_PORT || '465'),
     secure:   true,
     user:     process.env.ZOHO_SMTP_USER || 'qa.kylas@zohomail.in',
