@@ -35,7 +35,7 @@ jobs:
           PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
           PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
           PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep "@regression" --workers=2 --timeout=90000
+        run: npx playwright test --project=chromium --grep "@regression" --workers=4 --timeout=90000
 
       - name: Send notification email
         if: always()

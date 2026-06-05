@@ -110,7 +110,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'prod') {
                         grepTag = ''
                     }
-                    sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
+                    sh "npx playwright test --project=chromium ${grepTag} --workers=4 || true"
                 }
             }
         }
