@@ -36,6 +36,17 @@ jobs:
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
         run: npx playwright test --project=chromium --grep @regression --workers=2 --timeout=90000
 
+      - name: Send notification email
+        if: always()
+        env:
+          ENV: qa
+          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
+          ZOHO_SMTP_HOST: smtp.zoho.in
+          ZOHO_SMTP_PORT: '465'
+          NOTIFY_ENABLED: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run notify || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
