@@ -12,22 +12,22 @@ export class EmailAdapter {
   private transporter: nodemailer.Transporter;
 
   constructor() {
-    const { smtp } = notificationConfig;
+    const user = process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
+    const pass = process.env.GMAIL_APP_PASSWORD || process.env.ZOHO_APP_PASSWORD || notificationConfig.smtp.password;
+    const host = process.env.GMAIL_SMTP_HOST || process.env.ZOHO_SMTP_HOST || notificationConfig.smtp.host;
+    const port = parseInt(process.env.GMAIL_SMTP_PORT || process.env.ZOHO_SMTP_PORT || String(notificationConfig.smtp.port));
     this.transporter = nodemailer.createTransport({
-      host:   smtp.host,
-      port:   smtp.port,
-      secure: smtp.secure,
-      auth: {
-        user: smtp.user,
-        pass: smtp.password,
-      },
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
     });
   }
 
   async send(payload: EmailPayload): Promise<void> {
     const { smtp } = notificationConfig;
     const info = await this.transporter.sendMail({
-      from:    smtp.from,
+      from:    `"Kylas QA Automation" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
       to:      payload.to.join(', '),
       cc:      payload.cc?.join(', '),
       subject: payload.subject,
