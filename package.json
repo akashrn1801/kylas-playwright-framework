@@ -8,7 +8,7 @@
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
   },
-"scripts": {
+  "scripts": {
     "pretest": "if [ -z \"$CI\" ]; then bash scripts/rotate-reports.sh; fi",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
@@ -25,7 +25,9 @@
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
-    "clean": "rm -rf test-results reports/ allure-results"
+    "clean": "rm -rf test-results reports/ allure-results",
+    "notify": "ts-node src/notifications/scripts/notify.ts",
+    "test:notify": "npm test && npm run notify"
   },
   "keywords": [
     "playwright",
@@ -39,6 +41,7 @@
     "@faker-js/faker": "^10.4.0",
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.1",
+    "@types/nodemailer": "^8.0.0",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
     "allure-commandline": "^2.41.0",
@@ -51,6 +54,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "nodemailer": "^8.0.10"
   }
 }
