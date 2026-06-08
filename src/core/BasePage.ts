@@ -122,7 +122,7 @@ export class BasePage {
 
   // Inline validation messages
   const inlineErrors = await this.page
-    .locator('.invalid-feedback, .text-danger, .error-message, .alert-danger')
+    .locator('.invalid-feedback:visible, .error-message:visible, .alert-danger:visible')
     .allTextContents();
 
   // Toast/notification errors

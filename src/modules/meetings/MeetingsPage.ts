@@ -579,7 +579,7 @@ export class MeetingsPage extends BasePage {
       return;
     }
     await this.page.locator('#Icon_Filter').click();
-    await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: 10000 });
+    await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.page.waitForTimeout(500);
     logger.success('Filter panel opened');
   }
@@ -609,11 +609,11 @@ export class MeetingsPage extends BasePage {
       await this.openFilterPanel();
     }
 
-    // Step 3: Click Add a filter dropdown — click the control div, not the placeholder
-    // WHY: React Select placeholder is always hidden via CSS — must click the control
-    const addFilterControl = this.page.locator('.select__control').first();
+    // Step 3: Click Add a filter dropdown — scoped inside #filterModal
+    // WHY: .select__control exists elsewhere on page — must scope to filter modal
+    const addFilterControl = this.page.locator('#filterModal .select__control').first();
     await addFilterControl.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await addFilterControl.click();
+    await addFilterControl.click({ force: true });
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search

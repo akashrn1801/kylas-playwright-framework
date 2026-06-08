@@ -475,7 +475,8 @@ export class LeadsPage extends BasePage {
     await expect(
       this.phoneInput()
     ).toBeVisible();
-
+    // WHY: Phone input briefly detaches after React re-render on GHA — wait for stability
+    await this.page.waitForTimeout(500);
     await this.fill(
       this.phoneInput(),
       data.phone,

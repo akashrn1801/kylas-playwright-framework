@@ -521,9 +521,9 @@ export class CompaniesPage extends BasePage {
         logger.info('Opening edit modal');
 
         await this.click(this.editIconButton(), 'edit icon');
-
-        await expect(this.editModal()).toBeVisible({ timeout: 10000 });
-
+        await expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation });
+        // WHY: Wait for name input to be ready — modal animation on GHA is slow
+        await this.page.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: config.timeouts.navigation });
         logger.success('Edit modal opened');
     }
 
