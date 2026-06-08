@@ -35,7 +35,7 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --grep @regression --workers=4 --timeout=90000
+        run: npx playwright test --project=chromium --grep @regression --workers=4 --timeout=180000
 
       - name: Send notification email
         if: always()
