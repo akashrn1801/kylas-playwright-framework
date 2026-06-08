@@ -109,14 +109,16 @@ export class MeetingsPage extends BasePage {
     // Wait for sort modal
     await this.page.locator('#sortModal').waitFor({ state: 'visible', timeout: 5000 });
     await this.page.waitForTimeout(400);
-    // Click the dropdown control (uses plain css- classes not is-invalid__)
-    await this.page.locator('#sortModal .css-yk16xz-control').click();
+    // WHY: Click the singleValue text inside the sort dropdown to open it
+    const sortDropdown = this.page.locator('#sortModal').locator('[class*="singleValue"]').first();
+    await sortDropdown.waitFor({ state: 'visible', timeout: 5000 });
+    await sortDropdown.click();
     await this.page.waitForTimeout(400);
     // Select Latest First option
     await this.page.locator('#sortModal').locator('div[class*="option"]', { hasText: 'Latest First' }).click();
     await this.page.waitForTimeout(400);
     // Apply sort
-    await this.page.locator('#sortModal').locator('button.btn-primary').click();
+    await this.page.locator('#sortModal').getByText('Apply', { exact: true }).click();
     await this.page.waitForTimeout(1000);
     logger.success('Sorted by Latest First');
   }
@@ -364,6 +366,7 @@ export class MeetingsPage extends BasePage {
     logger.info('Saving meeting');
     const idPromise = this.captureIdFromResponse();
     await this.addMeetingSaveButton().click();
+    await this.assertNoFormErrors('meeting create form');
     const id = await idPromise;
     await this.page.waitForTimeout(1500);
 
@@ -454,7 +457,14 @@ export class MeetingsPage extends BasePage {
     logger.success('Confirmed on meetings list page');
   }
 
-  async assertMeetingInList(title: string): Promise<void> {
+  async assertMeetingInList(title: string, meetingId?: number | null): Promise<void> {
+    // WHY: If ID is available use searchMeetingById — bypasses unreliable list search
+    if (meetingId) {
+      logger.info(`Verifying meeting via ID: ${meetingId}`);
+      await this.searchMeetingById(meetingId);
+      logger.success(`Meeting verified via ID: ${meetingId}`);
+      return;
+    }
     // First check if meeting is already visible on current page
     const alreadyVisible = await this.meetingTitleInList(title).isVisible().catch(() => false);
     if (alreadyVisible) {
@@ -677,7 +687,7 @@ export class MeetingsPage extends BasePage {
     logger.success(`Meeting status confirmed: ${expectedStatus}`);
   }
 
-    async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<void> {
+    async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<number | null> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
     // WHY: On GHA the form sometimes does not open on first click — retry up to 3 times
@@ -694,8 +704,9 @@ export class MeetingsPage extends BasePage {
     }
     if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
     await this.fillMeetingForm(data, createdBy, addInvitee);
-    await this.saveMeeting();
+    const meetingId = await this.saveMeeting();
     logger.success(`Meeting "${data.title}" created`);
+    return meetingId;
   }
 
   async updateMeeting(newTitle: string, originalTitle: string, newStatus?: string, newDescription?: string): Promise<void> {

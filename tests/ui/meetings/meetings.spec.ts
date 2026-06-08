@@ -30,10 +30,9 @@ test.describe('Meetings', () => {
     const meetingData  = generateMeetingData();
 
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(meetingData, 'Admin');
-
-    // Assert meeting appears in list
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
+    // Assert meeting appears in list — use ID if available for reliable verification
+    await meetingsPage.assertMeetingInList(meetingData.title, meetingId);
 
     // Open the meeting and assert detail view
     await meetingsPage.openMeetingFromList(meetingData.title);
