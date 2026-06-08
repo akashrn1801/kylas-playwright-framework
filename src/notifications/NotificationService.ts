@@ -11,6 +11,7 @@ export interface NotificationInput {
   buildUrl: string;
   gitCommit: string;
   triggeredBy: string;
+  runSource: 'local' | 'github-actions' | 'jenkins';
 }
 
 export class NotificationService {
@@ -41,6 +42,7 @@ export class NotificationService {
       buildUrl:    input.buildUrl,
       gitCommit:   input.gitCommit,
       triggeredBy: input.triggeredBy,
+      runSource:   input.runSource,
     };
     const recipients = getRecipients(input.env, input.branch);
     const subject    = this.template.subject(ctx);
