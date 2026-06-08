@@ -33,7 +33,7 @@ export class BasePage {
   async click(locator: Locator, description = 'element'): Promise<void> {
     logger.info(`Clicking: ${description}`);
     await locator.waitFor({ state: 'visible' });
-    await locator.click();
+    await locator.click({ timeout: 15000 });
   }
 
   async clickByText(text: string): Promise<void> {
