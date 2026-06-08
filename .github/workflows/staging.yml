@@ -1,8 +1,11 @@
 name: Staging Pipeline
 
 on:
-  push:
-    branches: [stage]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual staging pipeline run'
+        required: false
 
 jobs:
   test-staging:
