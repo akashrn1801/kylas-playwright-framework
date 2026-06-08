@@ -515,7 +515,7 @@ export class DealsPage extends BasePage {
     const allIndicators = this.page.locator('.look-up.col-3 .is-invalid__indicator');
     await allIndicators.last().waitFor({ state: 'visible', timeout: 10000 });
     await allIndicators.last().scrollIntoViewIfNeeded();
-    await allIndicators.last().click();
+    await allIndicators.last().click({ force: true });
     logger.info('Clicked product dropdown indicator');
 
     // Wait for options to load
@@ -528,7 +528,7 @@ export class DealsPage extends BasePage {
         break;
       } catch {
         logger.info(`Product options not visible, re-clicking (attempt ${i + 1})`);
-        await allIndicators.last().click();
+        await allIndicators.last().click({ force: true });
       }
     }
     if (!productFound) throw new Error('Product options did not appear');

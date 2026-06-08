@@ -29,6 +29,7 @@ jobs:
         env:
           ENV: prod
           CI: true
+          NAVIGATION_TIMEOUT: 120000
           PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
           PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
           PROD_ADMIN_EMAIL: ${{ secrets.PROD_ADMIN_EMAIL }}

@@ -610,7 +610,9 @@ export class MeetingsPage extends BasePage {
     }
 
     // Step 3: Click Add a filter dropdown — use placeholder text
-    await this.page.locator('.select__placeholder', { hasText: 'Add a filter' }).click();
+    const addFilterPlaceholder = this.page.locator('.select__placeholder').filter({ hasText: 'Add a filter' });
+    await addFilterPlaceholder.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await addFilterPlaceholder.click({ force: true });
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search
@@ -680,7 +682,7 @@ export class MeetingsPage extends BasePage {
     async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<void> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
-    await this.page.waitForTimeout(800);
+    await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.fillMeetingForm(data, createdBy, addInvitee);
     await this.saveMeeting();
     logger.success(`Meeting "${data.title}" created`);
