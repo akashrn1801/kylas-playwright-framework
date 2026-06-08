@@ -158,7 +158,7 @@ export class ContactsPage extends BasePage {
         await this.page.waitForLoadState('domcontentloaded');
 
         await expect(this.contactTable()).toBeVisible({
-            timeout: 60000,
+            timeout: config.timeouts.navigation,
         });
 
         await this.waitForLoaderToDisappear();
