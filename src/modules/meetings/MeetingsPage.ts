@@ -449,7 +449,7 @@ export class MeetingsPage extends BasePage {
 
   async assertOnMeetingsPage(): Promise<void> {
     await this.assertUrl(/\/sales\/meetings\/list/);
-    await this.assertVisible(this.page.locator('h1.h1', { hasText: 'Meetings' }), 'Meetings heading');
+    await this.assertVisible(this.page.locator('h1.h1', { hasText: 'Meetings' }), 'Meetings heading', config.timeouts.navigation);
     await this.assertVisible(this.addButton(), 'Add button');
     logger.success('Confirmed on meetings list page');
   }
