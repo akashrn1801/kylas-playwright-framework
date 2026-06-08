@@ -32,6 +32,9 @@ export const test = base.extend<TestFixtures>({
   restrictedPage: async ({ browser }, use) => {
     const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
+    // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
+    // Each worker waits a different amount based on a small random delay
+    if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
     // WHY: On GHA with parallel workers, concurrent restricted sessions can cause
     // redirect back to login. Retry navigation up to 3 times before failing.
     let landed = false;

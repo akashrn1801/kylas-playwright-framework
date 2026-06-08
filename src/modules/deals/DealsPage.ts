@@ -189,6 +189,14 @@ export class DealsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
+    // WHY: Wait for list API response before checking DOM — faster and more reliable
+    await Promise.race([
+      this.page.waitForResponse(
+        (res) => res.url().includes('/v1/deals') && res.request().method() === 'GET' && res.status() === 200,
+        { timeout: config.timeouts.navigation }
+      ).catch(() => null),
+      this.dealTable().waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+    ]);
     await expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation });
     await this.waitForLoaderToDisappear();
   }
