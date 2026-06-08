@@ -154,15 +154,19 @@ export class ContactsPage extends BasePage {
         ];
     }
 
-    private async waitForListReady(): Promise<void> {
+  private async waitForListReady(): Promise<void> {
         await this.page.waitForLoadState('domcontentloaded');
-
-        await expect(this.contactTable()).toBeVisible({
-            timeout: config.timeouts.navigation,
-        });
-
+        // WHY: Wait for list API response before checking DOM — faster and more reliable
+        await Promise.race([
+          this.page.waitForResponse(
+            (res) => res.url().includes('/v1/contacts') && res.request().method() === 'GET' && res.status() === 200,
+            { timeout: config.timeouts.navigation }
+          ).catch(() => null),
+          this.contactTable().waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+        ]);
+        await expect(this.contactTable()).toBeVisible({ timeout: config.timeouts.navigation });
         await this.waitForLoaderToDisappear();
-    }
+  }
 
     private async waitForLoaderToDisappear(): Promise<void> {
         try {

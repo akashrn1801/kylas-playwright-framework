@@ -15,9 +15,9 @@ export class MeetingsPage extends BasePage {
 
   private readonly retryConfig: RetryConfig = (() => {
     switch (config.env) {
-      case 'staging': return { retries: 3, wait: 5000 };
+      case 'staging': return { retries: 5, wait: 8000 };
       case 'prod':    return { retries: 5, wait: 3000 };
-      default:        return { retries: 5, wait: 5000 };
+      default:        return { retries: 8, wait: 8000 }; // WHY: GHA CI needs more retries for search index lag
     }
   })();
 
@@ -580,7 +580,9 @@ export class MeetingsPage extends BasePage {
     }
     await this.page.locator('#Icon_Filter').click();
     await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await this.page.waitForTimeout(500);
+    // WHY: Wait for React Select inside modal to fully mount before interacting
+    await this.page.locator('#filterModal .select__control').first().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await this.page.waitForTimeout(300);
     logger.success('Filter panel opened');
   }
 

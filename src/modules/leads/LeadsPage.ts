@@ -151,11 +151,16 @@ export class LeadsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
-
-    await expect(this.leadTable()).toBeVisible({
-      timeout: config.timeouts.navigation,
-    });
-
+    // WHY: Wait for list API response before checking DOM — faster and more reliable
+    // than polling .rt-table which renders async after the API call completes
+    await Promise.race([
+      this.page.waitForResponse(
+        (res) => res.url().includes('/v1/leads') && res.request().method() === 'GET' && res.status() === 200,
+        { timeout: config.timeouts.navigation }
+      ).catch(() => null),
+      this.leadTable().waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+    ]);
+    await expect(this.leadTable()).toBeVisible({ timeout: config.timeouts.navigation });
     await this.waitForLoaderToDisappear();
   }
 
