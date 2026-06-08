@@ -358,6 +358,7 @@ export class DealsPage extends BasePage {
 
     await this.click(this.estimatedClosureDateInput(), 'estimated closure date input');
     await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
+    await this.page.waitForTimeout(400); /* Firefox: wait for calendar open animation to settle */
     logger.info('Calendar opened');
 
     const dayCell = this.calendarDayByLabel(dayLabel);
@@ -658,7 +659,6 @@ export class DealsPage extends BasePage {
     await receivedOption.waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Use dispatchEvent for reliable click — dropdown may close
     // before a normal click registers on slower CI environments
-    await receivedOption.scrollIntoViewIfNeeded();
     await receivedOption.dispatchEvent('mousedown');
     await this.page.waitForTimeout(100);
     await receivedOption.dispatchEvent('mouseup');
