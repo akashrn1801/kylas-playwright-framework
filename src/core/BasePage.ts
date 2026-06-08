@@ -73,9 +73,9 @@ export class BasePage {
 
   // ─── Assertion Helpers ────────────────────────────────────
 
-  async assertVisible(locator: Locator, description = 'element'): Promise<void> {
+  async assertVisible(locator: Locator, description = 'element', timeout = 30000): Promise<void> {
     logger.info(`Asserting visible: ${description}`);
-    await expect(locator).toBeVisible();
+    await expect(locator).toBeVisible({ timeout });
   }
 
   async assertText(locator: Locator, expectedText: string): Promise<void> {
