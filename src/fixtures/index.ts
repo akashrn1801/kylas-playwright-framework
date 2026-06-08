@@ -32,8 +32,20 @@ export const test = base.extend<TestFixtures>({
   restrictedPage: async ({ browser }, use) => {
     const context = await browser.newContext({ storageState: stateFor('restricted') });
     const page = await context.newPage();
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+    // WHY: On GHA with parallel workers, concurrent restricted sessions can cause
+    // redirect back to login. Retry navigation up to 3 times before failing.
+    let landed = false;
+    for (let i = 0; i < 3; i++) {
+      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+      try {
+        await page.waitForURL(/sales\//, { timeout: 30000 });
+        landed = true;
+        break;
+      } catch {
+        if (i < 2) await page.waitForTimeout(3000);
+      }
+    }
+    if (!landed) throw new Error('restrictedPage: failed to reach /sales/ after 3 attempts');
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
