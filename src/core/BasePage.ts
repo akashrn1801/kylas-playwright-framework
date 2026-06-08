@@ -1,3 +1,4 @@
+import { config } from '../../config/config';
 import { Page, Locator, expect } from '@playwright/test';
 import { logger } from '../utils/logger';
 
@@ -30,10 +31,10 @@ export class BasePage {
 
   // ─── Click Actions ────────────────────────────────────────
 
-  async click(locator: Locator, description = 'element'): Promise<void> {
+  async click(locator: Locator, description = 'element', force = false): Promise<void> {
     logger.info(`Clicking: ${description}`);
     await locator.waitFor({ state: 'visible' });
-    await locator.click({ timeout: 15000 });
+    await locator.click({ timeout: 15000, force });
   }
 
   async clickByText(text: string): Promise<void> {
@@ -66,7 +67,7 @@ export class BasePage {
     await locator.waitFor({ state: 'hidden', timeout });
   }
 
-  async waitForUrl(urlPattern: string | RegExp, timeout = 30000): Promise<void> {
+  async waitForUrl(urlPattern: string | RegExp, timeout = config.timeouts.navigation): Promise<void> {
     logger.info(`Waiting for URL: ${urlPattern}`);
     await this.page.waitForURL(urlPattern, { timeout });
   }

@@ -155,7 +155,7 @@ export class CompaniesPage extends BasePage {
         await this.page.waitForLoadState('domcontentloaded');
 
         await expect(this.companyTable()).toBeVisible({
-            timeout: 60000,
+            timeout: config.timeouts.navigation,
         });
 
         await this.waitForLoaderToDisappear();
