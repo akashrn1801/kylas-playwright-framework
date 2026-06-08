@@ -67,6 +67,7 @@ ${envPrefix}_RESTRICTED_EMAIL=${RESTRICTED_EMAIL}
 ${envPrefix}_RESTRICTED_PASSWORD=${RESTRICTED_PASSWORD}
 HEADLESS=true
 CI=true
+NAVIGATION_TIMEOUT=120000
 GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
 GMAIL_USER=${GMAIL_USER}
 GMAIL_SMTP_HOST=smtp.gmail.com
@@ -110,7 +111,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'prod') {
                         grepTag = ''
                     }
-                    sh "npx playwright test --project=chromium ${grepTag} --workers=4 || true"
+                    sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
                 }
             }
         }
