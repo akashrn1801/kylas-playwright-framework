@@ -555,11 +555,11 @@ export class ContactsPage extends BasePage {
         logger.info('Opening edit modal');
 
         await this.click(this.editIconButton(), 'edit icon');
-
         await expect(this.editModal()).toBeVisible({
-            timeout: 10000,
+            timeout: config.timeouts.navigation,
         });
-
+        // WHY: Wait for firstName input — modal animation on GHA is slow
+        await this.firstNameInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
         logger.success('Edit modal opened');
     }
 

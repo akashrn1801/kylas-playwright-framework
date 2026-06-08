@@ -130,9 +130,11 @@ export class BasePage {
     .locator('.toast, .toast-error, .toast-danger, .notification-error, [class*="toast"][class*="error"], [class*="alert"][class*="error"], .Toastify__toast--error, .swal2-error')
     .allTextContents();
 
-  // Any visible error containers
+  // Any visible error containers — use specific selectors to avoid false positives
+  // WHY: [class*="error"] is too broad — matches React Select is-invalid__ classes
+  // which contain currency values (INR). Use only known error container classes.
   const errorContainers = await this.page
-    .locator('[class*="error"]:visible, [class*="Error"]:visible, [class*="danger"]:visible')
+    .locator('.error-container:visible, .form-error:visible, .field-error:visible, .alert.alert-danger:visible')
     .allTextContents();
 
   const allErrors = [
