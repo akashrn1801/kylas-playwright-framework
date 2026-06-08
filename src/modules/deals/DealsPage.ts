@@ -189,7 +189,7 @@ export class DealsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
-    await expect(this.dealTable()).toBeVisible({ timeout: 30000 });
+    await expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation });
     await this.waitForLoaderToDisappear();
   }
 
@@ -274,7 +274,7 @@ export class DealsPage extends BasePage {
           (res.url().includes('/deals') || res.url().includes('/deal')) &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: 30000 },
+        { timeout: config.timeouts.navigation },
       );
       const body = await response.json();
       const dealId = body?.id ?? body?.data?.id ?? body?.dealId ?? null;
