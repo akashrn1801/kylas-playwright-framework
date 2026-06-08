@@ -28,6 +28,7 @@ jobs:
         env:
           ENV: qa
           CI: true
+          NAVIGATION_TIMEOUT: 120000
           QA_APP_URL: ${{ secrets.QA_APP_URL }}
           QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
           QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}

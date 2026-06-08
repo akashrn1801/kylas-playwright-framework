@@ -29,6 +29,7 @@ jobs:
         env:
           ENV: staging
           CI: true
+          NAVIGATION_TIMEOUT: 120000
           STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
           STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
           STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
