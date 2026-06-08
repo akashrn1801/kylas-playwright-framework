@@ -599,7 +599,7 @@ export class MeetingsPage extends BasePage {
     const clearVisible = await this.page.locator('#clearFilters').isVisible().catch(() => false);
     if (clearVisible) {
       logger.info('Clearing existing filters');
-      await this.page.locator('#clearFilters').click();
+      await this.page.locator('#clearFilters').click({ force: true });
       await this.page.waitForTimeout(500);
       // Click Ok on confirm popup
       await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 5000 });
@@ -609,10 +609,11 @@ export class MeetingsPage extends BasePage {
       await this.openFilterPanel();
     }
 
-    // Step 3: Click Add a filter dropdown — use placeholder text
-    const addFilterPlaceholder = this.page.locator('.select__placeholder').filter({ hasText: 'Add a filter' });
-    await addFilterPlaceholder.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await addFilterPlaceholder.click({ force: true });
+    // Step 3: Click Add a filter dropdown — click the control div, not the placeholder
+    // WHY: React Select placeholder is always hidden via CSS — must click the control
+    const addFilterControl = this.page.locator('.select__control').first();
+    await addFilterControl.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await addFilterControl.click();
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search
@@ -682,7 +683,19 @@ export class MeetingsPage extends BasePage {
     async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<void> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
-    await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    // WHY: On GHA the form sometimes does not open on first click — retry up to 3 times
+    let formOpened = false;
+    for (let i = 0; i < 3; i++) {
+      try {
+        await this.titleInput().waitFor({ state: 'visible', timeout: 15000 });
+        formOpened = true;
+        break;
+      } catch {
+        logger.warn(`Meeting form did not open on attempt ${i + 1}, retrying Add button click`);
+        await this.click(this.addButton(), 'Add button retry');
+      }
+    }
+    if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
     await this.fillMeetingForm(data, createdBy, addInvitee);
     await this.saveMeeting();
     logger.success(`Meeting "${data.title}" created`);
