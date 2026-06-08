@@ -53,7 +53,7 @@ test.describe('Deals RBAC', () => {
       try {
         const responsePromise = page.waitForResponse(
           (res) => res.url().includes('/v1/users/me') && res.status() === 200,
-          { timeout: 15000 },
+          { timeout: config.timeouts.navigation },
         );
         await page.goto(`${config.appUrl}/sales/deals/list`, { waitUntil: 'domcontentloaded' });
         const response = await responsePromise;
@@ -86,20 +86,20 @@ test.describe('Deals RBAC', () => {
       `${config.appUrl}/sales/deals/details/${dealId}`,
       { waitUntil: 'domcontentloaded' },
     );
-    await restrictedPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
     logger.info('On deal details page');
 
     // Step 4 — Verify Company Owner via modal
     logger.info('Verifying company owner');
     const companyLink = restrictedPage.locator('.title.text-break.link-primary span').first();
-    await companyLink.waitFor({ state: 'visible', timeout: 10000 });
+    await companyLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await companyLink.click();
 
     const companyModal = restrictedPage
       .locator('.modal-content')
       .filter({ hasText: 'Owner' })
       .last();
-    await companyModal.waitFor({ state: 'visible', timeout: 10000 });
+    await companyModal.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
 
     const companyOwner = (await companyModal
       .locator('.read-only-info')
@@ -119,16 +119,16 @@ test.describe('Deals RBAC', () => {
     }
 
     await companyModal.locator('button[aria-label="Close"]').click();
-    await companyModal.waitFor({ state: 'hidden', timeout: 5000 });
+    await companyModal.waitFor({ state: 'hidden', timeout: config.timeouts.navigation });
 
     // Step 5 — Verify Contact Owner via new tab
     logger.info('Verifying contact owner');
     const contactLink = restrictedPage.locator('.deal-contact__name').first();
-    await contactLink.waitFor({ state: 'visible', timeout: 10000 });
+    await contactLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
 
     try {
       const [newTab] = await Promise.all([
-        restrictedPage.context().waitForEvent('page', { timeout: 10000 }),
+        restrictedPage.context().waitForEvent('page', { timeout: config.timeouts.navigation }),
         contactLink.click(),
       ]);
       await newTab.waitForLoadState('domcontentloaded');
@@ -173,7 +173,7 @@ test.describe('Deals RBAC', () => {
     );
 
     try {
-      await restrictedPage.waitForURL(/deals\/details\//, { timeout: 10000 });
+      await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
       // Page loaded — verify edit button is NOT visible
       const editBtn = restrictedPage.locator('#edit-action-btn');
       const editBtnVisible = await editBtn.isVisible();

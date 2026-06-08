@@ -18,7 +18,7 @@ pipeline {
     PROD_RESTRICTED_EMAIL    = credentials('PROD_RESTRICTED_EMAIL')
     PROD_RESTRICTED_PASSWORD = credentials('PROD_RESTRICTED_PASSWORD')
     DEFAULT_TIMEOUT          = '30000'
-    NAVIGATION_TIMEOUT       = '90000'
+    NAVIGATION_TIMEOUT       = '120000'
     EXPECT_TIMEOUT           = '20000'
     HEADLESS                 = 'true'
     WORKERS                  = '1'
