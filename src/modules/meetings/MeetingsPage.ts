@@ -580,9 +580,7 @@ export class MeetingsPage extends BasePage {
     }
     await this.page.locator('#Icon_Filter').click();
     await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    // WHY: Wait for React Select inside modal to fully mount before interacting
-    await this.page.locator('#filterModal .select__control').first().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await this.page.waitForTimeout(300);
+    await this.page.waitForTimeout(500);
     logger.success('Filter panel opened');
   }
 
@@ -601,7 +599,7 @@ export class MeetingsPage extends BasePage {
     const clearVisible = await this.page.locator('#clearFilters').isVisible().catch(() => false);
     if (clearVisible) {
       logger.info('Clearing existing filters');
-      await this.page.locator('#clearFilters').click({ force: true });
+      await this.page.locator('#clearFilters').click();
       await this.page.waitForTimeout(500);
       // Click Ok on confirm popup
       await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 5000 });
@@ -610,12 +608,9 @@ export class MeetingsPage extends BasePage {
       // Reopen filter panel
       await this.openFilterPanel();
     }
-
-    // Step 3: Click Add a filter dropdown — scoped inside #filterModal
-    // WHY: .select__control exists elsewhere on page — must scope to filter modal
-    const addFilterControl = this.page.locator('#filterModal .select__control').first();
-    await addFilterControl.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await addFilterControl.click({ force: true });
+    // Step 3: Click Add a filter dropdown — use placeholder text
+    // WHY: Original working approach — placeholder click opens the dropdown reliably
+    await this.page.locator('.select__placeholder').filter({ hasText: 'Add a filter' }).click();
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search
