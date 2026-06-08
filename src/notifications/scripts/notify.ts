@@ -46,7 +46,8 @@ async function main() {
     triggeredBy = process.env.USER || 'local';
   }
 
-  await service.notify({ jsonReportPath, env, branch, buildNumber, buildUrl, gitCommit, triggeredBy });
+  const runSource = isJenkins ? 'jenkins' : isGHA ? 'github-actions' : 'local';
+  await service.notify({ jsonReportPath, env, branch, buildNumber, buildUrl, gitCommit, triggeredBy, runSource });
 }
 
 main().catch(err => { console.error('[Notification] Fatal error:', err); process.exit(0); });

@@ -8,6 +8,7 @@ export interface EmailContext {
   buildUrl: string;
   gitCommit: string;
   triggeredBy: string;
+  runSource?: 'local' | 'github-actions' | 'jenkins';
   allureUrl?: string;
 }
 
@@ -19,7 +20,9 @@ export class EmailTemplate {
   }
 
   html(ctx: EmailContext): string {
-    const { report, env, branch, buildNumber, buildUrl, gitCommit, triggeredBy, allureUrl } = ctx;
+    const { report, env, branch, buildNumber, buildUrl, gitCommit, triggeredBy, runSource, allureUrl } = ctx;
+    const sourceLabel = runSource === 'github-actions' ? '🐙 GitHub Actions' : runSource === 'jenkins' ? '🔧 Jenkins' : '💻 Local';
+    const sourceBg    = runSource === 'github-actions' ? '#24292f' : runSource === 'jenkins' ? '#d33833' : '#6b7280';
     const statusColor = report.status === 'passed' ? '#22c55e' : report.status === 'failed' ? '#ef4444' : '#f59e0b';
     const statusLabel = report.status === 'passed' ? '✅ PASSED' : report.status === 'failed' ? '❌ FAILED' : '⚠️ UNSTABLE';
     const envColor    = env === 'prod' ? '#7c3aed' : env === 'staging' ? '#0891b2' : '#059669';
@@ -84,6 +87,7 @@ export class EmailTemplate {
   <span style="display:inline-block;background:${envColor};color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;margin-right:6px;">ENV: ${env.toUpperCase()}</span>
   <span style="display:inline-block;background:#2563eb;color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;margin-right:6px;">BRANCH: ${this.esc(branch)}</span>
   <span style="display:inline-block;background:#374151;color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;">BUILD #${this.esc(buildNumber)}</span>
+  <span style="display:inline-block;background:${sourceBg};color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;margin-left:6px;">${sourceLabel}</span>
 </td></tr>
 
 <tr><td style="padding:8px 32px;">
