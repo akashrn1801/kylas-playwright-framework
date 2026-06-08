@@ -11,13 +11,13 @@
   "scripts": {
     "pretest": "if [ -z \"$CI\" ]; then bash scripts/rotate-reports.sh; fi",
     "test": "playwright test",
-    "test:headed": "playwright test --headed",
+    "test:headed": "playwright test --headed && npm run notify",
     "test:debug": "playwright test --debug",
-    "test:ui": "playwright test --project=chromium",
-    "test:leads": "playwright test tests/ui/leads/ --project=chromium",
-    "test:rbac": "playwright test tests/rbac/ --project=chromium",
-    "test:login": "playwright test tests/ui/dashboard/ --project=chromium",
-    "test:deals": "playwright test tests/ui/deals/ tests/rbac/deals.rbac.spec.ts --project=chromium",
+    "test:ui": "playwright test --project=chromium && npm run notify",
+    "test:leads": "playwright test tests/ui/leads/ --project=chromium && npm run notify",
+    "test:rbac": "playwright test tests/rbac/ --project=chromium && npm run notify",
+    "test:login": "playwright test tests/ui/dashboard/ --project=chromium && npm run notify",
+    "test:deals": "playwright test tests/ui/deals/ tests/rbac/deals.rbac.spec.ts --project=chromium && npm run notify",
     "report:playwright": "playwright show-report reports/playwright-report",
     "report:allure:generate": "allure generate reports/allure-results --clean -o reports/allure-report",
     "report:allure:open": "allure open reports/allure-report",
@@ -27,7 +27,8 @@
     "format": "prettier --write .",
     "clean": "rm -rf test-results reports/ allure-results",
     "notify": "ts-node src/notifications/scripts/notify.ts",
-    "test:notify": "npm test && npm run notify"
+    "test:notify": "npm test && npm run notify",
+    "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi"
   },
   "keywords": [
     "playwright",

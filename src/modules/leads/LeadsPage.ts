@@ -453,7 +453,8 @@ export class LeadsPage extends BasePage {
 
     await this.click(
       this.addEmailButton(),
-      'add email button'
+      'add email button',
+      true // force: CSS overlay intercepts pointer events on GHA
     );
 
     await expect(
