@@ -71,7 +71,7 @@ export interface CompanyData {
 export function generateCompanyData(
     overrides: Partial<CompanyData> = {}
 ): CompanyData {
-    const companyName = faker.company.name();
+    const companyName = `${faker.company.name()}-${Date.now()}`;
     const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');
 
     return {
