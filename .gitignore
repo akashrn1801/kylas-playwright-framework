@@ -16,3 +16,4 @@ logs/
 npm-debug.log*
 *.tmp
 *.temp
+.env.example
