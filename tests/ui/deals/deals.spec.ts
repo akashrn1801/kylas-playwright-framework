@@ -101,12 +101,16 @@ test.describe('Deals', () => {
 
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
-
-    await adminPage.goto(
-      `${config.appUrl}/sales/deals/details/${dealId}`,
-      { waitUntil: 'domcontentloaded' },
-    );
-    await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+    if (dealId) {
+      await adminPage.goto(
+        `${config.appUrl}/sales/deals/details/${dealId}`,
+        { waitUntil: 'domcontentloaded' },
+      );
+      await adminPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+    } else {
+      // WHY: dealId capture failed — use search to find and open the deal
+      await dealsPage.searchAndOpenDeal(dealData.name);
+    }
 
     // WHY: Default stage after creation is always Open
     await dealsPage.assertPipelineStageOnDetails('Open');

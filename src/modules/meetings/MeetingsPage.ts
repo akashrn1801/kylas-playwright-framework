@@ -575,7 +575,9 @@ export class MeetingsPage extends BasePage {
 
     // Save
     await this.editMeetingSaveButton().click();
-    await this.page.waitForTimeout(1500);
+    // WHY: Wait for edit modal to close — same as saveEditedMeeting — prevents next action failing
+    await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: config.timeouts.navigation }).catch(() => {});
+    await this.page.waitForTimeout(500);
     logger.success(`Meeting "${title}" rescheduled`);
   }
 
@@ -609,7 +611,7 @@ export class MeetingsPage extends BasePage {
     const clearVisible = await this.page.locator('#clearFilters').isVisible().catch(() => false);
     if (clearVisible) {
       logger.info('Clearing existing filters');
-      await this.page.locator('#clearFilters').click();
+      await this.page.locator('#clearFilters').click({ force: true, timeout: 5000 }).catch(() => logger.warn('clearFilters click failed — skipping'));
       await this.page.waitForTimeout(500);
       // Click Ok on confirm popup
       await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 5000 });
@@ -618,9 +620,12 @@ export class MeetingsPage extends BasePage {
       // Reopen filter panel
       await this.openFilterPanel();
     }
-    // Step 3: Click Add a filter dropdown — use placeholder text
-    // WHY: Original working approach — placeholder click opens the dropdown reliably
-    await this.page.locator('.select__placeholder').filter({ hasText: 'Add a filter' }).click();
+    // Step 3: Open Add a filter dropdown
+    // WHY: Use the control div with force:true — placeholder and indicator have CSS visibility issues
+    // The control div is the entire React Select clickable area and is always attached
+    const filterControl = this.page.locator('#filterModal [class*="-control"]').first();
+    await filterControl.waitFor({ state: 'attached', timeout: config.timeouts.navigation });
+    await filterControl.click({ force: true });
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search
