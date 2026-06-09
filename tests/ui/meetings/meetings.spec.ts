@@ -63,8 +63,8 @@ test.describe('Meetings', () => {
 
     // Create the meeting first
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(originalData, 'Admin');
-    await meetingsPage.assertMeetingInList(originalData.title);
+    const originalMeetingId = await meetingsPage.createMeeting(originalData, 'Admin');
+    await meetingsPage.assertMeetingInList(originalData.title, originalMeetingId);
 
     // Update title and description via edit form
     await meetingsPage.updateMeeting(
@@ -75,7 +75,7 @@ test.describe('Meetings', () => {
     );
 
     // Assert updated title in list
-    await meetingsPage.assertMeetingInList(updatedTitle);
+    await meetingsPage.assertMeetingInList(updatedTitle, originalMeetingId);
 
     // Open meeting and change status via ellipsis menu
     await meetingsPage.openMeetingFromList(updatedTitle);
@@ -97,9 +97,8 @@ test.describe('Meetings', () => {
     const meetingData  = generateMeetingData({ title: `CalTest-${Date.now()}` });
 
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(meetingData, 'Admin');
-
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    const calMeetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
+    await meetingsPage.assertMeetingInList(meetingData.title, calMeetingId);
     await meetingsPage.openMeetingFromList(meetingData.title);
 
     // Assert medium is one of the valid options — fallback logic selected it
@@ -127,10 +126,10 @@ test.describe('Meetings', () => {
     const meetingData  = generateMeetingData();
 
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(meetingData, 'Admin');
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
+    await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
     await meetingsPage.rescheduleMeeting(meetingData.title);
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
   });
 
   test('@prodSafe meetings list page should be accessible', async ({ adminPage }) => {
