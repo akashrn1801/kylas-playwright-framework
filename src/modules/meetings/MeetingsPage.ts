@@ -590,8 +590,19 @@ export class MeetingsPage extends BasePage {
       logger.debug('Filter panel already open');
       return;
     }
-    await this.page.locator('#Icon_Filter').click();
-    await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    // WHY: Icon_Filter click can be unreliable on CI — retry up to 3 times
+    let filterOpened = false;
+    for (let i = 0; i < 3; i++) {
+      await this.page.locator('#Icon_Filter').click({ force: true });
+      try {
+        await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: 10000 });
+        filterOpened = true;
+        break;
+      } catch {
+        logger.warn(`Filter panel did not open on attempt ${i + 1}, retrying`);
+      }
+    }
+    if (!filterOpened) throw new Error('Filter panel did not open after 3 attempts');
     await this.page.waitForTimeout(500);
     logger.success('Filter panel opened');
   }
@@ -627,9 +638,12 @@ export class MeetingsPage extends BasePage {
     // Step 3: Open Add a filter dropdown
     // WHY: Use the control div with force:true — placeholder and indicator have CSS visibility issues
     // The control div is the entire React Select clickable area and is always attached
-    const filterControl = this.page.locator('#filterModal [class*="-control"]').first();
-    await filterControl.waitFor({ state: 'attached', timeout: config.timeouts.navigation });
-    await filterControl.click({ force: true });
+    // WHY: Click the filter dropdown input directly and type to search
+    // React Select opens when its hidden input receives focus
+    const filterInput = this.page.locator('#filterModal .select__input input').first();
+    await filterInput.waitFor({ state: 'attached', timeout: config.timeouts.navigation });
+    await filterInput.focus();
+    await this.page.waitForTimeout(300);
     await this.page.waitForTimeout(500);
 
     // Step 4: Type 'id' to search
