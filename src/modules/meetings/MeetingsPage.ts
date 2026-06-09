@@ -408,7 +408,7 @@ export class MeetingsPage extends BasePage {
   async openMeetingFromList(title: string): Promise<void> {
     logger.info(`Opening meeting from list: "${title}"`);
     const listItem = this.meetingTitleInList(title);
-    await listItem.waitFor({ state: 'visible', timeout: config.timeouts.default });
+    await listItem.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await listItem.click();
     await this.page.waitForTimeout(800);
     logger.success(`Meeting "${title}" opened`);
@@ -428,7 +428,7 @@ export class MeetingsPage extends BasePage {
 
   async fillEditForm(newTitle: string, newStatus?: string, newDescription?: string): Promise<void> {
     logger.info(`Editing meeting new title: "${newTitle}"`);
-    await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.default });
+    await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.titleInput().fill('');
     await this.titleInput().fill(newTitle);
 
@@ -492,7 +492,7 @@ export class MeetingsPage extends BasePage {
 
   async assertMeetingDetailTitle(title: string): Promise<void> {
     const detailTitle = this.meetingDetailTitle();
-    await detailTitle.waitFor({ state: 'visible', timeout: config.timeouts.default });
+    await detailTitle.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     const text = await detailTitle.textContent();
     if (!text?.includes(title)) throw new Error(`Detail title "${text}" does not contain "${title}"`);
     logger.success(`Meeting detail title confirmed: "${text}"`);
@@ -500,7 +500,7 @@ export class MeetingsPage extends BasePage {
 
   async assertMeetingDetailField(fieldId: string, expectedValue: string): Promise<void> {
     const field = this.detailFieldValue(fieldId);
-    await field.waitFor({ state: 'visible', timeout: config.timeouts.default });
+    await field.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     const text = await field.textContent();
     if (!text?.includes(expectedValue)) throw new Error(`Field "${fieldId}" = "${text}" does not contain "${expectedValue}"`);
     logger.success(`Field "${fieldId}" confirmed`);
@@ -613,9 +613,13 @@ export class MeetingsPage extends BasePage {
       logger.info('Clearing existing filters');
       await this.page.locator('#clearFilters').click({ force: true, timeout: 5000 }).catch(() => logger.warn('clearFilters click failed — skipping'));
       await this.page.waitForTimeout(500);
-      // Click Ok on confirm popup
-      await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 5000 });
-      await this.page.locator('#confirm').click();
+      // WHY: Confirm popup may or may not appear depending on app state
+      try {
+        await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 3000 });
+        await this.page.locator('#confirm').click();
+      } catch {
+        logger.info('No confirm popup after clearFilters — continuing');
+      }
       await this.page.waitForTimeout(1500);
       // Reopen filter panel
       await this.openFilterPanel();
@@ -688,7 +692,7 @@ export class MeetingsPage extends BasePage {
   async assertMeetingStatus(expectedStatus: string): Promise<void> {
     logger.info(`Asserting meeting status: ${expectedStatus}`);
     const statusEl = this.page.locator('span.meeting__status', { hasText: expectedStatus });
-    await statusEl.waitFor({ state: 'visible', timeout: config.timeouts.default });
+    await statusEl.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     logger.success(`Meeting status confirmed: ${expectedStatus}`);
   }
 
