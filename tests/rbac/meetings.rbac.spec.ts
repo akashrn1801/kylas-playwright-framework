@@ -36,10 +36,9 @@ test.describe('Meetings RBAC', () => {
     const meetingData   = generateRestrictedMeetingData();
 
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(meetingData, 'Restricted');
-
+    const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Restricted');
     // Assert the meeting appears in the restricted user's list
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
 
     // Open and assert detail view
     await meetingsPage.openMeetingFromList(meetingData.title);
@@ -60,12 +59,12 @@ test.describe('Meetings RBAC', () => {
 
     // Create first
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(originalData, 'Restricted');
-    await meetingsPage.assertMeetingInList(originalData.title);
+    const originalId = await meetingsPage.createMeeting(originalData, 'Restricted');
+    await meetingsPage.assertMeetingInList(originalData.title, originalId);
 
     // Reschedule first
     await meetingsPage.rescheduleMeeting(originalData.title);
-    await meetingsPage.assertMeetingInList(originalData.title);
+    await meetingsPage.assertMeetingInList(originalData.title, originalId);
 
     // Then Edit
     await meetingsPage.updateMeeting(
@@ -76,7 +75,7 @@ test.describe('Meetings RBAC', () => {
     );
 
     // Assert updated title in list and detail
-    await meetingsPage.assertMeetingInList(updatedTitle);
+    await meetingsPage.assertMeetingInList(updatedTitle, originalId);
     await meetingsPage.openMeetingFromList(updatedTitle);
     await meetingsPage.assertMeetingDetailTitle(updatedTitle);
     const newStatus = await meetingsPage.changeStatusViaEllipsis();
@@ -98,8 +97,8 @@ test.describe('Meetings RBAC', () => {
     const adminData = generateAdminMeetingData();
 
     await adminMeetings.goToMeetingsList();
-    await adminMeetings.createMeeting(adminData, 'Admin');
-    await adminMeetings.assertMeetingInList(adminData.title);
+    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin');
+    await adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Restricted user searches for the admin meeting — must NOT find it
     await restrictedMeetings.goToMeetingsList();
@@ -121,8 +120,8 @@ test.describe('Meetings RBAC', () => {
     // Admin creates meeting — invitee search 'restricted' adds restricted user
     const adminData = generateAdminMeetingData();
     await adminMeetings.goToMeetingsList();
-    await adminMeetings.createMeeting(adminData, 'Admin');
-    await adminMeetings.assertMeetingInList(adminData.title);
+    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin');
+    await adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Capture meeting ID from admin detail view
     await adminMeetings.openMeetingFromList(adminData.title);
@@ -170,10 +169,10 @@ test.describe('Meetings RBAC', () => {
     const meetingData  = generateRestrictedMeetingData();
 
     await meetingsPage.goToMeetingsList();
-    await meetingsPage.createMeeting(meetingData, 'Restricted');
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    const meetingId1 = await meetingsPage.createMeeting(meetingData, 'Restricted');
+    await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
     await meetingsPage.rescheduleMeeting(meetingData.title);
-    await meetingsPage.assertMeetingInList(meetingData.title);
+    await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
   });
   
   // ── Test: Restricted user cannot see admin entities in Related To ──────────
