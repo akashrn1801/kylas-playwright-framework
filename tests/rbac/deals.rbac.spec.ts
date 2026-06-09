@@ -93,7 +93,7 @@ test.describe('Deals RBAC', () => {
     logger.info('Verifying company owner');
     const companyLink = restrictedPage.locator('.title.text-break.link-primary span').first();
     await companyLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await companyLink.click();
+    await companyLink.click({ force: true });
 
     const companyModal = restrictedPage
       .locator('.modal-content')
