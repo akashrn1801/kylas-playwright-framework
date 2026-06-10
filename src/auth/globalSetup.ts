@@ -1,4 +1,5 @@
 import { chromium, FullConfig } from '@playwright/test';
+import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { config } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,6 +9,7 @@ import * as path from 'path';
 const STORAGE_STATE_DIR = path.join(__dirname, 'storageStates', config.env);
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
+  ErrorCollector.attachNodeListeners();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
   // WHY: --no-sandbox is required inside Docker/Jenkins containers
 // Without it Chromium cannot create a sandbox process and times out

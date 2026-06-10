@@ -10,6 +10,7 @@ export interface EmailContext {
   triggeredBy: string;
   runSource?: 'local' | 'github-actions' | 'jenkins';
   allureUrl?: string;
+  miscErrors?: any;
 }
 
 export class EmailTemplate {
@@ -211,6 +212,8 @@ ${report.failedTests.length > 0 ? `
   </div>
 </td></tr>` : ''}
 
+${this.miscErrorsSection(ctx.miscErrors)}
+
 <tr><td style="padding:16px 32px;text-align:center;">
   <a href="${jenkinsBuildUrl}" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px;margin-right:8px;">🔍 Jenkins Build →</a>
   <a href="${allureReportUrl}" style="display:inline-block;background:#7c3aed;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px;">📊 Allure Report →</a>
@@ -225,6 +228,59 @@ ${report.failedTests.length > 0 ? `
 </table>
 </body></html>`;
   }
+  private miscErrorsSection(miscErrors: any): string {
+  if (!miscErrors || miscErrors.totalErrors === 0) {
+    return `
+    <tr><td style="padding:8px 32px;">
+      <div style="background:#f0fdf4;border-radius:12px;padding:16px 20px;border:1px solid #bbf7d0;">
+        <div style="font-size:13px;font-weight:700;color:#15803d;">✅ No Background Errors Detected</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:4px;">No browser console errors, network failures, or uncaught exceptions were captured during this run.</div>
+      </div>
+    </td></tr>`;
+  }
+  const icons: Record<string,string> = { 'pageerror':'💥','console-error':'🔴','requestfailed':'📡','response-error':'🌐','node-exception':'⚡','node-rejection':'⚡' };
+  const byTypeRows = Object.entries(miscErrors.byType as Record<string,number>).map(([type,count]) =>
+    `<tr><td style="padding:4px 8px;font-size:12px;color:#374151;">${icons[type]||'❓'} ${type}</td><td style="padding:4px 8px;font-size:12px;font-weight:700;color:#374151;text-align:right;">${count}</td></tr>`
+  ).join('');
+  const byTest = new Map<string,any[]>();
+  for (const e of (miscErrors.errors as any[])) {
+    const key = e.testTitle || 'unknown';
+    if (!byTest.has(key)) byTest.set(key, []);
+    byTest.get(key)!.push(e);
+  }
+  const errorRows = Array.from(byTest.entries()).slice(0,20).map(([testTitle,errors]) => {
+    const details = errors.slice(0,3).map(e =>
+      `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
+        <div style="font-size:11px;font-weight:700;color:#ea580c;">[${e.type}]</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;font-family:monospace;word-break:break-all;">${this.esc((e.message||'').substring(0,150))}</div>
+        ${e.url?`<div style="font-size:10px;color:#6b7280;margin-top:2px;">📎 ${this.esc(e.url.substring(0,100))}</div>`:''}
+        ${e.statusCode?`<div style="font-size:10px;color:#ef4444;">HTTP ${e.statusCode}</div>`:''}
+        <div style="font-size:10px;color:#9ca3af;margin-top:2px;">⏰ ${e.timestamp}</div>
+      </div>`).join('');
+    const more = errors.length > 3 ? `<div style="font-size:11px;color:#9ca3af;padding:4px 8px;">... and ${errors.length-3} more</div>` : '';
+    return `<tr style="border-bottom:1px solid #fed7aa;"><td style="padding:8px;">
+      <div style="font-size:12px;font-weight:600;color:#1f2937;margin-bottom:4px;">🧪 ${this.esc(testTitle)}</div>
+      ${details}${more}
+    </td></tr>`;
+  }).join('');
+  const truncNote = byTest.size > 20 ? `<div style="font-size:11px;color:#9ca3af;padding:8px 0;">Showing 20 of ${byTest.size} affected tests. Full report: reports/misc-errors.json</div>` : '';
+  return `
+  <tr><td style="padding:8px 32px;">
+    <div style="background:#fff7ed;border-radius:12px;padding:20px;border:1px solid #fed7aa;">
+      <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:4px;">⚠️ Background Errors Captured — ${miscErrors.totalErrors} total</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">These are NOT test failures. Review, raise bugs, and add regression tests once fixed.</div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">By Error Type:</div>
+        <table width="200" cellpadding="0" cellspacing="0">${byTypeRows}</table>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Error Details:</div>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">${errorRows}</table>
+        ${truncNote}
+      </div>
+    </div>
+  </td></tr>`;
+}
 
   private formatDuration(ms: number): string {
     const s = Math.floor(ms / 1000);
