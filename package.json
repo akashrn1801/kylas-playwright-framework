@@ -18,6 +18,7 @@
     "test:rbac": "playwright test tests/rbac/ --project=chromium && npm run notify",
     "test:login": "playwright test tests/ui/dashboard/ --project=chromium && npm run notify",
     "test:deals": "playwright test tests/ui/deals/ tests/rbac/deals.rbac.spec.ts --project=chromium && npm run notify",
+    "test:tasks": "playwright test tests/ui/tasks/ tests/rbac/tasks.rbac.spec.ts --project=chromium && npm run notify",
     "report:playwright": "playwright show-report reports/playwright-report",
     "report:allure:generate": "allure generate reports/allure-results --clean -o reports/allure-report",
     "report:allure:open": "allure open reports/allure-report",
