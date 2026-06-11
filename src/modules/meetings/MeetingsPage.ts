@@ -421,7 +421,7 @@ export class MeetingsPage extends BasePage {
     }
   }
 
-  async fillMeetingForm(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<void> {
+  async fillMeetingForm(data: MeetingData, createdBy = 'Admin', addInvitee = true, skipRelatedTo = false): Promise<void> {
     logger.info(`Filling meeting form title: "${data.title}"`);
     await this.fill(this.titleInput(), data.title, 'Meeting title');
     await this.fillDate(3);
@@ -444,7 +444,15 @@ export class MeetingsPage extends BasePage {
       logger.info('Skipping invitee — no extra invitee added');
     }
 
-    await this.fillRelatedTo(createdBy === 'Restricted');
+    // WHY: skipRelatedTo=true for RBAC "not invited" tests — if Related To
+    // contains entities owned by the restricted user, Kylas grants them access
+    // to the meeting regardless of invitee status. Skip relations entirely
+    // to ensure the only access path is the invitee list.
+    if (!skipRelatedTo) {
+      await this.fillRelatedTo(createdBy === 'Restricted');
+    } else {
+      logger.info('Skipping Related To — skipRelatedTo=true');
+    }
 
     const selectedMedium = await this.selectMediumWithFallback();
     logger.info(`Medium resolved to: ${selectedMedium}`);
@@ -507,57 +515,13 @@ export class MeetingsPage extends BasePage {
   }
 
   async searchMeetingById(meetingId: number): Promise<void> {
-    logger.info(`Searching for meeting by ID: ${meetingId}`);
-
-    await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
+    // WHY: Navigate directly to ?id=<meetingId> — native app URL pattern.
+    // Filter panel approach was unreliable: detail panel intercepts filter button clicks.
+    logger.info(`Navigating to meeting by ID: ${meetingId}`);
+    await this.navigateTo(`${config.appUrl}/sales/meetings/list?id=${meetingId}`);
     await this.waitForListReady();
-    await this.page.waitForTimeout(500);
-
-    // Step 1: Open filter panel
-    await this.filterActionButton().click();
-    await this.page.waitForTimeout(800);
-
-    // Step 2: Clear existing filters if present
-    const clearVisible = await this.filterClearButton().isVisible().catch(() => false);
-    if (clearVisible) {
-      logger.info('Clearing existing filters');
-      await this.filterClearButton().click({ timeout: 3000 }).catch(() => {});
-      await this.page.waitForTimeout(300);
-      // WHY: Confirm popup may or may not appear — use short timeout, don't block
-      try {
-        await this.filterClearConfirmButton().waitFor({ state: 'visible', timeout: 2000 });
-        await this.filterClearConfirmButton().click();
-        await this.page.waitForTimeout(300);
-      } catch {
-        logger.info('No confirm popup after clear — continuing');
-      }
-      // Reopen filter panel after clearing
-      await this.filterActionButton().click({ timeout: 5000 }).catch(() => {});
-      await this.page.waitForTimeout(500);
-    }
-
-    // Step 3: Click "Add a filter" and type 'id'
-    await this.filterAddInput().click();
-    await this.page.waitForTimeout(300);
-    await this.page.keyboard.type('id', { delay: 100 });
-    await this.page.waitForTimeout(600);
-
-    // Step 4: Select ID option from React Select menu
-    await this.filterIdOption().waitFor({ state: 'visible', timeout: 8000 });
-    await this.filterIdOption().click();
-    await this.page.waitForTimeout(500);
-
-    // Step 5: Verify ID filter row appeared
-    await this.filterIdRow().waitFor({ state: 'visible', timeout: 10000 });
-    logger.info('ID filter added');
-
-    // Step 6: Enter meeting ID and apply
-    await this.filterIdInput().waitFor({ state: 'visible', timeout: 5000 });
-    await this.filterIdInput().fill(String(meetingId));
-    await this.page.waitForTimeout(300);
-    await this.filterApplyButton().click();
-    await this.page.waitForTimeout(2000);
-    logger.success(`Filter applied for meeting ID: ${meetingId}`);
+    await this.meetingDetailTitle().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    logger.success(`Meeting ID ${meetingId} confirmed via direct URL navigation`);
   }
 
   // ──────────────────────────────────────────────────────────
@@ -742,7 +706,27 @@ export class MeetingsPage extends BasePage {
     logger.success(`Invitee "${name}" confirmed`);
   }
 
-  async assertMeetingNotInList(title: string): Promise<void> {
+  async assertMeetingNotInList(title: string, meetingId?: number | null): Promise<void> {
+    if (meetingId) {
+      // WHY: Navigate directly to the meeting URL as the restricted user.
+      // App shows "No meetings found" p.title when restricted user has no access.
+      // Wait for the list to fully load (not skeleton) before checking.
+      logger.info(`Asserting meeting ID ${meetingId} not accessible to current user`);
+      await this.navigateTo(`${config.appUrl}/sales/meetings/list?id=${meetingId}`);
+      await this.page.waitForLoadState('networkidle', { timeout: config.timeouts.navigation }).catch(() => null);
+      // WHY: Wait for skeleton loaders to disappear — skeleton uses the same
+      // list container, so waitForListReady alone is not sufficient.
+      // Wait for either "No meetings found" OR the meeting title to appear.
+      await Promise.race([
+        this.page.locator('p.title', { hasText: 'No meetings found' }).waitFor({ state: 'visible', timeout: 15000 }),
+        this.meetingDetailTitle().waitFor({ state: 'visible', timeout: 15000 }),
+      ]).catch(() => null);
+      const blocked = await this.page.locator('p.title', { hasText: 'No meetings found' }).isVisible().catch(() => false);
+      if (!blocked) throw new Error(`Meeting ID ${meetingId} should NOT be accessible but detail panel is visible`);
+      logger.success(`Meeting ID ${meetingId} correctly blocked — "No meetings found" confirmed`);
+      return;
+    }
+    // Fallback: name-based search when ID not available
     await this.searchMeetingInList(title);
     await this.page.waitForTimeout(1500);
     const visible = await this.meetingTitleInList(title).isVisible().catch(() => false);
@@ -774,7 +758,7 @@ export class MeetingsPage extends BasePage {
   // Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
-  async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<number | null> {
+  async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true, skipRelatedTo = false): Promise<number | null> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
     // WHY: On GHA the form sometimes does not open on first click — retry up to 3 times
@@ -790,7 +774,7 @@ export class MeetingsPage extends BasePage {
       }
     }
     if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
-    await this.fillMeetingForm(data, createdBy, addInvitee);
+    await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
     const meetingId = await this.saveMeeting();
     logger.success(`Meeting "${data.title}" created`);
     return meetingId;

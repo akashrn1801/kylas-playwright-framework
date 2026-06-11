@@ -220,16 +220,25 @@ export class TasksPage extends BasePage {
       await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
       await this.waitForListReady();
 
-      // Use search input to filter by name
+      // WHY: Wrap name in double quotes for exact match search —
+      // prevents partial matches and returns only the specific task.
+      // Confirmed from DOM: #fulltext-search with quoted input returns exact results.
       const searchVisible = await this.taskSearchInput().isVisible().catch(() => false);
       if (searchVisible) {
-        await this.taskSearchInput().fill(name);
-        await this.page.waitForTimeout(1000);
+        await this.taskSearchInput().fill(`"${name}"`);
+        // WHY: Press Enter to trigger search — the input does not auto-search on type
+        await this.taskSearchInput().press('Enter');
+        // WHY: Wait for the API response after search is triggered
+        await this.page.waitForResponse(
+          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+          { timeout: 10000 }
+        ).catch(() => null);
+        await this.page.waitForTimeout(500);
       }
 
       const found = await this.taskListItemByName(name).isVisible().catch(() => false);
       if (found) {
-        logger.success(`Task "${name}" found`);
+        logger.success(`Task "${name}" found via quoted search`);
         return true;
       }
       if (attempt < retries) await this.page.waitForTimeout(wait);
@@ -713,54 +722,13 @@ export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async searchTaskById(taskId: number): Promise<void> {
-    logger.info(`Searching for task by ID: ${taskId}`);
-
-    await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
+    // WHY: Navigate directly to ?id=<taskId> — same native URL pattern as meetings.
+    // Filter panel approach was unreliable: detail panel intercepts filter button clicks.
+    logger.info(`Navigating to task by ID: ${taskId}`);
+    await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${taskId}`);
     await this.waitForListReady();
-    await this.page.waitForTimeout(1000);
-
-    // Step 1: Open filter panel
-    await this.openFilterPanel();
-
-    // Step 2: Clear existing filters if present
-    const clearVisible = await this.page.locator('#clearFilters').isVisible().catch(() => false);
-    if (clearVisible) {
-      logger.info('Clearing existing filters');
-      await this.page.locator('#clearFilters').click({ force: true, timeout: 5000 }).catch(() => {});
-      await this.page.waitForTimeout(500);
-      try {
-        await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 3000 });
-        await this.page.locator('#confirm').click();
-      } catch {
-        logger.info('No confirm popup after clearFilters');
-      }
-      await this.page.waitForTimeout(1500);
-      await this.openFilterPanel();
-    }
-
-    // Step 3: Focus the filter dropdown input and type 'id'
-    // WHY: Same approach as MeetingsPage — focus hidden React Select input then type
-    const filterInput = this.page.locator('#filterModal .select__input input').first();
-    await filterInput.waitFor({ state: 'attached', timeout: config.timeouts.navigation });
-    await filterInput.focus();
-    await this.page.waitForTimeout(300);
-    await this.page.locator('.select__input input').first().fill('id');
-    await this.page.waitForTimeout(600);
-
-    // Step 4: Select ID option
-    await this.page.locator('label').filter({ hasText: /^ID$/ }).click();
-    await this.page.waitForTimeout(600);
-
-    // Step 5: Verify ID filter row appeared
-    await this.page.locator('#filter-item-id').waitFor({ state: 'visible', timeout: 5000 });
-    logger.info('ID filter added');
-
-    // Step 6: Type task ID and apply
-    await this.page.locator('#input_id').fill(String(taskId));
-    await this.page.waitForTimeout(300);
-    await this.page.locator('#applyFilterBtn').click();
-    await this.page.waitForTimeout(2000);
-    logger.success(`Filter applied for task ID: ${taskId}`);
+    await this.taskListItemById(taskId).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
   }
 
   // ──────────────────────────────────────────────────────────
@@ -798,8 +766,16 @@ export class TasksPage extends BasePage {
     await this.goToTasksList();
     const searchVisible = await this.taskSearchInput().isVisible().catch(() => false);
     if (searchVisible) {
-      await this.taskSearchInput().fill(name);
-      await this.page.waitForTimeout(1500);
+      // WHY: Quoted search returns exact matches only — if task is absent,
+      // list will be empty. More reliable than unquoted partial search.
+      await this.taskSearchInput().fill(`"${name}"`);
+      // WHY: Press Enter to trigger search
+      await this.taskSearchInput().press('Enter');
+      await this.page.waitForResponse(
+        (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+        { timeout: 10000 }
+      ).catch(() => null);
+      await this.page.waitForTimeout(500);
     }
     await expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 });
     logger.success(`Task absent confirmed: "${name}"`);

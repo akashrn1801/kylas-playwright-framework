@@ -13,10 +13,11 @@
  * 3. ErrorCollector.clearCurrentTest() in the use() callback
  */
 
-import { test as base, Page, BrowserContext } from '@playwright/test';
+import { test as base, Page, BrowserContext, chromium } from '@playwright/test';
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
+import { AuthManager } from '../auth/authManager';
 
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
@@ -111,7 +112,12 @@ export const test = base.extend<TestFixtures>({
     // are tagged with the correct test title and file
     ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
 
-    const context = await browser.newContext({ storageState: stateFor('admin') });
+    // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
+    // AuthManager validates the session before creating the context and
+    // re-logins automatically if expired. This prevents mid-suite session
+    // expiry from causing flaky failures.
+    const authManager = new AuthManager(browser);
+    const context = await authManager.getContextForRole('admin');
     const page    = await context.newPage();
 
     // WHY: Attach error listeners before navigating so we capture ALL errors
@@ -120,6 +126,7 @@ export const test = base.extend<TestFixtures>({
 
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
@@ -135,40 +142,24 @@ export const test = base.extend<TestFixtures>({
 
   restrictedPage: async ({ browser }, use, testInfo) => {
     ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
-
-    const context = await browser.newContext({ storageState: stateFor('restricted') });
+    // WHY: Use AuthManager.getContextForRole() — validates session before
+    // creating context and re-logins if expired. Same as adminPage.
+    const authManager = new AuthManager(browser);
+    const context = await authManager.getContextForRole('restricted');
     const page    = await context.newPage();
-
     // WHY: Attach error listeners before any navigation
     attachErrorListeners(page);
-
     // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
     if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
-
-    // WHY: On GHA with parallel workers, concurrent restricted sessions can cause
-    // redirect back to login. Retry navigation up to 3 times before failing.
-    let landed = false;
-    for (let i = 0; i < 3; i++) {
-      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-      try {
-        await page.waitForURL(/sales\//, { timeout: 30000 });
-        landed = true;
-        break;
-      } catch {
-        if (i < 2) await page.waitForTimeout(3000);
-      }
-    }
-    if (!landed) throw new Error('restrictedPage: failed to reach /sales/ after 3 attempts');
-
+    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');
       await popup.waitFor({ state: 'visible', timeout: 3000 });
       await popup.click();
       await popup.waitFor({ state: 'hidden', timeout: 3000 });
     } catch { /* no popup — continue */ }
-
     await use(page);
-
     ErrorCollector.clearCurrentTest();
     await context.close();
   },

@@ -94,15 +94,23 @@ test.describe('Meetings RBAC', () => {
     const restrictedMeetings = new MeetingsPage(restrictedPage);
 
     // Admin creates a meeting — does NOT add restricted user as invitee
+    // WHY: Pass addInvitee=false to prevent the first invitee option (restricted user)
+    // from being added automatically. Default addInvitee=true was causing the restricted
+    // user to be added as invitee, giving them access and failing the RBAC assertion.
     const adminData = generateAdminMeetingData();
 
     await adminMeetings.goToMeetingsList();
-    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin');
+    // WHY: addInvitee=false — don't add restricted user as invitee
+    // WHY: skipRelatedTo=true — Related To entities owned by restricted user
+    // grant access regardless of invitee list (Kylas product behaviour)
+    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin', false, true);
     await adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Restricted user searches for the admin meeting — must NOT find it
+    // WHY: Pass meeting ID so assertMeetingNotInList uses direct URL check
+    // which returns "No meetings found" — deterministic RBAC verification
     await restrictedMeetings.goToMeetingsList();
-    await restrictedMeetings.assertMeetingNotInList(adminData.title);
+    await restrictedMeetings.assertMeetingNotInList(adminData.title, adminMeetingId1);
   });
 
   // ── Test 5: Restricted user CAN see admin meeting when invited ────────────
