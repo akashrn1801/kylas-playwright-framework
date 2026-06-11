@@ -19,6 +19,12 @@ export class AuthManager {
   // Prevent parallel login race conditions
   private static loginInProgress: Map<string, Promise<void>> = new Map();
 
+  // WHY: Cache last successful validation time per role — avoids launching
+  // a full browser context just to validate session on every single test.
+  // If validated within SESSION_CACHE_MS, skip re-validation entirely.
+  private static lastValidated: Map<string, number> = new Map();
+  private static readonly SESSION_CACHE_MS = 60 * 60 * 1000; // 1 hour
+
   constructor(browser: Browser) {
     this.browser = browser;
     this.ensureStorageStateDir();
@@ -320,25 +326,33 @@ export class AuthManager {
     const stateFile = this.getStorageStateFile(role);
 
     if (fs.existsSync(stateFile)) {
-      logger.info(`Existing storage state found for role: ${role}`);
+      // WHY: Check in-memory cache first — if we validated this role within
+      // SESSION_CACHE_MS, skip the full browser navigation check entirely.
+      // This prevents 35 extra browser launches for a 35-test suite.
+      const lastValidatedAt = AuthManager.lastValidated.get(role) ?? 0;
+      const cacheAge = Date.now() - lastValidatedAt;
 
-      const valid = await this.isSessionValid(stateFile);
-
-      if (!valid) {
-        logger.warn(
-          `Session expired or invalid for role: ${role}`
-        );
-
-        await this.loginAndSaveState(role);
+      if (cacheAge < AuthManager.SESSION_CACHE_MS) {
+        logger.info(`Session cache hit for role: ${role} (age: ${Math.round(cacheAge / 1000)}s) — skipping validation`);
       } else {
-        logger.info(`Session is still valid for role: ${role}`);
+        logger.info(`Existing storage state found for role: ${role}`);
+        const valid = await this.isSessionValid(stateFile);
+
+        if (!valid) {
+          logger.warn(`Session expired or invalid for role: ${role}`);
+          await this.loginAndSaveState(role);
+        } else {
+          logger.info(`Session is still valid for role: ${role}`);
+        }
+        // WHY: Update cache timestamp after successful validation or re-login
+        AuthManager.lastValidated.set(role, Date.now());
       }
     } else {
       logger.warn(
         `No storage state found for role: ${role}. Logging in fresh.`
       );
-
       await this.loginAndSaveState(role);
+      AuthManager.lastValidated.set(role, Date.now());
     }
 
     logger.info(`Creating authenticated browser context for role: ${role}`);

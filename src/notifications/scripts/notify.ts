@@ -20,9 +20,12 @@ async function main() {
   const { NotificationService } = await import('../NotificationService');
   const service = new NotificationService();
 
+  const env_for_path = process.env.ENV || 'qa';
   const jsonReportPath = path.resolve(
     process.env.REPORT_PATH ||
-    path.join(process.cwd(), 'reports', 'playwright-report', 'results.json')
+    (process.env.CI
+      ? path.join(process.cwd(), 'reports', 'playwright-report', 'results.json')
+      : path.join(process.cwd(), 'reports', env_for_path, 'latest', 'playwright-report', 'results.json'))
   );
 
   const isJenkins = !!process.env.JENKINS_URL || !!process.env.BUILD_NUMBER;
