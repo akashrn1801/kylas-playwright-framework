@@ -875,7 +875,7 @@ export class TasksPage extends BasePage {
     let found = false;
     for (let i = 0; i < count; i++) {
       const iframe = noteIframes.nth(i);
-      const noteText = await iframe.evaluate((el: HTMLIFrameElement) => {
+      const noteText = await iframe.evaluate((el: any) => {
         return el.contentDocument?.body?.textContent?.trim() ?? '';
       });
       logger.info(`Note ${i} text: "${noteText}"`);

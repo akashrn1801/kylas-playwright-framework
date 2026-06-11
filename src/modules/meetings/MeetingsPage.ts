@@ -21,41 +21,117 @@ export class MeetingsPage extends BasePage {
     }
   })();
 
-  private readonly addButton             = () => this.page.getByRole('button', { name: 'Add' }).first();
-  private readonly titleInput            = () => this.page.locator('[id="1_11_input_title"]');
-  private readonly calendarIcon          = () => this.page.locator('.col-6 > #from > div:nth-child(2) > .col-7 > .col-undefined > #from > div > .SingleDatePicker > div > .SingleDatePickerInput > .SingleDatePickerInput_calendarIcon');
-  private readonly calendarForwardButton = () => this.page.getByLabel('Move forward to switch to the next month.');
-  private readonly calendarDayByLabel    = (label: string) => this.page.locator(`.SingleDatePicker td[aria-label="${label}"]`);
-  private readonly fromTimeClockIcon     = () => this.page.locator('.col-6 > #from > div:nth-child(2) > .col-5 > .rc-time-picker > .rc-time-custom-styles');
-  private readonly toTimeInput           = () => this.page.locator('[id="1_32_input_to_time"]');
-  private readonly timezoneInput         = () => this.page.locator('[id="1_41_input_timezone"]');
-  private readonly statusInput           = () => this.page.locator('[id="1_42_input_status"]');
-  private readonly inviteesContainer     = () => this.page.locator('.is-invalid__value-container--is-multi');
-  private readonly relatedToInput        = () => this.page.locator('[id="1_71_input_relatedTo"]');
-  private readonly entitiesDropdown      = () => this.page.locator('.entity-lookup').locator('.is-invalid__control').first();
-  private readonly searchDropdown        = () => this.page.locator('div').filter({ hasText: /^Search \.\.\.\$/ }).nth(1);
-  private readonly mediumInput           = () => this.page.locator('[id="1_81_input_medium"]');
-  private readonly locationInput         = () => this.page.locator('[id="1_81_input_location"]');
-  private readonly gpsButton             = () => this.page.getByText('Get GPS Address');
-  private readonly gpsSearchInput        = () => this.page.getByPlaceholder('Search for area, street name');
-  private readonly addressPrediction     = () => this.page.locator('.autocomplete-prediction').first();
-  private readonly calendarWarning       = () => this.page.locator('.calendar-suggestion');
-  private readonly descriptionEditor     = () => this.page.locator('div.ck-editor__editable[role="textbox"]');
-  private readonly addMeetingSaveButton  = () => this.page.locator('button.save-button').first();
-  private readonly editMeetingSaveButton = () => this.page.locator('button.save-button').first();
-  private readonly refreshButton         = () => this.page.locator('button.btn-action[data-original-title="Refresh"]');
-  private readonly nameFilterInput       = () => this.page.locator('input#name');
-  private readonly meetingTitleInList    = (title: string) => this.page.locator('h2.meeting__title.text-truncate', { hasText: title });
-  private readonly meetingDetailTitle    = () => this.page.locator('h2.h2.text-break.meeting__title');
-  private readonly ellipsisButton        = () => this.page.locator('i.far.fa-ellipsis-v').first();
-  private readonly dropdownMenu          = () => this.page.locator('div.dropdown-menu.show');
-  private readonly editOption            = () => this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Edit' });
-  private readonly inviteeCard           = (name: string) => this.page.locator('.invitee__name strong', { hasText: name });
-  private readonly detailFieldValue      = (label: string) => this.page.locator(`#${label} span.title`).first();
+  // ──────────────────────────────────────────────────────────
+  // Locators — List page
+  // ──────────────────────────────────────────────────────────
+
+  private readonly addButton              = () => this.page.getByRole('button', { name: 'Add' }).first();
+  private readonly meetingsList           = () => this.page.locator('ul.list-group.list-group-flush');
+  private readonly meetingTitleInList     = (title: string) => this.page.locator('h2.meeting__title.text-truncate', { hasText: title });
+  private readonly meetingDetailTitle     = () => this.page.locator('h2.h2.text-break.meeting__title');
+  private readonly meetingsHeading        = () => this.page.locator('h1.h1', { hasText: 'Meetings' });
+  private readonly meetingStatusBadge     = (status: string) => this.page.locator('span.meeting__status', { hasText: status });
+  private readonly nameFilterInput        = () => this.page.locator('input#name');
+  private readonly refreshButton          = () => this.page.locator('button.btn-action[data-original-title="Refresh"]');
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Sort modal
+  // ──────────────────────────────────────────────────────────
+
+  private readonly sortButton             = () => this.page.locator('[data-original-title="Sort"]');
+  private readonly sortModal              = () => this.page.locator('#sortModal');
+  private readonly sortDropdownSingleVal  = () => this.page.locator('#sortModal').locator('[class*="singleValue"]').first();
+  private readonly sortLatestFirstOption  = () => this.page.locator('#sortModal').locator('div[class*="option"]', { hasText: 'Latest First' });
+  private readonly sortApplyButton        = () => this.page.locator('#sortModal').getByText('Apply', { exact: true });
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Meeting form
+  // ──────────────────────────────────────────────────────────
+
+  private readonly titleInput             = () => this.page.locator('[id="1_11_input_title"]');
+  private readonly calendarIcon           = () => this.page.locator('.col-6 > #from > div:nth-child(2) > .col-7 > .col-undefined > #from > div > .SingleDatePicker > div > .SingleDatePickerInput > .SingleDatePickerInput_calendarIcon');
+  private readonly calendarForwardButton  = () => this.page.getByLabel('Move forward to switch to the next month.');
+  private readonly calendarDayByLabel     = (label: string) => this.page.locator(`.SingleDatePicker td[aria-label="${label}"]`);
+  private readonly fromTimeClockIcon      = () => this.page.locator('.col-6 > #from > div:nth-child(2) > .col-5 > .rc-time-picker > .rc-time-custom-styles');
+  private readonly toTimeInput            = () => this.page.locator('[id="1_32_input_to_time"]');
+  private readonly timezoneInput          = () => this.page.locator('[id="1_41_input_timezone"]');
+  private readonly statusInput            = () => this.page.locator('[id="1_42_input_status"]');
+  private readonly inviteesInput          = () => this.page.locator('[id="1_61_input_invitees"]');
+  private readonly inviteesControl        = () => this.inviteesInput().locator('xpath=../../..');
+  private readonly inviteesFirstOption    = () => this.page.locator('.is-invalid__menu-list .is-invalid__option').first();
+  private readonly inviteesContainer      = () => this.page.locator('.is-invalid__value-container--is-multi');
+  private readonly inviteeCard            = (name: string) => this.page.locator('.invitee__name strong', { hasText: name });
+  private readonly relatedToInput         = () => this.page.locator('[id="1_71_input_relatedTo"]');
+  private readonly entitiesDropdown       = () => this.page.locator('.entity-lookup').locator('.is-invalid__control').first();
+  private readonly relationOptions        = () => this.page.locator('.is-invalid__option');
+  private readonly mediumInputControl     = () => this.page.locator('[id="1_81_input_medium"]').locator('xpath=../../..').locator('[class*="single-value"]');
+  private readonly mediumInputValue       = () => this.page.locator('input[name="medium"]');
+  private readonly locationInput          = () => this.page.locator('[id="1_81_input_location"]');
+  private readonly gpsButton              = () => this.page.getByText('Get GPS Address');
+  private readonly gpsSearchInput         = () => this.page.getByPlaceholder('Search for area, street name');
+  private readonly addressPrediction      = () => this.page.locator('.autocomplete-prediction').first();
+  private readonly calendarWarning        = () => this.page.locator('.calendar-suggestion');
+  private readonly descriptionEditor      = () => this.page.locator('div.ck-editor__editable[role="textbox"]');
+  private readonly addMeetingSaveButton   = () => this.page.locator('button.save-button').first();
+  private readonly editMeetingSaveButton  = () => this.page.locator('button.save-button').first();
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Save popup (after create)
+  // ──────────────────────────────────────────────────────────
+
+  private readonly meetingIdPopup         = () => this.page.locator('span.link-primary').filter({ hasText: 'Meeting ID' });
+  private readonly meetingIdPopupFallback = () => this.page.locator('span.link-primary').first();
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Edit modal
+  // ──────────────────────────────────────────────────────────
+
+  private readonly editModal              = () => this.page.locator('#editEntityModal');
+  private readonly rescheduleCalendarIcon = () => this.page.locator('.col-6 > #from > div:nth-child(2) > .col-7 > .col-undefined > #from > div > .SingleDatePicker > div > .SingleDatePickerInput > .SingleDatePickerInput_calendarIcon');
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Ellipsis menu
+  // ──────────────────────────────────────────────────────────
+
+  private readonly ellipsisButton         = () => this.page.locator('i.far.fa-ellipsis-v').first();
+  private readonly dropdownMenu           = () => this.page.locator('div.dropdown-menu.show');
+  private readonly editOption             = () => this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Edit' });
+  private readonly markConductedOption    = () => this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Mark as Conducted' });
+  private readonly cancelMeetingOption    = () => this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Cancel meeting' });
+  private readonly rescheduleMeetingOption = () => this.page.getByRole('link', { name: 'Reschedule meeting' });
+  private readonly confirmButton          = () => this.page.locator('#confirm');
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Filter panel
+  // ──────────────────────────────────────────────────────────
+
+  private readonly filterActionButton     = () => this.page.locator('#filter-action');
+  private readonly filterModal            = () => this.page.locator('#filterModal');
+  private readonly filterClearButton      = () => this.page.locator('#clearFilters');
+  private readonly filterClearConfirmButton = () => this.page.locator('.modal.show .btn-primary', { hasText: 'Ok' });
+  private readonly filterAddInput         = () => this.page.getByText('Add a filter', { exact: true });
+  private readonly filterIdOption         = () => this.page.locator('.select__option').filter({ hasText: /^ID$/ }).first();
+  private readonly filterIdRow            = () => this.page.locator('#filter-item-id');
+  private readonly filterIdInput          = () => this.page.locator('#input_id');
+  private readonly filterApplyButton      = () => this.page.locator('#applyFilterBtn');
+
+  // ──────────────────────────────────────────────────────────
+  // Locators — Detail page
+  // ──────────────────────────────────────────────────────────
+
+  private readonly detailFieldValue       = (label: string) => this.page.locator(`#${label} span.title`).first();
+
+  // ──────────────────────────────────────────────────────────
+  // Constructor
+  // ──────────────────────────────────────────────────────────
 
   constructor(page: Page) {
     super(page);
   }
+
+  // ──────────────────────────────────────────────────────────
+  // Private Helpers
+  // ──────────────────────────────────────────────────────────
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
@@ -88,9 +164,8 @@ export class MeetingsPage extends BasePage {
         logger.success(`Meeting "${title}" found in list`);
         return true;
       }
-      // Make sure edit modal is closed
-      await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
-      // Navigate back to clean list — handles pagination
+      // WHY: Make sure edit modal is closed before navigating
+      await this.editModal().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
       await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
       await this.waitForListReady();
       await this.sortByLatestFirst().catch(() => logger.warn('Sort failed — continuing'));
@@ -100,34 +175,30 @@ export class MeetingsPage extends BasePage {
     return false;
   }
 
-  async sortByLatestFirst(): Promise<void> {
-    logger.info('Sorting meetings by Latest First');
-    // Check if already sorted by Latest First
-    const currentSort = await this.page.locator('#sortModal').isVisible().catch(() => false);
-    // Click sort button
-    await this.page.locator('[data-original-title="Sort"]').click();
-    // Wait for sort modal
-    await this.page.locator('#sortModal').waitFor({ state: 'visible', timeout: 5000 });
-    await this.page.waitForTimeout(400);
-    // WHY: Click the singleValue text inside the sort dropdown to open it
-    const sortDropdown = this.page.locator('#sortModal').locator('[class*="singleValue"]').first();
-    await sortDropdown.waitFor({ state: 'visible', timeout: 5000 });
-    await sortDropdown.click();
-    await this.page.waitForTimeout(400);
-    // Select Latest First option
-    await this.page.locator('#sortModal').locator('div[class*="option"]', { hasText: 'Latest First' }).click();
-    await this.page.waitForTimeout(400);
-    // Apply sort
-    await this.page.locator('#sortModal').getByText('Apply', { exact: true }).click();
-    await this.page.waitForTimeout(1000);
-    logger.success('Sorted by Latest First');
-  }
-
-    async goToMeetingsList(): Promise<void> {
-    logger.info('Navigating to meetings list');
-    await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
-    await this.waitForListReady();
-    logger.success('On meetings list page');
+  private async openFilterPanel(): Promise<void> {
+    logger.info('Opening filter panel');
+    const alreadyOpen = await this.filterModal()
+      .evaluate(el => el.classList.contains('show'))
+      .catch(() => false);
+    if (alreadyOpen) {
+      logger.debug('Filter panel already open');
+      return;
+    }
+    // WHY: filter button click can be unreliable on CI — retry up to 3 times
+    let filterOpened = false;
+    for (let i = 0; i < 3; i++) {
+      await this.filterActionButton().click({ force: true });
+      try {
+        await this.filterModal().waitFor({ state: 'visible', timeout: 10000 });
+        filterOpened = true;
+        break;
+      } catch {
+        logger.warn(`Filter panel did not open on attempt ${i + 1}, retrying`);
+      }
+    }
+    if (!filterOpened) throw new Error('Filter panel did not open after 3 attempts');
+    await this.page.waitForTimeout(500);
+    logger.success('Filter panel opened');
   }
 
   private async fillDate(daysFromNow: number): Promise<void> {
@@ -194,6 +265,41 @@ export class MeetingsPage extends BasePage {
     logger.debug(`${type} time set`);
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Navigation
+  // ──────────────────────────────────────────────────────────
+
+  async goToMeetingsList(): Promise<void> {
+    logger.info('Navigating to meetings list');
+    await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
+    await this.waitForListReady();
+    logger.success('On meetings list page');
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Sort
+  // ──────────────────────────────────────────────────────────
+
+  async sortByLatestFirst(): Promise<void> {
+    logger.info('Sorting meetings by Latest First');
+    await this.sortButton().click();
+    await this.sortModal().waitFor({ state: 'visible', timeout: 5000 });
+    await this.page.waitForTimeout(400);
+    // WHY: Click the singleValue text inside the sort dropdown to open it
+    await this.sortDropdownSingleVal().waitFor({ state: 'visible', timeout: 5000 });
+    await this.sortDropdownSingleVal().click();
+    await this.page.waitForTimeout(400);
+    await this.sortLatestFirstOption().click();
+    await this.page.waitForTimeout(400);
+    await this.sortApplyButton().click();
+    await this.page.waitForTimeout(1000);
+    logger.success('Sorted by Latest First');
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Meeting Form
+  // ──────────────────────────────────────────────────────────
+
   async selectMediumWithFallback(): Promise<SelectedMedium> {
     // Randomly pick between Google Meet and Outlook first — then fall back to Offline
     const onlineMediums: Array<{ value: SelectedMedium; label: string }> = Math.random() > 0.5
@@ -208,20 +314,14 @@ export class MeetingsPage extends BasePage {
 
     for (const medium of onlineMediums) {
       logger.info(`Trying medium: ${medium.label}`);
-
-      // Open dropdown by clicking current single-value text
-      await this.page.locator('[id="1_81_input_medium"]').locator('xpath=../../..').locator('[class*="single-value"]').click();
+      await this.mediumInputControl().click();
       await this.page.waitForTimeout(500);
-
-      // Click option by text
       await this.page.getByText(medium.label, { exact: true }).last().click();
       await this.page.waitForTimeout(1000);
 
-      // Verify value changed
-      const newValue = await this.page.locator('input[name="medium"]').inputValue().catch(() => '');
+      const newValue = await this.mediumInputValue().inputValue().catch(() => '');
       logger.info(`Medium input value: ${newValue}`);
 
-      // Check for calendar warning
       const warningVisible = await this.calendarWarning().isVisible().catch(() => false);
       if (!warningVisible) {
         logger.success(`Selected medium: ${medium.label} (value: ${newValue})`);
@@ -232,7 +332,7 @@ export class MeetingsPage extends BasePage {
 
     // Fall back to Offline
     logger.warn('No online calendar connected — falling back to Offline');
-    await this.page.locator('[id="1_81_input_medium"]').locator('xpath=../../..').locator('[class*="single-value"]').click();
+    await this.mediumInputControl().click();
     await this.page.waitForTimeout(500);
     await this.page.getByText('Offline', { exact: true }).last().click();
     await this.page.waitForTimeout(500);
@@ -248,7 +348,6 @@ export class MeetingsPage extends BasePage {
       await this.page.waitForTimeout(1500);
       const addonDialog = await this.page.locator('text=purchase').first().isVisible().catch(() => false);
       if (!addonDialog) {
-        // Extract city from location string or use first word
         const citySearch = manualAddress.split(',')[0].trim().substring(0, 10);
         await this.gpsSearchInput().fill(citySearch);
         await this.page.waitForSelector('.autocomplete-prediction', { timeout: 5000 }).catch(() => null);
@@ -286,15 +385,14 @@ export class MeetingsPage extends BasePage {
       await this.page.waitForTimeout(1500);
 
       // Step 4: Wait for options to appear
-      const options = this.page.locator('.is-invalid__option');
       try {
-        await options.first().waitFor({ state: 'visible', timeout: 5000 });
+        await this.relationOptions().first().waitFor({ state: 'visible', timeout: 5000 });
       } catch {
         // Options not loaded yet — try search terms
         for (const term of ['abc', 'isa', 'rau', 'amb', 'win', 'dea', 'con', 'the', 'inc']) {
           await this.relatedToInput().fill(term);
           await this.page.waitForTimeout(1000);
-          const appeared = await options.first().isVisible().catch(() => false);
+          const appeared = await this.relationOptions().first().isVisible().catch(() => false);
           if (appeared) {
             logger.info(`Found ${entityType} results with term: "${term}"`);
             break;
@@ -303,13 +401,13 @@ export class MeetingsPage extends BasePage {
           await this.page.waitForTimeout(200);
         }
       }
-      const count = await options.count().catch(() => 0);
-
+      const count = await this.relationOptions().count().catch(() => 0);
       logger.info(`Options count for ${entityType}: ${count}`);
+
       // Step 5: Pick random option
       if (count > 0) {
         const randomIdx = Math.floor(Math.random() * Math.min(count, 5));
-        const selectedOption = options.nth(randomIdx);
+        const selectedOption = this.relationOptions().nth(randomIdx);
         const optionText = await selectedOption.textContent();
         await selectedOption.click();
         await this.page.waitForTimeout(300);
@@ -319,7 +417,6 @@ export class MeetingsPage extends BasePage {
         logger.warn(`No ${entityType} records found - skipping`);
         await this.page.keyboard.press('Escape');
       }
-
       await this.page.waitForTimeout(600);
     }
   }
@@ -333,18 +430,15 @@ export class MeetingsPage extends BasePage {
 
     // Timezone already defaults to GMT+05:30 — no action needed
     logger.info('Timezone left as default GMT+05:30');
-
     // Status already defaults to Scheduled — no action needed
     logger.info('Status left as default Scheduled');
 
-
     // Creator is auto-added — optionally add another invitee
     if (addInvitee) {
-      await this.page.locator('[id="1_61_input_invitees"]').locator('xpath=../../..').click();
-      const inviteeMenuOption = this.page.locator('.is-invalid__menu-list .is-invalid__option').first();
-      await inviteeMenuOption.waitFor({ state: 'visible', timeout: 10000 });
+      await this.inviteesControl().click();
+      await this.inviteesFirstOption().waitFor({ state: 'visible', timeout: 10000 });
       await this.page.waitForTimeout(300);
-      await inviteeMenuOption.click();
+      await this.inviteesFirstOption().click();
       logger.info(`Invitee added by ${createdBy}`);
     } else {
       logger.info('Skipping invitee — no extra invitee added');
@@ -370,19 +464,16 @@ export class MeetingsPage extends BasePage {
     const id = await idPromise;
     await this.page.waitForTimeout(1500);
 
-    // After save a popup appears with span.link-primary containing meeting ID
+    // WHY: After save a popup appears with span.link-primary containing meeting ID
     try {
-      const popup = this.page.locator('span.link-primary').filter({ hasText: 'Meeting ID' });
-      await popup.waitFor({ state: 'visible', timeout: 5000 });
-      await popup.click();
+      await this.meetingIdPopup().waitFor({ state: 'visible', timeout: 5000 });
+      await this.meetingIdPopup().click();
       await this.page.waitForTimeout(1000);
-      logger.success(`Clicked meeting popup`);
+      logger.success('Clicked meeting popup');
     } catch {
-      // Try alternative — just the span.link-primary
       try {
-        const popup = this.page.locator('span.link-primary').first();
-        await popup.waitFor({ state: 'visible', timeout: 3000 });
-        await popup.click();
+        await this.meetingIdPopupFallback().waitFor({ state: 'visible', timeout: 3000 });
+        await this.meetingIdPopupFallback().click();
         await this.page.waitForTimeout(1000);
         logger.success('Clicked meeting popup (fallback)');
       } catch {
@@ -394,25 +485,84 @@ export class MeetingsPage extends BasePage {
     return id;
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Search & Open
+  // ──────────────────────────────────────────────────────────
+
   async searchMeetingInList(title: string): Promise<void> {
     logger.info(`Searching for meeting by name: "${title}"`);
-    // Meetings list uses name filter in the filter panel participant search
-    const nameInput = this.nameFilterInput();
-    const nameVisible = await nameInput.isVisible().catch(() => false);
+    const nameVisible = await this.nameFilterInput().isVisible().catch(() => false);
     if (nameVisible) {
-      await nameInput.fill(title);
+      await this.nameFilterInput().fill(title);
       await this.page.waitForTimeout(1000);
     }
   }
 
   async openMeetingFromList(title: string): Promise<void> {
     logger.info(`Opening meeting from list: "${title}"`);
-    const listItem = this.meetingTitleInList(title);
-    await listItem.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await listItem.click();
+    await this.meetingTitleInList(title).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await this.meetingTitleInList(title).click();
     await this.page.waitForTimeout(800);
     logger.success(`Meeting "${title}" opened`);
   }
+
+  async searchMeetingById(meetingId: number): Promise<void> {
+    logger.info(`Searching for meeting by ID: ${meetingId}`);
+
+    await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
+    await this.waitForListReady();
+    await this.page.waitForTimeout(500);
+
+    // Step 1: Open filter panel
+    await this.filterActionButton().click();
+    await this.page.waitForTimeout(800);
+
+    // Step 2: Clear existing filters if present
+    const clearVisible = await this.filterClearButton().isVisible().catch(() => false);
+    if (clearVisible) {
+      logger.info('Clearing existing filters');
+      await this.filterClearButton().click({ timeout: 3000 }).catch(() => {});
+      await this.page.waitForTimeout(300);
+      // WHY: Confirm popup may or may not appear — use short timeout, don't block
+      try {
+        await this.filterClearConfirmButton().waitFor({ state: 'visible', timeout: 2000 });
+        await this.filterClearConfirmButton().click();
+        await this.page.waitForTimeout(300);
+      } catch {
+        logger.info('No confirm popup after clear — continuing');
+      }
+      // Reopen filter panel after clearing
+      await this.filterActionButton().click({ timeout: 5000 }).catch(() => {});
+      await this.page.waitForTimeout(500);
+    }
+
+    // Step 3: Click "Add a filter" and type 'id'
+    await this.filterAddInput().click();
+    await this.page.waitForTimeout(300);
+    await this.page.keyboard.type('id', { delay: 100 });
+    await this.page.waitForTimeout(600);
+
+    // Step 4: Select ID option from React Select menu
+    await this.filterIdOption().waitFor({ state: 'visible', timeout: 8000 });
+    await this.filterIdOption().click();
+    await this.page.waitForTimeout(500);
+
+    // Step 5: Verify ID filter row appeared
+    await this.filterIdRow().waitFor({ state: 'visible', timeout: 10000 });
+    logger.info('ID filter added');
+
+    // Step 6: Enter meeting ID and apply
+    await this.filterIdInput().waitFor({ state: 'visible', timeout: 5000 });
+    await this.filterIdInput().fill(String(meetingId));
+    await this.page.waitForTimeout(300);
+    await this.filterApplyButton().click();
+    await this.page.waitForTimeout(2000);
+    logger.success(`Filter applied for meeting ID: ${meetingId}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Ellipsis Menu Actions
+  // ──────────────────────────────────────────────────────────
 
   async openEllipsisMenu(): Promise<void> {
     await this.ellipsisButton().click();
@@ -426,14 +576,50 @@ export class MeetingsPage extends BasePage {
     logger.success('Edit form opened');
   }
 
+  async markAsConducted(): Promise<void> {
+    logger.info('Marking meeting as Conducted via ellipsis menu');
+    await this.openEllipsisMenu();
+    await this.markConductedOption().click();
+    await this.page.waitForTimeout(1000);
+    logger.success('Meeting marked as Conducted');
+  }
+
+  async cancelMeeting(): Promise<void> {
+    logger.info('Cancelling meeting via ellipsis menu');
+    await this.openEllipsisMenu();
+    await this.cancelMeetingOption().click();
+    await this.page.waitForTimeout(500);
+    // WHY: Confirm cancellation popup
+    const confirmVisible = await this.confirmButton().isVisible().catch(() => false);
+    if (confirmVisible) {
+      await this.confirmButton().click();
+      logger.info('Confirmed cancellation popup');
+    }
+    await this.page.waitForTimeout(1000);
+    logger.success('Meeting cancelled');
+  }
+
+  async changeStatusViaEllipsis(): Promise<'Conducted' | 'Cancelled'> {
+    const action = Math.random() > 0.5 ? 'conducted' : 'cancelled';
+    if (action === 'conducted') {
+      await this.markAsConducted();
+      return 'Conducted';
+    } else {
+      await this.cancelMeeting();
+      return 'Cancelled';
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Edit Actions
+  // ──────────────────────────────────────────────────────────
+
   async fillEditForm(newTitle: string, newStatus?: string, newDescription?: string): Promise<void> {
     logger.info(`Editing meeting new title: "${newTitle}"`);
     await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.titleInput().fill('');
     await this.titleInput().fill(newTitle);
-
-    // Status is changed via ellipsis menu (markAsConducted/cancelMeeting) — NOT in edit form
-
+    // WHY: Status is changed via ellipsis menu (markAsConducted/cancelMeeting) — NOT in edit form
     if (newDescription) {
       await this.descriptionEditor().click();
       await this.page.keyboard.press('Control+a');
@@ -444,15 +630,64 @@ export class MeetingsPage extends BasePage {
   async saveEditedMeeting(): Promise<void> {
     logger.info('Saving edited meeting');
     await this.editMeetingSaveButton().click();
-    // Wait for edit modal to close before proceeding
-    await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    // WHY: Wait for edit modal to close before proceeding
+    await this.editModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
     await this.page.waitForTimeout(1000);
     logger.success('Meeting edit saved');
   }
 
+  async rescheduleMeeting(title: string): Promise<void> {
+    logger.info(`Rescheduling meeting: "${title}"`);
+    const found = await this.retryFindMeetingInList(title);
+    if (!found) throw new Error(`Cannot reschedule: meeting "${title}" not found`);
+    await this.openMeetingFromList(title);
+
+    await this.openEllipsisMenu();
+    await this.rescheduleMeetingOption().click();
+    await this.page.waitForLoadState('domcontentloaded');
+    logger.info('Reschedule form opened');
+
+    // Select next day — 1 day after currently selected date
+    await this.rescheduleCalendarIcon().click();
+    await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
+
+    const d = new Date();
+    d.setDate(d.getDate() + 4);
+    const dayLabel = formatDateForCalendarLabel(d);
+    const dayCell = this.calendarDayByLabel(dayLabel);
+    let found2 = false;
+    let attempts = 0;
+    try {
+      await dayCell.waitFor({ state: 'visible', timeout: 1500 });
+      found2 = true;
+    } catch { found2 = false; }
+    while (!found2 && attempts < 24) {
+      await this.calendarForwardButton().click();
+      await this.page.waitForTimeout(400);
+      try {
+        await dayCell.waitFor({ state: 'visible', timeout: 1000 });
+        found2 = true;
+      } catch { found2 = false; }
+      attempts++;
+    }
+    if (!found2) throw new Error(`Date cell not found for reschedule: ${dayLabel}`);
+    await dayCell.click();
+    logger.success(`Reschedule date selected: ${d.toDateString()}`);
+
+    await this.editMeetingSaveButton().click();
+    // WHY: Wait for edit modal to close — prevents next action failing
+    await this.editModal().waitFor({ state: 'hidden', timeout: config.timeouts.navigation }).catch(() => {});
+    await this.page.waitForTimeout(500);
+    logger.success(`Meeting "${title}" rescheduled`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Assertions
+  // ──────────────────────────────────────────────────────────
+
   async assertOnMeetingsPage(): Promise<void> {
     await this.assertUrl(/\/sales\/meetings\/list/);
-    await this.assertVisible(this.page.locator('h1.h1', { hasText: 'Meetings' }), 'Meetings heading', config.timeouts.navigation);
+    await this.assertVisible(this.meetingsHeading(), 'Meetings heading', config.timeouts.navigation);
     await this.assertVisible(this.addButton(), 'Add button');
     logger.success('Confirmed on meetings list page');
   }
@@ -465,13 +700,11 @@ export class MeetingsPage extends BasePage {
       logger.success(`Meeting verified via ID: ${meetingId}`);
       return;
     }
-    // First check if meeting is already visible on current page
     const alreadyVisible = await this.meetingTitleInList(title).isVisible().catch(() => false);
     if (alreadyVisible) {
       logger.success(`Meeting "${title}" confirmed in list`);
       return;
     }
-    // Check current URL — if already on list page, just sort and check
     const currentUrl = this.page.url();
     if (currentUrl.includes('/sales/meetings/list')) {
       await this.sortByLatestFirst().catch(() => {});
@@ -481,7 +714,6 @@ export class MeetingsPage extends BasePage {
         return;
       }
     }
-    // Navigate to list with latest first sort
     await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
     await this.waitForListReady();
     await this.sortByLatestFirst().catch(() => {});
@@ -491,9 +723,8 @@ export class MeetingsPage extends BasePage {
   }
 
   async assertMeetingDetailTitle(title: string): Promise<void> {
-    const detailTitle = this.meetingDetailTitle();
-    await detailTitle.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    const text = await detailTitle.textContent();
+    await this.meetingDetailTitle().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    const text = await this.meetingDetailTitle().textContent();
     if (!text?.includes(title)) throw new Error(`Detail title "${text}" does not contain "${title}"`);
     logger.success(`Meeting detail title confirmed: "${text}"`);
   }
@@ -533,184 +764,17 @@ export class MeetingsPage extends BasePage {
     logger.success('Edit option confirmed in menu');
   }
 
-  async rescheduleMeeting(title: string): Promise<void> {
-    logger.info(`Rescheduling meeting: "${title}"`);
-    const found = await this.retryFindMeetingInList(title);
-    if (!found) throw new Error(`Cannot reschedule: meeting "${title}" not found`);
-    await this.openMeetingFromList(title);
-
-    // Click ellipsis and select Reschedule meeting
-    await this.openEllipsisMenu();
-    await this.page.getByRole('link', { name: 'Reschedule meeting' }).click();
-    await this.page.waitForLoadState('domcontentloaded');
-    logger.info('Reschedule form opened');
-
-    // Select next day — 1 day after currently selected date
-    await this.page.locator('.col-6 > #from > div:nth-child(2) > .col-7 > .col-undefined > #from > div > .SingleDatePicker > div > .SingleDatePickerInput > .SingleDatePickerInput_calendarIcon').click();
-    await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
-
-    // Pick tomorrow (today + 4 days since meeting was set to today + 3)
-    const d = new Date();
-    d.setDate(d.getDate() + 4);
-    const dayLabel = formatDateForCalendarLabel(d);
-    const dayCell = this.calendarDayByLabel(dayLabel);
-    let found2 = false;
-    let attempts = 0;
-    try {
-      await dayCell.waitFor({ state: 'visible', timeout: 1500 });
-      found2 = true;
-    } catch { found2 = false; }
-    while (!found2 && attempts < 24) {
-      await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
-      try {
-        await dayCell.waitFor({ state: 'visible', timeout: 1000 });
-        found2 = true;
-      } catch { found2 = false; }
-      attempts++;
-    }
-    if (!found2) throw new Error(`Date cell not found for reschedule: ${dayLabel}`);
-    await dayCell.click();
-    logger.success(`Reschedule date selected: ${d.toDateString()}`);
-
-    // Save
-    await this.editMeetingSaveButton().click();
-    // WHY: Wait for edit modal to close — same as saveEditedMeeting — prevents next action failing
-    await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: config.timeouts.navigation }).catch(() => {});
-    await this.page.waitForTimeout(500);
-    logger.success(`Meeting "${title}" rescheduled`);
-  }
-
-  private async openFilterPanel(): Promise<void> {
-    logger.info('Opening filter panel');
-    const alreadyOpen = await this.page.locator('#filterModal').evaluate(
-      el => el.classList.contains('show')
-    ).catch(() => false);
-    if (alreadyOpen) {
-      logger.debug('Filter panel already open');
-      return;
-    }
-    // WHY: Icon_Filter click can be unreliable on CI — retry up to 3 times
-    let filterOpened = false;
-    for (let i = 0; i < 3; i++) {
-      await this.page.locator('#Icon_Filter').click({ force: true });
-      try {
-        await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: 10000 });
-        filterOpened = true;
-        break;
-      } catch {
-        logger.warn(`Filter panel did not open on attempt ${i + 1}, retrying`);
-      }
-    }
-    if (!filterOpened) throw new Error('Filter panel did not open after 3 attempts');
-    await this.page.waitForTimeout(500);
-    logger.success('Filter panel opened');
-  }
-
-    async searchMeetingById(meetingId: number): Promise<void> {
-    logger.info(`Searching for meeting by ID: ${meetingId}`);
-
-    // Navigate to clean meetings list
-    await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
-    await this.waitForListReady();
-    await this.page.waitForTimeout(1000);
-
-    // Step 1: Open filter panel by clicking Icon_Filter
-    await this.openFilterPanel();
-
-    // Step 2: Clear existing filters
-    const clearVisible = await this.page.locator('#clearFilters').isVisible().catch(() => false);
-    if (clearVisible) {
-      logger.info('Clearing existing filters');
-      await this.page.locator('#clearFilters').click({ force: true, timeout: 5000 }).catch(() => logger.warn('clearFilters click failed — skipping'));
-      await this.page.waitForTimeout(500);
-      // WHY: Confirm popup may or may not appear depending on app state
-      try {
-        await this.page.locator('#confirm').waitFor({ state: 'visible', timeout: 3000 });
-        await this.page.locator('#confirm').click();
-      } catch {
-        logger.info('No confirm popup after clearFilters — continuing');
-      }
-      await this.page.waitForTimeout(1500);
-      // Reopen filter panel
-      await this.openFilterPanel();
-    }
-    // Step 3: Open Add a filter dropdown
-    // WHY: Use the control div with force:true — placeholder and indicator have CSS visibility issues
-    // The control div is the entire React Select clickable area and is always attached
-    // WHY: Click the filter dropdown input directly and type to search
-    // React Select opens when its hidden input receives focus
-    const filterInput = this.page.locator('#filterModal .select__input input').first();
-    await filterInput.waitFor({ state: 'attached', timeout: config.timeouts.navigation });
-    await filterInput.focus();
-    await this.page.waitForTimeout(300);
-    await this.page.waitForTimeout(500);
-
-    // Step 4: Type 'id' to search
-    await this.page.locator('.select__input input').first().fill('id');
-    await this.page.waitForTimeout(600);
-
-    // Step 5: Select ID option
-    await this.page.locator('label').filter({ hasText: /^ID$/ }).click();
-    await this.page.waitForTimeout(600);
-
-    // Step 6: Verify ID filter appeared
-    await this.page.locator('#filter-item-id').waitFor({ state: 'visible', timeout: 5000 });
-    logger.info('ID filter added');
-
-    // Step 7: Type meeting ID
-    await this.page.locator('#input_id').fill(String(meetingId));
-    await this.page.waitForTimeout(300);
-
-    // Step 8: Apply filter
-    await this.page.locator('#applyFilterBtn').click();
-    await this.page.waitForTimeout(2000);
-    logger.success(`Filter applied for meeting ID: ${meetingId}`);
-  }
-
-  async markAsConducted(): Promise<void> {
-    logger.info('Marking meeting as Conducted via ellipsis menu');
-    await this.openEllipsisMenu();
-    await this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Mark as Conducted' }).click();
-    await this.page.waitForTimeout(1000);
-    logger.success('Meeting marked as Conducted');
-  }
-
-  async cancelMeeting(): Promise<void> {
-    logger.info('Cancelling meeting via ellipsis menu');
-    await this.openEllipsisMenu();
-    await this.page.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Cancel meeting' }).click();
-    await this.page.waitForTimeout(500);
-    // Confirm cancellation popup
-    const confirmVisible = await this.page.locator('#confirm').isVisible().catch(() => false);
-    if (confirmVisible) {
-      await this.page.locator('#confirm').click();
-      logger.info('Confirmed cancellation popup');
-    }
-    await this.page.waitForTimeout(1000);
-    logger.success('Meeting cancelled');
-  }
-
-  async changeStatusViaEllipsis(): Promise<'Conducted' | 'Cancelled'> {
-    // Randomly pick between Mark as Conducted or Cancel meeting
-    const action = Math.random() > 0.5 ? 'conducted' : 'cancelled';
-    if (action === 'conducted') {
-      await this.markAsConducted();
-      return 'Conducted';
-    } else {
-      await this.cancelMeeting();
-      return 'Cancelled';
-    }
-  }
-
   async assertMeetingStatus(expectedStatus: string): Promise<void> {
     logger.info(`Asserting meeting status: ${expectedStatus}`);
-    const statusEl = this.page.locator('span.meeting__status', { hasText: expectedStatus });
-    await statusEl.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await this.meetingStatusBadge(expectedStatus).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     logger.success(`Meeting status confirmed: ${expectedStatus}`);
   }
 
-    async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<number | null> {
+  // ──────────────────────────────────────────────────────────
+  // Workflow Wrappers
+  // ──────────────────────────────────────────────────────────
+
+  async createMeeting(data: MeetingData, createdBy = 'Admin', addInvitee = true): Promise<number | null> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
     // WHY: On GHA the form sometimes does not open on first click — retry up to 3 times

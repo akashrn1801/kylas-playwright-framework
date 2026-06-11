@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { isNoise } from './errorFilters';
+import { isNoise, isExpectedRbacError } from './errorFilters';
 
 export type MiscErrorType =
   | 'pageerror'
@@ -14,7 +14,11 @@ export interface MiscError {
   type: MiscErrorType;
   message: string;
   url?: string;
+  method?: string;
   statusCode?: number;
+  responseBody?: string;
+  apiErrorMessage?: string;
+  expected?: boolean;  // WHY: true = expected RBAC behaviour, not a real bug
   testTitle?: string;
   testFile?: string;
   timestamp: string;
@@ -24,6 +28,8 @@ export interface MiscError {
 export interface MiscErrorReport {
   capturedAt: string;
   totalErrors: number;
+  unexpectedErrors: number;
+  expectedRbacErrors: number;
   byType: Record<string, number>;
   errors: MiscError[];
 }
@@ -32,6 +38,7 @@ const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', 'misc-errors.json');
 
 class ErrorCollectorSingleton {
   private errors: MiscError[] = [];
+  private recentKeys = new Set<string>(); // WHY: dedup same error within 2s window
   private currentTestTitle = 'unknown';
   private currentTestFile  = 'unknown';
   private nodeListenersAttached = false;
@@ -49,8 +56,21 @@ class ErrorCollectorSingleton {
   capture(error: Omit<MiscError, 'timestamp' | 'testTitle' | 'testFile'>): void {
     try {
       if (isNoise(error.message, error.url)) return;
+      // WHY: Filter ERR_ABORTED on non-CRM URLs — navigation aborts when page navigates away
+      const isAbort = error.message && error.message.includes("ERR_ABORTED");
+      const isCrmUrl = error.url && (error.url.includes("sling-dev.com") || error.url.includes("kylas.io"));
+      if (isAbort && !isCrmUrl) return;
+      // WHY: Deduplicate — same error from multiple page listeners within 2s window
+      const dedupKey = `${error.type}:${error.url || error.message.substring(0, 50)}`;
+      if (this.recentKeys.has(dedupKey)) return;
+      this.recentKeys.add(dedupKey);
+      setTimeout(() => this.recentKeys.delete(dedupKey), 2000);
+      // WHY: Mark RBAC permission errors as expected — they are correct app behaviour
+      const expected = isExpectedRbacError(error.message, (error as any).apiErrorMessage);
+
       const entry: MiscError = {
         ...error,
+        expected,
         testTitle: this.currentTestTitle,
         testFile:  this.currentTestFile,
         timestamp: new Date().toISOString(),
@@ -85,11 +105,15 @@ class ErrorCollectorSingleton {
     for (const e of this.errors) {
       byType[e.type] = (byType[e.type] || 0) + 1;
     }
+    const unexpectedErrors  = this.errors.filter(e => !e.expected).length;
+    const expectedRbacErrors = this.errors.filter(e => e.expected).length;
     return {
-      capturedAt:  new Date().toISOString(),
-      totalErrors: this.errors.length,
+      capturedAt:          new Date().toISOString(),
+      totalErrors:         this.errors.length,
+      unexpectedErrors,
+      expectedRbacErrors,
       byType,
-      errors:      this.errors,
+      errors:              this.errors,
     };
   }
 

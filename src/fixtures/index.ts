@@ -47,22 +47,49 @@ function attachErrorListeners(page: Page): void {
   // WHY: requestfailed — DNS failures, connection refused, request aborted
   page.on('requestfailed', (request) => {
     const failure = request.failure();
+    const method = request.method();
+    const resourceType = request.resourceType();
     ErrorCollector.capture({
       type:    'requestfailed',
       message: failure?.errorText || 'Request failed',
       url:     request.url(),
+      method,
+      responseBody: `Resource type: ${resourceType} | Failure: ${failure?.errorText || 'unknown'}`,
     });
   });
 
   // WHY: response — captures 4xx/5xx HTTP errors from the CRM API
-  page.on('response', (response) => {
+  // Captures method, response body and API error message for full context
+  page.on('response', async (response) => {
     const status = response.status();
     if (status >= 400) {
+      const method = response.request().method();
+      let responseBody: string | undefined;
+      let apiErrorMessage: string | undefined;
+      try {
+        const text = await response.text();
+        responseBody = text.substring(0, 500);
+        // WHY: Try to extract error message from JSON response body
+        // Kylas API returns { message: '...' } or { error: '...' } on failures
+        try {
+          const json = JSON.parse(text);
+          apiErrorMessage = json?.message || json?.error || json?.errorMessage || json?.details || undefined;
+          if (apiErrorMessage) apiErrorMessage = String(apiErrorMessage).substring(0, 300);
+        } catch {
+          // not JSON — use raw text as error message if short
+          if (text.length < 200) apiErrorMessage = text;
+        }
+      } catch {
+        responseBody = undefined;
+      }
       ErrorCollector.capture({
-        type:       'response-error',
-        message:    `HTTP ${status} ${response.statusText()} — ${response.url()}`,
-        url:        response.url(),
-        statusCode: status,
+        type:            'response-error',
+        message:         `HTTP ${status} [${method}] ${response.url()}`,
+        url:             response.url(),
+        method,
+        statusCode:      status,
+        responseBody,
+        apiErrorMessage,
       });
     }
   });
