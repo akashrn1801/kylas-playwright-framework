@@ -32,8 +32,11 @@ class MiscErrorReporter implements Reporter {
       }
       console.log('\n' + '═'.repeat(70));
       console.log(`⚠️  MISCELLANEOUS BACKGROUND ERRORS — ${report.totalErrors} captured`);
+      if (report.unexpectedErrors > 0)   console.log(`   🔴 Unexpected (potential bugs): ${report.unexpectedErrors}`);
+      if (report.expectedRbacErrors > 0) console.log(`   🟡 Expected RBAC behaviour:     ${report.expectedRbacErrors}`);
       console.log('═'.repeat(70));
-      console.log('   These are NOT test failures. Review and raise bugs.\n');
+      console.log('   Unexpected errors = review and raise bugs.');
+      console.log('   Expected RBAC errors = correct app behaviour (restricted user access denied).\n');
       console.log('📊 Error Breakdown:');
       const icons: Record<string,string> = { 'pageerror':'💥','console-error':'🔴','requestfailed':'📡','response-error':'🌐','node-exception':'⚡','node-rejection':'⚡' };
       for (const [type, count] of Object.entries(report.byType as Record<string,number>)) {
@@ -50,8 +53,11 @@ class MiscErrorReporter implements Reporter {
         console.log(`\n   🧪 ${testTitle}`);
         for (const e of errors) {
           console.log(`      ${icons[e.type]||'❓'} [${e.type}] ${e.message.substring(0,120)}`);
-          if (e.url)        console.log(`            URL: ${e.url}`);
-          if (e.statusCode) console.log(`            HTTP ${e.statusCode}`);
+          if (e.url)             console.log(`            URL: ${e.url}`);
+          if (e.method)          console.log(`            Method: ${e.method}`);
+          if (e.statusCode)      console.log(`            HTTP ${e.statusCode}`);
+          if (e.apiErrorMessage) console.log(`            Error: ${e.apiErrorMessage}`);
+          if (e.responseBody)    console.log(`            Response: ${e.responseBody.substring(0,150)}`);
         }
       }
       console.log('\n' + '─'.repeat(70));

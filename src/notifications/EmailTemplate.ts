@@ -248,27 +248,36 @@ ${this.miscErrorsSection(ctx.miscErrors)}
     if (!byTest.has(key)) byTest.set(key, []);
     byTest.get(key)!.push(e);
   }
-  const errorRows = Array.from(byTest.entries()).slice(0,20).map(([testTitle,errors]) => {
-    const details = errors.slice(0,3).map(e =>
+  const errorRows = Array.from(byTest.entries()).map(([testTitle,errors]) => {
+    const details = errors.map(e =>
       `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
-        <div style="font-size:11px;font-weight:700;color:#ea580c;">[${e.type}]</div>
-        <div style="font-size:11px;color:#374151;margin-top:2px;font-family:monospace;word-break:break-all;">${this.esc((e.message||'').substring(0,150))}</div>
-        ${e.url?`<div style="font-size:10px;color:#6b7280;margin-top:2px;">📎 ${this.esc(e.url.substring(0,100))}</div>`:''}
-        ${e.statusCode?`<div style="font-size:10px;color:#ef4444;">HTTP ${e.statusCode}</div>`:''}
+        <div style="font-size:11px;font-weight:700;color:${e.expected ? '#92400e' : '#ea580c'};">
+          [${e.type}]${e.expected ? ' <span style="font-size:10px;background:#fef9c3;padding:1px 4px;border-radius:3px;margin-left:4px;">✓ Expected RBAC</span>' : ''}
+        </div>
+        ${e.method ? `<div style="font-size:10px;color:#374151;margin-top:2px;"><strong>Method:</strong> ${e.method}</div>` : ''}
+        <div style="font-size:11px;color:#374151;margin-top:2px;"><strong>Error:</strong> ${this.esc((e.message||'').substring(0,150))}</div>
+        ${e.url ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;word-break:break-all;"><strong>URL:</strong> ${this.esc(e.url)}</div>` : ''}
+        ${e.statusCode ? `<div style="font-size:10px;color:#ef4444;font-weight:700;margin-top:2px;">HTTP Status: ${e.statusCode}</div>` : ''}
+        ${e.apiErrorMessage ? `<div style="font-size:11px;color:#dc2626;margin-top:3px;font-weight:600;background:#fff1f2;padding:4px 6px;border-radius:4px;">⚠️ Server Error: ${this.esc(e.apiErrorMessage)}</div>` : ''}
+        ${e.responseBody && !e.apiErrorMessage ? `<div style="font-size:10px;color:#374151;margin-top:2px;font-family:monospace;background:#f3f4f6;padding:3px 6px;border-radius:3px;word-break:break-all;"><strong>Response:</strong> ${this.esc(e.responseBody.substring(0,300))}</div>` : ''}
         <div style="font-size:10px;color:#9ca3af;margin-top:2px;">⏰ ${e.timestamp}</div>
       </div>`).join('');
-    const more = errors.length > 3 ? `<div style="font-size:11px;color:#9ca3af;padding:4px 8px;">... and ${errors.length-3} more</div>` : '';
+    const more = '';
     return `<tr style="border-bottom:1px solid #fed7aa;"><td style="padding:8px;">
       <div style="font-size:12px;font-weight:600;color:#1f2937;margin-bottom:4px;">🧪 ${this.esc(testTitle)}</div>
       ${details}${more}
     </td></tr>`;
   }).join('');
-  const truncNote = byTest.size > 20 ? `<div style="font-size:11px;color:#9ca3af;padding:8px 0;">Showing 20 of ${byTest.size} affected tests. Full report: reports/misc-errors.json</div>` : '';
+  const truncNote = '';
   return `
   <tr><td style="padding:8px 32px;">
     <div style="background:#fff7ed;border-radius:12px;padding:20px;border:1px solid #fed7aa;">
       <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:4px;">⚠️ Background Errors Captured — ${miscErrors.totalErrors} total</div>
-      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">These are NOT test failures. Review, raise bugs, and add regression tests once fixed.</div>
+      <div style="margin-bottom:8px;display:flex;gap:8px;">
+        ${miscErrors.unexpectedErrors > 0 ? `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🔴 ${miscErrors.unexpectedErrors} Unexpected (raise bugs)</span>` : ''}
+        ${miscErrors.expectedRbacErrors > 0 ? `<span style="background:#fefce8;border:1px solid #fef08a;color:#92400e;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🟡 ${miscErrors.expectedRbacErrors} Expected RBAC behaviour</span>` : ''}
+      </div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">Unexpected = review and raise bugs. Expected RBAC = correct app security behaviour (restricted user access denied).</div>
       <div style="margin-bottom:12px;">
         <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">By Error Type:</div>
         <table width="200" cellpadding="0" cellspacing="0">${byTypeRows}</table>

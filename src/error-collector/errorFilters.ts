@@ -1,4 +1,42 @@
+// WHY: These are background polling/prefetch API calls that get aborted
+// when Playwright navigates away from a page. They are NOT real failures —
+// the browser cancels them on navigation. Only real API errors have status codes.
+export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
+  /\/v1\/users\/me$/i,
+  /\/v1\/users\/lookup/i,
+  /\/v1\/users\/\d+$/i,
+  /\/v1\/configurations\/uniqueness/i,
+  /\/v1\/calendar-oauth\/accounts/i,
+  /\/v1\/marketplace\/apps\/actions/i,
+  /\/v1\/ai-agent\/workflows\/subscribed/i,
+  /\/v1\/tasks\/search\?/i,
+  /\/v1\/tasks\/search-lists/i,
+  /\/v1\/ui\/layouts\/list\//i,
+  /\/v1\/ui\/layouts\/EDIT\//i,
+  /\/v1\/tasks\/search-lists\/preferred/i,
+  /\/v1\/rules\/search\/action-logs/i,
+  /\/v1\/ui\/apps\/settings/i,
+  /\/v1\/dashboards\//i,
+  // Entity detail lookups that abort on navigation
+  /\/v1\/leads\/\d+$/i,
+  /\/v1\/contacts\/\d+$/i,
+  /\/v1\/companies\/\d+$/i,
+  /\/v1\/deals\/\d+$/i,
+  /\/v1\/tasks\/\d+\/relation/i,
+  // Dashboard background polls
+  /\/v1\/search\/smart-list\//i,
+  /\/v3\/reports\//i,
+  /\/v1\/reports\//i,
+  // Image assets aborting on navigation
+  /\.gif$/i,
+  /\.png$/i,
+  /\/images\//i,
+];
+
 export const NOISE_PATTERNS: RegExp[] = [
+  // WHY: "Failed to load resource" console errors are always duplicated by response-error
+  // which captures full details (method, status, body). Filter the console duplicate.
+  /Failed to load resource: the server responded with a status of/i,
   /Grammarly/i,
   /grammarly/i,
   /HW_frame/i,
@@ -39,11 +77,41 @@ export const NOISE_URL_PATTERNS: RegExp[] = [
   /headwayapp\.co/i,
   /zohocdn\.com/i,
   /zoho\.com/i,
+  /cloudflareinsights\.com/i,
+  /cloudflare\.com/i,
+  // Stripe payment scripts (third-party, not Kylas app)
+  /js\.stripe\.com/i,
+  /stripe\.com/i,
+  // Font assets aborting on navigation (expected browser behaviour)
+  /font-awesome/i,
+  /\.woff2/i,
+  /\.woff/i,
+  /\.ttf/i,
+];
+
+// WHY: These are expected RBAC 404s — restricted user cannot access admin-owned entities.
+// The app correctly returns 404 when restricted user tries to fetch Lead/Contact/Company/Deal
+// owned by admin. This is correct security behaviour, not a bug.
+export const RBAC_EXPECTED_MESSAGES: RegExp[] = [
+  /Resource doesnt seem to exists or you dont have enough permissions/i,
+  /The record doesn.t seem to exist, or you don.t have enough permissions/i,
+  /you don.t have enough permissions to access it/i,
+  /not authorised to perform this operation/i,
 ];
 
 export function isNoise(message: string, url?: string): boolean {
   const fullText = `${message} ${url || ''}`;
   if (NOISE_PATTERNS.some(p => p.test(fullText))) return true;
   if (url && NOISE_URL_PATTERNS.some(p => p.test(url))) return true;
+  // WHY: ERR_ABORTED on known background polling URLs = navigation abort, not real error
+  if (message?.includes('ERR_ABORTED') && url && ABORT_ON_NAVIGATE_PATTERNS.some(p => p.test(url))) return true;
   return false;
+}
+
+// WHY: Separate check for RBAC expected errors — these should be tracked differently
+// They are NOT noise (we want to know they happened) but they are EXPECTED behaviour
+// Use isExpectedRbacError() to classify them separately in the error collector
+export function isExpectedRbacError(message: string, apiErrorMessage?: string): boolean {
+  const text = `${message} ${apiErrorMessage || ''}`;
+  return RBAC_EXPECTED_MESSAGES.some(p => p.test(text));
 }
