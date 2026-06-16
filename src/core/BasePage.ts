@@ -155,4 +155,27 @@ export class BasePage {
 
   logger.success(`No validation errors found in ${context}`);
 }
+
+  async getLoggedInUserName(role: 'admin' | 'restricted' = 'restricted'): Promise<string> {
+    try {
+      const path = require('path');
+      const fs = require('fs');
+      const namesFile = path.join(__dirname, '../auth/storageStates', process.env.ENV || 'qa', 'userNames.json');
+      if (fs.existsSync(namesFile)) {
+        const names = JSON.parse(fs.readFileSync(namesFile, 'utf8'));
+        if (names[role]) {
+          return names[role];
+        }
+      }
+    } catch (e) {
+      // fall through to DOM fallback
+    }
+    // DOM fallback
+    await this.page.locator('.user-profile-dropdown').click();
+    const nameLocator = this.page.locator('.user-info .user-name').first();
+    await nameLocator.waitFor({ state: 'visible', timeout: 5000 });
+    const name = await nameLocator.innerText();
+    await this.page.keyboard.press('Escape');
+    return name.trim();
+  }
 }

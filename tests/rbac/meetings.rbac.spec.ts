@@ -25,6 +25,8 @@ test.describe('Meetings RBAC', () => {
 
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
+    logger.success('M8 passed');
+
   });
 
   // ── Test 2: Restricted user creates own meeting ────────────────────────────
@@ -46,6 +48,8 @@ test.describe('Meetings RBAC', () => {
 
     // Restricted user owns this meeting — Edit should be available
     await meetingsPage.assertEditOptionInMenu();
+    logger.success('M9 passed');
+
   });
 
   // ── Test 3: Restricted user edits own meeting ──────────────────────────────
@@ -80,6 +84,8 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.assertMeetingDetailTitle(updatedTitle);
     const newStatus = await meetingsPage.changeStatusViaEllipsis();
     await meetingsPage.assertMeetingStatus(newStatus);
+    logger.success('M10 passed');
+
   });
 
   // ── Test 4: Restricted user CANNOT see admin meeting (not invited) ─────────
@@ -111,6 +117,8 @@ test.describe('Meetings RBAC', () => {
     // which returns "No meetings found" — deterministic RBAC verification
     await restrictedMeetings.goToMeetingsList();
     await restrictedMeetings.assertMeetingNotInList(adminData.title, adminMeetingId1);
+    logger.success('M11 passed');
+
   });
 
   // ── Test 5: Restricted user CAN see admin meeting when invited ────────────
@@ -165,6 +173,8 @@ test.describe('Meetings RBAC', () => {
     if (editVisible) throw new Error('Edit option should NOT be visible for restricted user on admin meeting');
     logger.success('Edit option correctly absent — only Clone visible');
     await restrictedPage.keyboard.press('Escape');
+    logger.success('M12 passed');
+
   });
 
 
@@ -181,6 +191,8 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
     await meetingsPage.rescheduleMeeting(meetingData.title);
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
+    logger.success('M13 passed');
+
   });
   
   // ── Test: Restricted user cannot see admin entities in Related To ──────────
@@ -228,6 +240,8 @@ test.describe('Meetings RBAC', () => {
     // Close form
     await restrictedPage.keyboard.press('Escape');
     await restrictedPage.waitForTimeout(500);
+    logger.success('M14 passed');
+
   });
 
 });

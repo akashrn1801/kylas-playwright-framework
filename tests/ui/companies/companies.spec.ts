@@ -1,6 +1,7 @@
 import { test } from '../../../src/fixtures/index';
 import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
 import { generateCompanyData } from '../../../src/data/factories/companyFactory';
+import { logger } from '../../../src/utils/logger';
 
 test.describe('Companies', () => {
   test(

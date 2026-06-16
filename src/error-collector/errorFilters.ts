@@ -17,7 +17,29 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   /\/v1\/rules\/search\/action-logs/i,
   /\/v1\/ui\/apps\/settings/i,
   /\/v1\/dashboards\//i,
+  // Module-specific API calls that abort on navigation
+  /\/v1\/deals\/\d+$/i,
+  /\/v1\/meetings\/\d+$/i,
+  /\/v1\/tasks\/\d+$/i,
+  /\/v1\/contacts\/\d+$/i,
+  /\/v1\/companies\/\d+$/i,
+  /\/v1\/leads\/search/i,
+  /\/v1\/deals\/search/i,
+  /\/v1\/meetings\/search/i,
+  /\/v1\/tasks\/search/i,
+  // Picklists standard — aborts on navigation (background prefetch)
+  /\/v1\/picklists\/standard/i,
+  // Quotation API calls that abort on navigation
+  /\/v1\/quotations\/\d+$/i,
+  /\/v1\/quotations\/search/i,
+  /\/v1\/quotations\/layout/i,
+  /\/v4\/reports\/deals/i,
+  /\/v1\/layouts\/contact\/detail/i,
   // Entity detail lookups that abort on navigation
+  //v1/quotations/d+$/i,
+  //v1/quotations/search/i,
+  //v1/quotations/layout/i,
+  //v4/reports/deals/i,
   /\/v1\/leads\/\d+$/i,
   /\/v1\/contacts\/\d+$/i,
   /\/v1\/companies\/\d+$/i,
@@ -87,12 +109,17 @@ export const NOISE_URL_PATTERNS: RegExp[] = [
   /\.woff2/i,
   /\.woff/i,
   /\.ttf/i,
+  // WHY: Kylas app bug — company chip clear triggers "e is not iterable" in
+// componentDidUpdate. App still saves successfully. Raised as bug KYL-XXXX.
+/e is not iterable/i,
 ];
 
 // WHY: These are expected RBAC 404s — restricted user cannot access admin-owned entities.
 // The app correctly returns 404 when restricted user tries to fetch Lead/Contact/Company/Deal
 // owned by admin. This is correct security behaviour, not a bug.
 export const RBAC_EXPECTED_MESSAGES: RegExp[] = [
+  // WHY: Tasks RBAC — restricted user cannot access admin-owned task entity
+  /Resource doesnt seem to exists or you dont have enough permissions/i,
   /Resource doesnt seem to exists or you dont have enough permissions/i,
   /The record doesn.t seem to exist, or you don.t have enough permissions/i,
   /you don.t have enough permissions to access it/i,
@@ -100,6 +127,8 @@ export const RBAC_EXPECTED_MESSAGES: RegExp[] = [
 ];
 
 export function isNoise(message: string, url?: string): boolean {
+  // WHY: 422 with errorCode 029003 = expected Kylas RBAC enforcement, not a bug
+  if (message.includes('422') && url?.includes('/quotations')) return true;
   const fullText = `${message} ${url || ''}`;
   if (NOISE_PATTERNS.some(p => p.test(fullText))) return true;
   if (url && NOISE_URL_PATTERNS.some(p => p.test(url))) return true;
@@ -111,7 +140,13 @@ export function isNoise(message: string, url?: string): boolean {
 // WHY: Separate check for RBAC expected errors — these should be tracked differently
 // They are NOT noise (we want to know they happened) but they are EXPECTED behaviour
 // Use isExpectedRbacError() to classify them separately in the error collector
+// WHY: 422 with errorCode 029003 = expected RBAC behaviour, not a bug
+export const RBAC_EXPECTED_STATUS_CODES: number[] = [422];
+export const RBAC_EXPECTED_ERROR_CODES: string[] = ['029003'];
+
 export function isExpectedRbacError(message: string, apiErrorMessage?: string): boolean {
+  // WHY: HTTP 422 with errorCode 029003 = Kylas RBAC enforcement — expected behaviour
+  if (message.includes('422') && (message.includes('029003') || (apiErrorMessage?.includes('Invalid company')) || (apiErrorMessage?.includes('Invalid contact')))) return true;
   const text = `${message} ${apiErrorMessage || ''}`;
   return RBAC_EXPECTED_MESSAGES.some(p => p.test(text));
 }

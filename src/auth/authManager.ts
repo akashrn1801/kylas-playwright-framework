@@ -281,8 +281,10 @@ export class AuthManager {
 
       logger.info('Waiting for successful login redirect');
 
+      // WHY: domcontentloaded sufficient to confirm redirect — faster than load under parallel stress.
       await page.waitForURL(/sales\//, {
         timeout: 90000,
+        waitUntil: 'domcontentloaded',
       });
 
       logger.info(`Login successful for role: ${role}`);

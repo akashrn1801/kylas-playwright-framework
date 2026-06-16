@@ -4,6 +4,7 @@ import {
   generateCompanyData,
   generateAdminCompanyData,
 } from '../../src/data/factories/companyFactory';
+import { logger } from '../../src/utils/logger';
 
 test.describe('Companies RBAC', () => {
   test(

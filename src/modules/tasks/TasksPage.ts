@@ -727,8 +727,15 @@ export class TasksPage extends BasePage {
     logger.info(`Navigating to task by ID: ${taskId}`);
     await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${taskId}`);
     await this.waitForListReady();
-    await this.taskListItemById(taskId).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
+    // WHY: Use try/catch instead of bare waitFor — if the item is not visible within
+    // the timeout (e.g. search index lag), we want assertTaskInList to fall through
+    // to the retryFindTask name-search fallback rather than throwing here.
+    try {
+      await this.taskListItemById(taskId).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
+    } catch {
+      logger.warn(`Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`);
+    }
   }
 
   // ──────────────────────────────────────────────────────────

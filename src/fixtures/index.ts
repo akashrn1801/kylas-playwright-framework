@@ -18,6 +18,7 @@ import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { AuthManager } from '../auth/authManager';
+import { logger } from '../utils/logger';
 
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
@@ -151,7 +152,17 @@ export const test = base.extend<TestFixtures>({
     attachErrorListeners(page);
     // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
     if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+    // WHY: QA env has intermittent TCP timeouts under parallel load — mirror AuthManager 3-retry pattern.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        break;
+      } catch (e) {
+        if (attempt === 3) throw e;
+        logger.warn(`restrictedPage goto attempt ${attempt} failed — retrying in 3s`);
+        await page.waitForTimeout(3000);
+      }
+    }
     await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');

@@ -1,6 +1,7 @@
 import { test } from '../../../src/fixtures/index';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { generateContactData } from '../../../src/data/factories/contactFactory';
+import { logger } from '../../../src/utils/logger';
 
 test.describe('Contacts', () => {
   test(
