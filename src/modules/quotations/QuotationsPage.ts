@@ -827,12 +827,21 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertStatusOnDetailPage(expectedStatus: QuotationStatus): Promise<void> {
+    // WHY: Wait for the status element explicitly instead of reading body text immediately.
+    // On CI, the detail page may not have fully rendered the status badge when body.innerText()
+    // is called — causing false negatives. Waiting for the locator ensures the element is present.
     const statusLocator = this.page.locator('[class*="status"], [class*="badge"]').filter({ hasText: expectedStatus }).first();
-    const detailText = await this.page.locator('body').innerText();
-    if (!detailText.includes(expectedStatus)) {
-      throw new Error(`Expected status "${expectedStatus}" not found on detail page`);
+    try {
+      await statusLocator.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      logger.success(`Status confirmed via locator: ${expectedStatus}`);
+    } catch {
+      // Fallback: check body text in case badge selector doesn't match
+      const detailText = await this.page.locator('body').innerText();
+      if (!detailText.includes(expectedStatus)) {
+        throw new Error(`Expected status "${expectedStatus}" not found on detail page`);
+      }
+      logger.success(`Status confirmed via body text: ${expectedStatus}`);
     }
-    logger.success(`Status confirmed: ${expectedStatus}`);
   }
 
   async assertOwnerOnDetailPage(ownerName: string): Promise<void> {
