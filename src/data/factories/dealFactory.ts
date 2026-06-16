@@ -73,6 +73,11 @@ export interface DealData {
   // Part payments
   numberOfInstallments: number; // 1–12
 
+  // WHY: When true, fillDealForm skips associatedContacts and associatedCompany.
+  // Used in RBAC tests where we need a deal with no accessible entities so
+  // the restricted user cannot see quotations linked to it.
+  skipAssociatedEntities?: boolean;
+
   // Attribution
   subSource: string;
   utmSource: string;

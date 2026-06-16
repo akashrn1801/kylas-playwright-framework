@@ -29,7 +29,9 @@
     "clean": "rm -rf test-results reports/ allure-results",
     "notify": "ts-node src/notifications/scripts/notify.ts",
     "test:notify": "npm test && npm run notify",
-    "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi"
+    "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi",
+    "test:quotations": "playwright test tests/ui/quotations/ --project=chromium",
+    "test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium"
   },
   "keywords": [
     "playwright",

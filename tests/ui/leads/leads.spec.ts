@@ -3,6 +3,7 @@ import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import { generateLeadData, LEAD_PIPELINE_STAGES } from '../../../src/data/factories/leadFactory';
 import { faker } from '@faker-js/faker';
 import { config } from '../../../config/config';
+import { logger } from '../../../src/utils/logger';
 
 test.describe('Leads', () => {
 
@@ -10,6 +11,8 @@ test.describe('Leads', () => {
     const leadsPage = new LeadsPage(adminPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
+    logger.success('L1 passed');
+
   });
 
   test('@regression admin should create a new lead with all fields', async ({ adminPage }) => {
@@ -19,6 +22,8 @@ test.describe('Leads', () => {
     await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     await leadsPage.assertLeadCreated(leadData);
+    logger.success('L2 passed');
+
   });
 
   test('@regression admin should update a created lead', async ({ adminPage }) => {
@@ -30,6 +35,8 @@ test.describe('Leads', () => {
     const updatedData = generateLeadData();
     await leadsPage.updateLead(updatedData, leadData.firstName);
     await leadsPage.assertLeadUpdated(updatedData);
+    logger.success('L3 passed');
+
   });
 
 
@@ -56,6 +63,8 @@ test.describe('Leads', () => {
 
     // WHY: Verify pipeline stage is shown correctly on details page
     await leadsPage.assertPipelineStageOnDetails('Open');
+    logger.success('L4 passed');
+
   });
 
   test('@regression admin should change pipeline stage while updating a lead', async ({ adminPage }) => {
@@ -90,5 +99,7 @@ test.describe('Leads', () => {
     );
     await adminPage.waitForURL(/leads\/details\//, { timeout: 20000 });
     await leadsPage.assertPipelineStageOnDetails(newStage);
+    logger.success('L5 passed');
+
   });
 });

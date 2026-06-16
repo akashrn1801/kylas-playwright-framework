@@ -1,6 +1,7 @@
 import { test } from '../../src/fixtures/index';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import { generateLeadData, generateAdminLeadData } from '../../src/data/factories/leadFactory';
+import { logger } from '../../src/utils/logger';
 
 test.describe('Leads RBAC', () => {
 
@@ -8,6 +9,8 @@ test.describe('Leads RBAC', () => {
     const leadsPage = new LeadsPage(restrictedPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
+    logger.success('L6 passed');
+
   });
 
   test('@regression restricted user can create a lead', async ({ restrictedPage }) => {
@@ -17,6 +20,8 @@ test.describe('Leads RBAC', () => {
     await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     await leadsPage.assertLeadCreated(leadData);
+    logger.success('L7 passed');
+
   });
 
   test('@regression restricted user can edit own lead', async ({ restrictedPage }) => {
@@ -28,6 +33,8 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await leadsPage.updateLead(updatedData, leadData.firstName);
     await leadsPage.assertLeadUpdated(updatedData);
+    logger.success('L8 passed');
+
   });
 
   test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
@@ -41,6 +48,8 @@ test.describe('Leads RBAC', () => {
     const restrictedLeadsPage = new LeadsPage(restrictedPage);
     await restrictedLeadsPage.goToLeadsList();
     await restrictedLeadsPage.assertLeadNotInList(leadData.firstName);
+    logger.success('L9 passed');
+
   });
 
 });

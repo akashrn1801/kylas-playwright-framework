@@ -25,6 +25,8 @@ test.describe('Tasks', () => {
 
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
+    logger.success('TK1 passed');
+
   });
 
   // ── Test 2: Create via Quick Task form ────────────────────────────────────
@@ -40,6 +42,8 @@ test.describe('Tasks', () => {
     const taskId = await tasksPage.createQuickTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK2 passed');
+
   });
 
   // ── Test 3: Create via Detailed Task form (all fields + relation) ──────────
@@ -54,6 +58,8 @@ test.describe('Tasks', () => {
     const taskId = await tasksPage.createDetailedTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK3 passed');
+
   });
 
   // ── Test 4: Quick Form → switch to Detailed via toggle ────────────────────
@@ -69,6 +75,8 @@ test.describe('Tasks', () => {
     const taskId = await tasksPage.createQuickTaskThenSwitchToDetailed(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK4 passed');
+
   });
 
   // ── Test 5: Update an existing task ───────────────────────────────────────
@@ -86,6 +94,8 @@ test.describe('Tasks', () => {
 
     await tasksPage.updateTask(updatedData, originalData.name, taskId);
     await tasksPage.assertTaskUpdated(updatedData, taskId);
+    logger.success('TK5 passed');
+
   });
 
   // ── Test 6: Mark a task as complete ───────────────────────────────────────
@@ -115,6 +125,8 @@ test.describe('Tasks', () => {
         logger.info(`Task ${taskId} no longer in My Tasks view after completion — expected behaviour`);
       }
     }
+    logger.success('TK6 passed');
+
   });
 
 
@@ -139,6 +151,8 @@ test.describe('Tasks', () => {
     const noteText = `Automation note ${Date.now()} — task follow up required`;
     await tasksPage.addNoteToTask(noteText);
     await tasksPage.assertNoteAdded(noteText);
+    logger.success('TK7 passed');
+
   });
 
 
@@ -157,6 +171,8 @@ test.describe('Tasks', () => {
     // Change due date to 5 days from now via ellipsis
     await tasksPage.changeDueDateViaEllipsis(taskId!, 5);
     logger.info('Due date changed via ellipsis menu');
+    logger.success('TK8 passed');
+
   });
 
   // ── Test: Mark as Completed via ellipsis ──────────────────────────────────
@@ -175,6 +191,8 @@ test.describe('Tasks', () => {
     await tasksPage.markAsCompletedViaEllipsis(taskId!);
     await tasksPage.searchTaskById(taskId!);
     await tasksPage.assertTaskStatusOnDetail(taskId!, 'Completed');
+    logger.success('TK9 passed');
+
   });
 
   // ── Test: Clone task via ellipsis ─────────────────────────────────────────
@@ -194,6 +212,8 @@ test.describe('Tasks', () => {
     const clonedId = await tasksPage.cloneTaskViaEllipsis(taskId!);
     const clonedName = `${taskData.name} Copy`;
     await tasksPage.assertTaskCreated({ ...taskData, name: clonedName }, clonedId);
+    logger.success('TK10 passed');
+
   });
 
   // ── Test 7: prodSafe — read-only navigation ────────────────────────────────
@@ -203,6 +223,8 @@ test.describe('Tasks', () => {
 
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
+    logger.success('TK11 passed');
+
   });
 
 });
