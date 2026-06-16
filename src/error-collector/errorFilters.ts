@@ -27,6 +27,8 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   /\/v1\/deals\/search/i,
   /\/v1\/meetings\/search/i,
   /\/v1\/tasks\/search/i,
+  // Rate limit on /v1/users/me during parallel auth in CI — expected under load
+  /\/v1\/users\/me$/i,
   // Picklists standard — aborts on navigation (background prefetch)
   /\/v1\/picklists\/standard/i,
   // Quotation API calls that abort on navigation
