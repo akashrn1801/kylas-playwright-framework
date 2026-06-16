@@ -87,10 +87,17 @@ export class ReportParser {
       if (suite.specs) {
         for (const spec of suite.specs) {
           for (const test of spec.tests || []) {
-            const retries    = (test.results || []).length - 1;
-            const lastResult = test.results?.[test.results.length - 1];
-            const status     = this.mapStatus(test.status, retries);
-            const error      = lastResult?.error?.message || lastResult?.error?.value || undefined;
+            const allResults = test.results || [];
+            const retries    = allResults.length - 1;
+            const lastResult = allResults[allResults.length - 1];
+            // WHY: Derive status from the overall test outcome and last result:
+            // - Playwright sets test.status = 'flaky' when it passed on retry
+            // - Playwright sets test.status = 'unexpected' when it failed on all attempts
+            // - Playwright sets test.status = 'expected' when it passed first time
+            // - Using retries > 0 alone is wrong: a test that fails twice has retries=1
+            //   but should be 'failed', not 'flaky'
+            const status = this.mapStatus(test.status, lastResult?.status);
+            const error  = lastResult?.error?.message || lastResult?.error?.value || undefined;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
               status,
@@ -108,11 +115,22 @@ export class ReportParser {
     return results;
   }
 
-  private mapStatus(status: string, retries: number): 'passed' | 'failed' | 'skipped' | 'flaky' {
-    if (status === 'expected')   return 'passed';
-    if (status === 'unexpected') return retries > 0 ? 'flaky' : 'failed';
-    if (status === 'flaky')      return 'flaky';
-    if (status === 'skipped')    return 'skipped';
+  private mapStatus(testStatus: string, lastResultStatus?: string): 'passed' | 'failed' | 'skipped' | 'flaky' {
+    // WHY: Use Playwright's own test.status field as primary source of truth:
+    // 'expected'   = passed first time → passed
+    // 'flaky'      = failed then passed on retry → flaky
+    // 'unexpected' = failed on ALL attempts → failed
+    // 'skipped'    = skipped
+    // lastResultStatus is used as a safety check for edge cases
+    if (testStatus === 'expected')   return 'passed';
+    if (testStatus === 'flaky')      return 'flaky';
+    if (testStatus === 'skipped')    return 'skipped';
+    if (testStatus === 'unexpected') {
+      // Double-check: if last result was 'passed', Playwright should have set flaky
+      // but handle edge case where it didn't
+      if (lastResultStatus === 'passed') return 'flaky';
+      return 'failed';
+    }
     return 'failed';
   }
 }
