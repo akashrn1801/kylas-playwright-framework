@@ -53,6 +53,20 @@ export const config = {
     workers:    Number(process.env.WORKERS)     || 2,
     retryCount: Number(process.env.RETRY_COUNT) || 1,
   },
+    deals: {
+      adminDealName:
+        ENV === 'prod'
+          ? process.env.PROD_ADMIN_DEAL_NAME || ''
+          : ENV === 'staging'
+          ? process.env.STAGING_ADMIN_DEAL_NAME || ''
+          : process.env.QA_ADMIN_DEAL_NAME || '',
+      restrictedDealName:
+        ENV === 'prod'
+          ? process.env.PROD_RESTRICTED_DEAL_NAME || ''
+          : ENV === 'staging'
+          ? process.env.STAGING_RESTRICTED_DEAL_NAME || ''
+          : process.env.QA_RESTRICTED_DEAL_NAME || '',
+    },
 };
 
 export type UserRole = keyof typeof config.users;

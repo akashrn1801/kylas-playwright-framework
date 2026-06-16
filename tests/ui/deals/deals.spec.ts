@@ -15,6 +15,8 @@ test.describe('Deals', () => {
     const dealsPage = new DealsPage(adminPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
+    logger.success('D1 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -32,6 +34,8 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     await dealsPage.assertDealCreated(dealData, dealId ?? undefined);
+    logger.success('D2 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -51,6 +55,8 @@ test.describe('Deals', () => {
     const updatedData = generateDealData();
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
     await dealsPage.assertDealUpdated(updatedData);
+    logger.success('D3 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -86,6 +92,8 @@ test.describe('Deals', () => {
 
     await dealsPage.saveEditedDeal();
     logger.success('Payment math verified: Total - Received = Remaining (±1 rounding tolerance) — amounts are correct. Deal saved successfully.');
+    logger.success('D4 passed');
+
   });
 
 
@@ -116,6 +124,8 @@ test.describe('Deals', () => {
     await dealsPage.assertPipelineStageOnDetails('Open');
     await dealsPage.assertActualValueContainsINR();
     logger.success('Pipeline stage Open and INR currency verified after deal creation');
+    logger.success('D5 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -145,6 +155,8 @@ test.describe('Deals', () => {
     );
     await dealsPage.assertPipelineStageOnDetails('Negotiation');
     logger.success('Pipeline stage changed to Negotiation and verified');
+    logger.success('D6 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -171,6 +183,8 @@ test.describe('Deals', () => {
     await dealsPage.assertPaymentReceivedAfterEdit();
     await dealsPage.saveEditedDeal();
     logger.success(`Deal closed as Lost with reason: ${closedLostReason}`);
+    logger.success('D7 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -197,6 +211,8 @@ test.describe('Deals', () => {
     await dealsPage.assertPaymentReceivedAfterEdit();
     await dealsPage.saveEditedDeal();
     logger.success(`Deal closed as Unqualified with reason: ${closedUnqualifiedReason}`);
+    logger.success('D8 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -224,6 +240,8 @@ test.describe('Deals', () => {
     );
     await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
     await dealsPage.assertPartPaymentsSummaryOnDetails();
+    logger.success('D9 passed');
+
   });
 
 });

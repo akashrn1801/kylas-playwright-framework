@@ -4,6 +4,7 @@ import {
   generateContactData,
   generateAdminContactData,
 } from '../../src/data/factories/contactFactory';
+import { logger } from '../../src/utils/logger';
 
 test.describe('Contacts RBAC', () => {
   test(

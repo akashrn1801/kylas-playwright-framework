@@ -28,6 +28,8 @@ test.describe('Tasks RBAC', () => {
 
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
+    logger.success('TK12 passed');
+
   });
 
   // ── Test 2: Restricted user creates own quick task ────────────────────────
@@ -42,6 +44,8 @@ test.describe('Tasks RBAC', () => {
     const taskId = await tasksPage.createQuickTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK13 passed');
+
   });
 
   // ── Test 3: Restricted user creates own detailed task ────────────────────
@@ -57,6 +61,8 @@ test.describe('Tasks RBAC', () => {
     const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK14 passed');
+
   });
 
   // ── Test 4: Restricted user edits own task ────────────────────────────────
@@ -74,6 +80,8 @@ test.describe('Tasks RBAC', () => {
 
     await tasksPage.updateTask(updatedData, originalData.name, taskId);
     await tasksPage.assertTaskUpdated(updatedData, taskId);
+    logger.success('TK15 passed');
+
   });
 
   // ── Test 5: Restricted user marks own task as complete ───────────────────
@@ -92,6 +100,8 @@ test.describe('Tasks RBAC', () => {
     await tasksPage.openTaskInDetailPanel(taskData.name, taskId);
     await tasksPage.markTaskAsComplete(taskId);
     logger.success('Restricted user marked own task as complete');
+    logger.success('TK16 passed');
+
   });
 
   // ── Test 6: Restricted user CANNOT see admin task (not assigned) ──────────
@@ -116,6 +126,8 @@ test.describe('Tasks RBAC', () => {
     // Restricted user searches — must NOT find it
     await restrictedTasks.goToTasksList();
     await restrictedTasks.assertTaskNotInList(adminData.name);
+    logger.success('TK17 passed');
+
   });
 
   // ── Test 7: Restricted user CAN see AND edit admin task when assigned ──────
@@ -182,6 +194,8 @@ test.describe('Tasks RBAC', () => {
     const updatedVisible = await restrictedPage.locator(`li#task_${taskId}`).isVisible().catch(() => false);
     if (!updatedVisible) throw new Error(`Updated task ${taskId} not found for restricted user after edit`);
     logger.success('Restricted user successfully edited admin-assigned task');
+    logger.success('TK18 passed');
+
   });
 
 
@@ -203,6 +217,8 @@ test.describe('Tasks RBAC', () => {
     const noteText = `Restricted user note ${Date.now()} — automation test`;
     await tasksPage.addNoteToTask(noteText);
     await tasksPage.assertNoteAdded(noteText);
+    logger.success('TK19 passed');
+
   });
 
 
@@ -230,6 +246,8 @@ test.describe('Tasks RBAC', () => {
 
     // WHY: Restricted user is only assignee — cannot delete admin-owned task
     await restrictedTasks.assertDeleteOptionNotVisible(taskId!);
+    logger.success('TK20 passed');
+
   });
 
 
@@ -266,6 +284,8 @@ test.describe('Tasks RBAC', () => {
     const adminTaskNote = `Restricted assignee note ${Date.now()} — admin task`;
     await restrictedTasks.addNoteToTask(adminTaskNote);
     await restrictedTasks.assertNoteAdded(adminTaskNote);
+    logger.success('TK21 passed');
+
   });
 
 });

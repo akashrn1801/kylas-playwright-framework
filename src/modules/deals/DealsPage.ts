@@ -438,11 +438,15 @@ export class DealsPage extends BasePage {
     await pipelineOption.click();
     logger.success('Pipeline selected');
 
-    // Associated Contacts
-    await this.selectFirstOptionFromDropdown(this.associatedContactsInput(), 'associated contact');
-
-    // Associated Company
-    await this.selectFirstOptionFromDropdown(this.associatedCompanyInput(), 'associated company');
+    // Associated Contacts + Company
+    // WHY: Skip when skipAssociatedEntities=true — used in RBAC tests to create
+    // deals with no linked entities so restricted user cannot see related quotations.
+    if (!data.skipAssociatedEntities) {
+      await this.selectFirstOptionFromDropdown(this.associatedContactsInput(), 'associated contact');
+      await this.selectFirstOptionFromDropdown(this.associatedCompanyInput(), 'associated company');
+    } else {
+      logger.info('Skipping associated contact and company (skipAssociatedEntities=true)');
+    }
 
     // WHY: Add random number of products (1-3) to exercise product table
     const productCount = Math.floor(Math.random() * 3) + 1;

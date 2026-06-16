@@ -13,6 +13,8 @@ test.describe('Deals RBAC', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
+    logger.success('D10 passed');
+
   });
 
   test('@regression restricted user can create a deal', async ({ restrictedPage }) => {
@@ -22,6 +24,8 @@ test.describe('Deals RBAC', () => {
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     await dealsPage.assertDealCreated(dealData, dealId ?? undefined);
+    logger.success('D11 passed');
+
   });
 
   test('@regression restricted user can edit own deal', async ({ restrictedPage }) => {
@@ -33,6 +37,8 @@ test.describe('Deals RBAC', () => {
     const updatedData = generateDealData();
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
     await dealsPage.assertDealUpdated(updatedData);
+    logger.success('D12 passed');
+
   });
 
 
@@ -151,6 +157,8 @@ test.describe('Deals RBAC', () => {
     } catch (error) {
       logger.warn(`Contact owner verification skipped: ${String(error)}`);
     }
+    logger.success('D13 passed');
+
   });
 
   // ──────────────────────────────────────────────────────────
@@ -183,6 +191,8 @@ test.describe('Deals RBAC', () => {
       // Redirected away — also valid RBAC behaviour
       logger.success('Restricted user redirected from admin deal — RBAC working');
     }
+    logger.success('D14 passed');
+
   });
 
   // WHY: generateAdminDealData() uses ADM<timestamp> prefix — guaranteed
@@ -196,6 +206,8 @@ test.describe('Deals RBAC', () => {
     const restrictedDealsPage = new DealsPage(restrictedPage);
     await restrictedDealsPage.goToDealsList();
     await restrictedDealsPage.assertDealNotInList(adminDealData.name);
+    logger.success('D15 passed');
+
   });
 
 });

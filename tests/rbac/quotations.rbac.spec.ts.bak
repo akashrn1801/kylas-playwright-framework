@@ -1,0 +1,386 @@
+import { test, expect } from '../../src/fixtures/index';
+import { QuotationsPage } from '../../src/modules/quotations/QuotationsPage';
+import {
+  generateAdminQuotationData,
+  generateRestrictedQuotationData,
+  generateProductRowData,
+} from '../../src/data/factories/quotationFactory';
+import { logger } from '../../src/utils/logger';
+import { config } from '../../config/config';
+
+test.describe('Quotations — RBAC', () => {
+
+  // ─── T5 ───────────────────────────────────────────────────────────────────
+  test('@smoke @regression restricted user should navigate to quotations list', async ({ restrictedPage }) => {
+    const quotationsPage = new QuotationsPage(restrictedPage);
+
+    await quotationsPage.goToQuotationsList();
+    await quotationsPage.assertOnListPage();
+
+    logger.success('T5 passed');
+  });
+
+  // ─── T6 ───────────────────────────────────────────────────────────────────
+  test('@regression restricted user should create a quotation with accessible deal', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
+
+    const quotationsPage = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+
+    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    await quotationsPage.assertQuotationInList(data.quotationNumber);
+
+    if (id) {
+      await quotationsPage.goToQuotationDetail(id);
+      await quotationsPage.assertOnDetailPage(id);
+    }
+
+    logger.success('T6 passed');
+  });
+
+  // ─── T7 ───────────────────────────────────────────────────────────────────
+  test('@regression restricted user should handle inaccessible entity error and retry successfully', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Use admin deal — which has company/contact restricted user cannot access
+    const data = generateRestrictedQuotationData({
+      dealName: config.deals.adminDealName,
+    });
+
+    await restrictedQuotationsPage.goToQuotationsList();
+    await restrictedQuotationsPage.openCreateForm();
+    await restrictedQuotationsPage.fillQuotationForm(data);
+
+    // Intercept the API response to read the error
+    let errorCode = '';
+    let errorMessage = '';
+    restrictedPage.on('response', async (response) => {
+      if (
+        response.url().includes('/quotations') &&
+        response.request().method() === 'POST' &&
+        response.status() >= 400
+      ) {
+        const body = await response.json().catch(() => ({}));
+        const errors = body?.errors || body?.validationErrors || [];
+        if (errors.length > 0) {
+          errorCode = errors[0]?.errorCode || '';
+          errorMessage = errors[0]?.message || '';
+        }
+        logger.warn(`API error — code: ${errorCode}, message: ${errorMessage}`);
+      }
+    });
+
+    // First save attempt — expect error
+    await restrictedQuotationsPage.saveQuotationExpectingError();
+    await restrictedQuotationsPage.assertErrorToast();
+
+    logger.warn(`Inaccessible entity detected — errorCode: ${errorCode}, message: ${errorMessage}`);
+
+    // Remove inaccessible entity based on error message
+    if (errorMessage.toLowerCase().includes('company')) {
+      logger.info('Removing inaccessible company from form');
+      await restrictedQuotationsPage.clearAssociatedCompany();
+      logger.warn('NOTE: Company was inaccessible for restricted user — removed before retry');
+    } else {
+      logger.info('Removing inaccessible contact from form');
+      await restrictedQuotationsPage.clearAssociatedContacts();
+      logger.warn('NOTE: Contact was inaccessible for restricted user — removed before retry');
+    }
+
+    // Retry save
+    const id = await restrictedQuotationsPage.saveQuotation();
+    await restrictedQuotationsPage.assertSuccessToast();
+    await restrictedQuotationsPage.assertOnListPage();
+    await restrictedQuotationsPage.assertQuotationInList(data.quotationNumber);
+
+    logger.success('T7 passed — inaccessible entity handled, quotation created on retry');
+  });
+
+  // ─── T8 ───────────────────────────────────────────────────────────────────
+  test('@regression restricted user should not see admin-owned quotation in list', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Admin creates quotation — owner stays as admin
+    const adminData = generateAdminQuotationData();
+    await adminQuotationsPage.createQuotation(adminData);
+    await adminQuotationsPage.assertQuotationInList(adminData.quotationNumber);
+
+    // Restricted user searches for admin's quotation
+    await restrictedQuotationsPage.assertQuotationNotInList(adminData.quotationNumber);
+
+    logger.success('T8 passed — restricted user cannot see admin quotation');
+  });
+
+  // ─── T9 ───────────────────────────────────────────────────────────────────
+  test('@regression restricted user should update own quotation', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
+
+    const quotationsPage = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+    const updatedSummary = `RES Updated ${Date.now()}`;
+
+    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+
+    await quotationsPage.updateQuotation(data.quotationNumber, {
+      summary: updatedSummary,
+      status: 'Negotiation',
+      additionalDiscount: 5,
+    }, id ?? undefined);
+
+    const bodyText = await restrictedPage.locator('body').innerText();
+    expect(bodyText).toContain(updatedSummary);
+    await quotationsPage.assertStatusOnDetailPage('Negotiation');
+
+    logger.success('T9 passed');
+  });
+
+  // ─── T10 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should see and edit quotation when set as owner by admin', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Admin creates quotation and sets owner = restricted user
+    const adminData = generateAdminQuotationData();
+    const restrictedQuotationsPageTemp = new QuotationsPage(restrictedPage);
+    const restrictedUserName = await restrictedQuotationsPageTemp.getLoggedInUserName('restricted');
+
+    const { id, dealName: adminDealName } = await adminQuotationsPage.createQuotationWithOwner(adminData, restrictedUserName);
+
+    // Restricted user should now see the quotation
+    await restrictedQuotationsPage.goToQuotationsList();
+    await restrictedQuotationsPage.searchQuotation(adminData.quotationNumber);
+
+    const found = await restrictedPage
+      .locator('tr, [class*="list-row"]')
+      .filter({ hasText: adminData.quotationNumber })
+      .first()
+      .isVisible()
+      .catch(() => false);
+    expect(found).toBe(true);
+    logger.success('Restricted user can see quotation set as owner by admin');
+
+    // Restricted user opens and edits
+    await restrictedQuotationsPage.searchAndOpenQuotation(adminData.quotationNumber, id ?? undefined);
+    await restrictedQuotationsPage.assertOnDetailPage();
+
+    // Deal chip visible (deal is shared) — deal selected randomly so check any chip exists
+    const chips10 = restrictedPage.locator(".related-entity-container");
+    if (await chips10.count() === 0) throw new Error("No entity chips on detail page");
+
+    // Edit as restricted user
+    const updatedSummary = `Restricted edit ${Date.now()}`;
+    await restrictedQuotationsPage.clickEditButton();
+    await restrictedQuotationsPage.fillEditForm({ summary: updatedSummary });
+    await restrictedQuotationsPage.saveQuotation();
+    await restrictedQuotationsPage.assertSuccessToast();
+
+    const bodyText = await restrictedPage.locator('body').innerText();
+    expect(bodyText).toContain(updatedSummary);
+
+    logger.success('T10 passed — restricted user saw and edited admin-created quotation as owner');
+  });
+
+  // ─── T22 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should verify all field values on detail page after create', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
+
+    const quotationsPage = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData({ status: 'Draft' });
+
+    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+
+    if (id) {
+      await quotationsPage.goToQuotationDetail(id);
+    } else {
+      await quotationsPage.searchAndOpenQuotation(data.quotationNumber);
+    }
+
+    await quotationsPage.assertDetailPageFields(data);
+    // Deal selected randomly — assert any entity chip exists
+    const chips22 = restrictedPage.locator(".related-entity-container");
+    if (await chips22.count() === 0) throw new Error("No entity chips on detail page");
+
+    const bodyText = await restrictedPage.locator('body').innerText();
+    expect(bodyText).toContain(data.quotationNumber);
+    expect(bodyText.toLowerCase()).toContain(data.summary.toLowerCase());
+
+    logger.success('T22 passed');
+  });
+
+  // ─── T23 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should verify grand total math', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
+
+    const quotationsPage = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+    const productRow = generateProductRowData({ discount: 3, tax: 5 });
+
+    await quotationsPage.goToQuotationsList();
+    await quotationsPage.openCreateForm();
+    await quotationsPage.fillQuotationForm(data);
+    await quotationsPage.editProductRow(0, productRow);
+
+    await quotationsPage.fillEditForm({
+      additionalDiscount: 5,
+      additionalTax: 3,
+      adjustment: 1,
+    });
+
+    const totals = await quotationsPage.assertGrandTotalMath();
+    logger.info(`Grand Total: ${totals.grandTotal}`);
+
+    await quotationsPage.saveQuotation();
+    await quotationsPage.assertSuccessToast();
+
+    logger.success('T23 passed');
+  });
+
+  // ─── T24 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should download own quotation and verify file', async ({ restrictedPage }) => {
+    test.setTimeout(480000);
+
+    const quotationsPage = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+
+    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+
+    if (id) {
+      await quotationsPage.goToQuotationDetail(id);
+    } else {
+      await quotationsPage.searchAndOpenQuotation(data.quotationNumber);
+    }
+
+    const { filename, size } = await quotationsPage.downloadQuotation();
+
+    expect(filename).toContain('.pdf');
+    expect(filename).toContain('Quotation_');
+    expect(size).toBeGreaterThan(0);
+
+    logger.success(`T24 passed — downloaded: ${filename} (${size} bytes)`);
+  });
+
+  // ─── T25 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should see inaccessible entity chip on detail page', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Admin creates quotation with owner = restricted user
+    // Admin-owned company/contact will be inaccessible to restricted user
+    const adminData = generateAdminQuotationData();
+    const restrictedQuotationsPageTemp = new QuotationsPage(restrictedPage);
+    const restrictedUserName = await restrictedQuotationsPageTemp.getLoggedInUserName('restricted');
+
+    const { id, dealName: adminDealName } = await adminQuotationsPage.createQuotationWithOwner(adminData, restrictedUserName);
+
+    // Restricted user opens detail page
+    if (id) {
+      await restrictedPage.goto(`${config.appUrl}/sales/quotations/details/${id}`);
+    } else {
+      await restrictedQuotationsPage.searchAndOpenQuotation(adminData.quotationNumber);
+    }
+
+    // Deal chip visible (deal is shared via ownership) — deal selected randomly
+    const chips25 = restrictedPage.locator(".related-entity-container");
+    if (await chips25.count() === 0) throw new Error("No entity chips on detail page");
+
+    // Company and contact chips show name in DOM even though hover shows no-access error
+    // The name is still rendered — only the hover popup API call returns 404
+    const entityChips = restrictedPage.locator('.related-entity-container');
+    const chipCount = await entityChips.count();
+    logger.info(`Entity chips on detail page: ${chipCount}`);
+    expect(chipCount).toBeGreaterThan(0);
+
+    logger.success('T25 passed — entity chips visible, hover error expected for inaccessible entities');
+  });
+
+  // ─── T26 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should replace inaccessible company with own company during edit', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Admin creates quotation with owner = restricted user + admin-owned company
+    const adminData = generateAdminQuotationData();
+    const restrictedQuotationsPageTemp = new QuotationsPage(restrictedPage);
+    const restrictedUserName = await restrictedQuotationsPageTemp.getLoggedInUserName('restricted');
+
+    const { id, dealName: adminDealName } = await adminQuotationsPage.createQuotationWithOwner(adminData, restrictedUserName);
+
+    // Restricted user opens and edits — replaces company with own
+    if (id) {
+      await restrictedPage.goto(`${config.appUrl}/sales/quotations/details/${id}`);
+    } else {
+      await restrictedQuotationsPage.searchAndOpenQuotation(adminData.quotationNumber);
+    }
+
+    await restrictedQuotationsPage.clickEditButton();
+
+    // Clear inaccessible company and add own
+    await restrictedQuotationsPage.clearAssociatedCompany();
+    // Add restricted user's own company — configure in env
+    // await restrictedQuotationsPage.fillAssociatedCompany(config.deals.restrictedCompanyName);
+
+    await restrictedQuotationsPage.saveQuotation();
+    await restrictedQuotationsPage.assertSuccessToast();
+
+    logger.success('T26 passed — NOTE: add restrictedCompanyName to config for full assertion');
+  });
+
+  // ─── T27 ──────────────────────────────────────────────────────────────────
+  test('@regression restricted user should not be able to find quotation owned by admin', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminQuotationsPage = new QuotationsPage(adminPage);
+    const restrictedQuotationsPage = new QuotationsPage(restrictedPage);
+
+    // Admin creates quotation — owner stays as admin (not shared)
+    const adminData = generateAdminQuotationData();
+    await adminQuotationsPage.createQuotation(adminData);
+    await adminQuotationsPage.assertQuotationInList(adminData.quotationNumber);
+
+    // Restricted user cannot find it
+    await restrictedQuotationsPage.assertQuotationNotInList(adminData.quotationNumber);
+
+    logger.success('T27 passed — restricted user cannot access admin-owned quotation');
+  });
+
+  // ─── T28 ──────────────────────────────────────────────────────────────────
+  test('@prodSafe restricted user should navigate to quotations list on production', async ({ restrictedPage }) => {
+    const quotationsPage = new QuotationsPage(restrictedPage);
+
+    await quotationsPage.goToQuotationsList();
+    await quotationsPage.assertOnListPage();
+
+    logger.success('T28 passed');
+  });
+
+});

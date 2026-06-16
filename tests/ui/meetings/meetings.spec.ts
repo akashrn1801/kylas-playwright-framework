@@ -19,6 +19,8 @@ test.describe('Meetings', () => {
 
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
+    logger.success('M1 passed');
+
   });
 
   // ── Test 2: Create ─────────────────────────────────────────────────────────
@@ -49,6 +51,8 @@ test.describe('Meetings', () => {
     } else {
       logger.warn('Invitee section not visible on this env — skipping invitee assertion');
     }
+    logger.success('M2 passed');
+
   });
 
   // ── Test 3: Update ─────────────────────────────────────────────────────────
@@ -86,6 +90,8 @@ test.describe('Meetings', () => {
 
     // Assert status changed on detail page
     await meetingsPage.assertMeetingStatus(newStatus);
+    logger.success('M3 passed');
+
   });
 
   // ── Test 4: Medium selection — calendar fallback behaviour ─────────────────
@@ -112,6 +118,8 @@ test.describe('Meetings', () => {
       throw new Error(`Unexpected medium value on detail page: "${mediumValue}"`);
     }
     logger.info(`Meeting created with medium: ${mediumValue}`);
+    logger.success('M4 passed');
+
   });
 
   // ── Test 5: prodSafe — read-only navigation ────────────────────────────────
@@ -130,6 +138,8 @@ test.describe('Meetings', () => {
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
     await meetingsPage.rescheduleMeeting(meetingData.title);
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
+    logger.success('M5 passed');
+
   });
 
   test('@prodSafe meetings list page should be accessible', async ({ adminPage }) => {
@@ -137,6 +147,8 @@ test.describe('Meetings', () => {
 
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
+    logger.success('M6 passed');
+
   });
 
   // ── Test: prodSafe — GPS address field works ─────────────────────────────
@@ -202,6 +214,8 @@ test.describe('Meetings', () => {
     await adminPage.keyboard.press('Escape');
     await adminPage.waitForTimeout(500);
     logger.success('GPS address test completed');
+    logger.success('M7 passed');
+
   });
 
 });
