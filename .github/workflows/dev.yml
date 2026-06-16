@@ -48,7 +48,7 @@ jobs:
           NOTIFY_ENABLED: 'true'
           REPORT_PATH: reports/playwright-report/results.json
         run: npm run notify || true
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: playwright-report-dev
