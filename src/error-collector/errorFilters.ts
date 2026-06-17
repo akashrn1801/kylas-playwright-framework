@@ -27,6 +27,18 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   /\/v1\/deals\/search/i,
   /\/v1\/meetings\/search/i,
   /\/v1\/tasks\/search/i,
+  // Score rules service — intermittently down on QA (infra issue, not app bug)
+  /\/v1\/score-rules\//i,
+  // Tenant usage — aborts on navigation
+  /\/v1\/tenants\/usage/i,
+  // Meetings layout list — aborts on navigation
+  /\/v1\/meetings\/layout\/list/i,
+  // Contact search — aborts on navigation
+  /\/v1\/search\/contact/i,
+  // Entity label + user settings — aborts on navigation
+  /\/v1\/entities\/label/i,
+  /\/v1\/users\/me\/settings/i,
+  /\/v1\/users\/me\/permissions/i,
   // Picklists standard — aborts on navigation (background prefetch)
   /\/v1\/picklists\/standard/i,
   // Quotation API calls that abort on navigation
@@ -52,6 +64,8 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
 ];
 
 export const NOISE_PATTERNS: RegExp[] = [
+  // WHY: HTTP 429 rate limiting — QA environment under load, not app bugs
+  /HTTP 429/i,
   // WHY: "Failed to load resource" console errors are always duplicated by response-error
   // which captures full details (method, status, body). Filter the console duplicate.
   /Failed to load resource: the server responded with a status of/i,

@@ -354,10 +354,31 @@ export class QuotationsPage extends BasePage {
     logger.info(`Searching quotation: ${value}`);
 
     // WHY: Modal or tooltip overlays intercept pointer events on the search icon.
+    // Bootstrap modals keep aria-hidden="true" + d-block during fade-out animation.
+    // waitFor('hidden') checks CSS visibility — wait for d-block class to be removed instead.
     const modal = this.page.locator('#editEntityModal');
     const isModalVisible = await modal.isVisible().catch(() => false);
     if (isModalVisible) {
-      await modal.waitFor({ state: 'hidden', timeout: 15000 });
+      try {
+        // Wait for modal to lose d-block class (Bootstrap fade-out complete)
+        // WHY: Using string form to avoid TypeScript DOM lib requirement in Node context
+        await this.page.waitForFunction(
+          '!document.getElementById("editEntityModal") || !document.getElementById("editEntityModal").classList.contains("d-block")',
+          { timeout: 15000 }
+        );
+      } catch {
+        // WHY: Modal has data-keyboard="false" so Escape doesn't work
+        // Force close via JavaScript DOM manipulation (string form avoids TS DOM lib error)
+        logger.warn('Modal still visible after 15s — force closing via JS');
+        await this.page.evaluate(`
+          const el = document.getElementById('editEntityModal');
+          if (el) { el.classList.remove('show', 'd-block'); el.style.display = 'none'; }
+          const backdrop = document.querySelector('.modal-backdrop');
+          if (backdrop) backdrop.remove();
+          document.body.classList.remove('modal-open');
+        `);
+        await this.page.waitForTimeout(300);
+      }
     }
 
     // WHY: .portal-element tooltips float above the list and block clicks — move mouse away.
@@ -955,8 +976,43 @@ export class QuotationsPage extends BasePage {
 
   // ─── 10. Workflow wrappers ────────────────────────────────────────────────────
 
+  private async dismissModalIfOpen(): Promise<void> {
+    try {
+      const modal = this.page.locator('#editEntityModal.d-block');
+      const isOpen = await modal.isVisible({ timeout: 1000 }).catch(() => false);
+      if (isOpen) {
+        logger.warn('Edit modal found open — clicking close button to dismiss');
+        // WHY: Modal has data-keyboard="false" and data-backdrop="static"
+        // so Escape key and backdrop click don't work — must click close button
+        const closeBtn = this.page.locator('#editEntityModal .close, #editEntityModal [data-dismiss="modal"]').first();
+        const closeBtnVisible = await closeBtn.isVisible({ timeout: 2000 }).catch(() => false);
+        if (closeBtnVisible) {
+          await closeBtn.click();
+        } else {
+          // Force close via JavaScript
+          await this.page.evaluate(`
+            const modal = document.getElementById('editEntityModal');
+            if (modal) {
+              modal.classList.remove('show', 'd-block');
+              modal.style.display = 'none';
+            }
+            const backdrop = document.querySelector('.modal-backdrop');
+            if (backdrop) backdrop.remove();
+            document.body.classList.remove('modal-open');
+          `);
+        }
+        await this.page.waitForTimeout(500);
+        logger.info('Edit modal dismissed');
+      }
+    } catch {
+      // modal not present — continue
+    }
+  }
+
   async createQuotation(data: QuotationData): Promise<{ id: string | null; dealName: string }> {
     logger.info(`Creating quotation: ${data.quotationNumber}`);
+    // WHY: Previous test may have left edit modal open — dismiss before navigating
+    await this.dismissModalIfOpen();
     await this.goToQuotationsList();
     await this.openCreateForm();
     const selectedDeal = await this.fillQuotationForm(data);

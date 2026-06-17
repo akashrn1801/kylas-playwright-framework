@@ -53,6 +53,7 @@ jobs:
         if: always()
         env:
           ENV: qa
+          BRANCH_NAME: sandbox
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com
