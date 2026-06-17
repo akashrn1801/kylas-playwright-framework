@@ -1,43 +1,34 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import {
-  DealData,
-  formatDateForCalendarLabel,
-} from '../../data/factories/dealFactory';
+import { DealData, formatDateForCalendarLabel } from '../../data/factories/dealFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
 export class DealsPage extends BasePage {
-
   // ──────────────────────────────────────────────────────────
   // Retry Config
   // ──────────────────────────────────────────────────────────
 
-  private readonly retryConfig = {
-    qa: { retries: 5, wait: 3000 },
-    staging: { retries: 3, wait: 5000 },
-    prod: { retries: 5, wait: 3000 },
-  };
+  // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
+  private get retryConfig() {
+    return config.searchRetry[config.env as keyof typeof config.searchRetry];
+  }
 
   // ──────────────────────────────────────────────────────────
   // Locators — List Page
   // ──────────────────────────────────────────────────────────
 
-  private readonly addButton = (): Locator =>
-    this.page.getByRole('button', { name: 'Add' });
+  private readonly addButton = (): Locator => this.page.getByRole('button', { name: 'Add' });
 
   private readonly searchInput = (): Locator =>
     // WHY: QA uses #deals-search-input, prod uses placeholder='Search'
     this.page.locator('#deals-search-input, input[placeholder="Search"]').first();
 
-  private readonly searchIcon = (): Locator =>
-    this.page.locator('.input-group-text > svg');
+  private readonly searchIcon = (): Locator => this.page.locator('.input-group-text > svg');
 
-  private readonly searchLoader = (): Locator =>
-    this.page.locator('.spinner, .loader, .loading');
+  private readonly searchLoader = (): Locator => this.page.locator('.spinner, .loader, .loading');
 
-  private readonly dealTable = (): Locator =>
-    this.page.locator('.rt-table');
+  private readonly dealTable = (): Locator => this.page.locator('.rt-table');
 
   private readonly dealRowByName = (name: string): Locator =>
     this.page
@@ -49,8 +40,7 @@ export class DealsPage extends BasePage {
   // Locators — Form
   // ──────────────────────────────────────────────────────────
 
-  private readonly nameInput = (): Locator =>
-    this.page.locator('[id="0_11_input_name"]');
+  private readonly nameInput = (): Locator => this.page.locator('[id="0_11_input_name"]');
 
   private readonly estimatedClosureDateInput = (): Locator =>
     this.page.getByPlaceholder('Pick a Date');
@@ -62,7 +52,10 @@ export class DealsPage extends BasePage {
     this.page.getByLabel(label, { exact: false });
 
   private readonly pipelineControl = (): Locator =>
-    this.page.locator('div').filter({ hasText: /^Search pipeline$/ }).nth(2);
+    this.page
+      .locator('div')
+      .filter({ hasText: /^Search pipeline$/ })
+      .nth(2);
 
   private readonly pipelineStageInput = (): Locator =>
     this.page.locator('[id="0_32_input_pipelineStage"]');
@@ -82,14 +75,11 @@ export class DealsPage extends BasePage {
   private readonly estimatedValueInput = (): Locator =>
     this.page.locator('[id="1_21_input_estimatedValue"]');
 
-  private readonly addPaymentButton = (): Locator =>
-    this.page.getByText('Add Payment');
+  private readonly addPaymentButton = (): Locator => this.page.getByText('Add Payment');
 
-  private readonly installmentsModal = (): Locator =>
-    this.page.locator('.installments-modal');
+  private readonly installmentsModal = (): Locator => this.page.locator('.installments-modal');
 
-  private readonly installmentsNumberInput = (): Locator =>
-    this.page.getByRole('spinbutton');
+  private readonly installmentsNumberInput = (): Locator => this.page.getByRole('spinbutton');
 
   private readonly installmentsConfirmButton = (): Locator =>
     this.page.getByRole('button', { name: 'Confirm' });
@@ -107,40 +97,39 @@ export class DealsPage extends BasePage {
     this.page.locator('.part-payments-summary .summary-row').nth(2).locator('.summary-value');
 
   private readonly campaignControl = (): Locator =>
-    this.page.locator('[id="57510"] > .tab-inner-content > .row > div > .form-group > .search-autocomplete > .css-2b097c-container > .is-invalid__control > .is-invalid__indicators > .is-invalid__indicator > .css-19bqh2r').first();
+    this.page
+      .locator(
+        '[id="57510"] > .tab-inner-content > .row > div > .form-group > .search-autocomplete > .css-2b097c-container > .is-invalid__control > .is-invalid__indicators > .is-invalid__indicator > .css-19bqh2r'
+      )
+      .first();
 
   private readonly sourceControl = (): Locator =>
-    this.page.locator('div').filter({ hasText: /^Choose$/ }).nth(3);
+    this.page
+      .locator('div')
+      .filter({ hasText: /^Choose$/ })
+      .nth(3);
 
-  private readonly subSourceInput = (): Locator =>
-    this.page.locator('[id="3_21_input_subSource"]');
+  private readonly subSourceInput = (): Locator => this.page.locator('[id="3_21_input_subSource"]');
 
-  private readonly utmSourceInput = (): Locator =>
-    this.page.locator('[id="3_22_input_utmSource"]');
+  private readonly utmSourceInput = (): Locator => this.page.locator('[id="3_22_input_utmSource"]');
 
   private readonly utmCampaignInput = (): Locator =>
     this.page.locator('[id="3_31_input_utmCampaign"]');
 
-  private readonly utmMediumInput = (): Locator =>
-    this.page.locator('[id="3_32_input_utmMedium"]');
+  private readonly utmMediumInput = (): Locator => this.page.locator('[id="3_32_input_utmMedium"]');
 
   private readonly utmContentInput = (): Locator =>
     this.page.locator('[id="3_41_input_utmContent"]');
 
-  private readonly utmTermInput = (): Locator =>
-    this.page.locator('[id="3_42_input_utmTerm"]');
+  private readonly utmTermInput = (): Locator => this.page.locator('[id="3_42_input_utmTerm"]');
 
-  private readonly saveButton = (): Locator =>
-    this.page.getByLabel('Add Deal').getByText('Save');
+  private readonly saveButton = (): Locator => this.page.getByLabel('Add Deal').getByText('Save');
 
-  private readonly saveEditButton = (): Locator =>
-    this.page.getByText('Save');
+  private readonly saveEditButton = (): Locator => this.page.getByText('Save');
 
-  private readonly editIconButton = (): Locator =>
-    this.page.locator('#edit-action-btn');
+  private readonly editIconButton = (): Locator => this.page.locator('#edit-action-btn');
 
-  private readonly editModal = (): Locator =>
-    this.page.locator('#editEntityModal');
+  private readonly editModal = (): Locator => this.page.locator('#editEntityModal');
 
   private readonly modalCancelButton = (): Locator =>
     this.page.locator('button[data-dismiss="modal"]').first();
@@ -162,14 +151,17 @@ export class DealsPage extends BasePage {
   // ── Edit form — pipeline stage ────────────────────────────
 
   private readonly pipelineStageDropdownIndicator = (): Locator =>
-    this.page.locator('[id="0_32_input_pipelineStage"]')
+    this.page
+      .locator('[id="0_32_input_pipelineStage"]')
       .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]')
       .locator('.is-invalid__dropdown-indicator');
 
   private readonly stageReasonDropdownIndicator = (): Locator =>
-    this.page.locator('#stage_reason')
+    this.page
+      .locator('#stage_reason')
       .locator('xpath=ancestor::div[contains(@class,"container")]')
-      .locator('[class*="indicator"]:not([class*="separator"])').last();
+      .locator('[class*="indicator"]:not([class*="separator"])')
+      .last();
 
   // ──────────────────────────────────────────────────────────
   // Constructor
@@ -183,19 +175,22 @@ export class DealsPage extends BasePage {
   // Private Helpers
   // ──────────────────────────────────────────────────────────
 
-  private getCurrentRetryConfig() {
-    return this.retryConfig[config.env as keyof typeof this.retryConfig];
-  }
-
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page.waitForResponse(
-        (res) => res.url().includes('/v1/deals') && res.request().method() === 'GET' && res.status() === 200,
-        { timeout: config.timeouts.navigation }
-      ).catch(() => null),
-      this.dealTable().waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+      this.page
+        .waitForResponse(
+          (res) =>
+            res.url().includes('/v1/deals') &&
+            res.request().method() === 'GET' &&
+            res.status() === 200,
+          { timeout: config.timeouts.navigation }
+        )
+        .catch(() => null),
+      this.dealTable()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
     ]);
     await expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation });
     await this.waitForLoaderToDisappear();
@@ -266,7 +261,7 @@ export class DealsPage extends BasePage {
           response.url().includes('/search/deal') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 },
+        { timeout: 15000 }
       );
     } catch {
       // Search API did not fire — wait briefly and continue
@@ -282,7 +277,7 @@ export class DealsPage extends BasePage {
           (res.url().includes('/deals') || res.url().includes('/deal')) &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: config.timeouts.navigation },
+        { timeout: config.timeouts.navigation }
       );
       const body = await response.json();
       const dealId = body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -295,7 +290,7 @@ export class DealsPage extends BasePage {
   }
 
   private async retryFindDeal(name: string): Promise<boolean> {
-    const currentConfig = this.getCurrentRetryConfig();
+    const currentConfig = this.retryConfig;
     for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
       logger.info(`Search attempt ${attempt}/${currentConfig.retries}`);
       await this.goToDealsList();
@@ -318,12 +313,14 @@ export class DealsPage extends BasePage {
 
   private async selectFirstOptionFromDropdown(
     inputLocator: Locator,
-    description: string,
+    description: string
   ): Promise<void> {
     logger.info(`Selecting ${description}`);
     // WHY: Click the dropdown indicator arrow — more reliable than clicking input.
     // The indicator is the svg arrow at the right of the control.
-    const control = inputLocator.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    const control = inputLocator.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
     const indicator = control.locator('.is-invalid__dropdown-indicator');
     await indicator.waitFor({ state: 'visible', timeout: 10000 });
     await indicator.scrollIntoViewIfNeeded();
@@ -353,7 +350,9 @@ export class DealsPage extends BasePage {
     const selectedText = (await selectedOption.textContent())?.trim() ?? 'unknown';
     await selectedOption.click();
     await this.page.waitForTimeout(300);
-    logger.success(`${description} selected: "${selectedText}" (index ${randomIndex} of ${optionCount})`);
+    logger.success(
+      `${description} selected: "${selectedText}" (index ${randomIndex} of ${optionCount})`
+    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -442,7 +441,10 @@ export class DealsPage extends BasePage {
     // WHY: Skip when skipAssociatedEntities=true — used in RBAC tests to create
     // deals with no linked entities so restricted user cannot see related quotations.
     if (!data.skipAssociatedEntities) {
-      await this.selectFirstOptionFromDropdown(this.associatedContactsInput(), 'associated contact');
+      await this.selectFirstOptionFromDropdown(
+        this.associatedContactsInput(),
+        'associated contact'
+      );
       await this.selectFirstOptionFromDropdown(this.associatedCompanyInput(), 'associated company');
     } else {
       logger.info('Skipping associated contact and company (skipAssociatedEntities=true)');
@@ -503,12 +505,12 @@ export class DealsPage extends BasePage {
     }
 
     // UTM fields
-    await this.fill(this.subSourceInput(),   data.subSource,   'sub source');
-    await this.fill(this.utmSourceInput(),   data.utmSource,   'utm source');
+    await this.fill(this.subSourceInput(), data.subSource, 'sub source');
+    await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
     await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
-    await this.fill(this.utmMediumInput(),   data.utmMedium,   'utm medium');
-    await this.fill(this.utmContentInput(),  data.utmContent,  'utm content');
-    await this.fill(this.utmTermInput(),     data.utmTerm,     'utm term');
+    await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
+    await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
+    await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
 
     logger.success('Deal form filled');
   }
@@ -589,7 +591,7 @@ export class DealsPage extends BasePage {
 
   async assertPartPaymentsEqualSplit(
     numberOfInstallments: number,
-    totalValueText: string,
+    _totalValueText: string
   ): Promise<void> {
     logger.info('Asserting part payment equal split');
 
@@ -605,17 +607,21 @@ export class DealsPage extends BasePage {
     await expect(this.partPaymentSummaryAmountReceived()).toBeVisible();
     await expect(this.partPaymentSummaryRemainingBalance()).toBeVisible();
 
-    const actualTotal      = await this.partPaymentSummaryActualTotal().textContent();
-    const amountReceived   = await this.partPaymentSummaryAmountReceived().textContent();
+    const actualTotal = await this.partPaymentSummaryActualTotal().textContent();
+    const amountReceived = await this.partPaymentSummaryAmountReceived().textContent();
     const remainingBalance = await this.partPaymentSummaryRemainingBalance().textContent();
 
-    logger.info(`Actual Total: ${actualTotal} | Received: ${amountReceived} | Remaining: ${remainingBalance}`);
+    logger.info(
+      `Actual Total: ${actualTotal} | Received: ${amountReceived} | Remaining: ${remainingBalance}`
+    );
 
     // WHY: No payments received yet — remaining must equal actual total
     expect(actualTotal?.trim()).toBe(remainingBalance?.trim());
     expect(amountReceived?.toLowerCase()).toContain('0');
 
-    logger.success(`Part payment summary verified — ${numberOfInstallments} installment(s), total: ${actualTotal}`);
+    logger.success(
+      `Part payment summary verified — ${numberOfInstallments} installment(s), total: ${actualTotal}`
+    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -667,7 +673,10 @@ export class DealsPage extends BasePage {
     await statusIndicator.click();
 
     // Wait for options then click Received by text
-    const receivedOption = this.page.locator('.is-invalid__option').filter({ hasText: 'Received' }).first();
+    const receivedOption = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: 'Received' })
+      .first();
     await receivedOption.waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Use dispatchEvent for reliable click — dropdown may close
     // before a normal click registers on slower CI environments
@@ -736,16 +745,22 @@ export class DealsPage extends BasePage {
 
     // Read all three summary values
     const actualTotalEl = this.page
-      .locator('.part-payments-summary .summary-row').nth(0).locator('.summary-value');
+      .locator('.part-payments-summary .summary-row')
+      .nth(0)
+      .locator('.summary-value');
     const amountReceivedEl = this.page
-      .locator('.part-payments-summary .summary-row').nth(1).locator('.summary-value');
+      .locator('.part-payments-summary .summary-row')
+      .nth(1)
+      .locator('.summary-value');
     const remainingBalanceEl = this.page
-      .locator('.part-payments-summary .summary-row').nth(2).locator('.summary-value');
+      .locator('.part-payments-summary .summary-row')
+      .nth(2)
+      .locator('.summary-value');
 
     await actualTotalEl.waitFor({ state: 'visible', timeout: 10000 });
 
-    const totalText     = (await actualTotalEl.textContent())?.trim() ?? '';
-    const receivedText  = (await amountReceivedEl.textContent())?.trim() ?? '';
+    const totalText = (await actualTotalEl.textContent())?.trim() ?? '';
+    const receivedText = (await amountReceivedEl.textContent())?.trim() ?? '';
     const remainingText = (await remainingBalanceEl.textContent())?.trim() ?? '';
 
     logger.info(`Actual Total: ${totalText}`);
@@ -755,12 +770,15 @@ export class DealsPage extends BasePage {
     // WHY: Parse INR values to numbers for math verification.
     // Format is "INR 1,00,000" — remove "INR " and all commas then parse.
     const parseINR = (text: string): number => {
-      const cleaned = text.replace(/INR\s*/i, '').replace(/,/g, '').trim();
+      const cleaned = text
+        .replace(/INR\s*/i, '')
+        .replace(/,/g, '')
+        .trim();
       return parseFloat(cleaned) || 0;
     };
 
-    const total     = parseINR(totalText);
-    const received  = parseINR(receivedText);
+    const total = parseINR(totalText);
+    const received = parseINR(receivedText);
     const remaining = parseINR(remainingText);
 
     logger.info(`Parsed — Total: ${total} | Received: ${received} | Remaining: ${remaining}`);
@@ -829,11 +847,7 @@ export class DealsPage extends BasePage {
     return { dealId, totalValueText };
   }
 
-  async updateDeal(
-    newData: DealData,
-    originalName?: string,
-    dealId?: number,
-  ): Promise<void> {
+  async updateDeal(newData: DealData, originalName?: string, dealId?: number): Promise<void> {
     const searchName = originalName ?? newData.name;
     await this.searchAndOpenDeal(searchName, dealId);
     await this.clickEditIcon();
@@ -875,10 +889,7 @@ export class DealsPage extends BasePage {
     logger.success(`Pipeline stage verified: ${stageName}`);
   }
 
-  async changePipelineStageInEdit(
-    newStage: string,
-    stageReason?: string,
-  ): Promise<void> {
+  async changePipelineStageInEdit(newStage: string, stageReason?: string): Promise<void> {
     logger.info(`Changing pipeline stage to: ${newStage}`);
 
     const indicator = this.pipelineStageDropdownIndicator();
@@ -901,9 +912,8 @@ export class DealsPage extends BasePage {
       await reasonIndicator.waitFor({ state: 'visible', timeout: 10000 });
       await reasonIndicator.click();
 
-      const reasonText = stageReason ?? (
-        newStage === 'Closed Lost' ? 'No followup' : 'Budget does not match'
-      );
+      const reasonText =
+        stageReason ?? (newStage === 'Closed Lost' ? 'No followup' : 'Budget does not match');
       const reasonOption = this.page
         .locator('.is-invalid__option')
         .filter({ hasText: reasonText })
@@ -935,9 +945,7 @@ export class DealsPage extends BasePage {
     const valueToCheck = tooltipValue ?? displayValue;
     logger.info(`Actual value: ${valueToCheck}`);
     expect(valueToCheck).toContain('INR');
-    expect(
-      parseFloat(valueToCheck.replace(/INR\s*/i, '').replace(/,/g, ''))
-    ).toBeGreaterThan(0);
+    expect(parseFloat(valueToCheck.replace(/INR\s*/i, '').replace(/,/g, ''))).toBeGreaterThan(0);
     logger.success(`INR currency verified: ${valueToCheck}`);
   }
 
@@ -956,9 +964,16 @@ export class DealsPage extends BasePage {
     const remainingEl = modal.locator('.summary-card--remaining .summary-card__value span');
     await totalEl.waitFor({ state: 'visible', timeout: 5000 });
 
-    const totalVal = await totalEl.getAttribute('data-original-title') ?? await totalEl.textContent() ?? '';
-    const receivedVal = await receivedEl.getAttribute('data-original-title') ?? await receivedEl.textContent() ?? '';
-    const remainingVal = await remainingEl.getAttribute('data-original-title') ?? await remainingEl.textContent() ?? '';
+    const totalVal =
+      (await totalEl.getAttribute('data-original-title')) ?? (await totalEl.textContent()) ?? '';
+    const receivedVal =
+      (await receivedEl.getAttribute('data-original-title')) ??
+      (await receivedEl.textContent()) ??
+      '';
+    const remainingVal =
+      (await remainingEl.getAttribute('data-original-title')) ??
+      (await remainingEl.textContent()) ??
+      '';
 
     logger.info(`Total: ${totalVal} | Received: ${receivedVal} | Remaining: ${remainingVal}`);
 
@@ -970,7 +985,12 @@ export class DealsPage extends BasePage {
 
     // Verify math: Total - Received = Remaining (±1 rounding)
     const parseINR = (text: string): number =>
-      parseFloat(text.replace(/INR\s*/i, '').replace(/,/g, '').trim()) || 0;
+      parseFloat(
+        text
+          .replace(/INR\s*/i, '')
+          .replace(/,/g, '')
+          .trim()
+      ) || 0;
 
     const total = parseINR(totalVal);
     const received = parseINR(receivedVal);

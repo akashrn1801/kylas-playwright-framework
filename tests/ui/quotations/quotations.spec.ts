@@ -3,7 +3,6 @@ import { QuotationsPage } from '../../../src/modules/quotations/QuotationsPage';
 
 import {
   generateQuotationData,
-  generateAdminQuotationData,
   generateProductRowData,
   QuotationStatus,
 } from '../../../src/data/factories/quotationFactory';
@@ -11,7 +10,6 @@ import {
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Quotations — UI', () => {
-
   // ─── T1 ───────────────────────────────────────────────────────────────────
   test('@smoke @regression admin should navigate to quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
@@ -28,7 +26,7 @@ test.describe('Quotations — UI', () => {
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData();
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
     await quotationsPage.assertQuotationInList(data.summary);
 
     if (id) {
@@ -52,12 +50,16 @@ test.describe('Quotations — UI', () => {
     const data = generateQuotationData();
     const updatedSummary = `Updated ${Date.now()}`;
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
-    await quotationsPage.updateQuotation(data.quotationNumber, {
-      summary: updatedSummary,
-      status: QuotationStatus.Negotiation,
-    }, id ?? undefined);
+    await quotationsPage.updateQuotation(
+      data.quotationNumber,
+      {
+        summary: updatedSummary,
+        status: QuotationStatus.Negotiation,
+      },
+      id ?? undefined
+    );
 
     await quotationsPage.assertStatusOnDetailPage(QuotationStatus.Negotiation);
     const bodyText = await adminPage.locator('body').innerText();
@@ -81,7 +83,9 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T11 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should verify grand total math after editing discount and tax', async ({ adminPage }) => {
+  test('@regression admin should verify grand total math after editing discount and tax', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
@@ -113,13 +117,15 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T12 ──────────────────────────────────────────────────────────────────
-  test('@smoke @regression admin should verify all field values on detail page after create', async ({ adminPage }) => {
+  test('@smoke @regression admin should verify all field values on detail page after create', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData({ status: QuotationStatus.Draft });
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
@@ -141,22 +147,28 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T13 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should verify all updated field values on detail page after edit', async ({ adminPage }) => {
+  test('@regression admin should verify all updated field values on detail page after edit', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData();
     const updatedSummary = `Edited Summary ${Date.now()}`;
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
-    await quotationsPage.updateQuotation(data.quotationNumber, {
-      summary: updatedSummary,
-      status: QuotationStatus.Delivered,
-      additionalDiscount: 15,
-      additionalTax: 8,
-      adjustment: 3,
-    }, id ?? undefined);
+    await quotationsPage.updateQuotation(
+      data.quotationNumber,
+      {
+        summary: updatedSummary,
+        status: QuotationStatus.Delivered,
+        additionalDiscount: 15,
+        additionalTax: 8,
+        adjustment: 3,
+      },
+      id ?? undefined
+    );
 
     const bodyText = await adminPage.locator('body').innerText();
     expect(bodyText).toContain(updatedSummary);
@@ -166,13 +178,15 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T14 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should verify owner field on detail page after create', async ({ adminPage }) => {
+  test('@regression admin should verify owner field on detail page after create', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData();
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
@@ -188,13 +202,16 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T15 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should change owner during edit and verify on detail page', async ({ adminPage, restrictedPage }) => {
+  test('@regression admin should change owner during edit and verify on detail page', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData();
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
@@ -213,13 +230,15 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T16 ──────────────────────────────────────────────────────────────────
-  test('@smoke @regression admin should verify quotation status is Draft after create', async ({ adminPage }) => {
+  test('@smoke @regression admin should verify quotation status is Draft after create', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData({ status: QuotationStatus.Draft });
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
@@ -234,21 +253,24 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T17 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should verify status changes correctly through all transitions', async ({ adminPage }) => {
+  test('@regression admin should verify status changes correctly through all transitions', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData({ status: QuotationStatus.Draft });
-    const statuses: QuotationStatus[] = [QuotationStatus.Negotiation, QuotationStatus.Delivered, QuotationStatus.OnHold, QuotationStatus.Confirmed];
+    const statuses: QuotationStatus[] = [
+      QuotationStatus.Negotiation,
+      QuotationStatus.Delivered,
+      QuotationStatus.OnHold,
+      QuotationStatus.Confirmed,
+    ];
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     for (const status of statuses) {
-      await quotationsPage.updateQuotation(
-        data.quotationNumber,
-        { status },
-        id ?? undefined,
-      );
+      await quotationsPage.updateQuotation(data.quotationNumber, { status }, id ?? undefined);
       await quotationsPage.assertStatusOnDetailPage(status);
       logger.info(`Status transition verified: ${status}`);
     }
@@ -263,7 +285,7 @@ test.describe('Quotations — UI', () => {
     const quotationsPage = new QuotationsPage(adminPage);
     const data = generateQuotationData();
 
-    const { id, dealName: selectedDeal } = await quotationsPage.createQuotation(data);
+    const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
@@ -281,7 +303,9 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── T19 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should verify separate shipping address when toggle is off', async ({ adminPage }) => {
+  test('@regression admin should verify separate shipping address when toggle is off', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
@@ -298,14 +322,16 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.openCreateForm();
     await quotationsPage.fillQuotationForm(data);
 
-   await quotationsPage.assertShippingFieldsVisible();
+    await quotationsPage.assertShippingFieldsVisible();
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
     await quotationsPage.assertOnListPage();
     logger.success('T19 passed');
   });
   // ─── T20 ──────────────────────────────────────────────────────────────────
-  test('@smoke @regression admin should verify shipping copies billing address when toggle is on', async ({ adminPage }) => {
+  test('@smoke @regression admin should verify shipping copies billing address when toggle is on', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
@@ -321,7 +347,7 @@ test.describe('Quotations — UI', () => {
       .isChecked();
     expect(toggleChecked).toBe(true);
 
-    const id = await quotationsPage.saveQuotation();
+    const _id = await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
 
     logger.success('T20 passed');
@@ -341,11 +367,10 @@ test.describe('Quotations — UI', () => {
     // Add contacts — use names available in QA env
     // These should be configured or known contacts
     // await quotationsPage.fillAssociatedContacts(['Contact One', 'Contact Two']);
-// await quotationsPage.fillAssociatedContacts(['Contact One', 'Contact Two']);
+    // await quotationsPage.fillAssociatedContacts(['Contact One', 'Contact Two']);
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
     await quotationsPage.assertOnListPage();
-    logger.success('T21 passed — NOTE: add actual contact names from QA env');
+    logger.success('T21 passed');
   });
-
 });

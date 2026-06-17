@@ -17,7 +17,6 @@ import { generateTaskData } from '../../../src/data/factories/taskFactory';
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Tasks', () => {
-
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
   test('@smoke @regression admin should navigate to tasks list page', async ({ adminPage }) => {
@@ -26,7 +25,6 @@ test.describe('Tasks', () => {
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
     logger.success('TK1 passed');
-
   });
 
   // ── Test 2: Create via Quick Task form ────────────────────────────────────
@@ -36,47 +34,48 @@ test.describe('Tasks', () => {
 
     const tasksPage = new TasksPage(adminPage);
     // WHY: Quick task CKEditor text becomes the task name shown in the list
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createQuickTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
     logger.success('TK2 passed');
-
   });
 
   // ── Test 3: Create via Detailed Task form (all fields + relation) ──────────
 
-  test('@regression admin should create a task via Detailed Task form with all fields', async ({ adminPage }) => {
+  test('@regression admin should create a task via Detailed Task form with all fields', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
     logger.success('TK3 passed');
-
   });
 
   // ── Test 4: Quick Form → switch to Detailed via toggle ────────────────────
 
-  test('@regression admin should create a task by switching Quick Form to Detailed via toggle', async ({ adminPage }) => {
+  test('@regression admin should create a task by switching Quick Form to Detailed via toggle', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
     // WHY: Distinct SWITCH- prefix makes this task easy to identify in list after save
-    const taskData  = generateTaskData({ name: `SWITCH-${Date.now()} Task` });
+    const taskData = generateTaskData({ name: `SWITCH-${Date.now()} Task` });
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createQuickTaskThenSwitchToDetailed(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
     logger.success('TK4 passed');
-
   });
 
   // ── Test 5: Update an existing task ───────────────────────────────────────
@@ -84,9 +83,9 @@ test.describe('Tasks', () => {
   test('@regression admin should update an existing task', async ({ adminPage }) => {
     test.setTimeout(480000);
 
-    const tasksPage    = new TasksPage(adminPage);
+    const tasksPage = new TasksPage(adminPage);
     const originalData = generateTaskData();
-    const updatedData  = generateTaskData({ status: 'In Progress' });
+    const updatedData = generateTaskData({ status: 'In Progress' });
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(originalData);
@@ -95,7 +94,6 @@ test.describe('Tasks', () => {
     await tasksPage.updateTask(updatedData, originalData.name, taskId);
     await tasksPage.assertTaskUpdated(updatedData, taskId);
     logger.success('TK5 passed');
-
   });
 
   // ── Test 6: Mark a task as complete ───────────────────────────────────────
@@ -104,7 +102,7 @@ test.describe('Tasks', () => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(taskData);
@@ -122,13 +120,13 @@ test.describe('Tasks', () => {
       const visible = await item.isVisible().catch(() => false);
       if (!visible) {
         // Task may have been removed from default view after completion — acceptable
-        logger.info(`Task ${taskId} no longer in My Tasks view after completion — expected behaviour`);
+        logger.info(
+          `Task ${taskId} no longer in My Tasks view after completion — expected behaviour`
+        );
       }
     }
     logger.success('TK6 passed');
-
   });
-
 
   // ── Test: Add note to task ─────────────────────────────────────────────────
 
@@ -136,7 +134,7 @@ test.describe('Tasks', () => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     // Create task first
     await tasksPage.goToTasksList();
@@ -152,9 +150,7 @@ test.describe('Tasks', () => {
     await tasksPage.addNoteToTask(noteText);
     await tasksPage.assertNoteAdded(noteText);
     logger.success('TK7 passed');
-
   });
-
 
   // ── Test: Change Due Date via ellipsis ────────────────────────────────────
 
@@ -162,7 +158,7 @@ test.describe('Tasks', () => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(taskData);
@@ -172,16 +168,17 @@ test.describe('Tasks', () => {
     await tasksPage.changeDueDateViaEllipsis(taskId!, 5);
     logger.info('Due date changed via ellipsis menu');
     logger.success('TK8 passed');
-
   });
 
   // ── Test: Mark as Completed via ellipsis ──────────────────────────────────
 
-  test('@regression admin should mark task as completed via ellipsis and verify status', async ({ adminPage }) => {
+  test('@regression admin should mark task as completed via ellipsis and verify status', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(taskData);
@@ -192,7 +189,6 @@ test.describe('Tasks', () => {
     await tasksPage.searchTaskById(taskId!);
     await tasksPage.assertTaskStatusOnDetail(taskId!, 'Completed');
     logger.success('TK9 passed');
-
   });
 
   // ── Test: Clone task via ellipsis ─────────────────────────────────────────
@@ -201,7 +197,7 @@ test.describe('Tasks', () => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(adminPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(taskData);
@@ -213,7 +209,6 @@ test.describe('Tasks', () => {
     const clonedName = `${taskData.name} Copy`;
     await tasksPage.assertTaskCreated({ ...taskData, name: clonedName }, clonedId);
     logger.success('TK10 passed');
-
   });
 
   // ── Test 7: prodSafe — read-only navigation ────────────────────────────────
@@ -224,7 +219,5 @@ test.describe('Tasks', () => {
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
     logger.success('TK11 passed');
-
   });
-
 });

@@ -9,7 +9,8 @@ export class LoginPage extends BasePage {
   private readonly emailInput = () => this.page.locator('#input_email');
   private readonly passwordInput = () => this.page.locator('#input_password');
   private readonly loginButton = () => this.page.locator('#loginBtn');
-  private readonly errorMessage = () => this.page.locator('.alert-danger, .error-message, [class*="error"]');
+  private readonly errorMessage = () =>
+    this.page.locator('.alert-danger, .error-message, [class*="error"]');
 
   constructor(page: Page) {
     super(page);

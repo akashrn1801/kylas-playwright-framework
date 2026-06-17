@@ -24,9 +24,9 @@ export interface NotificationInput {
 const MISC_ERRORS_PATH = path.resolve(process.cwd(), 'reports', 'misc-errors.json');
 
 export class NotificationService {
-  private parser   = new ReportParser();
+  private parser = new ReportParser();
   private template = new EmailTemplate();
-  private email    = new EmailAdapter();
+  private email = new EmailAdapter();
 
   async notify(input: NotificationInput): Promise<void> {
     if (!notificationConfig.enabled) {
@@ -39,11 +39,14 @@ export class NotificationService {
       return;
     }
     notificationConfig.smtp.password = password;
-    notificationConfig.smtp.user = process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
+    notificationConfig.smtp.user =
+      process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
 
     console.log('[Notification] Parsing test report...');
     const report = this.parser.parse(input.jsonReportPath);
-    console.log(`[Notification] Results — Total: ${report.total}, Passed: ${report.passed}, Failed: ${report.failed}, Flaky: ${report.flaky}`);
+    console.log(
+      `[Notification] Results — Total: ${report.total}, Passed: ${report.passed}, Failed: ${report.failed}, Flaky: ${report.flaky}`
+    );
 
     // WHY: Read misc-errors.json — if not found or empty, gracefully skip
     let miscErrors: any = null;
@@ -51,7 +54,9 @@ export class NotificationService {
       if (fs.existsSync(MISC_ERRORS_PATH)) {
         miscErrors = JSON.parse(fs.readFileSync(MISC_ERRORS_PATH, 'utf-8'));
         if (miscErrors.totalErrors > 0) {
-          console.log(`[Notification] Background errors found: ${miscErrors.totalErrors} — will include in email`);
+          console.log(
+            `[Notification] Background errors found: ${miscErrors.totalErrors} — will include in email`
+          );
         } else {
           console.log('[Notification] No background errors captured');
         }
@@ -62,19 +67,19 @@ export class NotificationService {
 
     const ctx: EmailContext = {
       report,
-      env:         input.env,
-      branch:      input.branch,
+      env: input.env,
+      branch: input.branch,
       buildNumber: input.buildNumber,
-      buildUrl:    input.buildUrl,
-      gitCommit:   input.gitCommit,
+      buildUrl: input.buildUrl,
+      gitCommit: input.gitCommit,
       triggeredBy: input.triggeredBy,
-      runSource:   input.runSource,
+      runSource: input.runSource,
       miscErrors,
     };
 
     const recipients = getRecipients(input.env, input.branch);
-    const subject    = this.template.subject(ctx);
-    const html       = this.template.html(ctx);
+    const subject = this.template.subject(ctx);
+    const html = this.template.html(ctx);
 
     console.log(`[Notification] Sending email — Subject: ${subject}`);
     try {

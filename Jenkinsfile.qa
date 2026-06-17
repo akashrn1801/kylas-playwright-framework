@@ -46,6 +46,7 @@ pipeline {
         sh '''
           ENV=qa npx playwright test \
             --project=chromium \
+            --grep @regression \
             --workers=1 \
             --reporter=line,allure-playwright
         '''

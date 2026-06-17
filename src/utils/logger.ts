@@ -1,12 +1,12 @@
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'SUCCESS';
 
 const colors = {
-  INFO: '\x1b[36m',    // Cyan
-  WARN: '\x1b[33m',    // Yellow
-  ERROR: '\x1b[31m',   // Red
-  DEBUG: '\x1b[35m',   // Magenta
+  INFO: '\x1b[36m', // Cyan
+  WARN: '\x1b[33m', // Yellow
+  ERROR: '\x1b[31m', // Red
+  DEBUG: '\x1b[35m', // Magenta
   SUCCESS: '\x1b[32m', // Green
-  RESET: '\x1b[0m',    // Reset
+  RESET: '\x1b[0m', // Reset
 };
 
 function getTimestamp(): string {

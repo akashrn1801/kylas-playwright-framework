@@ -12,9 +12,10 @@ import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
 
 test.describe('Quotations — RBAC', () => {
-
   // ─── T5 ───────────────────────────────────────────────────────────────────
-  test('@smoke @regression restricted user should navigate to quotations list', async ({ restrictedPage }) => {
+  test('@smoke @regression restricted user should navigate to quotations list', async ({
+    restrictedPage,
+  }) => {
     const qp = new QuotationsPage(restrictedPage);
     await qp.goToQuotationsList();
     await qp.assertOnListPage();
@@ -22,7 +23,9 @@ test.describe('Quotations — RBAC', () => {
   });
 
   // ─── T6 ───────────────────────────────────────────────────────────────────
-  test('@regression restricted user should create a quotation with accessible deal', async ({ restrictedPage }) => {
+  test('@regression restricted user should create a quotation with accessible deal', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
     const data = generateRestrictedQuotationData();
@@ -56,10 +59,7 @@ test.describe('Quotations — RBAC', () => {
         const body = await response.json().catch(() => ({}));
         // WHY: Kylas 029003 returns top-level message, not inside errors[]
         errorMessage =
-          body?.message ||
-          body?.errors?.[0]?.message ||
-          body?.validationErrors?.[0]?.message ||
-          '';
+          body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
         logger.warn(`API error — code: ${body?.errorCode}, message: ${errorMessage}`);
       }
     });
@@ -76,8 +76,7 @@ test.describe('Quotations — RBAC', () => {
     // Step 2 — still on form, clear inaccessible entity and retry
     const currentUrl = restrictedPage.url();
     const alreadySaved =
-      currentUrl.includes('/quotations/list') ||
-      currentUrl.includes('/quotations/details/');
+      currentUrl.includes('/quotations/list') || currentUrl.includes('/quotations/details/');
 
     if (!alreadySaved) {
       if (errorMessage.toLowerCase().includes('company')) {
@@ -135,7 +134,7 @@ test.describe('Quotations — RBAC', () => {
     await qp.updateQuotation(
       data.quotationNumber,
       { summary: updatedSummary, status: QuotationStatus.Negotiation, additionalDiscount: 5 },
-      id ?? undefined,
+      id ?? undefined
     );
     const bodyText = await restrictedPage.locator('body').innerText();
     expect(bodyText).toContain(updatedSummary);
@@ -176,8 +175,16 @@ test.describe('Quotations — RBAC', () => {
     const rowCount = await allRows.count();
     let found = false;
     for (let i = 0; i < rowCount; i++) {
-      const text = (await allRows.nth(i).innerText().catch(() => '')).trim();
-      if (text.length > 0) { found = true; break; }
+      const text = (
+        await allRows
+          .nth(i)
+          .innerText()
+          .catch(() => '')
+      ).trim();
+      if (text.length > 0) {
+        found = true;
+        break;
+      }
     }
     expect(found).toBe(true);
     logger.info('Restricted user can see quotation set as owner by admin');
@@ -213,7 +220,9 @@ test.describe('Quotations — RBAC', () => {
   });
 
   // ─── T22 ──────────────────────────────────────────────────────────────────
-  test('@regression restricted user should verify all field values on detail page after create', async ({ restrictedPage }) => {
+  test('@regression restricted user should verify all field values on detail page after create', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
     const data = generateRestrictedQuotationData({ status: QuotationStatus.Draft });
@@ -227,7 +236,7 @@ test.describe('Quotations — RBAC', () => {
 
     await qp.assertDetailPageFields(data);
     const chips = restrictedPage.locator('.related-entity-container');
-    if (await chips.count() === 0) throw new Error('No entity chips on detail page');
+    if ((await chips.count()) === 0) throw new Error('No entity chips on detail page');
 
     const bodyText = await restrictedPage.locator('body').innerText();
     expect(bodyText).toContain(data.quotationNumber);
@@ -260,7 +269,9 @@ test.describe('Quotations — RBAC', () => {
   });
 
   // ─── T24 ──────────────────────────────────────────────────────────────────
-  test('@regression restricted user should download own quotation and verify file', async ({ restrictedPage }) => {
+  test('@regression restricted user should download own quotation and verify file', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
     const data = generateRestrictedQuotationData();
@@ -296,11 +307,15 @@ test.describe('Quotations — RBAC', () => {
       await restrictedPage.goto(`${config.appUrl}/sales/quotations/details/${id}`, {
         waitUntil: 'domcontentloaded',
       });
-      await restrictedPage.locator('.related-entity-container').first()
+      await restrictedPage
+        .locator('.related-entity-container')
+        .first()
         .waitFor({ state: 'visible', timeout: 15000 });
     } else {
       await restrictedQP.searchAndOpenQuotation(adminData.quotationNumber);
-      await restrictedPage.locator('.related-entity-container').first()
+      await restrictedPage
+        .locator('.related-entity-container')
+        .first()
         .waitFor({ state: 'visible', timeout: 15000 });
     }
 
@@ -357,7 +372,6 @@ test.describe('Quotations — RBAC', () => {
     expect(bodyText.trim().length).toBeGreaterThan(50);
     logger.info('Detail page rendered — no white screen');
 
-
     // Step 6 — open edit and verify fields are editable
     // WHY: Modal fetches /v1/quotations/layout/edit after opening — fields are
     // briefly disabled while layout loads. Poll isDisabled until false.
@@ -371,9 +385,10 @@ test.describe('Quotations — RBAC', () => {
       if (!isDisabled) break;
       await restrictedPage.waitForTimeout(500);
     }
-    expect(isDisabled, 'Summary field is disabled after 15s — deal may be inaccessible').toBe(false);
+    expect(isDisabled, 'Summary field is disabled after 15s — deal may be inaccessible').toBe(
+      false
+    );
     logger.info('Fields are editable');
-
 
     // Step 7 — edit and save
     const updatedSummary = `T26 Edit ${Date.now()}`;
@@ -415,11 +430,12 @@ test.describe('Quotations — RBAC', () => {
   });
 
   // ─── T28 ──────────────────────────────────────────────────────────────────
-  test('@prodSafe restricted user should navigate to quotations list on production', async ({ restrictedPage }) => {
+  test('@prodSafe restricted user should navigate to quotations list on production', async ({
+    restrictedPage,
+  }) => {
     const qp = new QuotationsPage(restrictedPage);
     await qp.goToQuotationsList();
     await qp.assertOnListPage();
     logger.success('T28 passed');
   });
-
 });
