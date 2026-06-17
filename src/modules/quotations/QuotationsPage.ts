@@ -1,13 +1,14 @@
 import { Page, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import { QuotationData, ProductRowData, QuotationStatus, formatDateForCalendarLabel } from '../../data/factories/quotationFactory';
+import {
+  QuotationData,
+  ProductRowData,
+  QuotationStatus,
+  formatDateForCalendarLabel,
+} from '../../data/factories/quotationFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
-interface RetryConfig {
-  retries: number;
-  wait: number;
-}
 
 interface GrandTotalComponents {
   subTotal: number;
@@ -19,18 +20,17 @@ interface GrandTotalComponents {
 
 export class QuotationsPage extends BasePage {
   // ─── 1. Retry config ────────────────────────────────────────────────────────
-  private readonly retryConfig: RetryConfig = {
-    retries: config.env === 'staging' ? 3 : 5,
-    wait: config.env === 'staging' ? 5000 : 3000,
-  };
+  // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
+  private get retryConfig() {
+    return config.searchRetry[config.env as keyof typeof config.searchRetry];
+  }
 
   // ─── 2. Locators ────────────────────────────────────────────────────────────
 
   // List page
   private readonly listContainer = (): Locator =>
     this.page.locator('.entity-list, [class*="list-container"], .table-responsive').first();
-  private readonly searchInput = (): Locator =>
-    this.page.locator('#fulltext-search');
+  private readonly searchInput = (): Locator => this.page.locator('#fulltext-search');
   private readonly searchButton = (): Locator =>
     this.page.locator('.input-group-append .input-group-text').first();
   private readonly createButton = (): Locator =>
@@ -43,46 +43,55 @@ export class QuotationsPage extends BasePage {
       .first();
 
   // Modal
-  private readonly modal = (): Locator =>
-    this.page.locator('#editEntityModal');
+  private readonly modal = (): Locator => this.page.locator('#editEntityModal');
   private readonly modalSaveButton = (): Locator =>
     this.page.locator('#editEntityModal button[type="submit"].btn-primary');
 
   // Header fields
   private readonly quotationNumberInput = (): Locator =>
     this.page.locator('[id="0_11_input_quotationNumber"]');
-  private readonly summaryInput = (): Locator =>
-    this.page.locator('[id="0_21_input_summary"]');
+  private readonly summaryInput = (): Locator => this.page.locator('[id="0_21_input_summary"]');
   private readonly ownerControl = (): Locator =>
-    this.page.locator('[id="0_31_input_owner"]').locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-  private readonly ownerInput = (): Locator =>
-    this.page.locator('[id="0_31_input_owner"]');
+    this.page
+      .locator('[id="0_31_input_owner"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+  private readonly ownerInput = (): Locator => this.page.locator('[id="0_31_input_owner"]');
   private readonly dealControl = (): Locator =>
-    this.page.locator('[id="0_41_input_associatedDeal"]').locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-  private readonly dealInput = (): Locator =>
-    this.page.locator('[id="0_41_input_associatedDeal"]');
-  private readonly addNewProductButton = (): Locator =>
-    this.page.locator('span.add-new-product');
+    this.page
+      .locator('[id="0_41_input_associatedDeal"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+  private readonly dealInput = (): Locator => this.page.locator('[id="0_41_input_associatedDeal"]');
+  private readonly addNewProductButton = (): Locator => this.page.locator('span.add-new-product');
   private readonly productIdInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '01' : row === 1 ? '11' : '21'}_input_products.${row}.id"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '01' : row === 1 ? '11' : '21'}_input_products.${row}.id"]`
+    );
   private readonly selectedDealName = (): Locator =>
-    this.page.locator('[id="0_41_input_associatedDeal"]').locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]').locator('[class*="__single-value"]');
+    this.page
+      .locator('[id="0_41_input_associatedDeal"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]')
+      .locator('[class*="__single-value"]');
   private readonly companyControl = (): Locator =>
-    this.page.locator('[id="0_42_input_associatedCompany"]').locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    this.page
+      .locator('[id="0_42_input_associatedCompany"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
   private readonly companyInput = (): Locator =>
     this.page.locator('[id="0_42_input_associatedCompany"]');
   private readonly contactsControl = (): Locator =>
-    this.page.locator('[id="0_51_input_associatedContacts"]').locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    this.page
+      .locator('[id="0_51_input_associatedContacts"]')
+      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
   private readonly contactsInput = (): Locator =>
     this.page.locator('[id="0_51_input_associatedContacts"]');
   private readonly statusControl = (): Locator =>
-    this.page.locator('.search-autocomplete').filter({ has: this.page.locator('[id="0_52_input_status"]') }).locator('[class*="is-invalid__control"]');
-  private readonly statusInput = (): Locator =>
-    this.page.locator('[id="0_52_input_status"]');
+    this.page
+      .locator('.search-autocomplete')
+      .filter({ has: this.page.locator('[id="0_52_input_status"]') })
+      .locator('[class*="is-invalid__control"]');
+  private readonly statusInput = (): Locator => this.page.locator('[id="0_52_input_status"]');
   private readonly generationDateInput = (): Locator =>
     this.page.locator('[id="0_61_input_generationDate"]');
-  private readonly validTillInput = (): Locator =>
-    this.page.locator('[id="0_62_input_validTill"]');
+  private readonly validTillInput = (): Locator => this.page.locator('[id="0_62_input_validTill"]');
   private readonly calendarForwardButton = (): Locator =>
     this.page.getByLabel('Move forward to switch to the next month.');
   private readonly calendarDayByLabel = (label: string): Locator =>
@@ -90,19 +99,28 @@ export class QuotationsPage extends BasePage {
 
   // Product rows — indexed by row number (0-based)
   private readonly productDiscountInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '04' : row === 1 ? '14' : '24'}_input_products.${row}.discount"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '04' : row === 1 ? '14' : '24'}_input_products.${row}.discount"]`
+    );
   private readonly productTaxInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '05' : row === 1 ? '15' : '25'}_input_products.${row}.tax"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '05' : row === 1 ? '15' : '25'}_input_products.${row}.tax"]`
+    );
   private readonly productTotalInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '06' : row === 1 ? '16' : '26'}_input_products.${row}.total"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '06' : row === 1 ? '16' : '26'}_input_products.${row}.total"]`
+    );
   private readonly productPriceInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '03' : row === 1 ? '13' : '23'}_input_products.${row}.price"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '03' : row === 1 ? '13' : '23'}_input_products.${row}.price"]`
+    );
   private readonly productQuantityInput = (row: number): Locator =>
-    this.page.locator(`[id="1_${row === 0 ? '02' : row === 1 ? '12' : '22'}_input_products.${row}.quantity"]`);
+    this.page.locator(
+      `[id="1_${row === 0 ? '02' : row === 1 ? '12' : '22'}_input_products.${row}.quantity"]`
+    );
 
   // Summary totals
-  private readonly subTotalInput = (): Locator =>
-    this.page.locator('[id="1_22_input_subTotal"]');
+  private readonly subTotalInput = (): Locator => this.page.locator('[id="1_22_input_subTotal"]');
   private readonly additionalDiscountInput = (): Locator =>
     this.page.locator('[id="1_23_input_additionalDiscount"]');
   private readonly additionalTaxInput = (): Locator =>
@@ -141,14 +159,15 @@ export class QuotationsPage extends BasePage {
     this.page.locator('[id="2_72_input_shippingPinCode"]');
 
   // Detail page
-  private readonly editActionBtn = (): Locator =>
-    this.page.locator('#edit-action-btn');
+  private readonly editActionBtn = (): Locator => this.page.locator('#edit-action-btn');
   private readonly detailPageTitle = (): Locator =>
     this.page.locator('h1.h1, .page-title h1').first();
   private readonly entityChip = (name: string): Locator =>
     this.page.locator('.related-entity-container').filter({ hasText: name });
   private readonly ellipsisMenuButton = (): Locator =>
-    this.page.locator('.page-header button.btn.dropdown-toggle, [class*="more-actions"] button').first();
+    this.page
+      .locator('.page-header button.btn.dropdown-toggle, [class*="more-actions"] button')
+      .first();
   private readonly ellipsisMenuItem = (text: string): Locator =>
     this.page.locator('.dropdown-menu .dropdown-item').filter({ hasText: text });
 
@@ -171,18 +190,22 @@ export class QuotationsPage extends BasePage {
     const control = formGroup.locator('[class*="is-invalid__control"]');
     await control.click();
     // Wait for options to load
-    await this.page.locator('.is-invalid__option').first().waitFor({ state: 'visible', timeout: 5000 });
+    await this.page
+      .locator('.is-invalid__option')
+      .first()
+      .waitFor({ state: 'visible', timeout: 5000 });
     const options = this.page.locator('.is-invalid__option');
     const count = await options.count();
     const randomIndex = Math.floor(Math.random() * count);
     const selectedText = await options.nth(randomIndex).innerText();
     await options.nth(randomIndex).click();
-    await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     logger.debug(`Selected random country: ${selectedText.trim()}`);
     return selectedText.trim();
   }
-
-
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
@@ -190,64 +213,66 @@ export class QuotationsPage extends BasePage {
   }
 
   private async selectDateInPicker(input: Locator, date: Date): Promise<void> {
-  const dayLabel = formatDateForCalendarLabel(date);
-  logger.info(`Selecting date: ${date.toDateString()}`);
-  await input.click();
-  await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
-  await this.page.waitForTimeout(400);
-  const dayCell = this.calendarDayByLabel(dayLabel);
-  let found = false;
-  let attempts = 0;
-  try {
-    await dayCell.waitFor({ state: 'visible', timeout: 1000 });
-    found = true;
-  } catch {
-    found = false;
-  }
-  while (!found && attempts < 24) {
-    await this.calendarForwardButton().click();
+    const dayLabel = formatDateForCalendarLabel(date);
+    logger.info(`Selecting date: ${date.toDateString()}`);
+    await input.click();
+    await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
     await this.page.waitForTimeout(400);
+    const dayCell = this.calendarDayByLabel(dayLabel);
+    let found = false;
+    let attempts = 0;
     try {
       await dayCell.waitFor({ state: 'visible', timeout: 1000 });
       found = true;
     } catch {
-      attempts++;
+      found = false;
     }
+    while (!found && attempts < 24) {
+      await this.calendarForwardButton().click();
+      await this.page.waitForTimeout(400);
+      try {
+        await dayCell.waitFor({ state: 'visible', timeout: 1000 });
+        found = true;
+      } catch {
+        attempts++;
+      }
+    }
+    if (!found) throw new Error(`Date cell not found: ${dayLabel}`);
+    await dayCell.click();
+    logger.success(`Date selected: ${date.toDateString()}`);
   }
-  if (!found) throw new Error(`Date cell not found: ${dayLabel}`);
-  await dayCell.click();
-  logger.success(`Date selected: ${date.toDateString()}`);
-}
 
   private async selectFromIsInvalidControl(
     control: Locator,
     input: Locator,
-    value: string,
+    value: string
   ): Promise<void> {
     await control.click();
     await input.fill(value);
     await this.page.locator('.is-invalid__option').filter({ hasText: value }).first().click();
-    await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     logger.debug(`Selected "${value}" from is-invalid control`);
   }
 
   private async clearIsInvalidField(control: Locator): Promise<void> {
-  const clearButton = control.locator('[class*="__clear-indicator"], [aria-label="Clear"]');
-  const hasClear = await clearButton.isVisible().catch(() => false);
-  if (hasClear) {
-    await clearButton.click();
-    logger.info('Clear indicator found and clicked — field value removed');
-  } else {
-    logger.warn('Clear indicator not found — field may already be empty or selector mismatch');
+    const clearButton = control.locator('[class*="__clear-indicator"], [aria-label="Clear"]');
+    const hasClear = await clearButton.isVisible().catch(() => false);
+    if (hasClear) {
+      await clearButton.click();
+      logger.info('Clear indicator found and clicked — field value removed');
+    } else {
+      logger.warn('Clear indicator not found — field may already be empty or selector mismatch');
+    }
   }
-}
 
- private async captureQuotationIdFromResponse(): Promise<string | null> {
+  private async captureQuotationIdFromResponse(): Promise<string | null> {
     try {
       const response = await this.page.waitForResponse(
-        (r: Response) =>
-        /\/v1\/quotations$/.test(r.url()) && r.request().method() === 'POST',
-        { timeout: 15000 },
+        (r: Response) => /\/v1\/quotations$/.test(r.url()) && r.request().method() === 'POST',
+        { timeout: 15000 }
       );
       const body = await response.json().catch(() => null);
       const id = body?.id || body?.data?.id || null;
@@ -307,7 +332,12 @@ export class QuotationsPage extends BasePage {
       // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
       let nonEmptyCount = 0;
       for (let i = 0; i < rowCount; i++) {
-        const text = (await allRows.nth(i).innerText().catch(() => '')).trim();
+        const text = (
+          await allRows
+            .nth(i)
+            .innerText()
+            .catch(() => '')
+        ).trim();
         if (text.length > 0) nonEmptyCount++;
       }
       if (nonEmptyCount > 0) {
@@ -337,15 +367,21 @@ export class QuotationsPage extends BasePage {
     await this.fill(this.searchInput(), value, 'search input');
 
     await Promise.all([
-      this.page.waitForResponse(
-        (r) => r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
-        { timeout: 15000 },
-      ).catch(() => null),
+      this.page
+        .waitForResponse(
+          (r) =>
+            r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
+          { timeout: 15000 }
+        )
+        .catch(() => null),
       this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 }),
     ]);
 
     try {
-      await this.page.locator('.spinner, .loader, .loading').last().waitFor({ state: 'hidden', timeout: 10000 });
+      await this.page
+        .locator('.spinner, .loader, .loading')
+        .last()
+        .waitFor({ state: 'hidden', timeout: 10000 });
     } catch {
       // loader may not exist
     }
@@ -356,18 +392,23 @@ export class QuotationsPage extends BasePage {
     return parseFloat(raw.replace(/[^0-9.-]/g, '')) || 0;
   }
 
-
   private async selectRandomDeal(): Promise<string> {
     logger.info('Selecting random deal');
     await this.dealControl().click();
     await this.dealInput().fill('dea');
-    await this.page.locator('.is-invalid__option').first().waitFor({ state: 'visible', timeout: 10000 });
+    await this.page
+      .locator('.is-invalid__option')
+      .first()
+      .waitFor({ state: 'visible', timeout: 10000 });
     const options = this.page.locator('.is-invalid__option');
     const count = await options.count();
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const dealName = (await options.nth(randomIndex).innerText()).trim();
     await options.nth(randomIndex).click();
-    await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     logger.success(`Selected deal: ${dealName}`);
     return dealName;
   }
@@ -376,10 +417,16 @@ export class QuotationsPage extends BasePage {
     logger.info(`Selecting specific deal: ${dealName}`);
     await this.dealControl().click();
     await this.dealInput().fill(dealName);
-    await this.page.locator('.is-invalid__option').filter({ hasText: dealName }).first()
+    await this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: dealName })
+      .first()
       .waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('.is-invalid__option').filter({ hasText: dealName }).first().click();
-    await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     logger.success(`Selected specific deal: ${dealName}`);
     return dealName;
   }
@@ -407,7 +454,9 @@ export class QuotationsPage extends BasePage {
       await this.addNewProductButton().click();
       await productInput.waitFor({ state: 'visible', timeout: 10000 });
     }
-    const productControl = productInput.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    const productControl = productInput.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
     await productControl.click();
     await productInput.fill('BHK'); // WHY: App requires min 3 chars; 'BHK' matches known QA products
 
@@ -422,7 +471,10 @@ export class QuotationsPage extends BasePage {
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const productName = (await optionsLocator.nth(randomIndex).innerText()).trim();
     await optionsLocator.nth(randomIndex).click();
-    await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     await this.productQuantityInput(row).fill('1');
     logger.success(`Added product: ${productName}`);
   }
@@ -470,11 +522,7 @@ export class QuotationsPage extends BasePage {
     await this.ensureProductRowExists();
 
     // Status
-    await this.selectFromIsInvalidControl(
-      this.statusControl(),
-      this.statusInput(),
-      data.status,
-    );
+    await this.selectFromIsInvalidControl(this.statusControl(), this.statusInput(), data.status);
 
     // Dates
     await this.selectDateInPicker(this.generationDateInput(), data.generationDate);
@@ -482,7 +530,11 @@ export class QuotationsPage extends BasePage {
 
     // Additional discount / tax / adjustment
     if (data.additionalDiscount > 0) {
-      await this.fill(this.additionalDiscountInput(), String(data.additionalDiscount), 'Additional Discount');
+      await this.fill(
+        this.additionalDiscountInput(),
+        String(data.additionalDiscount),
+        'Additional Discount'
+      );
     }
     if (data.additionalTax > 0) {
       await this.fill(this.additionalTaxInput(), String(data.additionalTax), 'Additional Tax');
@@ -499,12 +551,21 @@ export class QuotationsPage extends BasePage {
 
     // Billing country — scoped to its form group
     if (data.billingCountry) {
-      const countryFormGroup = this.page.locator('[id="2_31_input_billingCountry"]').locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
+      const countryFormGroup = this.page
+        .locator('[id="2_31_input_billingCountry"]')
+        .locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
       const countryControl = countryFormGroup.locator('[class*="is-invalid__control"]');
       await countryControl.click();
       await this.page.locator('[id="2_31_input_billingCountry"]').fill(data.billingCountry);
-      await this.page.locator('.is-invalid__option').filter({ hasText: data.billingCountry }).first().click();
-      await this.page.locator('.is-invalid__menu').waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+      await this.page
+        .locator('.is-invalid__option')
+        .filter({ hasText: data.billingCountry })
+        .first()
+        .click();
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: 10000 })
+        .catch(() => {});
       logger.debug(`Selected billing country: ${data.billingCountry}`);
     }
 
@@ -519,14 +580,29 @@ export class QuotationsPage extends BasePage {
         await this.fill(this.shippingAddressInput(), data.shippingAddress, 'Shipping Address');
         await this.fill(this.shippingCityInput(), data.shippingCity || '', 'Shipping City');
         await this.fill(this.shippingStateInput(), data.shippingState || '', 'Shipping State');
-        await this.fill(this.shippingZipcodeInput(), data.shippingZipcode || '', 'Shipping Zipcode');
+        await this.fill(
+          this.shippingZipcodeInput(),
+          data.shippingZipcode || '',
+          'Shipping Zipcode'
+        );
         if (data.shippingCountry) {
-          const shippingCountryFormGroup = this.page.locator('[id="2_71_input_shippingCountry"]').locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
-          const shippingCountryControl = shippingCountryFormGroup.locator('[class*="is-invalid__control"]');
+          const shippingCountryFormGroup = this.page
+            .locator('[id="2_71_input_shippingCountry"]')
+            .locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
+          const shippingCountryControl = shippingCountryFormGroup.locator(
+            '[class*="is-invalid__control"]'
+          );
           await shippingCountryControl.click();
           await this.page.locator('[id="2_71_input_shippingCountry"]').fill(data.shippingCountry);
-          await this.page.locator('.is-invalid__option').filter({ hasText: data.shippingCountry }).first().click();
-          await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+          await this.page
+            .locator('.is-invalid__option')
+            .filter({ hasText: data.shippingCountry })
+            .first()
+            .click();
+          await this.page
+            .locator('.is-invalid__menu')
+            .waitFor({ state: 'hidden', timeout: 10000 })
+            .catch(() => {});
           logger.debug(`Selected shipping country: ${data.shippingCountry}`);
         }
       }
@@ -537,30 +613,25 @@ export class QuotationsPage extends BasePage {
   }
 
   async fillOwner(ownerName: string): Promise<void> {
-    const searchTerm = ownerName.split(" ")[0];
+    const searchTerm = ownerName.split(' ')[0];
     await this.ownerControl().click();
     await this.ownerInput().fill(searchTerm);
-    await this.page.locator(".is-invalid__option").filter({ hasText: ownerName }).first().click();
-    await this.page.locator(".is-invalid__menu").waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+    await this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first().click();
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     logger.info(`Set owner to: ${ownerName}`);
   }
 
   async fillAssociatedCompany(companyName: string): Promise<void> {
-    await this.selectFromIsInvalidControl(
-      this.companyControl(),
-      this.companyInput(),
-      companyName,
-    );
+    await this.selectFromIsInvalidControl(this.companyControl(), this.companyInput(), companyName);
     logger.info(`Set associated company to: ${companyName}`);
   }
 
   async fillAssociatedContacts(contactNames: string[]): Promise<void> {
     for (const name of contactNames) {
-      await this.selectFromIsInvalidControl(
-        this.contactsControl(),
-        this.contactsInput(),
-        name,
-      );
+      await this.selectFromIsInvalidControl(this.contactsControl(), this.contactsInput(), name);
       logger.info(`Added contact: ${name}`);
     }
   }
@@ -615,11 +686,7 @@ export class QuotationsPage extends BasePage {
     }
     await this.goToQuotationsList();
     await this.performSearch(quotationNumber);
-    await this.page
-      .locator('.rt-tr-group')
-      .filter({ hasText: quotationNumber })
-      .first()
-      .click();
+    await this.page.locator('.rt-tr-group').filter({ hasText: quotationNumber }).first().click();
     await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
     await this.page.waitForLoadState('domcontentloaded');
     logger.info(`Opened quotation: ${quotationNumber}`);
@@ -650,7 +717,7 @@ export class QuotationsPage extends BasePage {
       await this.selectFromIsInvalidControl(
         this.statusControl(),
         this.statusInput(),
-        changes.status,
+        changes.status
       );
     }
     if (changes.generationDate !== undefined) {
@@ -722,7 +789,14 @@ export class QuotationsPage extends BasePage {
     const allRows = this.page.locator('.rt-tr-group');
     const rowCount = await allRows.count();
     for (let i = 0; i < rowCount; i++) {
-      const text = (await allRows.nth(i).innerText().catch(() => '')).trim().toLowerCase();
+      const text = (
+        await allRows
+          .nth(i)
+          .innerText()
+          .catch(() => '')
+      )
+        .trim()
+        .toLowerCase();
       if (text.includes(searchTerm.toLowerCase())) {
         throw new Error(`Quotation should NOT be visible in list but was found: "${searchTerm}"`);
       }
@@ -763,7 +837,9 @@ export class QuotationsPage extends BasePage {
 
   async assertDetailPageFields(data: QuotationData): Promise<void> {
     logger.info('Asserting detail page fields');
-    const title = await this.detailPageTitle().innerText().catch(() => '');
+    const title = await this.detailPageTitle()
+      .innerText()
+      .catch(() => '');
     if (!title.includes(data.quotationNumber) && !title.includes(data.summary)) {
       logger.warn(`Detail page title "${title}" does not contain quotation number or summary`);
     }
@@ -779,7 +855,9 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertEntityChipNotVisible(entityName: string): Promise<void> {
-    const visible = await this.entityChip(entityName).isVisible().catch(() => false);
+    const visible = await this.entityChip(entityName)
+      .isVisible()
+      .catch(() => false);
     if (visible) {
       throw new Error(`Entity chip should NOT be visible: ${entityName}`);
     }
@@ -803,13 +881,13 @@ export class QuotationsPage extends BasePage {
     if (Math.abs(expected - grandTotal) > tolerance) {
       throw new Error(
         `Grand total math failed. Expected: ${expected.toFixed(2)}, Got: ${grandTotal}. ` +
-        `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
-        `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`,
+          `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
+          `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`
       );
     }
 
     logger.success(
-      `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`,
+      `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`
     );
 
     return { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
@@ -830,7 +908,10 @@ export class QuotationsPage extends BasePage {
     // WHY: Wait for the status element explicitly instead of reading body text immediately.
     // On CI, the detail page may not have fully rendered the status badge when body.innerText()
     // is called — causing false negatives. Waiting for the locator ensures the element is present.
-    const statusLocator = this.page.locator('[class*="status"], [class*="badge"]').filter({ hasText: expectedStatus }).first();
+    const statusLocator = this.page
+      .locator('[class*="status"], [class*="badge"]')
+      .filter({ hasText: expectedStatus })
+      .first();
     try {
       await statusLocator.waitFor({ state: 'visible', timeout: config.timeouts.expect });
       logger.success(`Status confirmed via locator: ${expectedStatus}`);
@@ -853,10 +934,16 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertShippingSameAsBilling(): Promise<void> {
-    const billingCity = await this.billingCityInput().inputValue().catch(() => '');
-    const shippingCity = await this.shippingCityInput().inputValue().catch(() => '');
+    const billingCity = await this.billingCityInput()
+      .inputValue()
+      .catch(() => '');
+    const shippingCity = await this.shippingCityInput()
+      .inputValue()
+      .catch(() => '');
     if (billingCity && shippingCity && billingCity !== shippingCity) {
-      throw new Error(`Shipping city "${shippingCity}" does not match billing city "${billingCity}"`);
+      throw new Error(
+        `Shipping city "${shippingCity}" does not match billing city "${billingCity}"`
+      );
     }
     logger.success('Shipping address matches billing address');
   }
@@ -868,7 +955,7 @@ export class QuotationsPage extends BasePage {
 
   // ─── 10. Workflow wrappers ────────────────────────────────────────────────────
 
- async createQuotation(data: QuotationData): Promise<{ id: string | null; dealName: string }> {
+  async createQuotation(data: QuotationData): Promise<{ id: string | null; dealName: string }> {
     logger.info(`Creating quotation: ${data.quotationNumber}`);
     await this.goToQuotationsList();
     await this.openCreateForm();
@@ -878,11 +965,7 @@ export class QuotationsPage extends BasePage {
     await this.assertOnListPage();
     // Get ID by searching and clicking the row
     await this.performSearch(data.summary);
-    await this.page
-      .locator('.rt-tr-group')
-      .filter({ hasText: data.summary })
-      .first()
-      .click();
+    await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
     await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
     const id = await this.captureIdFromUrl();
     logger.info(`URL after row click: ${this.page.url()}`);
@@ -893,7 +976,7 @@ export class QuotationsPage extends BasePage {
   }
   async createQuotationWithOwner(
     data: QuotationData,
-    ownerName: string,
+    ownerName: string
   ): Promise<{ id: string | null; dealName: string }> {
     logger.info(`Creating quotation with owner "${ownerName}": ${data.quotationNumber}`);
     await this.goToQuotationsList();
@@ -916,7 +999,7 @@ export class QuotationsPage extends BasePage {
   async updateQuotation(
     quotationNumber: string,
     changes: Partial<QuotationData>,
-    id?: string,
+    id?: string
   ): Promise<void> {
     logger.info(`Updating quotation: ${quotationNumber}`);
     await this.searchAndOpenQuotation(quotationNumber, id);
@@ -932,12 +1015,12 @@ export class QuotationsPage extends BasePage {
   }
 
   async attemptCreateWithInaccessibleEntities(
-    data: QuotationData,
+    data: QuotationData
   ): Promise<{ errorType: 'company' | 'contact' | null; toastText: string }> {
     logger.info('Attempting quotation create expecting inaccessible entity error');
     await this.goToQuotationsList();
     await this.openCreateForm();
-    await this.fillQuotationForm(data);  // deal name not needed here
+    await this.fillQuotationForm(data); // deal name not needed here
     await this.saveQuotationExpectingError();
 
     try {
@@ -974,50 +1057,56 @@ export class QuotationsPage extends BasePage {
   }
   // ─── Public helpers for T26 ─────────────────────────────────────────────────
 
-async fillAssociatedCompanyFirstAvailable(): Promise<string> {
-  // WHY: Search with common 3-char prefixes in order until results appear.
-  // Single character returns too many results and may match companies the
-  // restricted user owns — defeating the purpose of the RBAC test.
-  const searchTerms = ['The', 'Pvt', 'Ltd', 'Tech', 'Inf', 'Sol', 'Sys', 'Con', 'Ser', 'Man'];
+  async fillAssociatedCompanyFirstAvailable(): Promise<string> {
+    // WHY: Search with common 3-char prefixes in order until results appear.
+    // Single character returns too many results and may match companies the
+    // restricted user owns — defeating the purpose of the RBAC test.
+    const searchTerms = ['The', 'Pvt', 'Ltd', 'Tech', 'Inf', 'Sol', 'Sys', 'Con', 'Ser', 'Man'];
 
-  await this.companyControl().click();
+    await this.companyControl().click();
 
-  for (const term of searchTerms) {
-    await this.companyInput().fill(term);
-    await this.page.waitForTimeout(500);
+    for (const term of searchTerms) {
+      await this.companyInput().fill(term);
+      await this.page.waitForTimeout(500);
 
-    const optionCount = await this.page.locator('.is-invalid__option').count();
-    if (optionCount > 0) {
+      const optionCount = await this.page.locator('.is-invalid__option').count();
+      if (optionCount > 0) {
+        const firstName = await this.page.locator('.is-invalid__option').first().innerText();
+        await this.page.locator('.is-invalid__option').first().click();
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 10000 })
+          .catch(() => {});
+        logger.info(`Linked company via search "${term}": ${firstName.trim()}`);
+        return firstName.trim();
+      }
+      logger.debug(`No company results for "${term}" — trying next`);
+    }
+
+    // Last resort — clear and try empty search (shows all)
+    await this.companyInput().fill('');
+    await this.page.waitForTimeout(800);
+    const fallbackCount = await this.page.locator('.is-invalid__option').count();
+    if (fallbackCount > 0) {
       const firstName = await this.page.locator('.is-invalid__option').first().innerText();
       await this.page.locator('.is-invalid__option').first().click();
-      await this.page.locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-      logger.info(`Linked company via search "${term}": ${firstName.trim()}`);
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: 10000 })
+        .catch(() => {});
+      logger.info(`Linked company via empty search: ${firstName.trim()}`);
       return firstName.trim();
     }
-    logger.debug(`No company results for "${term}" — trying next`);
+
+    throw new Error(
+      'fillAssociatedCompanyFirstAvailable: no company options found with any search term'
+    );
+  }
+  async performSearchPublic(value: string): Promise<void> {
+    await this.performSearch(value);
   }
 
-  // Last resort — clear and try empty search (shows all)
-  await this.companyInput().fill('');
-  await this.page.waitForTimeout(800);
-  const fallbackCount = await this.page.locator('.is-invalid__option').count();
-  if (fallbackCount > 0) {
-    const firstName = await this.page.locator('.is-invalid__option').first().innerText();
-    await this.page.locator('.is-invalid__option').first().click();
-    await this.page.locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-    logger.info(`Linked company via empty search: ${firstName.trim()}`);
-    return firstName.trim();
+  async captureIdFromUrlPublic(): Promise<string | null> {
+    return this.captureIdFromUrl();
   }
-
-  throw new Error('fillAssociatedCompanyFirstAvailable: no company options found with any search term');
-}
-async performSearchPublic(value: string): Promise<void> {
-  await this.performSearch(value);
-}
-
-async captureIdFromUrlPublic(): Promise<string | null> {
-  return this.captureIdFromUrl();
-}
 }

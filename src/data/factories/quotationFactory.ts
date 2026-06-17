@@ -12,13 +12,13 @@ export interface ProductRowData {
   discountPercent: number;
   taxPercent: number;
   adjustmentPercent: number;
-   discount?: number;      // ← ADD - alias used in specs
+  discount?: number; // ← ADD - alias used in specs
   tax?: number;
 }
 
 export interface QuotationData {
   quotationNumber: string;
-   dealName?: string;     
+  dealName?: string;
   summary: string;
   status: QuotationStatus;
   generationDate: Date;
@@ -87,7 +87,9 @@ export function generateAdminQuotationData(overrides: Partial<QuotationData> = {
   });
 }
 
-export function generateRestrictedQuotationData(overrides: Partial<QuotationData> = {}): QuotationData {
+export function generateRestrictedQuotationData(
+  overrides: Partial<QuotationData> = {}
+): QuotationData {
   const ts = Date.now();
   return generateQuotationData({
     quotationNumber: `RES${ts}`,
@@ -98,10 +100,12 @@ export function generateRestrictedQuotationData(overrides: Partial<QuotationData
 
 export function generateProductRowData(overrides: Partial<ProductRowData> = {}): ProductRowData {
   return {
-    discountPercent: overrides.discountPercent ?? overrides.discount ?? faker.number.int({ min: 0, max: 30 }),
+    discountPercent:
+      overrides.discountPercent ?? overrides.discount ?? faker.number.int({ min: 0, max: 30 }),
     taxPercent: overrides.taxPercent ?? overrides.tax ?? faker.number.int({ min: 0, max: 28 }),
     adjustmentPercent: overrides.adjustmentPercent ?? faker.number.int({ min: -10, max: 10 }),
-    discount: overrides.discount ?? overrides.discountPercent ?? faker.number.int({ min: 0, max: 30 }),
+    discount:
+      overrides.discount ?? overrides.discountPercent ?? faker.number.int({ min: 0, max: 30 }),
     tax: overrides.tax ?? overrides.taxPercent ?? faker.number.int({ min: 0, max: 28 }),
     ...overrides,
   };

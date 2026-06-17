@@ -1,12 +1,15 @@
 import { test } from '../../../src/fixtures/index';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
-import { generateDealData, CLOSED_LOST_REASONS, CLOSED_UNQUALIFIED_REASONS } from '../../../src/data/factories/dealFactory';
+import {
+  generateDealData,
+  CLOSED_LOST_REASONS,
+  CLOSED_UNQUALIFIED_REASONS,
+} from '../../../src/data/factories/dealFactory';
 import { faker } from '@faker-js/faker';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Deals', () => {
-
   // ──────────────────────────────────────────────────────────
   // Navigation
   // ──────────────────────────────────────────────────────────
@@ -16,7 +19,6 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
     logger.success('D1 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
@@ -25,7 +27,9 @@ test.describe('Deals', () => {
   // creating multiple deals unnecessarily.
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should create a deal with all fields and verify part payments', async ({ adminPage }) => {
+  test('@regression admin should create a deal with all fields and verify part payments', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -35,7 +39,6 @@ test.describe('Deals', () => {
     const dealId = await dealsPage.createDeal(dealData);
     await dealsPage.assertDealCreated(dealData, dealId ?? undefined);
     logger.success('D2 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
@@ -43,7 +46,9 @@ test.describe('Deals', () => {
   // WHY: Creates one deal then immediately edits it — single deal lifecycle
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should update a deal and mark payment as received', async ({ adminPage }) => {
+  test('@regression admin should update a deal and mark payment as received', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -56,7 +61,6 @@ test.describe('Deals', () => {
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
     await dealsPage.assertDealUpdated(updatedData);
     logger.success('D3 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
@@ -66,7 +70,9 @@ test.describe('Deals', () => {
   // Actual Total - Amount Received = Remaining Balance (±1 rounding tolerance)
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should verify payment math after marking installment received', async ({ adminPage }) => {
+  test('@regression admin should verify payment math after marking installment received', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -91,17 +97,19 @@ test.describe('Deals', () => {
     await dealsPage.assertPaymentReceivedAfterEdit();
 
     await dealsPage.saveEditedDeal();
-    logger.success('Payment math verified: Total - Received = Remaining (±1 rounding tolerance) — amounts are correct. Deal saved successfully.');
+    logger.success(
+      'Payment math verified: Total - Received = Remaining (±1 rounding tolerance) — amounts are correct. Deal saved successfully.'
+    );
     logger.success('D4 passed');
-
   });
-
 
   // ──────────────────────────────────────────────────────────
   // Pipeline Stage verification on deal details
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should verify pipeline stage is Open after deal creation', async ({ adminPage }) => {
+  test('@regression admin should verify pipeline stage is Open after deal creation', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -110,10 +118,9 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     if (dealId) {
-      await adminPage.goto(
-        `${config.appUrl}/sales/deals/details/${dealId}`,
-        { waitUntil: 'domcontentloaded' },
-      );
+      await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
+        waitUntil: 'domcontentloaded',
+      });
       await adminPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
     } else {
       // WHY: dealId capture failed — use search to find and open the deal
@@ -125,14 +132,15 @@ test.describe('Deals', () => {
     await dealsPage.assertActualValueContainsINR();
     logger.success('Pipeline stage Open and INR currency verified after deal creation');
     logger.success('D5 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
   // Pipeline Stage change to Negotiation
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should change pipeline stage to Negotiation in edit', async ({ adminPage }) => {
+  test('@regression admin should change pipeline stage to Negotiation in edit', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -149,21 +157,21 @@ test.describe('Deals', () => {
     await dealsPage.saveEditedDeal();
 
     // Verify stage changed on details page
-    await adminPage.goto(
-      `${config.appUrl}/sales/deals/details/${dealId}`,
-      { waitUntil: 'domcontentloaded' },
-    );
+    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
+      waitUntil: 'domcontentloaded',
+    });
     await dealsPage.assertPipelineStageOnDetails('Negotiation');
     logger.success('Pipeline stage changed to Negotiation and verified');
     logger.success('D6 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
   // Closed Lost with stage reason
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should change pipeline stage to Closed Lost with random reason', async ({ adminPage }) => {
+  test('@regression admin should change pipeline stage to Closed Lost with random reason', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -184,14 +192,15 @@ test.describe('Deals', () => {
     await dealsPage.saveEditedDeal();
     logger.success(`Deal closed as Lost with reason: ${closedLostReason}`);
     logger.success('D7 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
   // Closed Unqualified with stage reason
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should change pipeline stage to Closed Unqualified with random reason', async ({ adminPage }) => {
+  test('@regression admin should change pipeline stage to Closed Unqualified with random reason', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -212,14 +221,15 @@ test.describe('Deals', () => {
     await dealsPage.saveEditedDeal();
     logger.success(`Deal closed as Unqualified with reason: ${closedUnqualifiedReason}`);
     logger.success('D8 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
   // Part payments summary on deal details with INR verification
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should verify part payments summary on deal details with INR currency and correct math', async ({ adminPage }) => {
+  test('@regression admin should verify part payments summary on deal details with INR currency and correct math', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -234,14 +244,11 @@ test.describe('Deals', () => {
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
 
     // Navigate to deal details and verify part payments summary
-    await adminPage.goto(
-      `${config.appUrl}/sales/deals/details/${dealId}`,
-      { waitUntil: 'domcontentloaded' },
-    );
+    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
+      waitUntil: 'domcontentloaded',
+    });
     await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');
-
   });
-
 });

@@ -11,14 +11,15 @@ export type MeetingMedium = (typeof MEETING_MEDIUM_OPTIONS)[number];
 export const MEETING_ENTITY_TYPES = ['lead', 'contact', 'deal', 'company'] as const;
 export type MeetingEntityType = (typeof MEETING_ENTITY_TYPES)[number];
 
-export const TIMEZONE_OPTION = '(GMT+05:30) Chennai, Kolkata, Mumbai, New Delhi / Sri Jayawardenapura';
+export const TIMEZONE_OPTION =
+  '(GMT+05:30) Chennai, Kolkata, Mumbai, New Delhi / Sri Jayawardenapura';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
 export interface MeetingTimeConfig {
-  fromHour: number;   // 24-hour format
+  fromHour: number; // 24-hour format
   fromMinute: number;
-  toHour: number;     // fromHour + 2
+  toHour: number; // fromHour + 2
   toMinute: number;
   amPmFrom: 'am' | 'pm';
   amPmTo: 'am' | 'pm';

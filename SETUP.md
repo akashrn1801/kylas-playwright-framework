@@ -127,14 +127,14 @@ RETRY_COUNT=1
 
 Go to `Settings → Secrets and variables → Actions` and add:
 
-| Secret Name | Value |
-|---|---|
-| `QA_APP_URL` | `https://app-qa.sling-dev.com` |
-| `QA_API_BASE_URL` | `https://api-qa.sling-dev.com/v1` |
-| `QA_ADMIN_EMAIL` | `playwrightautomation@mailinator.com` |
-| `QA_ADMIN_PASSWORD` | `Password@007` |
-| `QA_RESTRICTED_EMAIL` | `restricteduser@mailinator.com` |
-| `QA_RESTRICTED_PASSWORD` | `Password@007` |
+| Secret Name              | Value                                 |
+| ------------------------ | ------------------------------------- |
+| `QA_APP_URL`             | `https://app-qa.sling-dev.com`        |
+| `QA_API_BASE_URL`        | `https://api-qa.sling-dev.com/v1`     |
+| `QA_ADMIN_EMAIL`         | `playwrightautomation@mailinator.com` |
+| `QA_ADMIN_PASSWORD`      | `Password@007`                        |
+| `QA_RESTRICTED_EMAIL`    | `restricteduser@mailinator.com`       |
+| `QA_RESTRICTED_PASSWORD` | `Password@007`                        |
 
 ---
 
@@ -225,11 +225,11 @@ feature/*     ← your daily work branches. One per feature or fix.
 
 ### Rules
 
-| Branch | Who can push directly | Requires PR | Requires approval |
-|---|---|---|---|
-| `main` | Nobody | Yes | Yes (1) |
-| `develop` | Nobody | Yes | Yes (1) |
-| `feature/*` | Anyone | No | No |
+| Branch      | Who can push directly | Requires PR | Requires approval |
+| ----------- | --------------------- | ----------- | ----------------- |
+| `main`      | Nobody                | Yes         | Yes (1)           |
+| `develop`   | Nobody                | Yes         | Yes (1)           |
+| `feature/*` | Anyone                | No          | No                |
 
 ---
 
@@ -291,11 +291,11 @@ refactor: extract auth logic into helper
 
 ### What triggers CI
 
-| Event | What runs |
-|---|---|
-| Push to `develop` | Full test suite on chromium |
+| Event                  | What runs                   |
+| ---------------------- | --------------------------- |
+| Push to `develop`      | Full test suite on chromium |
 | PR targeting `develop` | Full test suite on chromium |
-| PR targeting `main` | Full test suite on chromium |
+| PR targeting `main`    | Full test suite on chromium |
 
 ### What CI does (in order)
 
@@ -407,6 +407,7 @@ This was a bug that has been fixed. `config.ts` now only validates the active en
 ### TypeScript errors after a merge
 
 Run `npx tsc --noEmit` to see all errors. Common causes after merges:
+
 - Duplicate imports in a file
 - Duplicate object keys
 - Missing methods called but not defined

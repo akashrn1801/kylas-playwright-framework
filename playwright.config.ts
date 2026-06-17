@@ -19,9 +19,31 @@ export default defineConfig({
 
   reporter: [
     ['list'],
-    ['html', { outputFolder: process.env.CI ? 'reports/playwright-report' : `reports/${config.env}/latest/playwright-report`, open: 'never' }],
-    ['json', { outputFile: process.env.CI ? 'reports/playwright-report/results.json' : `reports/${config.env}/latest/playwright-report/results.json` }],
-    ['allure-playwright', { resultsDir: process.env.CI ? 'reports/allure-results' : `reports/${config.env}/latest/allure-results` }],
+    [
+      'html',
+      {
+        outputFolder: process.env.CI
+          ? 'reports/playwright-report'
+          : `reports/${config.env}/latest/playwright-report`,
+        open: 'never',
+      },
+    ],
+    [
+      'json',
+      {
+        outputFile: process.env.CI
+          ? 'reports/playwright-report/results.json'
+          : `reports/${config.env}/latest/playwright-report/results.json`,
+      },
+    ],
+    [
+      'allure-playwright',
+      {
+        resultsDir: process.env.CI
+          ? 'reports/allure-results'
+          : `reports/${config.env}/latest/allure-results`,
+      },
+    ],
     ['./src/reporters/MiscErrorReporter.ts'],
   ],
 
@@ -40,41 +62,41 @@ export default defineConfig({
 
   projects: isCI
     ? [
-      {
-        name: 'chromium',
-        use: {
-          ...devices['Desktop Chrome'],
-          viewport: { width: 1920, height: 1080 },
+        {
+          name: 'chromium',
+          use: {
+            ...devices['Desktop Chrome'],
+            viewport: { width: 1920, height: 1080 },
+          },
         },
-      },
-    ]
+      ]
     : [
-      {
-        name: 'chromium',
-        use: {
-          ...devices['Desktop Chrome'],
-          viewport: { width: 1920, height: 1080 },
+        {
+          name: 'chromium',
+          use: {
+            ...devices['Desktop Chrome'],
+            viewport: { width: 1920, height: 1080 },
+          },
         },
-      },
-      {
-        name: 'firefox',
-        use: {
-          ...devices['Desktop Firefox'],
-          viewport: { width: 1920, height: 1080 },
+        {
+          name: 'firefox',
+          use: {
+            ...devices['Desktop Firefox'],
+            viewport: { width: 1920, height: 1080 },
+          },
         },
-      },
-      {
-        name: 'webkit',
-        use: {
-          ...devices['Desktop Safari'],
-          viewport: { width: 1920, height: 1080 },
+        {
+          name: 'webkit',
+          use: {
+            ...devices['Desktop Safari'],
+            viewport: { width: 1920, height: 1080 },
+          },
         },
-      },
-      {
-        name: 'mobile-chrome',
-        use: { ...devices['Pixel 5'] },
-      },
-    ],
+        {
+          name: 'mobile-chrome',
+          use: { ...devices['Pixel 5'] },
+        },
+      ],
 
   outputDir: 'test-results/',
 });

@@ -1,19 +1,19 @@
 /**
  * ADDITIONS TO src/fixtures/index.ts
- * 
+ *
  * Add this import at the top of the existing fixtures/index.ts:
  * import { ErrorCollector } from '../error-collector/ErrorCollector';
- * 
+ *
  * Then replace the adminPage fixture with the version below that includes
  * error listener attachment. Do the same for restrictedPage.
- * 
+ *
  * The key additions per page fixture are:
  * 1. ErrorCollector.setCurrentTest(testInfo.title, testInfo.file)
  * 2. attachErrorListeners(page) call
  * 3. ErrorCollector.clearCurrentTest() in the use() callback
  */
 
-import { test as base, Page, BrowserContext, chromium } from '@playwright/test';
+import { test as base, Page, BrowserContext } from '@playwright/test';
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
@@ -29,9 +29,9 @@ function attachErrorListeners(page: Page): void {
   // WHY: pageerror — uncaught JS exceptions in the browser (e.g. ReferenceError)
   page.on('pageerror', (err: Error) => {
     ErrorCollector.capture({
-      type:    'pageerror',
+      type: 'pageerror',
       message: err.message || String(err),
-      url:     err.stack?.split('\n')[1]?.trim(),
+      url: err.stack?.split('\n')[1]?.trim(),
     });
   });
 
@@ -39,9 +39,9 @@ function attachErrorListeners(page: Page): void {
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       ErrorCollector.capture({
-        type:    'console-error',
+        type: 'console-error',
         message: msg.text(),
-        url:     msg.location()?.url,
+        url: msg.location()?.url,
       });
     }
   });
@@ -52,9 +52,9 @@ function attachErrorListeners(page: Page): void {
     const method = request.method();
     const resourceType = request.resourceType();
     ErrorCollector.capture({
-      type:    'requestfailed',
+      type: 'requestfailed',
       message: failure?.errorText || 'Request failed',
-      url:     request.url(),
+      url: request.url(),
       method,
       responseBody: `Resource type: ${resourceType} | Failure: ${failure?.errorText || 'unknown'}`,
     });
@@ -75,7 +75,8 @@ function attachErrorListeners(page: Page): void {
         // Kylas API returns { message: '...' } or { error: '...' } on failures
         try {
           const json = JSON.parse(text);
-          apiErrorMessage = json?.message || json?.error || json?.errorMessage || json?.details || undefined;
+          apiErrorMessage =
+            json?.message || json?.error || json?.errorMessage || json?.details || undefined;
           if (apiErrorMessage) apiErrorMessage = String(apiErrorMessage).substring(0, 300);
         } catch {
           // not JSON — use raw text as error message if short
@@ -85,11 +86,11 @@ function attachErrorListeners(page: Page): void {
         responseBody = undefined;
       }
       ErrorCollector.capture({
-        type:            'response-error',
-        message:         `HTTP ${status} [${method}] ${response.url()}`,
-        url:             response.url(),
+        type: 'response-error',
+        message: `HTTP ${status} [${method}] ${response.url()}`,
+        url: response.url(),
         method,
-        statusCode:      status,
+        statusCode: status,
         responseBody,
         apiErrorMessage,
       });
@@ -107,7 +108,6 @@ export type TestFixtures = {
 };
 
 export const test = base.extend<TestFixtures>({
-
   adminPage: async ({ browser }, use, testInfo) => {
     // WHY: Set current test context so errors captured during this test
     // are tagged with the correct test title and file
@@ -119,7 +119,7 @@ export const test = base.extend<TestFixtures>({
     // expiry from causing flaky failures.
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('admin');
-    const page    = await context.newPage();
+    const page = await context.newPage();
 
     // WHY: Attach error listeners before navigating so we capture ALL errors
     // from the very first page load, not just after the test starts
@@ -133,7 +133,9 @@ export const test = base.extend<TestFixtures>({
       await popup.waitFor({ state: 'visible', timeout: 3000 });
       await popup.click();
       await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch { /* no popup — continue */ }
+    } catch {
+      /* no popup — continue */
+    }
 
     await use(page);
 
@@ -147,7 +149,7 @@ export const test = base.extend<TestFixtures>({
     // creating context and re-logins if expired. Same as adminPage.
     const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('restricted');
-    const page    = await context.newPage();
+    const page = await context.newPage();
     // WHY: Attach error listeners before any navigation
     attachErrorListeners(page);
     // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
@@ -169,7 +171,9 @@ export const test = base.extend<TestFixtures>({
       await popup.waitFor({ state: 'visible', timeout: 3000 });
       await popup.click();
       await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch { /* no popup — continue */ }
+    } catch {
+      /* no popup — continue */
+    }
     await use(page);
     ErrorCollector.clearCurrentTest();
     await context.close();

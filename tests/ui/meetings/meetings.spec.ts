@@ -3,7 +3,6 @@ import { MeetingsPage } from '../../../src/modules/meetings/MeetingsPage';
 import { logger } from '../../../src/utils/logger';
 import {
   generateMeetingData,
-  generateAdminMeetingData,
 } from '../../../src/data/factories/meetingFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -11,7 +10,6 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Meetings', () => {
-
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
   test('@smoke @regression admin should navigate to meetings list', async ({ adminPage }) => {
@@ -20,7 +18,6 @@ test.describe('Meetings', () => {
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
     logger.success('M1 passed');
-
   });
 
   // ── Test 2: Create ─────────────────────────────────────────────────────────
@@ -29,7 +26,7 @@ test.describe('Meetings', () => {
     test.setTimeout(600000); // 10 min — full form with calendar, GPS, related-to loop
 
     const meetingsPage = new MeetingsPage(adminPage);
-    const meetingData  = generateMeetingData();
+    const meetingData = generateMeetingData();
 
     await meetingsPage.goToMeetingsList();
     const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
@@ -52,7 +49,6 @@ test.describe('Meetings', () => {
       logger.warn('Invitee section not visible on this env — skipping invitee assertion');
     }
     logger.success('M2 passed');
-
   });
 
   // ── Test 3: Update ─────────────────────────────────────────────────────────
@@ -60,10 +56,10 @@ test.describe('Meetings', () => {
   test('@regression admin should update an existing meeting', async ({ adminPage }) => {
     test.setTimeout(600000);
 
-    const meetingsPage  = new MeetingsPage(adminPage);
-    const originalData  = generateMeetingData();
-    const updatedTitle  = `UPDATED-${originalData.title}`;
-    const updatedDesc   = 'Updated meeting description by admin automation';
+    const meetingsPage = new MeetingsPage(adminPage);
+    const originalData = generateMeetingData();
+    const updatedTitle = `UPDATED-${originalData.title}`;
+    const updatedDesc = 'Updated meeting description by admin automation';
 
     // Create the meeting first
     await meetingsPage.goToMeetingsList();
@@ -71,12 +67,7 @@ test.describe('Meetings', () => {
     await meetingsPage.assertMeetingInList(originalData.title, originalMeetingId);
 
     // Update title and description via edit form
-    await meetingsPage.updateMeeting(
-      updatedTitle,
-      originalData.title,
-      undefined,
-      updatedDesc,
-    );
+    await meetingsPage.updateMeeting(updatedTitle, originalData.title, undefined, updatedDesc);
 
     // Assert updated title in list
     await meetingsPage.assertMeetingInList(updatedTitle, originalMeetingId);
@@ -91,16 +82,17 @@ test.describe('Meetings', () => {
     // Assert status changed on detail page
     await meetingsPage.assertMeetingStatus(newStatus);
     logger.success('M3 passed');
-
   });
 
   // ── Test 4: Medium selection — calendar fallback behaviour ─────────────────
 
-  test('@regression admin should select meeting medium with calendar fallback', async ({ adminPage }) => {
+  test('@regression admin should select meeting medium with calendar fallback', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const meetingsPage = new MeetingsPage(adminPage);
-    const meetingData  = generateMeetingData({ title: `CalTest-${Date.now()}` });
+    const meetingData = generateMeetingData({ title: `CalTest-${Date.now()}` });
 
     await meetingsPage.goToMeetingsList();
     const calMeetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
@@ -113,17 +105,15 @@ test.describe('Meetings', () => {
     const mediumValue = await mediumField.textContent();
 
     const validMediums = ['Offline', 'Google Meet', 'Outlook'];
-    const isValid = validMediums.some(m => mediumValue?.includes(m));
+    const isValid = validMediums.some((m) => mediumValue?.includes(m));
     if (!isValid) {
       throw new Error(`Unexpected medium value on detail page: "${mediumValue}"`);
     }
     logger.info(`Meeting created with medium: ${mediumValue}`);
     logger.success('M4 passed');
-
   });
 
   // ── Test 5: prodSafe — read-only navigation ────────────────────────────────
-
 
   // ── Test 4b: Reschedule ───────────────────────────────────────────────────
 
@@ -131,7 +121,7 @@ test.describe('Meetings', () => {
     test.setTimeout(600000);
 
     const meetingsPage = new MeetingsPage(adminPage);
-    const meetingData  = generateMeetingData();
+    const meetingData = generateMeetingData();
 
     await meetingsPage.goToMeetingsList();
     const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
@@ -139,7 +129,6 @@ test.describe('Meetings', () => {
     await meetingsPage.rescheduleMeeting(meetingData.title);
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
     logger.success('M5 passed');
-
   });
 
   test('@prodSafe meetings list page should be accessible', async ({ adminPage }) => {
@@ -148,7 +137,6 @@ test.describe('Meetings', () => {
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
     logger.success('M6 passed');
-
   });
 
   // ── Test: prodSafe — GPS address field works ─────────────────────────────
@@ -173,8 +161,15 @@ test.describe('Meetings', () => {
     await adminPage.waitForTimeout(1500);
 
     // Check if Field Sales addon trial modal appeared
-    const addonDialog = await adminPage.locator('.trial-feature__title').isVisible().catch(() => false)
-      || await adminPage.locator('text=Field Sales is now available').isVisible().catch(() => false);
+    const addonDialog =
+      (await adminPage
+        .locator('.trial-feature__title')
+        .isVisible()
+        .catch(() => false)) ||
+      (await adminPage
+        .locator('text=Field Sales is now available')
+        .isVisible()
+        .catch(() => false));
     if (addonDialog) {
       // Dismiss by clicking I'll do it later
       await adminPage.locator('button.btn.link-primary', { hasText: "I'll do it later" }).click();
@@ -195,12 +190,19 @@ test.describe('Meetings', () => {
       await gpsSearchInput.fill('Pune');
       await adminPage.waitForTimeout(1500);
 
-      const predictionsVisible = await adminPage.locator('.autocomplete-prediction').first().isVisible().catch(() => false);
+      const predictionsVisible = await adminPage
+        .locator('.autocomplete-prediction')
+        .first()
+        .isVisible()
+        .catch(() => false);
       if (predictionsVisible) {
         await adminPage.locator('.autocomplete-prediction').first().click();
         await adminPage.waitForTimeout(500);
         // Verify location field has value
-        const locationValue = await adminPage.locator('[id="1_81_input_location"]').inputValue().catch(() => '');
+        const locationValue = await adminPage
+          .locator('[id="1_81_input_location"]')
+          .inputValue()
+          .catch(() => '');
         logger.success(`GPS address selected: ${locationValue}`);
       } else {
         // No predictions — fall back to manual
@@ -215,7 +217,5 @@ test.describe('Meetings', () => {
     await adminPage.waitForTimeout(500);
     logger.success('GPS address test completed');
     logger.success('M7 passed');
-
   });
-
 });

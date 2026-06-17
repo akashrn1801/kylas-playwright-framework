@@ -17,25 +17,27 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Meetings RBAC', () => {
-
   // ── Test 1: Restricted user navigates ─────────────────────────────────────
 
-  test('@regression restricted user should navigate to meetings list', async ({ restrictedPage }) => {
+  test('@regression restricted user should navigate to meetings list', async ({
+    restrictedPage,
+  }) => {
     const meetingsPage = new MeetingsPage(restrictedPage);
 
     await meetingsPage.goToMeetingsList();
     await meetingsPage.assertOnMeetingsPage();
     logger.success('M8 passed');
-
   });
 
   // ── Test 2: Restricted user creates own meeting ────────────────────────────
 
-  test('@regression restricted user should create their own meeting', async ({ restrictedPage }) => {
+  test('@regression restricted user should create their own meeting', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(600000);
 
-    const meetingsPage  = new MeetingsPage(restrictedPage);
-    const meetingData   = generateRestrictedMeetingData();
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const meetingData = generateRestrictedMeetingData();
 
     await meetingsPage.goToMeetingsList();
     const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Restricted');
@@ -49,12 +51,13 @@ test.describe('Meetings RBAC', () => {
     // Restricted user owns this meeting — Edit should be available
     await meetingsPage.assertEditOptionInMenu();
     logger.success('M9 passed');
-
   });
 
   // ── Test 3: Restricted user edits own meeting ──────────────────────────────
 
-  test('@regression restricted user should be able to edit their own meeting', async ({ restrictedPage }) => {
+  test('@regression restricted user should be able to edit their own meeting', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(600000);
 
     const meetingsPage = new MeetingsPage(restrictedPage);
@@ -75,7 +78,7 @@ test.describe('Meetings RBAC', () => {
       updatedTitle,
       originalData.title,
       'conducted',
-      'Restricted user edited this meeting',
+      'Restricted user edited this meeting'
     );
 
     // Assert updated title in list and detail
@@ -85,7 +88,6 @@ test.describe('Meetings RBAC', () => {
     const newStatus = await meetingsPage.changeStatusViaEllipsis();
     await meetingsPage.assertMeetingStatus(newStatus);
     logger.success('M10 passed');
-
   });
 
   // ── Test 4: Restricted user CANNOT see admin meeting (not invited) ─────────
@@ -96,7 +98,7 @@ test.describe('Meetings RBAC', () => {
   }) => {
     test.setTimeout(600000);
 
-    const adminMeetings      = new MeetingsPage(adminPage);
+    const _adminMeetings = new MeetingsPage(adminPage);
     const restrictedMeetings = new MeetingsPage(restrictedPage);
 
     // Admin creates a meeting — does NOT add restricted user as invitee
@@ -105,12 +107,12 @@ test.describe('Meetings RBAC', () => {
     // user to be added as invitee, giving them access and failing the RBAC assertion.
     const adminData = generateAdminMeetingData();
 
-    await adminMeetings.goToMeetingsList();
+    await _adminMeetings.goToMeetingsList();
     // WHY: addInvitee=false — don't add restricted user as invitee
     // WHY: skipRelatedTo=true — Related To entities owned by restricted user
     // grant access regardless of invitee list (Kylas product behaviour)
-    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin', false, true);
-    await adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
+    const adminMeetingId1 = await _adminMeetings.createMeeting(adminData, 'Admin', false, true);
+    await _adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Restricted user searches for the admin meeting — must NOT find it
     // WHY: Pass meeting ID so assertMeetingNotInList uses direct URL check
@@ -118,7 +120,6 @@ test.describe('Meetings RBAC', () => {
     await restrictedMeetings.goToMeetingsList();
     await restrictedMeetings.assertMeetingNotInList(adminData.title, adminMeetingId1);
     logger.success('M11 passed');
-
   });
 
   // ── Test 5: Restricted user CAN see admin meeting when invited ────────────
@@ -130,17 +131,17 @@ test.describe('Meetings RBAC', () => {
   }) => {
     test.setTimeout(600000);
 
-    const adminMeetings      = new MeetingsPage(adminPage);
+    const _adminMeetings = new MeetingsPage(adminPage);
     const restrictedMeetings = new MeetingsPage(restrictedPage);
 
     // Admin creates meeting — invitee search 'restricted' adds restricted user
     const adminData = generateAdminMeetingData();
-    await adminMeetings.goToMeetingsList();
-    const adminMeetingId1 = await adminMeetings.createMeeting(adminData, 'Admin');
-    await adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
+    await _adminMeetings.goToMeetingsList();
+    const adminMeetingId1 = await _adminMeetings.createMeeting(adminData, 'Admin');
+    await _adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Capture meeting ID from admin detail view
-    await adminMeetings.openMeetingFromList(adminData.title);
+    await _adminMeetings.openMeetingFromList(adminData.title);
     const detailTitle = await adminPage.locator('h2.h2.text-break.meeting__title').textContent();
     const idMatch = detailTitle?.match(/#(\d+)/);
     const meetingId = idMatch ? parseInt(idMatch[1]) : null;
@@ -155,8 +156,14 @@ test.describe('Meetings RBAC', () => {
     await restrictedMeetings.searchMeetingById(meetingId);
 
     // Meeting should appear in list (restricted user is invitee)
-    const meetingVisible = await restrictedPage.locator(`input#check_${meetingId}`).isVisible().catch(() => false);
-    if (!meetingVisible) throw new Error(`Meeting ID ${meetingId} not visible for restricted user — not added as invitee`);
+    const meetingVisible = await restrictedPage
+      .locator(`input#check_${meetingId}`)
+      .isVisible()
+      .catch(() => false);
+    if (!meetingVisible)
+      throw new Error(
+        `Meeting ID ${meetingId} not visible for restricted user — not added as invitee`
+      );
     logger.success(`Meeting ${meetingId} visible for restricted user as invitee`);
 
     // Click the meeting to open it
@@ -169,22 +176,26 @@ test.describe('Meetings RBAC', () => {
     // Restricted user CANNOT edit this meeting (owned by admin)
     // The ellipsis menu should only show Clone — not Edit
     await restrictedMeetings.openEllipsisMenu();
-    const editVisible = await restrictedPage.locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Edit' }).isVisible().catch(() => false);
-    if (editVisible) throw new Error('Edit option should NOT be visible for restricted user on admin meeting');
+    const editVisible = await restrictedPage
+      .locator('div.dropdown-menu.show a.dropdown-item', { hasText: 'Edit' })
+      .isVisible()
+      .catch(() => false);
+    if (editVisible)
+      throw new Error('Edit option should NOT be visible for restricted user on admin meeting');
     logger.success('Edit option correctly absent — only Clone visible');
     await restrictedPage.keyboard.press('Escape');
     logger.success('M12 passed');
-
   });
-
 
   // ── Test 8: Restricted user reschedules own meeting ──────────────────────
 
-  test('@regression restricted user should reschedule their own meeting', async ({ restrictedPage }) => {
+  test('@regression restricted user should reschedule their own meeting', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(600000);
 
     const meetingsPage = new MeetingsPage(restrictedPage);
-    const meetingData  = generateRestrictedMeetingData();
+    const meetingData = generateRestrictedMeetingData();
 
     await meetingsPage.goToMeetingsList();
     const meetingId1 = await meetingsPage.createMeeting(meetingData, 'Restricted');
@@ -192,9 +203,8 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.rescheduleMeeting(meetingData.title);
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
     logger.success('M13 passed');
-
   });
-  
+
   // ── Test: Restricted user cannot see admin entities in Related To ──────────
 
   test('@regression restricted user should not see admin entities in Related To dropdown', async ({
@@ -203,7 +213,7 @@ test.describe('Meetings RBAC', () => {
   }) => {
     test.setTimeout(600000);
 
-    const adminMeetings      = new MeetingsPage(adminPage);
+    const _adminMeetings = new MeetingsPage(adminPage);
     const restrictedMeetings = new MeetingsPage(restrictedPage);
 
     // Admin creates a lead with ADM prefix so we can search for it
@@ -233,7 +243,9 @@ test.describe('Meetings RBAC', () => {
     const adminLeadOption = restrictedPage.locator('.is-invalid__option', { hasText: /^ADM/ });
     const adminLeadVisible = await adminLeadOption.isVisible().catch(() => false);
     if (adminLeadVisible) {
-      throw new Error('Restricted user should NOT see admin-owned ADM leads in Related To dropdown');
+      throw new Error(
+        'Restricted user should NOT see admin-owned ADM leads in Related To dropdown'
+      );
     }
     logger.success('Restricted user correctly cannot see admin ADM entities in Related To');
 
@@ -241,7 +253,5 @@ test.describe('Meetings RBAC', () => {
     await restrictedPage.keyboard.press('Escape');
     await restrictedPage.waitForTimeout(500);
     logger.success('M14 passed');
-
   });
-
 });

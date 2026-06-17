@@ -1,6 +1,8 @@
 import { config } from '../../config/config';
 import { Page, Locator, expect } from '@playwright/test';
 import { logger } from '../utils/logger';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export class BasePage {
   protected page: Page;
@@ -67,7 +69,10 @@ export class BasePage {
     await locator.waitFor({ state: 'hidden', timeout });
   }
 
-  async waitForUrl(urlPattern: string | RegExp, timeout = config.timeouts.navigation): Promise<void> {
+  async waitForUrl(
+    urlPattern: string | RegExp,
+    timeout = config.timeouts.navigation
+  ): Promise<void> {
     logger.info(`Waiting for URL: ${urlPattern}`);
     await this.page.waitForURL(urlPattern, { timeout });
   }
@@ -108,66 +113,67 @@ export class BasePage {
     return (await locator.textContent()) || '';
   }
   async assertNoFormErrors(context = 'form'): Promise<void> {
-  logger.info(`Checking for validation errors in ${context}`);
+    logger.info(`Checking for validation errors in ${context}`);
 
-  // WHY: Wait briefly for any error messages to appear after save action
-  await this.page.waitForTimeout(1500);
+    // WHY: Wait briefly for any error messages to appear after save action
+    await this.page.waitForTimeout(1500);
 
-  // Field level errors
-  const fieldErrors = await this.page
-    .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
-    .evaluateAll((els: any[]) =>
-      els.map(el => el.name || el.id || 'unknown')
-    );
+    // Field level errors
+    const fieldErrors = await this.page
+      .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
+      .evaluateAll((els: any[]) => els.map((el) => el.name || el.id || 'unknown'));
 
-  // Inline validation messages
-  const inlineErrors = await this.page
-    .locator('.invalid-feedback:visible, .error-message:visible, .alert-danger:visible')
-    .allTextContents();
+    // Inline validation messages
+    const inlineErrors = await this.page
+      .locator('.invalid-feedback:visible, .error-message:visible, .alert-danger:visible')
+      .allTextContents();
 
-  // Toast/notification errors
-  const toastErrors = await this.page
-    .locator('.toast, .toast-error, .toast-danger, .notification-error, [class*="toast"][class*="error"], [class*="alert"][class*="error"], .Toastify__toast--error, .swal2-error')
-    .allTextContents();
+    // Toast/notification errors
+    const toastErrors = await this.page
+      .locator(
+        '.toast, .toast-error, .toast-danger, .notification-error, [class*="toast"][class*="error"], [class*="alert"][class*="error"], .Toastify__toast--error, .swal2-error'
+      )
+      .allTextContents();
 
-  // Any visible error containers — use specific selectors to avoid false positives
-  // WHY: [class*="error"] is too broad — matches React Select is-invalid__ classes
-  // which contain currency values (INR). Use only known error container classes.
-  const errorContainers = await this.page
-    .locator('.error-container:visible, .form-error:visible, .field-error:visible, .alert.alert-danger:visible')
-    .allTextContents();
+    // Any visible error containers — use specific selectors to avoid false positives
+    // WHY: [class*="error"] is too broad — matches React Select is-invalid__ classes
+    // which contain currency values (INR). Use only known error container classes.
+    const errorContainers = await this.page
+      .locator(
+        '.error-container:visible, .form-error:visible, .field-error:visible, .alert.alert-danger:visible'
+      )
+      .allTextContents();
 
-  const allErrors = [
-    ...inlineErrors,
-    ...toastErrors,
-    ...errorContainers,
-  ]
-    .map(e => e.trim())
-    .filter(e => e.length > 0);
+    const allErrors = [...inlineErrors, ...toastErrors, ...errorContainers]
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
 
-  if (allErrors.length > 0 || fieldErrors.length > 0) {
-    throw new Error(
-      `Validation errors found in ${context}:\n` +
-      `Fields with errors: ${fieldErrors.join(', ')}\n` +
-      `Error messages: ${allErrors.join(' | ')}`
-    );
+    if (allErrors.length > 0 || fieldErrors.length > 0) {
+      throw new Error(
+        `Validation errors found in ${context}:\n` +
+          `Fields with errors: ${fieldErrors.join(', ')}\n` +
+          `Error messages: ${allErrors.join(' | ')}`
+      );
+    }
+
+    logger.success(`No validation errors found in ${context}`);
   }
-
-  logger.success(`No validation errors found in ${context}`);
-}
 
   async getLoggedInUserName(role: 'admin' | 'restricted' = 'restricted'): Promise<string> {
     try {
-      const path = require('path');
-      const fs = require('fs');
-      const namesFile = path.join(__dirname, '../auth/storageStates', process.env.ENV || 'qa', 'userNames.json');
+      const namesFile = path.join(
+        __dirname,
+        '../auth/storageStates',
+        process.env.ENV || 'qa',
+        'userNames.json'
+      );
       if (fs.existsSync(namesFile)) {
         const names = JSON.parse(fs.readFileSync(namesFile, 'utf8'));
         if (names[role]) {
           return names[role];
         }
       }
-    } catch (e) {
+    } catch (_e) {
       // fall through to DOM fallback
     }
     // DOM fallback
