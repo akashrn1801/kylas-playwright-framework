@@ -525,10 +525,17 @@ export class TasksPage extends BasePage {
     // WHY: Click control to open dropdown — default options load immediately (only 2 users)
     // Do NOT type — typing triggers API search which returns No Options for short names
     await control.click();
-    await this.page.waitForTimeout(800);
-    // WHY: Options are Playwright Automation and User 1 — select by exact text match
-    const option = this.page.locator('.is-invalid__option').filter({ hasText: userName }).first();
-    await option.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Increased wait — staging env loads dropdown options slower than QA
+    await this.page.waitForTimeout(1500);
+    // WHY: Try both .is-invalid__option and generic react-select option selectors
+    // as the class name may differ between environments
+    let option = this.page.locator('.is-invalid__option').filter({ hasText: userName }).first();
+    const isVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+    if (!isVisible) {
+      logger.warn(`'.is-invalid__option' not found — trying generic react-select option`);
+      option = this.page.locator('[class*="__option"]').filter({ hasText: userName }).first();
+    }
+    await option.waitFor({ state: 'visible', timeout: 15000 });
     await option.click();
     logger.success(`Assigned to: ${userName}`);
   }
