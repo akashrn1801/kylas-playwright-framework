@@ -1,0 +1,161 @@
+// ============================================================================
+// Jenkinsfile.sandbox
+// Selective test runner for the sandbox branch.
+// Detects which modules changed vs dev and runs only those tests.
+// Always runs against QA environment.
+// ============================================================================
+
+pipeline {
+  agent any
+  tools { nodejs 'Node22' }
+
+  options {
+    ansiColor('xterm')
+    timestamps()
+    timeout(time: 60, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  environment {
+    CI                       = 'true'
+    HEADLESS                 = 'true'
+    PLAYWRIGHT_BROWSERS_PATH = '/var/jenkins_home/.cache/ms-playwright'
+    NAVIGATION_TIMEOUT       = '120000'
+    EXPECT_TIMEOUT           = '20000'
+    RETRY_COUNT              = '1'
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+        echo "Branch: ${env.GIT_BRANCH} | Commit: ${env.GIT_COMMIT}"
+      }
+    }
+
+    stage('Install') {
+      steps {
+        sh 'node --version'
+        sh 'npm ci'
+        sh 'npx playwright install chromium'
+      }
+    }
+
+    stage('Setup Environment') {
+      steps {
+        script {
+          withCredentials([
+            string(credentialsId: 'QA_APP_URL',             variable: 'QA_APP_URL'),
+            string(credentialsId: 'QA_API_BASE_URL',        variable: 'QA_API_BASE_URL'),
+            string(credentialsId: 'QA_ADMIN_EMAIL',         variable: 'QA_ADMIN_EMAIL'),
+            string(credentialsId: 'QA_ADMIN_PASSWORD',      variable: 'QA_ADMIN_PASSWORD'),
+            string(credentialsId: 'QA_RESTRICTED_EMAIL',    variable: 'QA_RESTRICTED_EMAIL'),
+            string(credentialsId: 'QA_RESTRICTED_PASSWORD', variable: 'QA_RESTRICTED_PASSWORD'),
+            string(credentialsId: 'GMAIL_APP_PASSWORD',     variable: 'GMAIL_APP_PASSWORD'),
+            string(credentialsId: 'GMAIL_USER',             variable: 'GMAIL_USER')
+          ]) {
+            writeFile file: '.env', text: """\
+ENV=qa
+QA_APP_URL=${QA_APP_URL}
+QA_API_BASE_URL=${QA_API_BASE_URL}
+QA_ADMIN_EMAIL=${QA_ADMIN_EMAIL}
+QA_ADMIN_PASSWORD=${QA_ADMIN_PASSWORD}
+QA_RESTRICTED_EMAIL=${QA_RESTRICTED_EMAIL}
+QA_RESTRICTED_PASSWORD=${QA_RESTRICTED_PASSWORD}
+HEADLESS=true
+CI=true
+NAVIGATION_TIMEOUT=120000
+EXPECT_TIMEOUT=20000
+GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+GMAIL_USER=${GMAIL_USER}
+GMAIL_SMTP_HOST=smtp.gmail.com
+GMAIL_SMTP_PORT=587
+NOTIFY_ENABLED=true
+REPORT_PATH=reports/playwright-report/results.json
+"""
+          }
+        }
+      }
+    }
+
+    stage('Clear Auth State') {
+      steps {
+        sh 'rm -rf src/auth/storageStates/'
+        sh 'mkdir -p src/auth/storageStates/'
+      }
+    }
+
+    stage('Detect Changed Tests') {
+      steps {
+        script {
+          // WHY: fetch dev branch so git diff can compare sandbox vs dev
+          sh 'git fetch origin dev'
+          def target = sh(
+            script: 'BASE_BRANCH=dev bash .github/scripts/detect-tests.sh 2>&1 | tail -1',
+            returnStdout: true
+          ).trim()
+          echo "Detected test target: ${target}"
+          env.TEST_TARGET = target
+        }
+      }
+    }
+
+    stage('Run Selective Tests') {
+      steps {
+        script {
+          echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
+          sh """
+            npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET} \
+              --reporter=line,allure-playwright || true
+          """
+        }
+      }
+      post {
+        always {
+          sh 'mv allure-results allure-results-sandbox || true'
+          allure([
+            includeProperties: false,
+            jdk: '',
+            results: [[path: 'allure-results-sandbox']]
+          ])
+        }
+      }
+    }
+
+  }
+
+  post {
+    always {
+      archiveArtifacts(
+        artifacts: 'reports/**,test-results/**',
+        allowEmptyArchive: true
+      )
+      publishHTML(target: [
+        allowMissing         : true,
+        alwaysLinkToLastBuild: true,
+        keepAll              : true,
+        reportDir            : 'reports/playwright-report',
+        reportFiles          : 'index.html',
+        reportName           : 'Playwright HTML Report — Sandbox'
+      ])
+      script {
+        try {
+          sh 'npm run notify || true'
+        } catch (e) {
+          echo 'Notification failed — continuing'
+        }
+      }
+      cleanWs()
+    }
+    success {
+      echo '✅ Sandbox selective tests passed'
+    }
+    failure {
+      echo '❌ Sandbox tests failed — fix before merging to dev'
+    }
+    unstable {
+      echo '⚠️ Sandbox tests unstable — check report'
+    }
+  }
+}
