@@ -102,16 +102,40 @@ REPORT_PATH=reports/playwright-report/results.json
             }
         }
 
+        stage('Detect Tests (sandbox only)') {
+            when {
+                branch 'sandbox'
+            }
+            steps {
+                script {
+                    sh 'git fetch origin dev'
+                    def target = sh(
+                        script: 'BASE_BRANCH=dev bash .github/scripts/detect-tests.sh 2>&1 | tail -1',
+                        returnStdout: true
+                    ).trim()
+                    echo "Sandbox detected test target: ${target}"
+                    env.SANDBOX_TEST_TARGET = target
+                }
+            }
+        }
+
         stage('Run Tests') {
             steps {
                 script {
                     def grepTag = '--grep @smoke'
-                    if (env.BRANCH_NAME == 'qa') {
+                    if (env.BRANCH_NAME == 'sandbox') {
+                        // WHY: Use selective detection for sandbox branch
+                        def target = env.SANDBOX_TEST_TARGET ?: '--grep @smoke'
+                        sh "npx playwright test --project=chromium --workers=1 ${target} || true"
+                    } else if (env.BRANCH_NAME == 'qa') {
                         grepTag = '--grep @regression'
+                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
                     } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'prod') {
                         grepTag = ''
+                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
+                    } else {
+                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
                     }
-                    sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
                 }
             }
         }
