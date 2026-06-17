@@ -30,6 +30,9 @@
     "notify": "ts-node src/notifications/scripts/notify.ts",
     "test:notify": "npm test && npm run notify",
     "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi",
+    "test:contacts": "playwright test tests/ui/contacts/ tests/rbac/contacts.rbac.spec.ts --project=chromium && npm run notify",
+    "test:companies": "playwright test tests/ui/companies/ tests/rbac/companies.rbac.spec.ts --project=chromium && npm run notify",
+    "test:meetings": "playwright test tests/ui/meetings/ tests/rbac/meetings.rbac.spec.ts --project=chromium && npm run notify",
     "test:quotations": "playwright test tests/ui/quotations/ --project=chromium && npm run notify",
     "test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium && npm run notify",
     "sandbox:reset": "bash scripts/reset-sandbox.sh"
