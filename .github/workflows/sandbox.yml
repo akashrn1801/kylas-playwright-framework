@@ -44,7 +44,6 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
-          QA_ADMIN_DEAL_NAME: ${{ secrets.QA_ADMIN_DEAL_NAME }}
         run: |
           TARGET="${{ steps.detect.outputs.target }}"
           echo "Running: npx playwright test --project=chromium --workers=1 $TARGET"

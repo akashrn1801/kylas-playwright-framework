@@ -19,7 +19,6 @@ export const LEAD_PIPELINE_STAGES: LeadPipelineStage[] = [
   'Closed Lost',
 ];
 
-
 export interface LeadData {
   firstName: string;
   lastName: string;

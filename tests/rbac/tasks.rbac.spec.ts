@@ -1,10 +1,7 @@
 import { test } from '../../src/fixtures/index';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { logger } from '../../src/utils/logger';
-import {
-  generateTaskData,
-  generateAdminTaskData,
-} from '../../src/data/factories/taskFactory';
+import { generateTaskData, generateAdminTaskData } from '../../src/data/factories/taskFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tasks — RBAC Tests
@@ -20,41 +17,44 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Tasks RBAC', () => {
-
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
-  test('@smoke @regression restricted user can navigate to tasks list', async ({ restrictedPage }) => {
+  test('@smoke @regression restricted user can navigate to tasks list', async ({
+    restrictedPage,
+  }) => {
     const tasksPage = new TasksPage(restrictedPage);
 
     await tasksPage.goToTasksList();
     await tasksPage.assertOnTasksListPage();
     logger.success('TK12 passed');
-
   });
 
   // ── Test 2: Restricted user creates own quick task ────────────────────────
 
-  test('@regression restricted user can create a task via Quick Task form', async ({ restrictedPage }) => {
+  test('@regression restricted user can create a task via Quick Task form', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(restrictedPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createQuickTask(taskData);
 
     await tasksPage.assertTaskCreated(taskData, taskId);
     logger.success('TK13 passed');
-
   });
 
   // ── Test 3: Restricted user creates own detailed task ────────────────────
 
-  test('@regression restricted user can create a task via Detailed Task form', async ({ restrictedPage }) => {
+  test('@regression restricted user can create a task via Detailed Task form', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(restrictedPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     // WHY: skipRelation=true — this test focuses on note adding, not relations
@@ -62,7 +62,6 @@ test.describe('Tasks RBAC', () => {
 
     await tasksPage.assertTaskCreated(taskData, taskId);
     logger.success('TK14 passed');
-
   });
 
   // ── Test 4: Restricted user edits own task ────────────────────────────────
@@ -70,9 +69,9 @@ test.describe('Tasks RBAC', () => {
   test('@regression restricted user can edit their own task', async ({ restrictedPage }) => {
     test.setTimeout(480000);
 
-    const tasksPage    = new TasksPage(restrictedPage);
+    const tasksPage = new TasksPage(restrictedPage);
     const originalData = generateTaskData();
-    const updatedData  = generateTaskData({ status: 'In Progress' });
+    const updatedData = generateTaskData({ status: 'In Progress' });
 
     await tasksPage.goToTasksList();
     const taskId = await tasksPage.createDetailedTask(originalData);
@@ -81,16 +80,17 @@ test.describe('Tasks RBAC', () => {
     await tasksPage.updateTask(updatedData, originalData.name, taskId);
     await tasksPage.assertTaskUpdated(updatedData, taskId);
     logger.success('TK15 passed');
-
   });
 
   // ── Test 5: Restricted user marks own task as complete ───────────────────
 
-  test('@regression restricted user can mark their own task as complete', async ({ restrictedPage }) => {
+  test('@regression restricted user can mark their own task as complete', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(restrictedPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     // WHY: skipRelation=true — this test focuses on note adding, not relations
@@ -101,7 +101,6 @@ test.describe('Tasks RBAC', () => {
     await tasksPage.markTaskAsComplete(taskId);
     logger.success('Restricted user marked own task as complete');
     logger.success('TK16 passed');
-
   });
 
   // ── Test 6: Restricted user CANNOT see admin task (not assigned) ──────────
@@ -112,7 +111,7 @@ test.describe('Tasks RBAC', () => {
   }) => {
     test.setTimeout(480000);
 
-    const adminTasks      = new TasksPage(adminPage);
+    const adminTasks = new TasksPage(adminPage);
     const restrictedTasks = new TasksPage(restrictedPage);
 
     // WHY: ADM<timestamp> prefix guarantees uniqueness — restricted user searching
@@ -127,7 +126,6 @@ test.describe('Tasks RBAC', () => {
     await restrictedTasks.goToTasksList();
     await restrictedTasks.assertTaskNotInList(adminData.name);
     logger.success('TK17 passed');
-
   });
 
   // ── Test 7: Restricted user CAN see AND edit admin task when assigned ──────
@@ -138,7 +136,7 @@ test.describe('Tasks RBAC', () => {
   }) => {
     test.setTimeout(480000);
 
-    const adminTasks      = new TasksPage(adminPage);
+    const adminTasks = new TasksPage(adminPage);
     const restrictedTasks = new TasksPage(restrictedPage);
 
     // WHY: ADM<timestamp> prefix for RBAC isolation
@@ -155,7 +153,8 @@ test.describe('Tasks RBAC', () => {
     await adminTasks.assertTaskCreated(adminData, taskId);
 
     logger.info(`Admin task ID: ${taskId}`);
-    if (!taskId) throw new Error('Could not capture admin task ID — cannot proceed with RBAC check');
+    if (!taskId)
+      throw new Error('Could not capture admin task ID — cannot proceed with RBAC check');
 
     // ── Restricted user perspective ──────────────────────────────────────────
 
@@ -166,11 +165,12 @@ test.describe('Tasks RBAC', () => {
     await restrictedTasks.searchTaskById(taskId);
 
     // Task should appear in filtered list
-    const taskVisible = await restrictedPage.locator(`li#task_${taskId}`).isVisible().catch(() => false);
+    const taskVisible = await restrictedPage
+      .locator(`li#task_${taskId}`)
+      .isVisible()
+      .catch(() => false);
     if (!taskVisible) {
-      throw new Error(
-        `Task ID ${taskId} not visible for restricted user — not assigned correctly`,
-      );
+      throw new Error(`Task ID ${taskId} not visible for restricted user — not assigned correctly`);
     }
     logger.success(`Task ${taskId} visible for restricted user as assignee`);
 
@@ -191,21 +191,25 @@ test.describe('Tasks RBAC', () => {
     // Verify the update persisted
     await restrictedTasks.goToTasksList();
     await restrictedTasks.searchTaskById(taskId);
-    const updatedVisible = await restrictedPage.locator(`li#task_${taskId}`).isVisible().catch(() => false);
-    if (!updatedVisible) throw new Error(`Updated task ${taskId} not found for restricted user after edit`);
+    const updatedVisible = await restrictedPage
+      .locator(`li#task_${taskId}`)
+      .isVisible()
+      .catch(() => false);
+    if (!updatedVisible)
+      throw new Error(`Updated task ${taskId} not found for restricted user after edit`);
     logger.success('Restricted user successfully edited admin-assigned task');
     logger.success('TK18 passed');
-
   });
-
 
   // ── Test: Restricted user adds note to own task ───────────────────────────
 
-  test('@regression restricted user can add a note to their own task', async ({ restrictedPage }) => {
+  test('@regression restricted user can add a note to their own task', async ({
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const tasksPage = new TasksPage(restrictedPage);
-    const taskData  = generateTaskData();
+    const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
     // WHY: skipRelation=true — this test focuses on note adding, not relations
@@ -218,9 +222,7 @@ test.describe('Tasks RBAC', () => {
     await tasksPage.addNoteToTask(noteText);
     await tasksPage.assertNoteAdded(noteText);
     logger.success('TK19 passed');
-
   });
-
 
   // ── Test: Restricted user cannot Delete admin-assigned task ───────────────
 
@@ -230,7 +232,7 @@ test.describe('Tasks RBAC', () => {
   }) => {
     test.setTimeout(480000);
 
-    const adminTasks      = new TasksPage(adminPage);
+    const adminTasks = new TasksPage(adminPage);
     const restrictedTasks = new TasksPage(restrictedPage);
 
     const adminData = generateAdminTaskData();
@@ -247,9 +249,7 @@ test.describe('Tasks RBAC', () => {
     // WHY: Restricted user is only assignee — cannot delete admin-owned task
     await restrictedTasks.assertDeleteOptionNotVisible(taskId!);
     logger.success('TK20 passed');
-
   });
-
 
   // ── Test: Restricted user can add note to admin-assigned task ────────────
 
@@ -259,7 +259,7 @@ test.describe('Tasks RBAC', () => {
   }) => {
     test.setTimeout(480000);
 
-    const adminTasks      = new TasksPage(adminPage);
+    const adminTasks = new TasksPage(adminPage);
     const restrictedTasks = new TasksPage(restrictedPage);
 
     const adminData = generateAdminTaskData();
@@ -285,7 +285,5 @@ test.describe('Tasks RBAC', () => {
     await restrictedTasks.addNoteToTask(adminTaskNote);
     await restrictedTasks.assertNoteAdded(adminTaskNote);
     logger.success('TK21 passed');
-
   });
-
 });

@@ -14,7 +14,7 @@ export interface UserCredentials {
 
 export class AuthManager {
   private browser: Browser;
-  private storageStatePath = path.join(__dirname, 'storageStates');
+  private storageStatePath = path.join(__dirname, 'storageStates', config.env);
 
   // Prevent parallel login race conditions
   private static loginInProgress: Map<string, Promise<void>> = new Map();
@@ -48,7 +48,7 @@ export class AuthManager {
     if (!config.appUrl || config.appUrl.trim() === '') {
       throw new Error(
         `config.appUrl is empty. ENV=${config.env}. ` +
-        `Check that ${config.env.toUpperCase()}_APP_URL is set in .env or Jenkins environment.`
+          `Check that ${config.env.toUpperCase()}_APP_URL is set in .env or Jenkins environment.`
       );
     }
   }
@@ -109,9 +109,7 @@ export class AuthManager {
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        logger.info(
-          `Navigation attempt ${attempt} to: ${config.appUrl}`
-        );
+        logger.info(`Navigation attempt ${attempt} to: ${config.appUrl}`);
 
         await page.goto(config.appUrl, {
           waitUntil: 'commit',
@@ -138,9 +136,7 @@ export class AuthManager {
       } catch (error) {
         lastError = error;
 
-        logger.warn(
-          `Navigation attempt ${attempt} failed: ${String(error)}`
-        );
+        logger.warn(`Navigation attempt ${attempt} failed: ${String(error)}`);
 
         logger.warn(`Current URL: ${page.url()}`);
 
@@ -160,8 +156,7 @@ export class AuthManager {
 
     if (!navigationSuccess) {
       throw new Error(
-        `Failed to load login page after 3 attempts. ` +
-        `Last error: ${String(lastError)}`
+        `Failed to load login page after 3 attempts. ` + `Last error: ${String(lastError)}`
       );
     }
   }
@@ -211,9 +206,7 @@ export class AuthManager {
     const existing = AuthManager.loginInProgress.get(role);
 
     if (existing) {
-      logger.info(
-        `Login already in progress for role: ${role}. Waiting...`
-      );
+      logger.info(`Login already in progress for role: ${role}. Waiting...`);
 
       await existing;
       return;
@@ -240,7 +233,7 @@ export class AuthManager {
     if (!credentials.email || !credentials.password) {
       throw new Error(
         `Credentials missing for role: ${role}, ENV: ${config.env}. ` +
-        `Check ${config.env.toUpperCase()}_${role.toUpperCase()}_EMAIL and PASSWORD in .env`
+          `Check ${config.env.toUpperCase()}_${role.toUpperCase()}_EMAIL and PASSWORD in .env`
       );
     }
 
@@ -309,10 +302,8 @@ export class AuthManager {
           fullPage: true,
         });
 
-        logger.error(
-          `Failure screenshot captured: ${screenshotPath}`
-        );
-      } catch {
+        logger.error(`Failure screenshot captured: ${screenshotPath}`);
+      } catch (_error) {
         logger.error('Failed to capture screenshot');
       }
 
@@ -335,7 +326,9 @@ export class AuthManager {
       const cacheAge = Date.now() - lastValidatedAt;
 
       if (cacheAge < AuthManager.SESSION_CACHE_MS) {
-        logger.info(`Session cache hit for role: ${role} (age: ${Math.round(cacheAge / 1000)}s) — skipping validation`);
+        logger.info(
+          `Session cache hit for role: ${role} (age: ${Math.round(cacheAge / 1000)}s) — skipping validation`
+        );
       } else {
         logger.info(`Existing storage state found for role: ${role}`);
         const valid = await this.isSessionValid(stateFile);
@@ -350,9 +343,7 @@ export class AuthManager {
         AuthManager.lastValidated.set(role, Date.now());
       }
     } else {
-      logger.warn(
-        `No storage state found for role: ${role}. Logging in fresh.`
-      );
+      logger.warn(`No storage state found for role: ${role}. Logging in fresh.`);
       await this.loginAndSaveState(role);
       AuthManager.lastValidated.set(role, Date.now());
     }

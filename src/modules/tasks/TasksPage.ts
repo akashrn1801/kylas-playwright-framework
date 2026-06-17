@@ -5,106 +5,85 @@ import { config } from '@config/config';
 import { TaskData } from '@data/factories/taskFactory';
 
 export class TasksPage extends BasePage {
-
   // ──────────────────────────────────────────────────────────
   // Retry Config
   // ──────────────────────────────────────────────────────────
 
-  private readonly retryConfig = (() => {
-    switch (config.env) {
-      case 'staging': return { retries: 3, wait: 5000 };
-      case 'prod':    return { retries: 5, wait: 3000 };
-      default:        return { retries: 5, wait: 3000 }; // qa
-    }
-  })();
+  // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
+  private get retryConfig() {
+    return config.searchRetry[config.env as keyof typeof config.searchRetry];
+  }
 
   // ──────────────────────────────────────────────────────────
   // Locators — List page
   // ──────────────────────────────────────────────────────────
 
-  private readonly addDropdownToggle = () =>
-    this.page.locator('#quickEntityDropdown');
+  private readonly addDropdownToggle = () => this.page.locator('#quickEntityDropdown');
 
-  private readonly addQuickTaskOption = () =>
-    this.page.locator('a#addQuickEntityButton');
+  private readonly addQuickTaskOption = () => this.page.locator('a#addQuickEntityButton');
 
-  private readonly addDetailedTaskOption = () =>
-    this.page.locator('a#detailedEntityButton');
+  private readonly addDetailedTaskOption = () => this.page.locator('a#detailedEntityButton');
 
-  private readonly taskList = () =>
-    this.page.locator('ul.task-list.list-group.list-group-flush');
+  private readonly taskList = () => this.page.locator('ul.task-list.list-group.list-group-flush');
 
   private readonly taskListItemByName = (name: string) =>
-    this.page.locator('li.list-group-item').filter({
-      has: this.page.locator('p.card-list-content', { hasText: name }),
-    }).first();
+    this.page
+      .locator('li.list-group-item')
+      .filter({
+        has: this.page.locator('p.card-list-content', { hasText: name }),
+      })
+      .first();
 
-  private readonly taskListItemById = (taskId: number) =>
-    this.page.locator(`li#task_${taskId}`);
+  private readonly taskListItemById = (taskId: number) => this.page.locator(`li#task_${taskId}`);
 
-  private readonly taskSearchInput = () =>
-    this.page.locator('input#fulltext-search').first();
+  private readonly taskSearchInput = () => this.page.locator('input#fulltext-search').first();
 
   // ──────────────────────────────────────────────────────────
   // Locators — Quick task form
   // ──────────────────────────────────────────────────────────
 
-  private readonly quickTaskBackdrop = () =>
-    this.page.locator('.quick-task-create-backdrop');
+  private readonly quickTaskBackdrop = () => this.page.locator('.quick-task-create-backdrop');
 
-  private readonly quickTaskCard = () =>
-    this.page.locator('.quick-task-card');
+  private readonly quickTaskCard = () => this.page.locator('.quick-task-card');
 
   // WHY: Toggle #formType — checked = Quick Form, unchecked = Detailed Form
-  private readonly quickFormToggle = () =>
-    this.page.locator('#formType');
+  private readonly quickFormToggle = () => this.page.locator('#formType');
 
   private readonly quickTaskPriorityButton = () =>
     this.page.locator('.quick-task-card button.priority');
   private readonly quickTaskDateButton = () =>
-    this.page.locator(".quick-task-card button.calender-button");
+    this.page.locator('.quick-task-card button.calender-button');
   private readonly quickTaskAssignedToButton = () =>
-    this.page.locator(".quick-task-card button.assign-to");
+    this.page.locator('.quick-task-card button.assign-to');
 
   private readonly quickTaskDescriptionEditor = () =>
     this.page.locator('.quick-task-card .ck-editor__editable[role="textbox"]');
 
-  private readonly quickTaskAddButton = () =>
-    this.page.locator('button.add-task-button');
+  private readonly quickTaskAddButton = () => this.page.locator('button.add-task-button');
 
-  private readonly quickTaskCloseButton = () =>
-    this.page.locator('button.close-cross-cta');
+  private readonly quickTaskCloseButton = () => this.page.locator('button.close-cross-cta');
 
   // ──────────────────────────────────────────────────────────
   // Locators — Detailed task modal
   // ──────────────────────────────────────────────────────────
 
-  private readonly detailedTaskModal = () =>
-    this.page.locator('#editEntityModal.tasks');
+  private readonly detailedTaskModal = () => this.page.locator('#editEntityModal.tasks');
 
-  private readonly taskNameInput = () =>
-    this.page.locator('[id="0_11_input_name"]');
+  private readonly taskNameInput = () => this.page.locator('[id="0_11_input_name"]');
 
-  private readonly taskTypeInput = () =>
-    this.page.locator('[id="0_12_input_type"]');
+  private readonly taskTypeInput = () => this.page.locator('[id="0_12_input_type"]');
 
-  private readonly taskDescriptionInput = () =>
-    this.page.locator('[id="0_21_input_description"]')
+  private readonly taskDescriptionInput = () => this.page.locator('[id="0_21_input_description"]');
 
-  private readonly taskStatusInput = () =>
-    this.page.locator('[id="0_31_input_status"]');
+  private readonly taskStatusInput = () => this.page.locator('[id="0_31_input_status"]');
 
-  private readonly taskPriorityInput = () =>
-    this.page.locator('[id="0_32_input_priority"]');
+  private readonly taskPriorityInput = () => this.page.locator('[id="0_32_input_priority"]');
 
-  private readonly taskReminderInput = () =>
-    this.page.locator('[id="0_51_input_reminder"]');
+  private readonly taskReminderInput = () => this.page.locator('[id="0_51_input_reminder"]');
 
-  private readonly taskAssignedToInput = () =>
-    this.page.locator('[id="0_52_input_assignedTo"]');
+  private readonly taskAssignedToInput = () => this.page.locator('[id="0_52_input_assignedTo"]');
 
-  private readonly taskRelationTypeInput = () =>
-    this.page.locator('[id="0_61_input_relation"]');
+  private readonly taskRelationTypeInput = () => this.page.locator('[id="0_61_input_relation"]');
 
   private readonly detailedTaskSaveButton = () =>
     this.page.locator('#editEntityModal.tasks button.save-button');
@@ -148,14 +127,18 @@ export class TasksPage extends BasePage {
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.page.waitForResponse(
-        (res) =>
-          res.url().includes('/v1/tasks') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        { timeout: config.timeouts.navigation },
-      ).catch(() => null),
-      this.taskList().waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+      this.page
+        .waitForResponse(
+          (res) =>
+            res.url().includes('/v1/tasks') &&
+            res.request().method() === 'GET' &&
+            res.status() === 200,
+          { timeout: config.timeouts.navigation }
+        )
+        .catch(() => null),
+      this.taskList()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
     ]);
     logger.debug('Tasks list is ready');
   }
@@ -167,7 +150,7 @@ export class TasksPage extends BasePage {
           res.url().includes('/v1/tasks') &&
           res.request().method() === 'POST' &&
           res.status() === 200,
-        { timeout: config.timeouts.navigation },
+        { timeout: config.timeouts.navigation }
       );
       const body = await response.json();
       const id = body?.id ?? body?.data?.id ?? null;
@@ -201,13 +184,13 @@ export class TasksPage extends BasePage {
     // WHY: React Select dropdowns — click the ancestor control div to open,
     // then click the matching option from the menu
     const inputLocator = this.page.locator(`[id="${inputId}"]`);
-    const control = inputLocator.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    const control = inputLocator.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
     await control.waitFor({ state: 'visible', timeout: 10000 });
     await control.click();
     await this.page.waitForTimeout(300);
-    const option = this.page
-      .locator('.is-invalid__option', { hasText: optionText })
-      .first();
+    const option = this.page.locator('.is-invalid__option', { hasText: optionText }).first();
     await option.waitFor({ state: 'visible', timeout: 5000 });
     await option.click();
     logger.success(`Selected "${optionText}" for ${inputId}`);
@@ -223,20 +206,26 @@ export class TasksPage extends BasePage {
       // WHY: Wrap name in double quotes for exact match search —
       // prevents partial matches and returns only the specific task.
       // Confirmed from DOM: #fulltext-search with quoted input returns exact results.
-      const searchVisible = await this.taskSearchInput().isVisible().catch(() => false);
+      const searchVisible = await this.taskSearchInput()
+        .isVisible()
+        .catch(() => false);
       if (searchVisible) {
         await this.taskSearchInput().fill(`"${name}"`);
         // WHY: Press Enter to trigger search — the input does not auto-search on type
         await this.taskSearchInput().press('Enter');
         // WHY: Wait for the API response after search is triggered
-        await this.page.waitForResponse(
-          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-          { timeout: 10000 }
-        ).catch(() => null);
+        await this.page
+          .waitForResponse(
+            (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+            { timeout: 10000 }
+          )
+          .catch(() => null);
         await this.page.waitForTimeout(500);
       }
 
-      const found = await this.taskListItemByName(name).isVisible().catch(() => false);
+      const found = await this.taskListItemByName(name)
+        .isVisible()
+        .catch(() => false);
       if (found) {
         logger.success(`Task "${name}" found via quoted search`);
         return true;
@@ -255,7 +244,9 @@ export class TasksPage extends BasePage {
         await this.detailedTaskCancelButton().click();
         await modal.waitFor({ state: 'hidden', timeout: 5000 });
       }
-    } catch { /* not open */ }
+    } catch {
+      /* not open */
+    }
   }
 
   private async closeQuickFormIfOpen(): Promise<void> {
@@ -266,12 +257,15 @@ export class TasksPage extends BasePage {
         await this.quickTaskCloseButton().click();
         await backdrop.waitFor({ state: 'hidden', timeout: 5000 });
       }
-    } catch { /* not open */ }
+    } catch {
+      /* not open */
+    }
   }
 
   private async openFilterPanel(): Promise<void> {
     logger.info('Opening filter panel');
-    const alreadyOpen = await this.page.locator('#filterModal')
+    const alreadyOpen = await this.page
+      .locator('#filterModal')
       .evaluate((el) => el.classList.contains('show'))
       .catch(() => false);
     if (alreadyOpen) return;
@@ -283,10 +277,6 @@ export class TasksPage extends BasePage {
       const filterBtn = this.page.locator('#filter-action');
       await filterBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
       await filterBtn.click({ force: true });
-
-
-
-
 
       try {
         await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: 10000 });
@@ -337,7 +327,9 @@ export class TasksPage extends BasePage {
     logger.info('Setting due date to Tomorrow');
     await this.click(this.quickTaskDateButton(), 'calendar button');
     await this.page.waitForTimeout(500);
-    const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', { hasText: 'Tomorrow' });
+    const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', {
+      hasText: 'Tomorrow',
+    });
     try {
       await tomorrowOption.waitFor({ state: 'visible', timeout: 3000 });
       await tomorrowOption.click();
@@ -407,7 +399,9 @@ export class TasksPage extends BasePage {
     await this.click(this.quickTaskAddButton(), 'Add Task button');
     const id = await idPromise;
     // WHY: Quick task form closes after save — stays on same /sales/tasks/list URL
-    await this.quickTaskBackdrop().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    await this.quickTaskBackdrop()
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
     await this.waitForListReady();
     logger.success(`Quick task saved (ID: ${id})`);
     return id;
@@ -441,16 +435,24 @@ export class TasksPage extends BasePage {
     let formOpened = false;
     for (let i = 0; i < 3; i++) {
       await this.click(this.addDropdownToggle(), 'add dropdown toggle');
-      await this.addDetailedTaskOption().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-      const optionVisible = await this.addDetailedTaskOption().isVisible().catch(() => false);
+      await this.addDetailedTaskOption()
+        .waitFor({ state: 'visible', timeout: 5000 })
+        .catch(() => {});
+      const optionVisible = await this.addDetailedTaskOption()
+        .isVisible()
+        .catch(() => false);
       if (!optionVisible) {
         logger.warn(`Detailed task option not visible on attempt ${i + 1} — retrying`);
         await this.page.waitForTimeout(1000);
         continue;
       }
       await this.addDetailedTaskOption().click();
-      await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-      const modalVisible = await this.detailedTaskModal().isVisible().catch(() => false);
+      await this.detailedTaskModal()
+        .waitFor({ state: 'visible', timeout: 10000 })
+        .catch(() => {});
+      const modalVisible = await this.detailedTaskModal()
+        .isVisible()
+        .catch(() => false);
       if (!modalVisible) {
         logger.warn(`Detailed task modal not visible on attempt ${i + 1} — retrying`);
         await this.page.waitForTimeout(1000);
@@ -470,7 +472,11 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form opened');
   }
 
-  async fillDetailedTaskForm(data: TaskData, assignedToName?: string, skipRelation = false): Promise<void> {
+  async fillDetailedTaskForm(
+    data: TaskData,
+    assignedToName?: string,
+    skipRelation = false
+  ): Promise<void> {
     logger.info(`Filling Detailed Task form: "${data.name}"`);
 
     // Task Name (required)
@@ -505,7 +511,7 @@ export class TasksPage extends BasePage {
     if (!skipRelation) {
       await this.fillRelation();
     } else {
-      logger.info("Skipping relation — skipRelation=true");
+      logger.info('Skipping relation — skipRelation=true');
     }
 
     logger.success('Detailed Task form filled');
@@ -535,14 +541,16 @@ export class TasksPage extends BasePage {
       logger.info(`Selecting relation entity type: ${entityType}`);
 
       // Step 1: Click the entity type dropdown (relation type selector)
-      const relationTypeControl = this.taskRelationTypeInput()
-        .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+      const relationTypeControl = this.taskRelationTypeInput().locator(
+        'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+      );
       await relationTypeControl.click();
       await this.page.waitForTimeout(400);
 
       // Select entity type
       // WHY: getByText resolves to multiple elements — use dropdown option selector specifically
-      await this.page.locator('.is-invalid__option, .is-invalid__option--is-focused')
+      await this.page
+        .locator('.is-invalid__option, .is-invalid__option--is-focused')
         .filter({ hasText: new RegExp('^' + entityType + '$') })
         .first()
         .click();
@@ -550,7 +558,10 @@ export class TasksPage extends BasePage {
 
       // Step 2: Click the entity search dropdown and search
       // WHY: After selecting entity type, a search dropdown appears — same as meetings
-      const searchControl = this.page.locator('div').filter({ hasText: /^Search \.\.\.$/ }).last();
+      const searchControl = this.page
+        .locator('div')
+        .filter({ hasText: /^Search \.\.\.$/ })
+        .last();
       const searchVisible = await searchControl.isVisible().catch(() => false);
       if (searchVisible) await searchControl.click();
       await this.page.waitForTimeout(400);
@@ -561,13 +572,19 @@ export class TasksPage extends BasePage {
       await this.page.waitForTimeout(1500);
 
       const options = this.page.locator('.is-invalid__option');
-      let hasOptions = await options.first().isVisible().catch(() => false);
+      let hasOptions = await options
+        .first()
+        .isVisible()
+        .catch(() => false);
 
       if (!hasOptions) {
         for (const term of ['a', 'e', 'the', 'inc', 'co']) {
           await entitySearchInput.fill(term);
           await this.page.waitForTimeout(1000);
-          hasOptions = await options.first().isVisible().catch(() => false);
+          hasOptions = await options
+            .first()
+            .isVisible()
+            .catch(() => false);
           if (hasOptions) {
             logger.info(`Found ${entityType} results with term: "${term}"`);
             break;
@@ -599,7 +616,9 @@ export class TasksPage extends BasePage {
     await this.assertNoFormErrors('task create form');
     const id = await idPromise;
     // WHY: Modal closes on successful save — wait for it to hide
-    await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+    await this.detailedTaskModal()
+      .waitFor({ state: 'hidden', timeout: 15000 })
+      .catch(() => {});
     await this.waitForListReady();
     logger.success(`Detailed task saved (ID: ${id})`);
     return id;
@@ -661,7 +680,11 @@ export class TasksPage extends BasePage {
 
     // WHY: Due date uses a text input with id 0_41_input_dueDate — type date directly
     // Format must match what the app expects: "Jun 12, 2026"
-    const formatted = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const formatted = d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
     const dueDateInput = this.page.locator('[id="0_41_input_dueDate"]');
     await dueDateInput.waitFor({ state: 'visible', timeout: 5000 });
     await dueDateInput.click({ clickCount: 3 });
@@ -731,10 +754,15 @@ export class TasksPage extends BasePage {
     // the timeout (e.g. search index lag), we want assertTaskInList to fall through
     // to the retryFindTask name-search fallback rather than throwing here.
     try {
-      await this.taskListItemById(taskId).waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.taskListItemById(taskId).waitFor({
+        state: 'visible',
+        timeout: config.timeouts.navigation,
+      });
       logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
     } catch {
-      logger.warn(`Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`);
+      logger.warn(
+        `Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`
+      );
     }
   }
 
@@ -771,17 +799,21 @@ export class TasksPage extends BasePage {
   async assertTaskNotInList(name: string): Promise<void> {
     logger.info(`Validating task absent: "${name}"`);
     await this.goToTasksList();
-    const searchVisible = await this.taskSearchInput().isVisible().catch(() => false);
+    const searchVisible = await this.taskSearchInput()
+      .isVisible()
+      .catch(() => false);
     if (searchVisible) {
       // WHY: Quoted search returns exact matches only — if task is absent,
       // list will be empty. More reliable than unquoted partial search.
       await this.taskSearchInput().fill(`"${name}"`);
       // WHY: Press Enter to trigger search
       await this.taskSearchInput().press('Enter');
-      await this.page.waitForResponse(
-        (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-        { timeout: 10000 }
-      ).catch(() => null);
+      await this.page
+        .waitForResponse(
+          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+          { timeout: 10000 }
+        )
+        .catch(() => null);
       await this.page.waitForTimeout(500);
     }
     await expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 });
@@ -807,7 +839,6 @@ export class TasksPage extends BasePage {
     await expect(this.detailPanelEditButton()).toBeHidden({ timeout: 5000 });
     logger.success('Edit button correctly absent');
   }
-
 
   // ──────────────────────────────────────────────────────────
   // Notes
@@ -926,7 +957,9 @@ export class TasksPage extends BasePage {
     await this.click(this.detailedTaskSaveButton(), 'save button');
     await this.assertNoFormErrors('clone task form');
     const id = await idPromise;
-    await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+    await this.detailedTaskModal()
+      .waitFor({ state: 'hidden', timeout: 15000 })
+      .catch(() => {});
     await this.waitForListReady();
     logger.success(`Cloned task saved (ID: ${id})`);
     return id;
@@ -947,13 +980,14 @@ export class TasksPage extends BasePage {
   async assertDeleteOptionNotVisible(taskId: number): Promise<void> {
     logger.info(`Asserting Delete option not visible for task ${taskId}`);
     await this.openListItemEllipsis(taskId);
-    const deleteOption = this.page.locator('.dropdown-menu.show .dropdown-item', { hasText: 'Delete' });
+    const deleteOption = this.page.locator('.dropdown-menu.show .dropdown-item', {
+      hasText: 'Delete',
+    });
     const visible = await deleteOption.isVisible().catch(() => false);
     if (visible) throw new Error('Delete option should NOT be visible for restricted user');
     await this.page.keyboard.press('Escape');
     logger.success('Delete option correctly absent');
   }
-
 
   // ──────────────────────────────────────────────────────────
   // Workflow Wrappers
@@ -966,7 +1000,11 @@ export class TasksPage extends BasePage {
     return await this.saveQuickTask();
   }
 
-  async createDetailedTask(data: TaskData, assignedToName?: string, skipRelation = false): Promise<number | null> {
+  async createDetailedTask(
+    data: TaskData,
+    assignedToName?: string,
+    skipRelation = false
+  ): Promise<number | null> {
     logger.info(`Creating detailed task: "${data.name}"`);
     await this.openDetailedTaskForm();
     await this.fillDetailedTaskForm(data, assignedToName, skipRelation);
@@ -981,11 +1019,7 @@ export class TasksPage extends BasePage {
     return await this.saveDetailedTask();
   }
 
-  async updateTask(
-    newData: TaskData,
-    originalName: string,
-    taskId?: number | null,
-  ): Promise<void> {
+  async updateTask(newData: TaskData, originalName: string, taskId?: number | null): Promise<void> {
     logger.info(`Updating task "${originalName}" → "${newData.name}"`);
     await this.openTaskInDetailPanel(originalName, taskId);
     await this.clickEditButtonInDetailPanel();

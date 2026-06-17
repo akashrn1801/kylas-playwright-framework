@@ -4,13 +4,13 @@ import { generateLeadData, generateAdminLeadData } from '../../src/data/factorie
 import { logger } from '../../src/utils/logger';
 
 test.describe('Leads RBAC', () => {
-
-  test('@smoke @regression restricted user can navigate to leads list', async ({ restrictedPage }) => {
+  test('@smoke @regression restricted user can navigate to leads list', async ({
+    restrictedPage,
+  }) => {
     const leadsPage = new LeadsPage(restrictedPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
     logger.success('L6 passed');
-
   });
 
   test('@regression restricted user can create a lead', async ({ restrictedPage }) => {
@@ -21,7 +21,6 @@ test.describe('Leads RBAC', () => {
     await leadsPage.createLead(leadData);
     await leadsPage.assertLeadCreated(leadData);
     logger.success('L7 passed');
-
   });
 
   test('@regression restricted user can edit own lead', async ({ restrictedPage }) => {
@@ -34,10 +33,12 @@ test.describe('Leads RBAC', () => {
     await leadsPage.updateLead(updatedData, leadData.firstName);
     await leadsPage.assertLeadUpdated(updatedData);
     logger.success('L8 passed');
-
   });
 
-  test('@regression restricted user cannot edit an admin-owned lead', async ({ adminPage, restrictedPage }) => {
+  test('@regression restricted user cannot edit an admin-owned lead', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
     // WHY: generateAdminLeadData uses timestamp prefix (ADM12345678)
     // guarantees this lead name has never existed before — no collision with old test data
@@ -49,7 +50,5 @@ test.describe('Leads RBAC', () => {
     await restrictedLeadsPage.goToLeadsList();
     await restrictedLeadsPage.assertLeadNotInList(leadData.firstName);
     logger.success('L9 passed');
-
   });
-
 });

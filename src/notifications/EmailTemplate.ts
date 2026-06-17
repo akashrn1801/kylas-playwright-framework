@@ -15,29 +15,64 @@ export interface EmailContext {
 
 export class EmailTemplate {
   subject(ctx: EmailContext): string {
-    const icon   = ctx.report.status === 'passed' ? '✅' : ctx.report.status === 'failed' ? '❌' : '⚠️';
+    const icon =
+      ctx.report.status === 'passed' ? '✅' : ctx.report.status === 'failed' ? '❌' : '⚠️';
     const status = ctx.report.status.toUpperCase();
     return `${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
   }
 
   html(ctx: EmailContext): string {
-    const { report, env, branch, buildNumber, buildUrl, gitCommit, triggeredBy, runSource, allureUrl } = ctx;
-    const sourceLabel = runSource === 'github-actions' ? '🐙 GitHub Actions' : runSource === 'jenkins' ? '🔧 Jenkins' : '💻 Local';
-    const sourceBg    = runSource === 'github-actions' ? '#24292f' : runSource === 'jenkins' ? '#d33833' : '#6b7280';
-    const statusColor = report.status === 'passed' ? '#22c55e' : report.status === 'failed' ? '#ef4444' : '#f59e0b';
-    const statusLabel = report.status === 'passed' ? '✅ PASSED' : report.status === 'failed' ? '❌ FAILED' : '⚠️ UNSTABLE';
-    const envColor    = env === 'prod' ? '#7c3aed' : env === 'staging' ? '#0891b2' : '#059669';
-    const duration    = this.formatDuration(report.duration);
-    const startTime   = new Date(report.startTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    const endTime     = new Date(report.endTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const {
+      report,
+      env,
+      branch,
+      buildNumber,
+      buildUrl,
+      gitCommit,
+      triggeredBy,
+      runSource,
+      allureUrl,
+    } = ctx;
+    const sourceLabel =
+      runSource === 'github-actions'
+        ? '🐙 GitHub Actions'
+        : runSource === 'jenkins'
+          ? '🔧 Jenkins'
+          : '💻 Local';
+    const sourceBg =
+      runSource === 'github-actions' ? '#24292f' : runSource === 'jenkins' ? '#d33833' : '#6b7280';
+    const statusColor =
+      report.status === 'passed' ? '#22c55e' : report.status === 'failed' ? '#ef4444' : '#f59e0b';
+    const statusLabel =
+      report.status === 'passed'
+        ? '✅ PASSED'
+        : report.status === 'failed'
+          ? '❌ FAILED'
+          : '⚠️ UNSTABLE';
+    const envColor = env === 'prod' ? '#7c3aed' : env === 'staging' ? '#0891b2' : '#059669';
+    const duration = this.formatDuration(report.duration);
+    const startTime = new Date(report.startTime).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+    });
+    const endTime = new Date(report.endTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     const shortCommit = gitCommit.substring(0, 8);
-    const today       = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const today = new Date().toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
 
-    const moduleRows = report.modules.map((m: ModuleStats) => {
-      const passRate = m.total > 0 ? Math.round((m.passed / m.total) * 100) : 0;
-      const barColor = m.failed > 0 ? '#ef4444' : m.flaky > 0 ? '#f59e0b' : '#22c55e';
-      const typeStyle = m.type === 'UI' ? 'background:#dbeafe;color:#1d4ed8;' : 'background:#dcfce7;color:#15803d;';
-      return `<tr style="border-bottom:1px solid #f3f4f6;">
+    const moduleRows = report.modules
+      .map((m: ModuleStats) => {
+        const passRate = m.total > 0 ? Math.round((m.passed / m.total) * 100) : 0;
+        const barColor = m.failed > 0 ? '#ef4444' : m.flaky > 0 ? '#f59e0b' : '#22c55e';
+        const typeStyle =
+          m.type === 'UI'
+            ? 'background:#dbeafe;color:#1d4ed8;'
+            : 'background:#dcfce7;color:#15803d;';
+        return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:8px;font-size:12px;color:#111827;font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
         <td style="padding:8px;text-align:center;font-size:12px;color:#16a34a;font-weight:700;">${m.passed}</td>
@@ -45,29 +80,44 @@ export class EmailTemplate {
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? '#ef4444' : '#9ca3af'};font-weight:${m.failed > 0 ? '700' : '400'};">${m.failed}</td>
         <td style="padding:8px;width:80px;"><div style="background:#e5e7eb;border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
       </tr>`;
-    }).join('');
+      })
+      .join('');
 
-    const slowestRows = report.slowestTests.map((t: TestResult) => `
+    const slowestRows = report.slowestTests
+      .map(
+        (t: TestResult) => `
       <tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:6px 0;font-size:12px;color:#374151;">${this.esc(t.title)}</td>
         <td style="padding:6px 0;text-align:right;font-size:12px;color:#6b7280;font-weight:600;white-space:nowrap;">${Math.round(t.duration / 1000)}s</td>
-      </tr>`).join('');
+      </tr>`
+      )
+      .join('');
 
-    const failedRows = report.failedTests.map((t: TestResult) => `
+    const failedRows = report.failedTests
+      .map(
+        (t: TestResult) => `
       <tr style="border-bottom:1px solid #fee2e2;">
         <td style="padding:8px;color:#1f2937;font-size:12px;">${this.esc(t.title)}</td>
         <td style="padding:8px;color:#6b7280;font-size:11px;">${t.file.split('/').pop() || ''}</td>
         <td style="padding:8px;color:#ef4444;font-size:11px;font-family:monospace;">${this.esc(t.error || 'Unknown error')}</td>
-      </tr>`).join('');
+      </tr>`
+      )
+      .join('');
 
-    const flakyRows = report.flakyTests.map((t: TestResult) => `
+    const flakyRows = report.flakyTests
+      .map(
+        (t: TestResult) => `
       <tr style="border-bottom:1px solid #fef3c7;">
         <td style="padding:6px 0;font-size:12px;color:#374151;">${this.esc(t.title)}</td>
         <td style="padding:6px 0;text-align:right;font-size:11px;color:#f59e0b;font-weight:600;">${t.retries} retry</td>
-      </tr>`).join('');
+      </tr>`
+      )
+      .join('');
 
-    const jenkinsBuildUrl = buildUrl || `http://localhost:8080/job/kylas-automation/job/${env === 'staging' ? 'stage' : env}/lastBuild/`;
-    const allureReportUrl = allureUrl || (jenkinsBuildUrl + 'allure/');
+    const jenkinsBuildUrl =
+      buildUrl ||
+      `http://localhost:8080/job/kylas-automation/job/${env === 'staging' ? 'stage' : env}/lastBuild/`;
+    const allureReportUrl = allureUrl || jenkinsBuildUrl + 'allure/';
 
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
@@ -181,23 +231,33 @@ export class EmailTemplate {
   </div>
 </td></tr>
 
-${report.slowestTests.length > 0 ? `
+${
+  report.slowestTests.length > 0
+    ? `
 <tr><td style="padding:8px 32px;">
   <div style="background:#f9fafb;border-radius:12px;padding:20px;">
     <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px;">🐢 Slowest Tests (Top 5)</div>
     <table width="100%" cellpadding="0" cellspacing="0">${slowestRows}</table>
   </div>
-</td></tr>` : ''}
+</td></tr>`
+    : ''
+}
 
-${report.flakyTests.length > 0 ? `
+${
+  report.flakyTests.length > 0
+    ? `
 <tr><td style="padding:8px 32px;">
   <div style="background:#fffbeb;border-radius:12px;padding:20px;border:1px solid #fde68a;">
     <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px;">⚠️ Flaky Tests (${report.flakyTests.length})</div>
     <table width="100%" cellpadding="0" cellspacing="0">${flakyRows}</table>
   </div>
-</td></tr>` : ''}
+</td></tr>`
+    : ''
+}
 
-${report.failedTests.length > 0 ? `
+${
+  report.failedTests.length > 0
+    ? `
 <tr><td style="padding:8px 32px;">
   <div style="background:#fff;border-radius:12px;padding:20px;border:1px solid #fecaca;">
     <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px;">❌ Failed Tests (${report.failedTests.length})</div>
@@ -210,7 +270,9 @@ ${report.failedTests.length > 0 ? `
       ${failedRows}
     </table>
   </div>
-</td></tr>` : ''}
+</td></tr>`
+    : ''
+}
 
 ${this.miscErrorsSection(ctx.miscErrors)}
 
@@ -229,47 +291,63 @@ ${this.miscErrorsSection(ctx.miscErrors)}
 </body></html>`;
   }
   private miscErrorsSection(miscErrors: any): string {
-  if (!miscErrors || miscErrors.totalErrors === 0) {
-    return `
+    if (!miscErrors || miscErrors.totalErrors === 0) {
+      return `
     <tr><td style="padding:8px 32px;">
       <div style="background:#f0fdf4;border-radius:12px;padding:16px 20px;border:1px solid #bbf7d0;">
         <div style="font-size:13px;font-weight:700;color:#15803d;">✅ No Background Errors Detected</div>
         <div style="font-size:12px;color:#6b7280;margin-top:4px;">No browser console errors, network failures, or uncaught exceptions were captured during this run.</div>
       </div>
     </td></tr>`;
-  }
-  const icons: Record<string,string> = { 'pageerror':'💥','console-error':'🔴','requestfailed':'📡','response-error':'🌐','node-exception':'⚡','node-rejection':'⚡' };
-  const byTypeRows = Object.entries(miscErrors.byType as Record<string,number>).map(([type,count]) =>
-    `<tr><td style="padding:4px 8px;font-size:12px;color:#374151;">${icons[type]||'❓'} ${type}</td><td style="padding:4px 8px;font-size:12px;font-weight:700;color:#374151;text-align:right;">${count}</td></tr>`
-  ).join('');
-  const byTest = new Map<string,any[]>();
-  for (const e of (miscErrors.errors as any[])) {
-    const key = e.testTitle || 'unknown';
-    if (!byTest.has(key)) byTest.set(key, []);
-    byTest.get(key)!.push(e);
-  }
-  const errorRows = Array.from(byTest.entries()).map(([testTitle,errors]) => {
-    const details = errors.map(e =>
-      `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
+    }
+    const icons: Record<string, string> = {
+      pageerror: '💥',
+      'console-error': '🔴',
+      requestfailed: '📡',
+      'response-error': '🌐',
+      'node-exception': '⚡',
+      'node-rejection': '⚡',
+    };
+    const byTypeRows = Object.entries(miscErrors.byType as Record<string, number>)
+      .map(
+        ([type, count]) =>
+          `<tr><td style="padding:4px 8px;font-size:12px;color:#374151;">${icons[type] || '❓'} ${type}</td><td style="padding:4px 8px;font-size:12px;font-weight:700;color:#374151;text-align:right;">${count}</td></tr>`
+      )
+      .join('');
+    const byTest = new Map<string, any[]>();
+    for (const e of miscErrors.errors as any[]) {
+      const key = e.testTitle || 'unknown';
+      if (!byTest.has(key)) byTest.set(key, []);
+      byTest.get(key)!.push(e);
+    }
+    const errorRows = Array.from(byTest.entries())
+      .map(([testTitle, errors]) => {
+        const details = errors
+          .map(
+            (e) =>
+              `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
         <div style="font-size:11px;font-weight:700;color:${e.expected ? '#92400e' : '#ea580c'};">
           [${e.type}]${e.expected ? ' <span style="font-size:10px;background:#fef9c3;padding:1px 4px;border-radius:3px;margin-left:4px;">✓ Expected RBAC</span>' : ''}
         </div>
         ${e.method ? `<div style="font-size:10px;color:#374151;margin-top:2px;"><strong>Method:</strong> ${e.method}</div>` : ''}
-        <div style="font-size:11px;color:#374151;margin-top:2px;"><strong>Error:</strong> ${this.esc((e.message||'').substring(0,150))}</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;"><strong>Error:</strong> ${this.esc((e.message || '').substring(0, 150))}</div>
         ${e.url ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;word-break:break-all;"><strong>URL:</strong> ${this.esc(e.url)}</div>` : ''}
         ${e.statusCode ? `<div style="font-size:10px;color:#ef4444;font-weight:700;margin-top:2px;">HTTP Status: ${e.statusCode}</div>` : ''}
         ${e.apiErrorMessage ? `<div style="font-size:11px;color:#dc2626;margin-top:3px;font-weight:600;background:#fff1f2;padding:4px 6px;border-radius:4px;">⚠️ Server Error: ${this.esc(e.apiErrorMessage)}</div>` : ''}
-        ${e.responseBody && !e.apiErrorMessage ? `<div style="font-size:10px;color:#374151;margin-top:2px;font-family:monospace;background:#f3f4f6;padding:3px 6px;border-radius:3px;word-break:break-all;"><strong>Response:</strong> ${this.esc(e.responseBody.substring(0,300))}</div>` : ''}
+        ${e.responseBody && !e.apiErrorMessage ? `<div style="font-size:10px;color:#374151;margin-top:2px;font-family:monospace;background:#f3f4f6;padding:3px 6px;border-radius:3px;word-break:break-all;"><strong>Response:</strong> ${this.esc(e.responseBody.substring(0, 300))}</div>` : ''}
         <div style="font-size:10px;color:#9ca3af;margin-top:2px;">⏰ ${e.timestamp}</div>
-      </div>`).join('');
-    const more = '';
-    return `<tr style="border-bottom:1px solid #fed7aa;"><td style="padding:8px;">
+      </div>`
+          )
+          .join('');
+        const more = '';
+        return `<tr style="border-bottom:1px solid #fed7aa;"><td style="padding:8px;">
       <div style="font-size:12px;font-weight:600;color:#1f2937;margin-bottom:4px;">🧪 ${this.esc(testTitle)}</div>
       ${details}${more}
     </td></tr>`;
-  }).join('');
-  const truncNote = '';
-  return `
+      })
+      .join('');
+    const truncNote = '';
+    return `
   <tr><td style="padding:8px 32px;">
     <div style="background:#fff7ed;border-radius:12px;padding:20px;border:1px solid #fed7aa;">
       <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:4px;">⚠️ Background Errors Captured — ${miscErrors.totalErrors} total</div>
@@ -289,7 +367,7 @@ ${this.miscErrorsSection(ctx.miscErrors)}
       </div>
     </div>
   </td></tr>`;
-}
+  }
 
   private formatDuration(ms: number): string {
     const s = Math.floor(ms / 1000);
@@ -301,6 +379,10 @@ ${this.miscErrorsSection(ctx.miscErrors)}
   }
 
   private esc(str: string): string {
-    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return (str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 }

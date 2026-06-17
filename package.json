@@ -31,7 +31,7 @@
     "test:notify": "npm test && npm run notify",
     "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi",
     "test:quotations": "playwright test tests/ui/quotations/ --project=chromium && npm run notify",
-"test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium && npm run notify",
+    "test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium && npm run notify",
     "sandbox:reset": "bash scripts/reset-sandbox.sh"
   },
   "keywords": [

@@ -43,12 +43,9 @@ export const CLOSED_UNQUALIFIED_REASONS: DealClosedUnqualifiedReason[] = [
   'Bought product/service with competitor',
 ];
 
-
 // ──────────────────────────────────────────────────────────
 // Enums — must match exact app-rendered option text
 // ──────────────────────────────────────────────────────────
-
-
 
 // ──────────────────────────────────────────────────────────
 // Interface
@@ -67,7 +64,7 @@ export interface DealData {
   pipeline: string;
 
   // Products
-  productName: string;   // name to search in product lookup
+  productName: string; // name to search in product lookup
   productQuantity: number;
 
   // Part payments
@@ -135,7 +132,7 @@ export function generateDealData(overrides: Partial<DealData> = {}): DealData {
     name: `Deal-${faker.commerce.productName()}-${faker.string.alphanumeric(4)}`,
     estimatedClosureDate: futureDateFromToday(5),
     pipeline: 'Default Pipeline', // update if your org uses a different name
-    productName: '',               // left blank — test will pick first available from dropdown
+    productName: '', // left blank — test will pick first available from dropdown
     productQuantity: faker.number.int({ min: 1, max: 10 }),
     numberOfInstallments: faker.number.int({ min: 2, max: 12 }),
     subSource: faker.helpers.arrayElement(['Organic', 'Paid', 'Referral', 'Direct']),

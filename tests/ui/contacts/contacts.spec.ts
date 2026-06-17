@@ -4,47 +4,41 @@ import { generateContactData } from '../../../src/data/factories/contactFactory'
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Contacts', () => {
-  test(
-    '@smoke @regression admin should navigate to contacts list page',
-    async ({ adminPage }) => {
-      const contactsPage = new ContactsPage(adminPage);
+  test('@smoke @regression admin should navigate to contacts list page', async ({ adminPage }) => {
+    const contactsPage = new ContactsPage(adminPage);
 
-      await contactsPage.goToContactsList();
-      await contactsPage.assertOnContactsListPage();
-    }
-  );
+    await contactsPage.goToContactsList();
+    await contactsPage.assertOnContactsListPage();
+    logger.success('C1 passed');
+  });
 
-  test(
-    '@regression admin should create a new contact with all fields',
-    async ({ adminPage }) => {
-      test.setTimeout(480000);
+  test('@regression admin should create a new contact with all fields', async ({ adminPage }) => {
+    test.setTimeout(480000);
 
-      const contactsPage = new ContactsPage(adminPage);
-      const contactData = generateContactData();
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateContactData();
 
-      await contactsPage.goToContactsList();
+    await contactsPage.goToContactsList();
 
-      const contactId = await contactsPage.createContact(contactData);
+    const contactId = await contactsPage.createContact(contactData);
 
-      await contactsPage.assertContactCreated(contactData, contactId ?? undefined);
-    }
-  );
+    await contactsPage.assertContactCreated(contactData, contactId ?? undefined);
+    logger.success('C2 passed');
+  });
 
-  test(
-    '@regression admin should update a created contact',
-    async ({ adminPage }) => {
-      test.setTimeout(480000);
+  test('@regression admin should update a created contact', async ({ adminPage }) => {
+    test.setTimeout(480000);
 
-      const contactsPage = new ContactsPage(adminPage);
-      const contactData = generateContactData();
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateContactData();
 
-      await contactsPage.goToContactsList();
-      await contactsPage.createContact(contactData);
+    await contactsPage.goToContactsList();
+    await contactsPage.createContact(contactData);
 
-      const updatedData = generateContactData();
+    const updatedData = generateContactData();
 
-      await contactsPage.updateContact(updatedData, contactData.firstName);
-      await contactsPage.assertContactUpdated(updatedData);
-    }
-  );
+    await contactsPage.updateContact(updatedData, contactData.firstName);
+    await contactsPage.assertContactUpdated(updatedData);
+    logger.success('C3 passed');
+  });
 });

@@ -1,20 +1,17 @@
 import { test, expect } from '../../src/fixtures/index';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
-import {
-  generateDealData,
-  generateAdminDealData,
-} from '../../src/data/factories/dealFactory';
+import { generateDealData, generateAdminDealData } from '../../src/data/factories/dealFactory';
 import { logger } from '../../src/utils/logger';
 import { config } from '../../config/config';
 
 test.describe('Deals RBAC', () => {
-
-  test('@smoke @regression restricted user can navigate to deals list', async ({ restrictedPage }) => {
+  test('@smoke @regression restricted user can navigate to deals list', async ({
+    restrictedPage,
+  }) => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
     logger.success('D10 passed');
-
   });
 
   test('@regression restricted user can create a deal', async ({ restrictedPage }) => {
@@ -25,7 +22,6 @@ test.describe('Deals RBAC', () => {
     const dealId = await dealsPage.createDeal(dealData);
     await dealsPage.assertDealCreated(dealData, dealId ?? undefined);
     logger.success('D11 passed');
-
   });
 
   test('@regression restricted user can edit own deal', async ({ restrictedPage }) => {
@@ -38,9 +34,7 @@ test.describe('Deals RBAC', () => {
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
     await dealsPage.assertDealUpdated(updatedData);
     logger.success('D12 passed');
-
   });
-
 
   // ──────────────────────────────────────────────────────────
   // RBAC — Contact and Company ownership verification
@@ -50,7 +44,10 @@ test.describe('Deals RBAC', () => {
   // User names captured from /v1/users/me API — no hardcoding.
   // ──────────────────────────────────────────────────────────
 
-  test('@regression restricted user contact and company owned by restricted not admin', async ({ restrictedPage, adminPage }) => {
+  test('@regression restricted user contact and company owned by restricted not admin', async ({
+    restrictedPage,
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     // WHY: /v1/users/me is called automatically on every page load.
@@ -59,7 +56,7 @@ test.describe('Deals RBAC', () => {
       try {
         const responsePromise = page.waitForResponse(
           (res) => res.url().includes('/v1/users/me') && res.status() === 200,
-          { timeout: config.timeouts.navigation },
+          { timeout: config.timeouts.navigation }
         );
         await page.goto(`${config.appUrl}/sales/deals/list`, { waitUntil: 'domcontentloaded' });
         const response = await responsePromise;
@@ -88,10 +85,9 @@ test.describe('Deals RBAC', () => {
     if (!dealId) throw new Error('Deal ID not captured — cannot verify ownership');
 
     // Step 3 — Navigate to deal details
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/deals/details/${dealId}`,
-      { waitUntil: 'domcontentloaded' },
-    );
+    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
+      waitUntil: 'domcontentloaded',
+    });
     await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
     logger.info('On deal details page');
 
@@ -107,13 +103,16 @@ test.describe('Deals RBAC', () => {
       .last();
     await companyModal.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
 
-    const companyOwner = (await companyModal
-      .locator('.read-only-info')
-      .filter({ has: restrictedPage.locator('label', { hasText: 'Owner' }) })
-      .first()
-      .locator('.title span')
-      .first()
-      .textContent())?.trim() ?? '';
+    const companyOwner =
+      (
+        await companyModal
+          .locator('.read-only-info')
+          .filter({ has: restrictedPage.locator('label', { hasText: 'Owner' }) })
+          .first()
+          .locator('.title span')
+          .first()
+          .textContent()
+      )?.trim() ?? '';
     logger.info(`Company owner: ${companyOwner}`);
 
     // WHY: Company is randomly selected from dropdown — may be admin-owned if restricted
@@ -121,7 +120,9 @@ test.describe('Deals RBAC', () => {
     if (restrictedName && companyOwner === restrictedName) {
       logger.success(`Company owner verified as restricted user: ${companyOwner}`);
     } else {
-      logger.warn(`Company owner is ${companyOwner} — may be admin-owned (random selection). Skipping hard assertion.`);
+      logger.warn(
+        `Company owner is ${companyOwner} — may be admin-owned (random selection). Skipping hard assertion.`
+      );
     }
 
     await companyModal.locator('button[aria-label="Close"]').click();
@@ -140,13 +141,16 @@ test.describe('Deals RBAC', () => {
       await newTab.waitForLoadState('domcontentloaded');
       logger.info(`Contact tab URL: ${newTab.url()}`);
 
-      const contactOwner = (await newTab
-        .locator('.read-only-info')
-        .filter({ has: newTab.locator('label', { hasText: 'Owner' }) })
-        .first()
-        .locator('span.title')
-        .first()
-        .textContent())?.trim() ?? '';
+      const contactOwner =
+        (
+          await newTab
+            .locator('.read-only-info')
+            .filter({ has: newTab.locator('label', { hasText: 'Owner' }) })
+            .first()
+            .locator('span.title')
+            .first()
+            .textContent()
+        )?.trim() ?? '';
       logger.info(`Contact owner: ${contactOwner}`);
 
       if (adminName) expect(contactOwner).not.toBe(adminName);
@@ -158,14 +162,16 @@ test.describe('Deals RBAC', () => {
       logger.warn(`Contact owner verification skipped: ${String(error)}`);
     }
     logger.success('D13 passed');
-
   });
 
   // ──────────────────────────────────────────────────────────
   // RBAC — Restricted cannot edit admin deal even via direct URL
   // ──────────────────────────────────────────────────────────
 
-  test('@regression restricted user cannot edit admin-owned deal via direct URL', async ({ adminPage, restrictedPage }) => {
+  test('@regression restricted user cannot edit admin-owned deal via direct URL', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
 
     const adminDealsPage = new DealsPage(adminPage);
@@ -175,10 +181,9 @@ test.describe('Deals RBAC', () => {
     if (!dealId) throw new Error('Admin deal ID not captured');
 
     // Restricted user navigates directly to admin deal via URL
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/deals/details/${dealId}`,
-      { waitUntil: 'domcontentloaded' },
-    );
+    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
+      waitUntil: 'domcontentloaded',
+    });
 
     try {
       await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
@@ -192,12 +197,14 @@ test.describe('Deals RBAC', () => {
       logger.success('Restricted user redirected from admin deal — RBAC working');
     }
     logger.success('D14 passed');
-
   });
 
   // WHY: generateAdminDealData() uses ADM<timestamp> prefix — guaranteed
   // unique name that restricted user can never find from a previous run.
-  test('@regression restricted user cannot see admin-owned deal', async ({ adminPage, restrictedPage }) => {
+  test('@regression restricted user cannot see admin-owned deal', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
     test.setTimeout(480000);
     const adminDealsPage = new DealsPage(adminPage);
     const adminDealData = generateAdminDealData();
@@ -207,7 +214,5 @@ test.describe('Deals RBAC', () => {
     await restrictedDealsPage.goToDealsList();
     await restrictedDealsPage.assertDealNotInList(adminDealData.name);
     logger.success('D15 passed');
-
   });
-
 });
