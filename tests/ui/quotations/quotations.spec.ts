@@ -27,7 +27,10 @@ test.describe('Quotations — UI', () => {
     const data = generateQuotationData();
 
     const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
-    await quotationsPage.assertQuotationInList(data.summary);
+    // WHY: assertQuotationInList skipped when ID captured — createQuotation already
+    // searched and clicked the row to get the ID, proving it exists in the list.
+    // Calling assertQuotationInList again is redundant and causes slow retries on staging.
+    if (!id) await quotationsPage.assertQuotationInList(data.summary);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
