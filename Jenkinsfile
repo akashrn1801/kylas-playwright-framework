@@ -27,6 +27,12 @@ pipeline {
         }
 
         stage('Install') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
             steps {
                 sh 'node --version'
                 sh 'npm ci'
@@ -35,6 +41,12 @@ pipeline {
         }
 
         stage('Setup Environment') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
             steps {
                 script {
                     def envPrefix = 'QA'
@@ -81,6 +93,12 @@ REPORT_PATH=reports/playwright-report/results.json
         }
 
         stage('Clear Auth State') {
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
             steps {
                 sh 'rm -rf src/auth/storageStates/'
                 sh 'mkdir -p src/auth/storageStates/'
@@ -120,22 +138,18 @@ REPORT_PATH=reports/playwright-report/results.json
         }
 
         stage('Run Tests') {
+            // WHY: Jenkins is primary CI for prod and main only.
+            // sandbox/dev/qa/stage are handled exclusively by GitHub Actions.
+            // This prevents double execution and environment load conflicts.
+            when {
+                anyOf {
+                    branch 'prod'
+                    branch 'main'
+                }
+            }
             steps {
                 script {
-                    def grepTag = '--grep @smoke'
-                    if (env.BRANCH_NAME == 'sandbox') {
-                        // WHY: Use selective detection for sandbox branch
-                        def target = env.SANDBOX_TEST_TARGET ?: '--grep @smoke'
-                        sh "npx playwright test --project=chromium --workers=1 ${target} || true"
-                    } else if (env.BRANCH_NAME == 'qa') {
-                        grepTag = '--grep @regression'
-                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
-                    } else if (env.BRANCH_NAME == 'stage' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'prod') {
-                        grepTag = ''
-                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
-                    } else {
-                        sh "npx playwright test --project=chromium ${grepTag} --workers=2 || true"
-                    }
+                    sh "npx playwright test --project=chromium --workers=2 || true"
                 }
             }
         }

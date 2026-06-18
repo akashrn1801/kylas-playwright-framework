@@ -1,9 +1,9 @@
 name: CI — prod (prod-safe tests)
+# WHY: Jenkins owns prod and main branches exclusively.
+# GitHub Actions is disabled for push/PR on these branches to prevent
+# double execution. Jenkins Jenkinsfile.prod handles prod with approval gate.
+# workflow_dispatch kept for emergency manual runs only.
 on:
-  push:
-    branches: [prod]
-  pull_request:
-    branches: [prod]
   workflow_dispatch:
     inputs:
       reason:
