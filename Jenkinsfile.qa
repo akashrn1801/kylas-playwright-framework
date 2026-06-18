@@ -42,6 +42,13 @@ pipeline {
     }
 
     stage('Test — QA') {
+      // WHY: Jenkins is NOT the primary CI for qa branch.
+      // GitHub Actions qa.yml handles qa branch exclusively.
+      // This pipeline is kept for MANUAL runs only — do not trigger via webhook.
+      // To run manually: Jenkins → Build Now (not triggered by push).
+      when {
+        expression { return params.MANUAL_RUN == true }
+      }
       steps {
         sh '''
           ENV=qa npx playwright test \

@@ -1,10 +1,11 @@
 name: CI — main (full validation)
 
+# WHY: Jenkins owns prod and main branches exclusively.
+# GitHub Actions is disabled for push/PR on these branches to prevent
+# double execution. Jenkins Jenkinsfile handles main with approval gate.
+# workflow_dispatch kept for emergency manual runs only.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   run-tests:
