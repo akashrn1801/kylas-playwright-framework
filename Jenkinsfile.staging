@@ -52,6 +52,10 @@ pipeline {
     }
 
     stage('Test — Staging') {
+      // WHY: Jenkins is NOT the primary CI for stage branch.
+      // GitHub Actions stage.yml handles stage branch exclusively.
+      // This pipeline is kept for MANUAL runs only — do not trigger via webhook.
+      // To run manually: Jenkins → Build Now (not triggered by push).
       steps {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
           sh '''
