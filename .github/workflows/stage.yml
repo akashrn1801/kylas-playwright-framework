@@ -3,8 +3,6 @@ name: CI — stage (full suite)
 on:
   push:
     branches: [stage]
-  pull_request:
-    branches: [stage]
   workflow_dispatch:
 
 jobs:
