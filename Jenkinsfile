@@ -31,6 +31,7 @@ pipeline {
                 anyOf {
                     branch 'prod'
                     branch 'main'
+                    triggeredBy 'UserIdCause'
                 }
             }
             steps {
@@ -45,6 +46,7 @@ pipeline {
                 anyOf {
                     branch 'prod'
                     branch 'main'
+                    triggeredBy 'UserIdCause'
                 }
             }
             steps {
@@ -97,6 +99,7 @@ REPORT_PATH=reports/playwright-report/results.json
                 anyOf {
                     branch 'prod'
                     branch 'main'
+                    triggeredBy 'UserIdCause'
                 }
             }
             steps {
@@ -110,6 +113,7 @@ REPORT_PATH=reports/playwright-report/results.json
                 anyOf {
                     branch 'prod'
                     branch 'main'
+                    triggeredBy 'UserIdCause'
                 }
             }
             steps {
@@ -145,6 +149,7 @@ REPORT_PATH=reports/playwright-report/results.json
                 anyOf {
                     branch 'prod'
                     branch 'main'
+                    triggeredBy 'UserIdCause'
                 }
             }
             steps {
