@@ -33,7 +33,9 @@ test.describe('Quotations — UI', () => {
       await quotationsPage.goToQuotationDetail(id);
       await quotationsPage.assertOnDetailPage(id);
       // Deal was selected randomly — assert any entity chip is visible
+      // WHY: Entity chips render async — wait for at least one to appear before counting
       const chips = adminPage.locator('.related-entity-container');
+      await chips.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
       const chipCount = await chips.count();
       if (chipCount === 0) throw new Error('No entity chips found on detail page');
       logger.success(`Entity chips visible: ${chipCount}`);
