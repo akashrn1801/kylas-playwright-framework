@@ -3,8 +3,6 @@ name: CI — qa (regression)
 on:
   push:
     branches: [qa]
-  pull_request:
-    branches: [qa]
 
 jobs:
   run-tests:
