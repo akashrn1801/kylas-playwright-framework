@@ -136,6 +136,10 @@ test.describe('Quotations — RBAC', () => {
       { summary: updatedSummary, status: QuotationStatus.Negotiation, additionalDiscount: 5 },
       id ?? undefined
     );
+    // WHY: Wait for detail page to fully render before grabbing body text.
+    // updateQuotation navigates to detail page but staging renders slower — same fix as T14.
+    await restrictedPage.waitForLoadState('domcontentloaded');
+    await restrictedPage.waitForTimeout(1500);
     const bodyText = await restrictedPage.locator('body').innerText();
     expect(bodyText).toContain(updatedSummary);
     await qp.assertStatusOnDetailPage(QuotationStatus.Negotiation);
