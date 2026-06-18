@@ -96,6 +96,8 @@ test.describe('Deals RBAC', () => {
     const companyLink = restrictedPage.locator('.title.text-break.link-primary span').first();
     await companyLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await companyLink.click({ force: true });
+    // WHY: Staging env renders modal slower — wait before checking visibility
+    await restrictedPage.waitForTimeout(2000);
 
     const companyModal = restrictedPage
       .locator('.modal-content')
