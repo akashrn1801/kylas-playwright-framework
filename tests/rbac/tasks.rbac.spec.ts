@@ -142,14 +142,14 @@ test.describe('Tasks RBAC', () => {
     // WHY: ADM<timestamp> prefix for RBAC isolation
     const adminData = generateAdminTaskData();
 
-    // Admin creates task and assigns it to "User 1" (restricted user name in QA)
-    // WHY: We type the restricted user's display name — same as meetings invitee pattern
+    // WHY: Capture restricted user display name at runtime — differs per environment
+    const restrictedUserName = await adminTasks.getLoggedInUserName('restricted');
     await adminTasks.goToTasksList();
     // WHY: skipRelation=true — this test verifies assignment RBAC only.
     // Admin-owned relations cause intermittent validation errors when restricted
     // user edits, because parallel workers may affect entity availability.
     // Relation RBAC is covered separately in the detailed task create tests.
-    const taskId = await adminTasks.createDetailedTask(adminData, 'User 1', true);
+    const taskId = await adminTasks.createDetailedTask(adminData, restrictedUserName, true);
     await adminTasks.assertTaskCreated(adminData, taskId);
 
     logger.info(`Admin task ID: ${taskId}`);
@@ -237,9 +237,11 @@ test.describe('Tasks RBAC', () => {
 
     const adminData = generateAdminTaskData();
 
+    // WHY: Capture restricted user display name at runtime — differs per environment
+    const restrictedUserName = await adminTasks.getLoggedInUserName('restricted');
     // Admin creates task assigned to restricted user (no relation to avoid validation issues)
     await adminTasks.goToTasksList();
-    const taskId = await adminTasks.createDetailedTask(adminData, 'User 1', true);
+    const taskId = await adminTasks.createDetailedTask(adminData, restrictedUserName, true);
     await adminTasks.assertTaskCreated(adminData, taskId);
 
     // Restricted user finds the task via ID filter
@@ -264,11 +266,13 @@ test.describe('Tasks RBAC', () => {
 
     const adminData = generateAdminTaskData();
 
+    // WHY: Capture restricted user display name at runtime — differs per environment
+    const restrictedUserName = await adminTasks.getLoggedInUserName('restricted');
     // Admin creates task with full relations, assigned to restricted user
     // WHY: skipRelation=false — we want relations present to verify restricted user
     // can still add notes even when task has admin-owned relations
     await adminTasks.goToTasksList();
-    const taskId = await adminTasks.createDetailedTask(adminData, 'User 1', false);
+    const taskId = await adminTasks.createDetailedTask(adminData, restrictedUserName, false);
     await adminTasks.assertTaskCreated(adminData, taskId);
 
     // Restricted user finds the task via ID filter

@@ -27,13 +27,18 @@ test.describe('Quotations — UI', () => {
     const data = generateQuotationData();
 
     const { id, dealName: _selectedDeal } = await quotationsPage.createQuotation(data);
-    await quotationsPage.assertQuotationInList(data.summary);
+    // WHY: assertQuotationInList skipped when ID captured — createQuotation already
+    // searched and clicked the row to get the ID, proving it exists in the list.
+    // Calling assertQuotationInList again is redundant and causes slow retries on staging.
+    if (!id) await quotationsPage.assertQuotationInList(data.summary);
 
     if (id) {
       await quotationsPage.goToQuotationDetail(id);
       await quotationsPage.assertOnDetailPage(id);
       // Deal was selected randomly — assert any entity chip is visible
+      // WHY: Entity chips render async — wait for at least one to appear before counting
       const chips = adminPage.locator('.related-entity-container');
+      await chips.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
       const chipCount = await chips.count();
       if (chipCount === 0) throw new Error('No entity chips found on detail page');
       logger.success(`Entity chips visible: ${chipCount}`);
