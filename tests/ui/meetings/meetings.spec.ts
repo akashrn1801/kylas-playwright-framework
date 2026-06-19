@@ -148,11 +148,10 @@ test.describe('Meetings', () => {
     await meetingsPage.goToMeetingsList();
 
     // Open Add Meeting form
-    await adminPage.locator('button.btn.btn-primary', { hasText: 'Add' }).first().click();
-    await adminPage.waitForTimeout(800);
+    await meetingsPage.openAddForm();
 
     // Fill title to keep form valid
-    await adminPage.locator('[id="1_11_input_title"]').fill('GPS Test Meeting');
+    await meetingsPage.fillTitleOnly('GPS Test Meeting');
 
     // Click Get GPS Address
     const gpsBtn = adminPage.getByText('Get GPS Address');
