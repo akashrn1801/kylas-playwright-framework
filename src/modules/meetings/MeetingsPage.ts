@@ -920,7 +920,9 @@ export class MeetingsPage extends BasePage {
         formOpened = true;
         break;
       } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1}, retrying Add button click`);
+        logger.warn(`Meeting form did not open on attempt ${i + 1} — reloading page and retrying`);
+        await this.reloadPage();
+        await this.waitForListReady();
         await this.click(this.addButton(), 'Add button retry');
       }
     }
