@@ -221,11 +221,10 @@ test.describe('Meetings RBAC', () => {
 
     // Open Add Meeting form as restricted user
     await restrictedMeetings.goToMeetingsList();
-    await restrictedPage.locator('button.btn.btn-primary', { hasText: 'Add' }).first().click();
-    await restrictedPage.waitForTimeout(800);
+    await restrictedMeetings.openAddForm();
 
     // Fill title only
-    await restrictedPage.locator('[id="1_11_input_title"]').fill('RBAC Entity Test Meeting');
+    await restrictedMeetings.fillTitleOnly('RBAC Entity Test Meeting');
 
     // Open Related To — select Lead entity type
     await restrictedPage.locator('.entity-lookup').locator('.is-invalid__control').first().click();

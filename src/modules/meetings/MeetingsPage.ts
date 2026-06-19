@@ -486,6 +486,31 @@ export class MeetingsPage extends BasePage {
     }
   }
 
+  async openAddForm(): Promise<void> {
+    // WHY: Centralised Add button click + form open wait — used by tests that need
+    // to open the form without filling all fields (GPS test, RBAC entity test)
+    await this.click(this.addButton(), 'Add button');
+    let formOpened = false;
+    for (let i = 0; i < 3; i++) {
+      try {
+        await this.titleInput().waitFor({ state: 'visible', timeout: 15000 });
+        formOpened = true;
+        break;
+      } catch {
+        logger.warn(`Meeting form did not open on attempt ${i + 1}, retrying`);
+        await this.click(this.addButton(), 'Add button retry');
+      }
+    }
+    if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
+    logger.success('Meeting add form opened');
+  }
+
+  async fillTitleOnly(title: string): Promise<void> {
+    // WHY: Some tests need to fill only the title without full form — GPS test, RBAC entity test
+    logger.info(`Filling meeting title: "${title}"`);
+    await this.fill(this.titleInput(), title, 'Meeting title');
+  }
+
   async fillMeetingForm(
     data: MeetingData,
     createdBy = 'Admin',
