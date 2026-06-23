@@ -61,6 +61,8 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   /\.gif$/i,
   /\.png$/i,
   /\/images\//i,
+  // Call logs layout list — aborts on navigation
+  /\/v1\/call-logs\/layout\/list/i,
 ];
 
 export const NOISE_PATTERNS: RegExp[] = [
