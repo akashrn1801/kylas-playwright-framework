@@ -33,6 +33,7 @@
     "test:contacts": "playwright test tests/ui/contacts/ tests/rbac/contacts.rbac.spec.ts --project=chromium && npm run notify",
     "test:companies": "playwright test tests/ui/companies/ tests/rbac/companies.rbac.spec.ts --project=chromium && npm run notify",
     "test:meetings": "playwright test tests/ui/meetings/ tests/rbac/meetings.rbac.spec.ts --project=chromium && npm run notify",
+    "test:call-logs": "playwright test tests/ui/call-logs/ tests/rbac/call-logs.rbac.spec.ts --project=chromium && npm run notify",
     "test:quotations": "playwright test tests/ui/quotations/ --project=chromium && npm run notify",
     "test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium && npm run notify",
     "sandbox:reset": "bash scripts/reset-sandbox.sh"
