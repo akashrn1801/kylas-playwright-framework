@@ -635,6 +635,9 @@ export class CallLogsPage extends BasePage {
     logger.info('Navigating to Call Logs list');
     await this.navigateTo(`${config.appUrl}/sales/calls/list`);
     await this.waitForListReady();
+    // WHY: Small wait for permissions to fully load — prevents intermittent
+    // permission errors on CI when restricted user creates call log immediately
+    await this.page.waitForTimeout(1000);
     logger.success('On Call Logs list page');
   }
 
