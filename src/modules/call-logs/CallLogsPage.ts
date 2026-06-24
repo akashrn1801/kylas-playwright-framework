@@ -559,6 +559,10 @@ export class CallLogsPage extends BasePage {
   }
 
   // WHY: Duration React Select — select type then fill numeric value
+  async fillDurationDirect(value: number, type: string): Promise<void> {
+    await this.fillDuration(value, type);
+  }
+
   private async fillDuration(value: number, type: string): Promise<void> {
     logger.info(`Filling duration: ${value} ${type}`);
     // WHY: Use generic selectFromDropdown — handles aria-hidden via JS mousedown

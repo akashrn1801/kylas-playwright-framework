@@ -407,6 +407,20 @@ export class TasksPage extends BasePage {
     return id;
   }
 
+  async saveQuickTaskFromEntityDetail(): Promise<number | null> {
+    logger.info('Saving Quick Task from entity detail page');
+    const idPromise = this.captureIdFromResponse();
+    await this.click(this.quickTaskAddButton(), 'Add Task button');
+    const id = await idPromise;
+    // WHY: When saving from entity detail page — no list to wait for
+    await this.quickTaskBackdrop()
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
+    await this.page.waitForTimeout(1000);
+    logger.success(`Quick task saved from entity detail (ID: ${id})`);
+    return id;
+  }
+
   async switchQuickFormToDetailed(): Promise<void> {
     logger.info('Switching Quick Form to Detailed via toggle');
     const toggle = this.quickFormToggle();
