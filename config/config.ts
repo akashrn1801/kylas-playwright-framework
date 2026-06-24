@@ -62,7 +62,8 @@ export const config = {
   // WHY: Meetings module needs more retries and longer wait — meeting list
   // loads slower due to calendar data aggregation on QA/Staging environments
   meetingRetry: {
-    qa: { retries: 8, wait: 8000 },
+    // WHY: Meetings search index lag — QA needs more retries/wait than other modules
+    qa: { retries: 10, wait: 10000 },
     staging: { retries: 5, wait: 8000 },
     prod: { retries: 5, wait: 3000 },
   },

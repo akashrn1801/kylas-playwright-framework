@@ -675,8 +675,9 @@ export class CallLogsPage extends BasePage {
       } catch {
         logger.warn(`Log a Call form did not open on attempt ${i + 1} — reloading page and retrying`);
         await this.reloadPage();
-        await this.page.waitForLoadState('networkidle');
-        await this.page.waitForTimeout(1000);
+        // WHY: networkidle unreliable on prod due to background requests — use domcontentloaded
+        await this.page.waitForLoadState('domcontentloaded');
+        await this.page.waitForTimeout(2000);
         await this.waitForListReady();
         await this.click(this.logACallButton(), 'Log a call button retry');
       }

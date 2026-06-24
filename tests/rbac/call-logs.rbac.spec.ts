@@ -155,6 +155,8 @@ test.describe('Call Logs — RBAC', () => {
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Lead', outcome: 'Connected' });
       await callLogsPage.goToCallLogsList();
+      // WHY: Add wait for permissions to fully load — intermittent permission error on CI
+      await restrictedPage.waitForTimeout(2000);
       const { callLogId } = await callLogsPage.createCallLog(data);
       expect(callLogId).not.toBeNull();
       await callLogsPage.goToCallLogById(callLogId!);
