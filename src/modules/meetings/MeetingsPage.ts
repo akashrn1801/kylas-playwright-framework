@@ -192,21 +192,23 @@ export class MeetingsPage extends BasePage {
     const { retries, wait } = this.retryConfig;
     for (let attempt = 1; attempt <= retries; attempt++) {
       logger.info(`Looking for meeting "${title}" in list — attempt ${attempt}/${retries}`);
+      // WHY: Soft wait — poll every 1s up to wait ms instead of hard wait
+      // Returns immediately when found, only waits full duration if not found
       const found = await this.meetingTitleInList(title)
-        .isVisible()
+        .waitFor({ state: 'visible', timeout: wait })
+        .then(() => true)
         .catch(() => false);
       if (found) {
         logger.success(`Meeting "${title}" found in list`);
         return true;
       }
-      // WHY: Make sure edit modal is closed before navigating
+      // WHY: Not found — navigate back to list and retry
       await this.editModal()
         .waitFor({ state: 'hidden', timeout: 5000 })
         .catch(() => {});
       await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
       await this.waitForListReady();
       await this.sortByLatestFirst().catch(() => logger.warn('Sort failed — continuing'));
-      await this.page.waitForTimeout(wait);
     }
     logger.warn(`Meeting "${title}" not found after ${retries} attempts`);
     return false;
