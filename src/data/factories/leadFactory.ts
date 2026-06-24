@@ -112,3 +112,38 @@ export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadDa
     ...overrides,
   };
 }
+
+// WHY: Shared lead data uses SHR prefix — guarantees uniqueness for share/reassign tests
+// Admin creates SHR-prefixed lead, shares with restricted user
+// Restricted user searches by SHR prefix — never collides with ADM or random leads
+export function generateSharedLeadData(overrides: Partial<LeadData> = {}): LeadData {
+  const timestamp = Date.now().toString();
+  const firstName = `SHR${timestamp}`;
+  const lastName = faker.person.lastName();
+  const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
+  return {
+    firstName,
+    lastName,
+    salutation: faker.helpers.arrayElement(['Mr', 'Mrs', 'Miss']),
+    email: `shr${timestamp}@testkylas.com`,
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
+    country: 'India',
+    facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    linkedIn: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    companyName: faker.company.name(),
+    department: faker.commerce.department(),
+    designation: faker.person.jobTitle(),
+    companyAddress: faker.location.streetAddress(),
+    companyCity: faker.location.city(),
+    companyState: faker.location.state(),
+    companyZipcode: faker.location.zipCode('#####'),
+    companyCountry: 'India',
+    pipelineStage: 'Open' as LeadPipelineStage,
+    ...overrides,
+  };
+}
