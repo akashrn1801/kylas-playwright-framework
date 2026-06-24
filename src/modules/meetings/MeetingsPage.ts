@@ -433,7 +433,8 @@ export class MeetingsPage extends BasePage {
       // Step 1: Click Entities dropdown and select entity type
       await this.entitiesDropdown().click();
       await this.page.waitForTimeout(400);
-      await this.page.getByText(entityType, { exact: true }).click();
+      // WHY: Scope to dropdown options only — getByText matches invitee chips too
+      await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();
       await this.page.waitForTimeout(500);
 
       // Step 2: Click Search... to open entity search dropdown
