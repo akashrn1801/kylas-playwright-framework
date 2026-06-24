@@ -27,8 +27,22 @@ fi
 
 # ── Rule 1: Core framework files → full regression ────────────────────────────
 CORE_CHANGED=$(echo "$CHANGED_FILES" | grep -E \
-  "^(src/core/|src/fixtures/|src/auth/|config/config\.ts|playwright\.config\.ts)" \
+  "^(src/core/|src/fixtures/|src/auth/|playwright\.config\.ts)" \
   || true)
+
+# WHY: config/config.ts only triggers full regression for critical changes
+# (appUrl, users, timeouts) not for module-level retry tuning (meetingRetry etc.)
+if echo "$CHANGED_FILES" | grep -q "^config/config\.ts$"; then
+  CONFIG_CRITICAL=$(git diff "origin/${BASE_BRANCH}" -- config/config.ts 2>/dev/null | \
+    grep "^+" | grep -E "(appUrl|apiBaseUrl|ADMIN|RESTRICTED|default:|navigation:|expect:|browser|headless|workers|retryCount)" \
+    || true)
+  if [ -n "$CONFIG_CRITICAL" ]; then
+    CORE_CHANGED="config/config.ts $CORE_CHANGED"
+    echo "Critical config change detected — adding to core" >&2
+  else
+    echo "Non-critical config change (retry tuning etc.) — skipping core trigger" >&2
+  fi
+fi
 
 if [ -n "$CORE_CHANGED" ]; then
   echo "Core file changed: $CORE_CHANGED" >&2
