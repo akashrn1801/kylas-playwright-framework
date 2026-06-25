@@ -23,6 +23,36 @@ import { logger } from '../utils/logger';
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
 
+// ── Session expiry detection ─────────────────────────────────────────────────
+
+function attachSessionExpiryListener(page: Page, role: 'admin' | 'restricted', authManager: AuthManager): void {
+  // WHY: Watch for 401 responses during tests — these indicate session expiry
+  // When detected, clear the storage state so the NEXT test gets a fresh login
+  page.on('response', async (response) => {
+    if (response.status() === 401) {
+      const url = response.url();
+      if (url.includes('/v1/') || url.includes('/api/')) {
+        logger.warn(`Session expiry detected for ${role} — 401 on ${url} — clearing storage state`);
+        await authManager.clearStorageState(role).catch(() => {});
+        // WHY: Reset validation cache so next test re-validates immediately
+        AuthManager['lastValidated'].delete(role);
+      }
+    }
+  });
+
+  // WHY: Watch for navigation to /signIn mid-test
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) {
+      const url = frame.url();
+      if (url.includes('/signIn') || url.includes('/login')) {
+        logger.warn(`Session expiry detected for ${role} — redirected to ${url}`);
+        authManager.clearStorageState(role).catch(() => {});
+        AuthManager['lastValidated'].delete(role);
+      }
+    }
+  });
+}
+
 // ── Error listener attachment ─────────────────────────────────────────────────
 
 function attachErrorListeners(page: Page): void {
@@ -124,8 +154,33 @@ export const test = base.extend<TestFixtures>({
     // WHY: Attach error listeners before navigating so we capture ALL errors
     // from the very first page load, not just after the test starts
     attachErrorListeners(page);
+    attachSessionExpiryListener(page, 'admin', authManager);
 
     await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+
+    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
+    const adminUrl = page.url();
+    if (adminUrl.includes('/signIn') || adminUrl.includes('/login')) {
+      logger.warn('Admin session expired mid-run — re-logging in');
+      await authManager.loginAndSaveState('admin');
+      const freshContext = await authManager.getContextForRole('admin');
+      const freshPage = await freshContext.newPage();
+      attachErrorListeners(freshPage);
+      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+      try {
+        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
+        await popup.waitFor({ state: 'visible', timeout: 3000 });
+        await popup.click();
+        await popup.waitFor({ state: 'hidden', timeout: 3000 });
+      } catch { /* no popup */ }
+      await use(freshPage);
+      ErrorCollector.clearCurrentTest();
+      await freshContext.close();
+      await context.close();
+      return;
+    }
+
     await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
 
     try {
@@ -152,6 +207,7 @@ export const test = base.extend<TestFixtures>({
     const page = await context.newPage();
     // WHY: Attach error listeners before any navigation
     attachErrorListeners(page);
+    attachSessionExpiryListener(page, 'restricted', authManager);
     // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
     if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
     // WHY: QA env has intermittent TCP timeouts under parallel load — mirror AuthManager 3-retry pattern.
@@ -165,6 +221,29 @@ export const test = base.extend<TestFixtures>({
         await page.waitForTimeout(3000);
       }
     }
+    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
+    const restrictedUrl = page.url();
+    if (restrictedUrl.includes('/signIn') || restrictedUrl.includes('/login')) {
+      logger.warn('Restricted session expired mid-run — re-logging in');
+      await authManager.loginAndSaveState('restricted');
+      const freshContext = await authManager.getContextForRole('restricted');
+      const freshPage = await freshContext.newPage();
+      attachErrorListeners(freshPage);
+      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
+      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+      try {
+        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
+        await popup.waitFor({ state: 'visible', timeout: 3000 });
+        await popup.click();
+        await popup.waitFor({ state: 'hidden', timeout: 3000 });
+      } catch { /* no popup */ }
+      await use(freshPage);
+      ErrorCollector.clearCurrentTest();
+      await freshContext.close();
+      await context.close();
+      return;
+    }
+
     await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
     try {
       const popup = page.locator('#cancel[data-dismiss="modal"]');

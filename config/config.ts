@@ -62,9 +62,10 @@ export const config = {
   // WHY: Meetings module needs more retries and longer wait — meeting list
   // loads slower due to calendar data aggregation on QA/Staging environments
   meetingRetry: {
-    qa: { retries: 8, wait: 8000 },
+    // WHY: Soft wait — waitFor polls until found or timeout, not a hard sleep
+    qa: { retries: 8, wait: 10000 },
     staging: { retries: 5, wait: 8000 },
-    prod: { retries: 5, wait: 3000 },
+    prod: { retries: 5, wait: 5000 },
   },
   execution: {
     workers: Number(process.env.WORKERS) || 2,

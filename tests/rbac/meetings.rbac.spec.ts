@@ -229,7 +229,8 @@ test.describe('Meetings RBAC', () => {
     // Open Related To — select Lead entity type
     await restrictedPage.locator('.entity-lookup').locator('.is-invalid__control').first().click();
     await restrictedPage.waitForTimeout(400);
-    await restrictedPage.getByText('Lead', { exact: true }).click();
+    // WHY: Scope to dropdown options only — getByText matches invitee chips too
+    await restrictedPage.locator('.is-invalid__option').filter({ hasText: 'Lead' }).first().click();
     await restrictedPage.waitForTimeout(500);
 
     // Open search dropdown and search for ADM prefix (admin-created leads)

@@ -12,6 +12,8 @@ import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
 
 test.describe('Quotations — RBAC', () => {
+  test.describe.configure({ mode: 'serial' });
+
   // ─── T5 ───────────────────────────────────────────────────────────────────
   test('@smoke @regression restricted user should navigate to quotations list', async ({
     restrictedPage,
