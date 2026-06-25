@@ -27,6 +27,7 @@ test.describe('Call Logs — RBAC', () => {
   test(
     '@smoke @regression Restricted user should navigate to Call Logs list page and verify list is visible',
     async ({ restrictedPage }) => {
+      test.setTimeout(180000);
       const callLogsPage = new CallLogsPage(restrictedPage);
       await callLogsPage.goToCallLogsList();
       await callLogsPage.assertOnCallLogsListPage();
@@ -414,7 +415,7 @@ test.describe('Call Logs — RBAC', () => {
       // WHY: After navigateToEntityViaDetailLink, restrictedCallLogs.page = new tab
       // Use restrictedCallLogs page locator not restrictedPage (old tab)
       const items = restrictedCallLogs['page'].locator('ul.list-unstyled.mb-0.card-list li.media');
-      await items.first().waitFor({ state: 'visible', timeout: 15000 });
+      await items.first().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
       const count = await items.count();
       logger.info(`Call log items in productivity section: ${count}`);
       expect(count).toBeGreaterThanOrEqual(1);

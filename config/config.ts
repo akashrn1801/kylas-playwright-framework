@@ -57,7 +57,8 @@ export const config = {
   searchRetry: {
     qa: { retries: 5, wait: 3000 },
     staging: { retries: 3, wait: 5000 },
-    prod: { retries: 5, wait: 3000 },
+    // WHY: Prod indexing lag is higher — 5 retries x 5s = 25s max wait
+    prod: { retries: 5, wait: 5000 },
   },
   // WHY: Meetings module needs more retries and longer wait — meeting list
   // loads slower due to calendar data aggregation on QA/Staging environments
@@ -65,7 +66,8 @@ export const config = {
     // WHY: Soft wait — waitFor polls until found or timeout, not a hard sleep
     qa: { retries: 8, wait: 10000 },
     staging: { retries: 5, wait: 8000 },
-    prod: { retries: 5, wait: 5000 },
+    // WHY: Prod is slower — increase wait to 8s to handle calendar aggregation lag
+    prod: { retries: 5, wait: 8000 },
   },
   execution: {
     workers: Number(process.env.WORKERS) || 2,

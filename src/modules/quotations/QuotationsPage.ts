@@ -1026,6 +1026,10 @@ export class QuotationsPage extends BasePage {
     await this.assertOnListPage();
     // Get ID by searching and clicking the row
     await this.performSearch(data.summary);
+    // WHY: Soft wait — waitFor polls until row is visible instead of hard click
+    // Prevents 'Target page closed' when server is under load with 2 workers
+    await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
+      .waitFor({ state: 'visible', timeout: 30000 });
     await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
     await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
     const id = await this.captureIdFromUrl();

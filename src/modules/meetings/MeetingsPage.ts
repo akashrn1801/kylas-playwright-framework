@@ -525,6 +525,13 @@ export class MeetingsPage extends BasePage {
   ): Promise<void> {
     logger.info(`Filling meeting form title: "${data.title}"`);
     await this.fill(this.titleInput(), data.title, 'Meeting title');
+    // WHY: Verify title was filled — on prod the field may lose focus and clear
+    const titleValue = await this.titleInput().inputValue().catch(() => '');
+    if (!titleValue || titleValue.trim() === '') {
+      logger.warn('Title field empty after fill — retrying');
+      await this.titleInput().click();
+      await this.titleInput().fill(data.title);
+    }
     await this.fillDate(3);
     await this.fillTimePicker(data.timeConfig, 'from');
     await this.fillTimePicker(data.timeConfig, 'to');
