@@ -10,6 +10,8 @@ import {
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Quotations — UI', () => {
+  test.describe.configure({ mode: 'serial' });
+
   // ─── T1 ───────────────────────────────────────────────────────────────────
   test('@smoke @regression admin should navigate to quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
