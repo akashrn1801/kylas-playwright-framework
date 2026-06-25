@@ -2,6 +2,8 @@ import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
+import { LeadsPage } from '@modules/leads/LeadsPage';
+import { generateLeadData } from '@data/factories/leadFactory';
 import {
   CallLogData,
   formatDateForCalendarLabel,
@@ -451,8 +453,17 @@ export class CallLogsPage extends BasePage {
         (opts[0] as HTMLElement).click();
         return opts[0].textContent?.trim() ?? '';
       }
-      // No search term — pick random from first 5, skip ADM-prefixed options
-      const nonAdmOpts = Array.from(opts).filter(o => !o.textContent?.trim().startsWith('ADM'));
+      // No search term — pick random from first 5, skip ADM/SHR/RES-prefixed options
+      // WHY: ADM = admin-owned, SHR = shared leads — restricted user may not have
+      // call log permission on these entities, causing HTTP 403
+      // RES = restricted user's own test data — safe to use
+      const nonAdmOpts = Array.from(opts).filter(o => {
+        const text = (o.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const hasADM = /ADM\d{10,}/.test(text);
+        const hasSHR = /SHR\d{10,}/.test(text);
+        return !hasADM && !hasSHR;
+      });
+      // WHY: If all options are SHR/ADM fall back to first option
       const pool = nonAdmOpts.length > 0 ? nonAdmOpts : Array.from(opts).slice(0, 5);
       const idx = Math.floor(Math.random() * Math.min(pool.length, 5));
       (pool[idx] as HTMLElement).click();
@@ -635,6 +646,9 @@ export class CallLogsPage extends BasePage {
     logger.info('Navigating to Call Logs list');
     await this.navigateTo(`${config.appUrl}/sales/calls/list`);
     await this.waitForListReady();
+    // WHY: Small wait for permissions to fully load — prevents intermittent
+    // permission errors on CI when restricted user creates call log immediately
+    await this.page.waitForTimeout(1000);
     logger.success('On Call Logs list page');
   }
 
@@ -675,8 +689,9 @@ export class CallLogsPage extends BasePage {
       } catch {
         logger.warn(`Log a Call form did not open on attempt ${i + 1} — reloading page and retrying`);
         await this.reloadPage();
-        await this.page.waitForLoadState('networkidle');
-        await this.page.waitForTimeout(1000);
+        // WHY: networkidle unreliable on prod due to background requests — use domcontentloaded
+        await this.page.waitForLoadState('domcontentloaded');
+        await this.page.waitForTimeout(2000);
         await this.waitForListReady();
         await this.click(this.logACallButton(), 'Log a call button retry');
       }
@@ -1324,6 +1339,20 @@ export class CallLogsPage extends BasePage {
   // Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: Creates a fresh lead owned by the current user and returns its full name.
+  // Used when entity dropdown only shows SHR/ADM leads (shared/admin-owned)
+  // which may not have call log permission, causing HTTP 403.
+  private async ensureOwnedLeadExists(): Promise<string> {
+    logger.info('Creating owned lead for call log entity selection');
+    const leadsPage = new LeadsPage(this.page);
+    const leadData = generateLeadData();
+    await leadsPage.goToLeadsList();
+    await leadsPage.createLead(leadData);
+    const fullName = `${leadData.firstName} ${leadData.lastName}`;
+    logger.success(`Created owned lead: ${fullName}`);
+    return fullName;
+  }
+
   async createCallLog(
     data: CallLogData,
     options: {
@@ -1332,13 +1361,21 @@ export class CallLogsPage extends BasePage {
     } = {}
   ): Promise<{ callLogId: number | null; entityName: string; selectedPhone: string }> {
     logger.info(`Creating call log — entity: ${data.entityType}, outcome: ${data.outcome}`);
+    // WHY: For Lead entity without selectedEntityName, auto-create owned lead
+    // Dropdown may only show SHR/ADM leads causing HTTP 403 on save
+    let resolvedEntityName = options.selectedEntityName;
+    if (data.entityType === 'Lead' && !resolvedEntityName) {
+      resolvedEntityName = await this.ensureOwnedLeadExists();
+      await this.goToCallLogsList();
+    }
     await this.openLogACallForm();
     const { entityName, selectedPhone } = await this.fillCreateForm(
       data,
-      options.selectedEntityName,
+      resolvedEntityName,
       options.includeNoteDuringCreate ?? false
     );
     const callLogId = await this.saveCallLog();
+
     logger.success(`Call log created — ID: ${callLogId}, entity: ${entityName}`);
     return { callLogId, entityName, selectedPhone };
   }

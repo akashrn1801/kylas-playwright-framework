@@ -23,7 +23,9 @@ export class AuthManager {
   // a full browser context just to validate session on every single test.
   // If validated within SESSION_CACHE_MS, skip re-validation entirely.
   private static lastValidated: Map<string, number> = new Map();
-  private static readonly SESSION_CACHE_MS = 60 * 60 * 1000; // 1 hour
+  // WHY: 30min cache — check session more frequently to catch expiry before tests fail
+  // App session TTL is ~1hr; checking every 30min ensures we re-login before expiry
+  private static readonly SESSION_CACHE_MS = 30 * 60 * 1000; // 30 minutes
 
   constructor(browser: Browser) {
     this.browser = browser;

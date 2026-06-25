@@ -1,11 +1,24 @@
 import { test, expect } from '../../src/fixtures/index';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
+import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import {
   generateAdminCallLogData,
   generateRestrictedCallLogData,
 } from '../../src/data/factories/callLogFactory';
+import { generateLeadData } from '../../src/data/factories/leadFactory';
 import { logger } from '../../src/utils/logger';
 import { config } from '../../config/config';
+
+// WHY: Helper to create a fresh lead owned by restricted user
+// Used by call log tests that need a Lead entity — avoids SHR/ADM leads
+// which restricted user may not have call log permission on
+async function createOwnedLead(restrictedPage: import('@playwright/test').Page): Promise<string> {
+  const leadsPage = new LeadsPage(restrictedPage);
+  const leadData = generateLeadData();
+  await leadsPage.goToLeadsList();
+  await leadsPage.createLead(leadData);
+  return `${leadData.firstName} ${leadData.lastName}`;
+}
 
 test.describe('Call Logs — RBAC', () => {
 
@@ -114,8 +127,10 @@ test.describe('Call Logs — RBAC', () => {
       test.setTimeout(480000);
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Lead', outcome: 'Missed Call' });
+      // WHY: Create own lead first — dropdown may only show SHR leads causing 403
+      const ownLeadName = await createOwnedLead(restrictedPage);
       await callLogsPage.goToCallLogsList();
-      const { callLogId } = await callLogsPage.createCallLog(data);
+      const { callLogId } = await callLogsPage.createCallLog(data, { selectedEntityName: ownLeadName });
       expect(callLogId).not.toBeNull();
       await callLogsPage.assertCallLogInList(callLogId!);
       await callLogsPage.assertOutcomeOnDetail('Missed Call');

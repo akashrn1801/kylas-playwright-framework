@@ -8,7 +8,8 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: isCI,
   retries: config.execution.retryCount,
-  workers: isCI ? 1 : config.execution.workers,
+  // WHY: 2 workers on CI — halves run time while maintaining stability
+  workers: isCI ? 2 : config.execution.workers,
   timeout: isCI ? 120000 : 480000,
 
   expect: {
