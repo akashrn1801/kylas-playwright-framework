@@ -54,8 +54,25 @@ jobs:
           else
             WORKERS=1
           fi
+          # WHY: Track start time for elapsed time reporting
+          START_TIME=$(date +%s)
+          echo "⏱️  Started at: $(date '+%H:%M:%S')"
+          echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS"
           echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET"
+
           npx playwright test --project=chromium --workers=$WORKERS $TARGET
+          EXIT_CODE=$?
+
+          # WHY: Report actual elapsed time after tests complete
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo ""
+          echo "⏱️  Finished at: $(date '+%H:%M:%S')"
+          echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
+          echo "📊 Tests: $TEST_COUNT | Workers: $WORKERS | Time: ${MINUTES}m ${SECONDS}s"
+          exit $EXIT_CODE
 
       - name: Send notification email
         if: always()
