@@ -1025,11 +1025,23 @@ export class QuotationsPage extends BasePage {
     await this.assertSuccessToast();
     await this.assertOnListPage();
     // Get ID by searching and clicking the row
-    await this.performSearch(data.summary);
-    // WHY: Soft wait — waitFor polls until row is visible instead of hard click
-    // Prevents 'Target page closed' when server is under load with 2 workers
-    await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
-      .waitFor({ state: 'visible', timeout: 30000 });
+    // WHY: Retry loop — search index lag means row may not appear immediately
+    // Prevents 'Target page closed' and 30s timeout when server is under load
+    const { retries, wait } = this.retryConfig;
+    let rowFound = false;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      await this.performSearch(data.summary);
+      try {
+        await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
+          .waitFor({ state: 'visible', timeout: 10000 });
+        rowFound = true;
+        break;
+      } catch {
+        logger.warn(`Row not found on attempt ${attempt}/${retries} — waiting ${wait}ms`);
+        await this.page.waitForTimeout(wait);
+      }
+    }
+    if (!rowFound) throw new Error(`Quotation row not found after ${retries} attempts: ${data.summary}`);
     await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
     await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
     const id = await this.captureIdFromUrl();
