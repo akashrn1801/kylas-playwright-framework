@@ -451,8 +451,13 @@ export class CallLogsPage extends BasePage {
         (opts[0] as HTMLElement).click();
         return opts[0].textContent?.trim() ?? '';
       }
-      // No search term — pick random from first 5, skip ADM-prefixed options
-      const nonAdmOpts = Array.from(opts).filter(o => !o.textContent?.trim().startsWith('ADM'));
+      // No search term — pick random from first 5, skip ADM/SHR-prefixed options
+      // WHY: ADM = admin-owned, SHR = shared leads — restricted user may not have
+      // call log permission on these entities, causing HTTP 403
+      const nonAdmOpts = Array.from(opts).filter(o => {
+        const text = o.textContent?.trim() ?? '';
+        return !text.startsWith('ADM') && !text.startsWith('SHR');
+      });
       const pool = nonAdmOpts.length > 0 ? nonAdmOpts : Array.from(opts).slice(0, 5);
       const idx = Math.floor(Math.random() * Math.min(pool.length, 5));
       (pool[idx] as HTMLElement).click();
