@@ -174,24 +174,27 @@ test.describe('Quotations — RBAC', () => {
     expect(id, 'Quotation ID must be captured').toBeTruthy();
 
     // Restricted user should see the quotation in their list
-    await restrictedQP.goToQuotationsList();
-    await restrictedPage.waitForTimeout(1500);
-    await restrictedQP.searchQuotation(adminData.summary);
-    await restrictedPage.waitForTimeout(2000);
-    const allRows = restrictedPage.locator('.rt-tr-group');
-    const rowCount = await allRows.count();
+    // WHY: Retry search — prod indexing lag can delay visibility after ownership assignment
     let found = false;
-    for (let i = 0; i < rowCount; i++) {
-      const text = (
-        await allRows
-          .nth(i)
-          .innerText()
-          .catch(() => '')
-      ).trim();
-      if (text.length > 0) {
-        found = true;
-        break;
+    const maxRetries = 5;
+    const retryWait = 3000;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      logger.info(`Search attempt ${attempt}/${maxRetries} for: ${adminData.summary}`);
+      await restrictedQP.goToQuotationsList();
+      await restrictedQP.searchQuotation(adminData.summary);
+      await restrictedPage.waitForTimeout(2000);
+      const allRows = restrictedPage.locator('.rt-tr-group');
+      const rowCount = await allRows.count();
+      for (let i = 0; i < rowCount; i++) {
+        const text = (await allRows.nth(i).innerText().catch(() => '')).trim();
+        if (text.length > 0) {
+          found = true;
+          break;
+        }
       }
+      if (found) break;
+      logger.warn(`Quotation not found yet — waiting ${retryWait}ms before retry`);
+      await restrictedPage.waitForTimeout(retryWait);
     }
     expect(found).toBe(true);
     logger.info('Restricted user can see quotation set as owner by admin');

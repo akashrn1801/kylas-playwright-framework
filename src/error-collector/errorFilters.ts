@@ -63,6 +63,26 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   /\/images\//i,
   // Call logs layout list — aborts on navigation
   /\/v1\/call-logs\/layout\/list/i,
+  // Call logs search — aborts on navigation when switching pages
+  /\/v1\/call-logs\/search/i,
+  // Call logs detail — aborts on navigation
+  /\/v1\/call-logs\/\d+/i,
+  // Dashboards background poll — aborts on navigation
+  /\/v1\/dashboards$/i,
+  // Smart assistant — background feature check
+  /\/v1\/tenants\/smart-assistant/i,
+  // Tenants background poll
+  /\/v1\/tenants$/i,
+  // Notes relation — aborts on navigation
+  /\/v1\/notes\/relation/i,
+  // Tasks complete — aborts on navigation
+  /\/v1\/tasks\/\d+\/complete/i,
+  // Call logs layout edit view
+  /\/v1\/call-logs\/layout\?view=edit/i,
+  // Search lists preferred
+  /\/v1\/search-lists\/preferred/i,
+  // Deals layouts list
+  /\/v1\/deals\/layouts\/list/i,
 ];
 
 export const NOISE_PATTERNS: RegExp[] = [

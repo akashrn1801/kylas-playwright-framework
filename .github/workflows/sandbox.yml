@@ -58,6 +58,12 @@ jobs:
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
           echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS"
+          # WHY: Estimate completion time — avg 30s per test divided by workers
+          AVG_SECS=30
+          ESTIMATED_SECS=$(( (TEST_COUNT * AVG_SECS + WORKERS - 1) / WORKERS ))
+          ESTIMATED_MINS=$(( ESTIMATED_SECS / 60 ))
+          ESTIMATED_END=$(date -d "+${ESTIMATED_SECS} seconds" '+%H:%M:%S' 2>/dev/null || date -v +${ESTIMATED_SECS}S '+%H:%M:%S')
+          echo "🕐  Estimated duration: ~${ESTIMATED_MINS} min | ETA: ${ESTIMATED_END}"
           echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET"
 
           npx playwright test --project=chromium --workers=$WORKERS $TARGET
