@@ -207,6 +207,12 @@ export class ContactsPage extends BasePage {
   private async waitForContactDetailsPage(): Promise<void> {
     await this.page.waitForURL(/sales\/contacts\/details\//, { timeout: 20000 });
     await this.page.waitForLoadState('domcontentloaded');
+    // WHY: Wait for contact GET API response — ensures React has contactId in state
+    // Without this, share/edit fires before app resolves contactId → /contacts/undefined/share
+    await this.page.waitForResponse(
+      (res) => res.url().match(/\/v1\/contacts\/\d+$/) !== null && res.request().method() === 'GET',
+      { timeout: 15000 }
+    ).catch(() => null);
   }
 
   private async waitForContactListPage(): Promise<void> {
@@ -486,6 +492,13 @@ export class ContactsPage extends BasePage {
       const timestamp = Date.now();
       await emailInput.fill(`clone${timestamp}@testkylas.com`);
       logger.debug('Clone email updated to unique value');
+    }
+    // WHY: Ensure lastName is not empty after email fill — clone pre-fills it but fill() may clear it
+    const lastNameInput = this.lastNameInput();
+    const lastNameValue = await lastNameInput.inputValue().catch(() => '');
+    if (!lastNameValue) {
+      logger.warn('lastName was cleared during clone — re-filling with Copy suffix');
+      await lastNameInput.fill('Contact Copy');
     }
     // WHY: Change phone to unique value — same phone as original causes duplicate error
     const phoneInput = this.phoneInput();
@@ -819,7 +832,9 @@ export class ContactsPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 5000 });
+    // WHY: Wait for icon to be attached first — SVG icons load after React renders
+    await this.rightPanelIcon(title).waitFor({ state: 'attached', timeout: 15000 });
+    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 15000 });
     logger.success(`Right panel icon visible: ${title}`);
   }
 

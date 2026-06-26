@@ -300,6 +300,8 @@ test.describe('Contacts', () => {
     await contactsPage.clickEllipsisOption('Add Deal');
     await adminPage.locator('#editEntityModal').waitFor({ state: 'visible', timeout: 10000 });
     await expect(adminPage.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 });
+    // WHY: Wait for modal to fully initialize — contact ID must be resolved before filling fields
+    await adminPage.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: 10000 });
     const dealData = generateDealData();
     // WHY: Fill deal name
     await adminPage.locator('[id="0_11_input_name"]').fill(dealData.name);

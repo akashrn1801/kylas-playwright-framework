@@ -46,9 +46,9 @@ test.describe('Contacts RBAC', () => {
     const contactsPage = new ContactsPage(restrictedPage);
     const contactData = generateContactData();
     await contactsPage.goToContactsList();
-    await contactsPage.createContact(contactData);
+    const contactId = await contactsPage.createContact(contactData);
     const updatedData = generateContactData();
-    await contactsPage.updateContact(updatedData, contactData.firstName);
+    await contactsPage.updateContact(updatedData, contactData.firstName, contactId ?? undefined);
     await contactsPage.assertContactUpdated(updatedData);
     logger.success('CR3 passed');
   });
@@ -129,7 +129,9 @@ test.describe('Contacts RBAC', () => {
       { waitUntil: 'domcontentloaded' }
     );
     await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    // WHY: Wait for page title to confirm contact data fully loaded
+    await restrictedPage.locator('.page-title').waitFor({ state: 'visible', timeout: 10000 }).catch(() => null);
+    await restrictedPage.waitForTimeout(1000);
     // WHY: Update permission — edit button (#edit-action) should be visible
     // NOTE: Contacts uses #edit-action (no -btn suffix) unlike Leads (#edit-action-btn)
     await expect(restrictedPage.locator('#edit-action')).toBeVisible({ timeout: 10000 });
