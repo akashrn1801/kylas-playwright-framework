@@ -288,10 +288,19 @@ export class QuotationsPage extends BasePage {
     try {
       const toastLink = this.page.locator('.toastr.rrt-success .link-primary');
       await toastLink.waitFor({ state: 'visible', timeout: 8000 });
+      // WHY: Try href first — more reliable than text content
+      const href = await toastLink.getAttribute('href').catch(() => null);
+      if (href) {
+        const hrefMatch = href.match(/\/quotations\/details\/(\d+)/);
+        if (hrefMatch) {
+          logger.success(`Captured quotation ID from toast href: ${hrefMatch[1]}`);
+          return hrefMatch[1];
+        }
+      }
       const text = await toastLink.textContent();
-      const match = text?.match(/Quotation ID:s*(d+)/);
+      const match = text?.match(/Quotation ID:\s*(\d+)/);
       if (match) {
-        logger.success(`Captured quotation ID from toast: ${match[1]}`);
+        logger.success(`Captured quotation ID from toast text: ${match[1]}`);
         return match[1];
       }
     } catch {
@@ -1022,32 +1031,45 @@ export class QuotationsPage extends BasePage {
     await this.openCreateForm();
     const selectedDeal = await this.fillQuotationForm(data);
     await this.saveQuotation();
+    // WHY: Capture ID from toast BEFORE navigating away — avoids search index lag
+    // on prod where quotation may not appear in list for 30-40s after creation
+    const toastId = await this.captureIdFromToast();
     await this.assertSuccessToast();
     await this.assertOnListPage();
-    // Get ID by searching and clicking the row
-    // WHY: Retry loop — search index lag means row may not appear immediately
-    // Prevents 'Target page closed' and 30s timeout when server is under load
-    const { retries, wait } = this.retryConfig;
-    let rowFound = false;
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      await this.performSearch(data.summary);
-      try {
-        await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
-          .waitFor({ state: 'visible', timeout: 10000 });
-        rowFound = true;
-        break;
-      } catch {
-        logger.warn(`Row not found on attempt ${attempt}/${retries} — waiting ${wait}ms`);
-        await this.page.waitForTimeout(wait);
+    let id: string | null = toastId;
+    if (id) {
+      // WHY: ID-first navigation — go directly to detail URL, no search needed
+      logger.info(`ID-first navigation to quotation: ${id}`);
+      await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
+      await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
+      const urlId = await this.captureIdFromUrl();
+      if (urlId) id = urlId;
+      logger.success(`Navigated to quotation detail: ${id}`);
+      await this.goToQuotationsList();
+    } else {
+      // WHY: Fallback — search list if toast ID not captured
+      logger.warn('Toast ID not captured — falling back to list search');
+      const { retries, wait } = this.retryConfig;
+      let rowFound = false;
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        await this.performSearch(data.summary);
+        try {
+          await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
+            .waitFor({ state: 'visible', timeout: 10000 });
+          rowFound = true;
+          break;
+        } catch {
+          logger.warn(`Row not found on attempt ${attempt}/${retries} — waiting ${wait}ms`);
+          await this.page.waitForTimeout(wait);
+        }
       }
+      if (!rowFound) throw new Error(`Quotation row not found after ${retries} attempts: ${data.summary}`);
+      await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
+      await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
+      id = await this.captureIdFromUrl();
+      logger.info(`Captured ID: ${id}`);
+      await this.goToQuotationsList();
     }
-    if (!rowFound) throw new Error(`Quotation row not found after ${retries} attempts: ${data.summary}`);
-    await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
-    await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
-    const id = await this.captureIdFromUrl();
-    logger.info(`URL after row click: ${this.page.url()}`);
-    logger.info(`Captured ID: ${id}`);
-    await this.goToQuotationsList();
     logger.success(`Quotation created: ${data.quotationNumber} (id: ${id})`);
     return { id, dealName: selectedDeal };
   }
