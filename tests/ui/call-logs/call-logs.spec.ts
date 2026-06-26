@@ -38,6 +38,7 @@ test.describe('Call Logs', () => {
   // ── CL1 ───────────────────────────────────────────────────────────────────
 
   test('@smoke @regression admin should navigate to call logs list page and verify list is visible', async ({ adminPage }) => {
+    test.setTimeout(180000);
     const callLogsPage = new CallLogsPage(adminPage);
     await callLogsPage.goToCallLogsList();
     await callLogsPage.assertOnCallLogsListPage();

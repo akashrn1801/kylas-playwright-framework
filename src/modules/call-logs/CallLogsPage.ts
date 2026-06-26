@@ -1293,10 +1293,11 @@ export class CallLogsPage extends BasePage {
   async openCallLogsProductivitySection(): Promise<void> {
     logger.info('Opening Call Logs productivity section on entity detail');
     const callLogsBtn = this.callLogsProductivityButton();
-    await callLogsBtn.waitFor({ state: 'visible', timeout: 15000 });
+    // WHY: Use navigation timeout — prod loads slower than QA
+    await callLogsBtn.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await callLogsBtn.scrollIntoViewIfNeeded();
     await callLogsBtn.click();
-    await this.productivityCallLogList().waitFor({ state: 'visible', timeout: 15000 });
+    await this.productivityCallLogList().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     logger.success('Call Logs productivity section opened');
   }
 

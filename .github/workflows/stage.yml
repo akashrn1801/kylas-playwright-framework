@@ -38,7 +38,18 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
-        run: npx playwright test --project=chromium --workers=2 --timeout=120000
+        run: |
+          START_TIME=$(date +%s)
+          echo "⏱️  Started at: $(date '+%H:%M:%S')"
+          echo "🕐  Estimated duration: ~44 min"
+          npx playwright test --project=chromium --workers=2 --timeout=120000
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
+          exit $EXIT_CODE
 
       - name: Send notification email
         if: always()
