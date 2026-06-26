@@ -26,7 +26,6 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
   const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
-
   return {
     firstName,
     lastName,
@@ -61,7 +60,6 @@ export function generateAdminContactData(overrides: Partial<ContactData> = {}): 
   const firstName = `ADM${timestamp}`;
   const lastName = faker.person.lastName();
   const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
-
   return {
     firstName,
     lastName,
@@ -72,6 +70,70 @@ export function generateAdminContactData(overrides: Partial<ContactData> = {}): 
     state: faker.location.state(),
     zipcode: faker.location.zipCode('#####'),
     // WHY: Sanitize username — remove special chars that fail URL validation on staging
+    facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    linkedin: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    department: faker.commerce.department(),
+    designation: faker.person.jobTitle(),
+    subSource: 'organic',
+    utmSource: 'google',
+    utmCampaign: faker.lorem.slug(2),
+    utmMedium: 'cpc',
+    utmContent: faker.lorem.slug(2),
+    utmTerm: faker.lorem.word(),
+    ...overrides,
+  };
+}
+
+// WHY: Shared contact data uses SHR prefix — used for share permission RBAC tests.
+// Admin creates the contact, then shares it with restricted user.
+// SHR prefix guarantees no collision with ADM or RES contacts from other test runs.
+export function generateSharedContactData(overrides: Partial<ContactData> = {}): ContactData {
+  const timestamp = Date.now().toString();
+  const firstName = `SHR${timestamp}`;
+  const lastName = faker.person.lastName();
+  const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
+  return {
+    firstName,
+    lastName,
+    email: `shr${timestamp}@testkylas.com`,
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
+    facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    linkedin: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
+    department: faker.commerce.department(),
+    designation: faker.person.jobTitle(),
+    subSource: 'organic',
+    utmSource: 'google',
+    utmCampaign: faker.lorem.slug(2),
+    utmMedium: 'cpc',
+    utmContent: faker.lorem.slug(2),
+    utmTerm: faker.lorem.word(),
+    ...overrides,
+  };
+}
+
+// WHY: Restricted contact data uses RES prefix — restricted user's own contacts.
+// Used in tests that verify admin cannot see restricted user's data.
+// RES prefix guarantees no collision with ADM or SHR contacts.
+export function generateRestrictedContactData(overrides: Partial<ContactData> = {}): ContactData {
+  const timestamp = Date.now().toString();
+  const firstName = `RES${timestamp}`;
+  const lastName = faker.person.lastName();
+  const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`;
+  return {
+    firstName,
+    lastName,
+    email: `res${timestamp}@testkylas.com`,
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
     facebook: `https://facebook.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
     twitter: `https://twitter.com/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
     linkedin: `https://linkedin.com/in/${username.replace(/[^a-zA-Z0-9._-]/g, '')}`,
