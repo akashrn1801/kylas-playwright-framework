@@ -1048,13 +1048,14 @@ export class QuotationsPage extends BasePage {
       await this.goToQuotationsList();
     } else {
       // WHY: Fallback — search list if toast ID not captured
-      logger.warn('Toast ID not captured — falling back to list search');
+      // WHY: Search by quotationNumber (visible in list) not summary (not indexed immediately)
+      logger.warn('Toast ID not captured — falling back to list search by quotation number');
       const { retries, wait } = this.retryConfig;
       let rowFound = false;
       for (let attempt = 1; attempt <= retries; attempt++) {
-        await this.performSearch(data.summary);
+        await this.performSearch(data.quotationNumber);
         try {
-          await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first()
+          await this.page.locator('.rt-tr-group').filter({ hasText: data.quotationNumber }).first()
             .waitFor({ state: 'visible', timeout: 10000 });
           rowFound = true;
           break;
@@ -1063,8 +1064,8 @@ export class QuotationsPage extends BasePage {
           await this.page.waitForTimeout(wait);
         }
       }
-      if (!rowFound) throw new Error(`Quotation row not found after ${retries} attempts: ${data.summary}`);
-      await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
+      if (!rowFound) throw new Error(`Quotation row not found after ${retries} attempts: ${data.quotationNumber}`);
+      await this.page.locator('.rt-tr-group').filter({ hasText: data.quotationNumber }).first().click();
       await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
       id = await this.captureIdFromUrl();
       logger.info(`Captured ID: ${id}`);
