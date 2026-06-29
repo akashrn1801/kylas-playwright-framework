@@ -600,6 +600,8 @@ test.describe('Contacts RBAC', () => {
       .first()
       .click();
     await restrictedPage.waitForTimeout(500);
+    // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
+    const baselineCount = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
     // WHY: Add first note — this note will be kept
     await restrictedPage.locator('textarea.notes-textarea').click();
     await restrictedPage.waitForTimeout(1000);
@@ -614,9 +616,9 @@ test.describe('Contacts RBAC', () => {
     await restrictedPage.waitForTimeout(500);
     await restrictedPage.getByText('Add', { exact: true }).click();
     await restrictedPage.waitForTimeout(1500);
-    // WHY: Verify 2 notes exist
+    // WHY: Verify both new notes were added on top of baseline
     const notesBeforeDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesBeforeDelete).toBe(2);
+    expect(notesBeforeDelete).toBe(baselineCount + 2);
     // WHY: Delete the first note (newest first display) — "Note to delete" was added last so appears first
     const lastNoteEllipsis = restrictedPage
       .locator('div.row.pt-2.pl-2.pr-2')
@@ -633,9 +635,21 @@ test.describe('Contacts RBAC', () => {
     await restrictedPage.locator('button#confirm.btn-danger').waitFor({ state: 'visible', timeout: 5000 });
     await restrictedPage.locator('button#confirm.btn-danger').click();
     await restrictedPage.waitForTimeout(1500);
-    // WHY: Verify only 1 note remains
+    // WHY: Verify count dropped by 1 relative to baseline
     const notesAfterDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesAfterDelete).toBe(1);
+    expect(notesAfterDelete).toBe(baselineCount + 1);
+    // WHY: Note text lives in CKEditor iframes — skip the active editor iframe (title="Rich Text Editor, main")
+    // and use innerText (excludes hidden/removed nodes) to check only saved-note display iframes
+    const checkNoteText = async (text: string): Promise<boolean> =>
+      restrictedPage.evaluate((t) => {
+        for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
+          if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
+          try { if (iframe.contentDocument?.body?.innerText?.includes(t)) return true; } catch {}
+        }
+        return false;
+      }, text);
+    expect(await checkNoteText('Note to delete')).toBe(false);
+    expect(await checkNoteText('Note to keep')).toBe(true);
     logger.success('CR17 passed');
   });
 
