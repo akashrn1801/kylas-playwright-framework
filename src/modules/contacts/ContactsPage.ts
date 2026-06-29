@@ -74,6 +74,9 @@ export class ContactsPage extends BasePage {
 
   // UTM / source fields — below address, require scroll on some viewports
   private readonly subSourceInput = (): Locator => this.page.locator('input[name="subSource"]');
+  private readonly salutationInput = (): Locator => this.page.locator('[id="0_11_input_salutation"]');
+  private readonly campaignInput = (): Locator => this.page.locator('[id="5_11_input_campaign"]');
+  private readonly sourceInput = (): Locator => this.page.locator('[id="5_12_input_source"]');
 
   private readonly utmSourceInput = (): Locator => this.page.locator('input[name="utmSource"]');
 
@@ -288,6 +291,34 @@ export class ContactsPage extends BasePage {
     }
   }
 
+  // WHY: React Select dropdowns in contacts render options in a React portal OUTSIDE
+  // the control container. Scoping options to the visible .is-invalid__menu (the portal
+  // root) prevents accidentally clicking stale options from a simultaneously-open dropdown.
+  // Steps mirror selectFromIsInvalidControl in QuotationsPage but add the menu-visible gate.
+  private async selectFromContactDropdown(inputId: string, optionText: string): Promise<void> {
+    const input = this.page.locator(`[id="${inputId}"]`);
+    await input.scrollIntoViewIfNeeded();
+    await input.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Click the ancestor .is-invalid__control wrapper — clicking the input alone
+    // does not reliably trigger the React Select open handler on portalled dropdowns
+    const control = input.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    await control.click();
+    // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
+    await input.fill(optionText);
+    // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
+    // options are rendered in the portal. Prevents racing against another open dropdown.
+    const menu = this.page.locator('.is-invalid__menu');
+    await menu.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Scope the option click to the visible menu container — avoids clicking options
+    // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
+    const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
+    await option.waitFor({ state: 'visible', timeout: 5000 });
+    await option.click();
+    // WHY: Wait for menu to collapse — confirms React Select registered the selection
+    await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+    logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
+  }
+
   private async retryFindContact(firstName: string): Promise<boolean> {
     const currentConfig = this.retryConfig;
     for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
@@ -332,6 +363,9 @@ export class ContactsPage extends BasePage {
   async fillContactForm(data: ContactData): Promise<void> {
     logger.info('Filling contact form');
     await this.disableRequiredFieldsToggle();
+    if (data.salutation) {
+      await this.selectFromContactDropdown('0_11_input_salutation', data.salutation);
+    }
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
     await this.click(this.addEmailButton(), 'add email button');
@@ -353,6 +387,12 @@ export class ContactsPage extends BasePage {
     // scrollIntoViewIfNeeded ensures fill doesn't silently fail
     await this.utmSourceInput().scrollIntoViewIfNeeded();
     await this.fill(this.subSourceInput(), data.subSource, 'sub source');
+    if (data.campaign) {
+      await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+    }
+    if (data.source) {
+      await this.selectFromContactDropdown('5_12_input_source', data.source);
+    }
     await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
     await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
     await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
@@ -434,7 +474,9 @@ export class ContactsPage extends BasePage {
 
   async fillEditForm(data: ContactData): Promise<void> {
     logger.info('Updating contact form');
-    // Basic fields
+    if (data.salutation) {
+      await this.selectFromContactDropdown('0_11_input_salutation', data.salutation);
+    }
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
     // WHY: Update email — id="1_11_input_email_0"
@@ -453,6 +495,12 @@ export class ContactsPage extends BasePage {
     // WHY: Update professional fields
     await this.fill(this.departmentInput(), data.department, 'department');
     await this.fill(this.designationInput(), data.designation, 'designation');
+    if (data.campaign) {
+      await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+    }
+    if (data.source) {
+      await this.selectFromContactDropdown('5_12_input_source', data.source);
+    }
     // WHY: Update campaign fields
     await this.fill(this.page.locator('[id="5_21_input_subSource"]'), data.subSource, 'subSource');
     await this.fill(this.page.locator('[id="5_22_input_utmSource"]'), data.utmSource, 'utmSource');
@@ -790,17 +838,24 @@ export class ContactsPage extends BasePage {
     expect(tab3Text).toContain(data.department.toLowerCase());
     expect(tab3Text).toContain(data.designation.toLowerCase());
     logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation}`);
-    // WHY: Verify Campaign Information tab — subSource, utmSource, utmCampaign, utmMedium, utmContent, utmTerm
+    // WHY: Salutation appears in page header/name area — assert in body text
+    if (data.salutation) {
+      await expect(this.page.locator('body')).toContainText(data.salutation, { timeout: 5000 });
+      logger.debug(`Salutation verified: ${data.salutation}`);
+    }
+    // WHY: Verify Campaign Information tab — subSource, campaign, source, utmSource etc.
     await this.page.locator('#nav-tab4-tab').click();
     await this.page.waitForTimeout(800);
     const tab4Text = (await tabPane.textContent() ?? '').toLowerCase();
     expect(tab4Text).toContain(data.subSource.toLowerCase());
+    if (data.campaign) expect(tab4Text).toContain(data.campaign.toLowerCase());
+    if (data.source) expect(tab4Text).toContain(data.source.toLowerCase());
     expect(tab4Text).toContain(data.utmSource.toLowerCase());
     expect(tab4Text).toContain(data.utmCampaign.toLowerCase());
     expect(tab4Text).toContain(data.utmMedium.toLowerCase());
     expect(tab4Text).toContain(data.utmContent.toLowerCase());
     expect(tab4Text).toContain(data.utmTerm.toLowerCase());
-    logger.debug(`Campaign tab — subSource: ${data.subSource} | utmSource: ${data.utmSource} | utmCampaign: ${data.utmCampaign}`);
+    logger.debug(`Campaign tab — subSource: ${data.subSource} | campaign: ${data.campaign} | source: ${data.source} | utmSource: ${data.utmSource}`);
     logger.success('Contact detail fields verified');
   }
 

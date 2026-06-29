@@ -1,5 +1,9 @@
 import { faker } from '@faker-js/faker';
 
+export const SALUTATION_OPTIONS = ['Mr', 'Mrs', 'Miss'] as const;
+export const CAMPAIGN_OPTIONS = ['Organic'] as const;
+export const SOURCE_OPTIONS = ['Google', 'Facebook', 'LinkedIn', 'Exhibition', 'Cold Calling'] as const;
+
 export interface ContactData {
   firstName: string;
   lastName: string;
@@ -15,6 +19,9 @@ export interface ContactData {
   department: string;
   designation: string;
   subSource: string;
+  salutation: string;
+  campaign: string;
+  source: string;
   utmSource: string;
   utmCampaign: string;
   utmMedium: string;
@@ -42,6 +49,9 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: faker.helpers.arrayElement(['organic', 'paid', 'referral', 'direct']),
+    salutation: faker.helpers.arrayElement([...SALUTATION_OPTIONS]),
+    campaign: faker.helpers.arrayElement([...CAMPAIGN_OPTIONS]),
+    source: faker.helpers.arrayElement([...SOURCE_OPTIONS]),
     utmSource: faker.helpers.arrayElement(['google', 'facebook', 'twitter', 'email']),
     utmCampaign: faker.lorem.slug(2),
     utmMedium: faker.helpers.arrayElement(['cpc', 'email', 'social', 'banner']),
@@ -76,6 +86,9 @@ export function generateAdminContactData(overrides: Partial<ContactData> = {}): 
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: 'organic',
+    salutation: faker.helpers.arrayElement([...SALUTATION_OPTIONS]),
+    campaign: faker.helpers.arrayElement([...CAMPAIGN_OPTIONS]),
+    source: faker.helpers.arrayElement([...SOURCE_OPTIONS]),
     utmSource: 'google',
     utmCampaign: faker.lorem.slug(2),
     utmMedium: 'cpc',
@@ -108,6 +121,9 @@ export function generateSharedContactData(overrides: Partial<ContactData> = {}):
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: 'organic',
+    salutation: faker.helpers.arrayElement([...SALUTATION_OPTIONS]),
+    campaign: faker.helpers.arrayElement([...CAMPAIGN_OPTIONS]),
+    source: faker.helpers.arrayElement([...SOURCE_OPTIONS]),
     utmSource: 'google',
     utmCampaign: faker.lorem.slug(2),
     utmMedium: 'cpc',
@@ -140,6 +156,9 @@ export function generateRestrictedContactData(overrides: Partial<ContactData> = 
     department: faker.commerce.department(),
     designation: faker.person.jobTitle(),
     subSource: 'organic',
+    salutation: faker.helpers.arrayElement([...SALUTATION_OPTIONS]),
+    campaign: faker.helpers.arrayElement([...CAMPAIGN_OPTIONS]),
+    source: faker.helpers.arrayElement([...SOURCE_OPTIONS]),
     utmSource: 'google',
     utmCampaign: faker.lorem.slug(2),
     utmMedium: 'cpc',
