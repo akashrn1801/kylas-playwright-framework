@@ -5,7 +5,7 @@ pipeline {
   options {
     ansiColor('xterm')
     timestamps()
-    timeout(time: 60, unit: 'MINUTES')
+    timeout(time: 150, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
@@ -57,13 +57,28 @@ pipeline {
       // This pipeline is kept for MANUAL runs only — do not trigger via webhook.
       // To run manually: Jenkins → Build Now (not triggered by push).
       steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-          sh '''
-            ENV=staging npx playwright test \
-              --project=chromium \
-              --workers=1 \
-              --reporter=line,allure-playwright
-          '''
+        script {
+          // WHY: Dynamic timeout — scales automatically as the suite grows.
+          // Calibrated from real CI data (workers=2): ~20 sec/test average.
+          // Staging runs the full suite (no --grep filter).
+          def testCount = sh(
+            script: "grep -rh \"^\\s*test(\" tests/ | wc -l",
+            returnStdout: true
+          ).trim().toInteger()
+          def secondsPerTest = 20
+          def bufferMinutes = 20
+          def computedTimeoutMinutes = Math.ceil((testCount * secondsPerTest) / 60.0).toInteger() + bufferMinutes
+          echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+          timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
+            catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+              sh '''
+                ENV=staging npx playwright test \
+                  --project=chromium \
+                  --workers=2 \
+                  --reporter=line,allure-playwright
+              '''
+            }
+          }
         }
       }
       post {

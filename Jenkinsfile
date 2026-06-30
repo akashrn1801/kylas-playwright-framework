@@ -7,7 +7,7 @@ pipeline {
 
     options {
         timestamps()
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 150, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
@@ -154,7 +154,19 @@ REPORT_PATH=reports/playwright-report/results.json
             }
             steps {
                 script {
-                    sh "npx playwright test --project=chromium --workers=2 || true"
+                    // WHY: Dynamic timeout — scales automatically as the suite grows.
+                    // Calibrated from real CI data (workers=2): ~20 sec/test average.
+                    def testCount = sh(
+                        script: "grep -rh \"^\\s*test(\" tests/ | wc -l",
+                        returnStdout: true
+                    ).trim().toInteger()
+                    def secondsPerTest = 20
+                    def bufferMinutes = 20
+                    def computedTimeoutMinutes = Math.ceil((testCount * secondsPerTest) / 60.0).toInteger() + bufferMinutes
+                    echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+                    timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
+                        sh "npx playwright test --project=chromium --workers=2 || true"
+                    }
                 }
             }
         }
