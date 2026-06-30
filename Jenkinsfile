@@ -162,7 +162,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     ).trim().toInteger()
                     def secondsPerTest = 20
                     def bufferMinutes = 20
-                    def computedTimeoutMinutes = Math.ceil((testCount * secondsPerTest) / 60.0).toInteger() + bufferMinutes
+                    def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
                     echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
                     timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
                         sh "npx playwright test --project=chromium --workers=2 || true"
