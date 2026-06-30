@@ -123,3 +123,60 @@ export function generateAdminCompanyData(overrides: Partial<CompanyData> = {}): 
     ...overrides,
   };
 }
+
+// WHY: Restricted user's own company data — RES prefix guarantees uniqueness
+export function generateRestrictedCompanyData(overrides: Partial<CompanyData> = {}): CompanyData {
+  const timestamp = Date.now().toString();
+  const name = `RES${timestamp} Corp`;
+  const slug = `res${timestamp}corp`;
+
+  return {
+    name,
+    numberOfEmployees: '100-249',
+    industry: 'Accounting',
+    businessType: 'Prospect',
+    annualRevenue: faker.number.int({ min: 100000, max: 10000000 }),
+    website: `https://www.${slug}.com`,
+    uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
+    uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
+    email: `res${timestamp}@testkylas.com`,
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
+    facebook: `https://facebook.com/${slug}`,
+    twitter: `https://twitter.com/${slug}`,
+    linkedIn: `https://linkedin.com/company/${slug}`,
+    ...overrides,
+  };
+}
+
+// WHY: Shared company data — SHR prefix, used for share-permission RBAC tests.
+// Admin creates the company, then shares it with restricted user.
+export function generateSharedCompanyData(overrides: Partial<CompanyData> = {}): CompanyData {
+  const timestamp = Date.now().toString();
+  const name = `SHR${timestamp} Corp`;
+  const slug = `shr${timestamp}corp`;
+
+  return {
+    name,
+    numberOfEmployees: '100-249',
+    industry: 'Accounting',
+    businessType: 'Prospect',
+    annualRevenue: faker.number.int({ min: 100000, max: 10000000 }),
+    website: `https://www.${slug}.com`,
+    uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
+    uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
+    email: `shr${timestamp}@testkylas.com`,
+    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    address: faker.location.streetAddress(),
+    city: faker.location.city(),
+    state: faker.location.state(),
+    zipcode: faker.location.zipCode('#####'),
+    facebook: `https://facebook.com/${slug}`,
+    twitter: `https://twitter.com/${slug}`,
+    linkedIn: `https://linkedin.com/company/${slug}`,
+    ...overrides,
+  };
+}
