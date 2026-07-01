@@ -312,8 +312,8 @@ export class AuthManager {
 
     const context = await this.browser.newContext({
       viewport: {
-        width: 1440,
-        height: 900,
+        width: 1920,
+        height: 1080,
       },
     });
 
@@ -434,8 +434,8 @@ export class AuthManager {
     return await this.browser.newContext({
       storageState: stateFile,
       viewport: {
-        width: 1440,
-        height: 900,
+        width: 1920,
+        height: 1080,
       },
     });
   }

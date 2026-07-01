@@ -222,7 +222,7 @@ export class CallLogsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   private readonly callLogsProductivityButton = () =>
-    this.page.locator("button[data-original-title='Call Logs'] svg");
+    this.page.locator("button[data-original-title='Call Logs']");
 
   private readonly productivityCallLogList = () =>
     this.page.locator('ul.list-unstyled.mb-0.card-list.list-bordered');
