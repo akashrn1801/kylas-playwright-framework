@@ -156,16 +156,23 @@ REPORT_PATH=reports/playwright-report/results.json
                 script {
                     // WHY: Dynamic timeout — scales automatically as the suite grows.
                     // Calibrated from real CI data (workers=2): ~20 sec/test average.
+                    // WHY: prod runs only @prodSafe tests (read-only, safe against live data)
+                    // main runs the full suite (final validation gate before release)
+                    def isProd = env.BRANCH_NAME == 'prod'
+                    def grepFlag = isProd ? '--grep @prodSafe' : ''
+                    def countScript = isProd ?
+                        "grep -rh \"@prodSafe\" tests/ | wc -l" :
+                        "grep -rh \"^\\s*test(\" tests/ | wc -l"
                     def testCount = sh(
-                        script: "grep -rh \"^\\s*test(\" tests/ | wc -l",
+                        script: countScript,
                         returnStdout: true
                     ).trim().toInteger()
                     def secondsPerTest = 20
                     def bufferMinutes = 20
                     def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
-                    echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+                    echo "Detected ${testCount} tests (branch: ${env.BRANCH_NAME}) — dynamic timeout set to ${computedTimeoutMinutes} minutes"
                     timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
-                        sh "npx playwright test --project=chromium --workers=2 || true"
+                        sh "npx playwright test --project=chromium ${grepFlag} --workers=2 || true"
                     }
                 }
             }
