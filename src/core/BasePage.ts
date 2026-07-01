@@ -35,7 +35,10 @@ export class BasePage {
 
   async click(locator: Locator, description = 'element', force = false): Promise<void> {
     logger.info(`Clicking: ${description}`);
-    await locator.waitFor({ state: 'visible' });
+    // WHY: Explicit timeout prevents silent infinite hang when an element never renders.
+    // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
+    // then hangs until Playwright teardown instead of failing with an actionable error.
+    await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await locator.click({ timeout: 15000, force });
   }
 

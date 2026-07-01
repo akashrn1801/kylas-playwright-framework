@@ -280,12 +280,13 @@ test.describe('Companies', () => {
     const contactData = generateContactData();
     const contactId = await companiesPage.addContactFromDirectButton(contactData);
     expect(contactId).not.toBeNull();
-    // WHY: Verify contact card shows the newly added contact
+    // WHY: Verify contact card shows the newly added contact.
+    // The Contacts card Name column renders lastName only — assert on lastName not firstName.
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const contactsCard = adminPage.locator('.card').filter({ hasText: 'Contacts' }).first();
     await contactsCard.scrollIntoViewIfNeeded();
-    await expect(contactsCard).toContainText(contactData.firstName, { timeout: 10000 });
-    logger.success(`CO13 passed — contact added: ID=${contactId}, name=${contactData.firstName}`);
+    await expect(contactsCard).toContainText(contactData.lastName, { timeout: 10000 });
+    logger.success(`CO13 passed — contact added: ID=${contactId}, name=${contactData.lastName}`);
   });
 
   // ── CO14 ──────────────────────────────────────────────────
