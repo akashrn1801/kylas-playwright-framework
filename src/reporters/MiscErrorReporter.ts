@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', 'misc-errors.json');
+const WORKER_FILE_PATTERN = /^misc-errors-worker-.+\.json$/;
 
 class MiscErrorReporter implements Reporter {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -10,6 +11,17 @@ class MiscErrorReporter implements Reporter {
     try {
       const dir = path.dirname(OUTPUT_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      // WHY: Clean up stale per-worker files left behind by a crashed previous
+      // run, so onEnd()'s merge doesn't pick up errors from an unrelated run.
+      for (const file of fs.readdirSync(dir)) {
+        if (WORKER_FILE_PATTERN.test(file)) {
+          try {
+            fs.unlinkSync(path.join(dir, file));
+          } catch {
+            /* already removed */
+          }
+        }
+      }
       const empty = {
         capturedAt: new Date().toISOString(),
         totalErrors: 0,
@@ -22,7 +34,56 @@ class MiscErrorReporter implements Reporter {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onEnd(_result: FullResult): void {
+    this.mergeWorkerReports();
     this.printTerminalSummary();
+  }
+
+  // WHY: Each worker wrote its own misc-errors-worker-<id>.json (see
+  // ErrorCollector.ts) — merge them all into the single final misc-errors.json
+  // that NotificationService.ts reads, then remove the per-worker files.
+  private mergeWorkerReports(): void {
+    try {
+      const dir = path.dirname(OUTPUT_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const workerFiles = fs.readdirSync(dir).filter((f) => WORKER_FILE_PATTERN.test(f));
+
+      const mergedErrors: any[] = [];
+      for (const file of workerFiles) {
+        const filePath = path.join(dir, file);
+        try {
+          const workerReport = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          if (Array.isArray(workerReport.errors)) {
+            mergedErrors.push(...workerReport.errors);
+          }
+        } catch {
+          /* skip unreadable/partial worker file */
+        } finally {
+          try {
+            fs.unlinkSync(filePath);
+          } catch {
+            /* already removed */
+          }
+        }
+      }
+
+      const byType: Record<string, number> = {};
+      for (const e of mergedErrors) {
+        byType[e.type] = (byType[e.type] || 0) + 1;
+      }
+
+      const merged = {
+        capturedAt: new Date().toISOString(),
+        totalErrors: mergedErrors.length,
+        unexpectedErrors: mergedErrors.filter((e) => !e.expected).length,
+        expectedRbacErrors: mergedErrors.filter((e) => e.expected).length,
+        byType,
+        errors: mergedErrors,
+      };
+
+      fs.writeFileSync(OUTPUT_PATH, JSON.stringify(merged, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('[MiscErrorReporter] Failed to merge worker reports:', err);
+    }
   }
 
   private printTerminalSummary(): void {

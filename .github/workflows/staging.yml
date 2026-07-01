@@ -37,7 +37,7 @@ jobs:
           HEADLESS: true
           WORKERS: 2
           RETRY_COUNT: 1
-        run: npx playwright test --project=chromium || true
+        run: npx playwright test --project=chromium
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v6
