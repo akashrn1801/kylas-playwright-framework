@@ -4,6 +4,10 @@ import { logger } from '@utils/logger';
 import { config } from '@config/config';
 import { LeadsPage } from '@modules/leads/LeadsPage';
 import { generateLeadData } from '@data/factories/leadFactory';
+import { ContactsPage } from '@modules/contacts/ContactsPage';
+import { generateContactData } from '@data/factories/contactFactory';
+import { DealsPage } from '@modules/deals/DealsPage';
+import { generateDealData } from '@data/factories/dealFactory';
 import {
   CallLogData,
   formatDateForCalendarLabel,
@@ -1354,6 +1358,35 @@ export class CallLogsPage extends BasePage {
     return fullName;
   }
 
+  // WHY: Creates a fresh contact owned by the current user.
+  // Contact dropdown may only show SHR/ADM contacts — restricted user cannot create
+  // call logs against entities they don't own, causing HTTP 403 on save.
+  private async ensureOwnedContactExists(): Promise<string> {
+    logger.info('Creating owned contact for call log entity selection');
+    const contactsPage = new ContactsPage(this.page);
+    const contactData = generateContactData();
+    await contactsPage.goToContactsList();
+    await contactsPage.createContact(contactData);
+    const fullName = `${contactData.firstName} ${contactData.lastName}`;
+    logger.success(`Created owned contact: ${fullName}`);
+    return fullName;
+  }
+
+  // WHY: Creates a fresh deal owned by the current user.
+  // Deal dropdown may only show SHR/ADM deals — restricted user cannot create
+  // call logs against deals they don't own, causing HTTP 403 on save.
+  // Public so CL23 (which uses the manual form-fill path) can pre-create a deal
+  // and pass its name as selectedEntityName to fillCreateForm.
+  async ensureOwnedDealExists(): Promise<string> {
+    logger.info('Creating owned deal for call log entity selection');
+    const dealsPage = new DealsPage(this.page);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    await dealsPage.createDeal(dealData);
+    logger.success(`Created owned deal: ${dealData.name}`);
+    return dealData.name;
+  }
+
   async createCallLog(
     data: CallLogData,
     options: {
@@ -1362,11 +1395,20 @@ export class CallLogsPage extends BasePage {
     } = {}
   ): Promise<{ callLogId: number | null; entityName: string; selectedPhone: string }> {
     logger.info(`Creating call log — entity: ${data.entityType}, outcome: ${data.outcome}`);
-    // WHY: For Lead entity without selectedEntityName, auto-create owned lead
-    // Dropdown may only show SHR/ADM leads causing HTTP 403 on save
+    // WHY: Auto-create an owned entity when no specific entity is requested.
+    // The entity dropdown may show only SHR/ADM-prefixed items from other test runs.
+    // Saving a call log against an entity the user doesn't own → HTTP 403 "necessary permission".
     let resolvedEntityName = options.selectedEntityName;
     if (data.entityType === 'Lead' && !resolvedEntityName) {
       resolvedEntityName = await this.ensureOwnedLeadExists();
+      await this.goToCallLogsList();
+    }
+    if (data.entityType === 'Contact' && !resolvedEntityName) {
+      resolvedEntityName = await this.ensureOwnedContactExists();
+      await this.goToCallLogsList();
+    }
+    if (data.entityType === 'Deal' && !resolvedEntityName) {
+      resolvedEntityName = await this.ensureOwnedDealExists();
       await this.goToCallLogsList();
     }
     await this.openLogACallForm();
