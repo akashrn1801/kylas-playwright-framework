@@ -172,7 +172,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
                     echo "Detected ${testCount} tests (branch: ${env.BRANCH_NAME}) — dynamic timeout set to ${computedTimeoutMinutes} minutes"
                     timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
-                        sh "npx playwright test --project=chromium ${grepFlag} --workers=2 || true"
+                        sh "npx playwright test --project=chromium ${grepFlag} --workers=2"
                     }
                 }
             }

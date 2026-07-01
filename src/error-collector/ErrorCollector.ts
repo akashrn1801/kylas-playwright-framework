@@ -34,7 +34,15 @@ export interface MiscErrorReport {
   errors: MiscError[];
 }
 
-const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', 'misc-errors.json');
+// WHY: Each Playwright worker is a separate OS process running its own
+// ErrorCollector singleton instance. Writing all workers to the same shared
+// misc-errors.json means the last writer silently overwrites every other
+// worker's captured history. Each worker instead writes its own file (keyed
+// by Playwright's TEST_WORKER_INDEX env var), and MiscErrorReporter.onEnd()
+// merges them into the final reports/misc-errors.json once the run completes.
+const REPORTS_DIR = path.resolve(process.cwd(), 'reports');
+const WORKER_ID = process.env.TEST_WORKER_INDEX ?? String(process.pid);
+const OUTPUT_PATH = path.join(REPORTS_DIR, `misc-errors-worker-${WORKER_ID}.json`);
 
 class ErrorCollectorSingleton {
   private errors: MiscError[] = [];
