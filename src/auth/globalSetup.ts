@@ -9,6 +9,19 @@ const STORAGE_STATE_DIR = path.join(__dirname, 'storageStates', config.env);
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   ErrorCollector.attachNodeListeners();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
+
+  // WHY: Remove any stale advisory-lock directories left behind by a crashed
+  // previous run — otherwise AuthManager.withFileLock() would make every
+  // worker wait the full 30s timeout before proceeding with login.
+  for (const role of ['admin', 'restricted'] as const) {
+    const lockPath = path.join(STORAGE_STATE_DIR, `${role}.lock`);
+    try {
+      fs.rmdirSync(lockPath);
+    } catch {
+      /* not present */
+    }
+  }
+
   // WHY: --no-sandbox is required inside Docker/Jenkins containers
   // Without it Chromium cannot create a sandbox process and times out
   const browser = await chromium.launch({
