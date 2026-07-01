@@ -196,7 +196,7 @@ test.describe('Leads RBAC', () => {
     const taskData = generateTaskData();
     await tasksPage.openQuickTaskForm();
     await tasksPage.fillQuickTaskForm(taskData);
-    const taskId = await tasksPage.saveQuickTask();
+    const taskId = await tasksPage.saveQuickTaskFromEntityDetail();
     expect(taskId).not.toBeNull();
     logger.success(`Task created: ${taskId}`);
     // WHY: Click Tasks icon again to refresh task list and verify task appears

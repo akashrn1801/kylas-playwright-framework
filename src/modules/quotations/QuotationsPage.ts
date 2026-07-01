@@ -913,7 +913,9 @@ export class QuotationsPage extends BasePage {
       .innerText()
       .catch(() => '');
     if (!title.includes(data.quotationNumber) && !title.includes(data.summary)) {
-      logger.warn(`Detail page title "${title}" does not contain quotation number or summary`);
+      throw new Error(
+        `Wrong quotation loaded — page title "${title}" does not contain quotation number "${data.quotationNumber}" or summary "${data.summary}". Navigation landed on the wrong quotation.`
+      );
     }
     // Deal chip visible — deal name is random so we just check any chip exists
     const chipCount = await this.page.locator('.related-entity-container').count();
