@@ -40,8 +40,8 @@ jobs:
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "🕐  Estimated duration: ~42 min"
-          npx playwright test --project=chromium --grep "@regression" --workers=2 --timeout=90000
+          echo "🕐  Estimated duration: ~85 min (full suite, matches Jenkinsfile scope)"
+          npx playwright test --project=chromium --workers=2 --timeout=90000
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))

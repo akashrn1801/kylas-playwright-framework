@@ -53,69 +53,94 @@ async function setupRole(
     }
   }
 
-  console.log(`[globalSetup] Logging in as: ${role}`);
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  let capturedUserName = '';
+  // WHY: A single failed page.goto()/login-click here aborts the ENTIRE suite
+  // run with zero retry, unlike authManager.ts's runtime re-login path which
+  // already retries navigation 3x. Mirror that same 3-attempt/backoff pattern
+  // for this one-time, most-consequential login.
+  const maxAttempts = 3;
+  let lastError: unknown;
 
-  // Intercept /v1/users/me response to capture display name
-  page.on('response', async (r) => {
-    if (r.url().includes('/v1/users/me') && r.status() === 200) {
-      const body = await r.json().catch(() => null);
-      const n = body?.name || body?.fullName || body?.firstName || '';
-      if (n) capturedUserName = n;
-    }
-  });
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    console.log(`[globalSetup] Logging in as: ${role} (attempt ${attempt}/${maxAttempts})`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    let capturedUserName = '';
 
-  try {
-    // WHY: Jenkins server is slower than local — 30s default is not enough
-    // for the initial page load on a memory-constrained CI server
-    // WHY: "commit" fires on first byte received — more reliable than
-    // "domcontentloaded" in headless Docker where JS may hang on load
-    await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
-    await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
-    await page.locator('#input_email').fill(credentials.email);
-    await page.locator('#input_password').fill(credentials.password);
-    await page.locator('#loginBtn').click();
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-
-    // WHY: validate we actually landed on the app not redirected back to login
-    const currentUrl = page.url();
-    if (currentUrl.includes('signIn') || currentUrl.includes('login')) {
-      throw new Error(
-        `[globalSetup] Login failed for ${role} — redirected to ${currentUrl}. Check credentials for ENV=${config.env}`
-      );
-    }
+    // Intercept /v1/users/me response to capture display name
+    page.on('response', async (r) => {
+      if (r.url().includes('/v1/users/me') && r.status() === 200) {
+        const body = await r.json().catch(() => null);
+        const n = body?.name || body?.fullName || body?.firstName || '';
+        if (n) capturedUserName = n;
+      }
+    });
 
     try {
-      const dismissBtn = page.locator('#cancel[data-dismiss="modal"]');
-      await dismissBtn.waitFor({ state: 'visible', timeout: 5000 });
-      await dismissBtn.click();
-      await dismissBtn.waitFor({ state: 'hidden', timeout: 5000 });
-      console.log(`[globalSetup] Dismissed popup for: ${role}`);
-    } catch {
-      // No popup — continue
-    }
+      // WHY: Jenkins server is slower than local — 30s default is not enough
+      // for the initial page load on a memory-constrained CI server
+      // WHY: "commit" fires on first byte received — more reliable than
+      // "domcontentloaded" in headless Docker where JS may hang on load
+      await page.goto(config.appUrl, { waitUntil: 'commit', timeout: 60000 });
+      await page.locator('#input_email').waitFor({ state: 'visible', timeout: 60000 });
+      await page.locator('#input_email').fill(credentials.email);
+      await page.locator('#input_password').fill(credentials.password);
+      await page.locator('#loginBtn').click();
+      await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
 
-    await context.storageState({ path: stateFile });
-    console.log(`[globalSetup] State saved for: ${role}`);
+      // WHY: validate we actually landed on the app not redirected back to login
+      const currentUrl = page.url();
+      if (currentUrl.includes('signIn') || currentUrl.includes('login')) {
+        throw new Error(
+          `[globalSetup] Login failed for ${role} — redirected to ${currentUrl}. Check credentials for ENV=${config.env}`
+        );
+      }
 
-    // Save captured display name to userNames.json
-    await page.waitForTimeout(2000);
-    if (capturedUserName) {
-      const namesFile = path.join(STORAGE_STATE_DIR, 'userNames.json');
-      const existing = fs.existsSync(namesFile)
-        ? JSON.parse(fs.readFileSync(namesFile, 'utf8'))
-        : {};
-      existing[role] = capturedUserName.trim();
-      fs.writeFileSync(namesFile, JSON.stringify(existing, null, 2));
-      console.log(`[globalSetup] Display name saved for ${role}: ${capturedUserName.trim()}`);
-    } else {
-      console.warn(`[globalSetup] Could not capture display name for ${role}`);
+      try {
+        const dismissBtn = page.locator('#cancel[data-dismiss="modal"]');
+        await dismissBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await dismissBtn.click();
+        await dismissBtn.waitFor({ state: 'hidden', timeout: 5000 });
+        console.log(`[globalSetup] Dismissed popup for: ${role}`);
+      } catch {
+        // No popup — continue
+      }
+
+      await context.storageState({ path: stateFile });
+      console.log(`[globalSetup] State saved for: ${role}`);
+
+      // Save captured display name to userNames.json
+      await page.waitForTimeout(2000);
+      if (capturedUserName) {
+        const namesFile = path.join(STORAGE_STATE_DIR, 'userNames.json');
+        const existing = fs.existsSync(namesFile)
+          ? JSON.parse(fs.readFileSync(namesFile, 'utf8'))
+          : {};
+        existing[role] = capturedUserName.trim();
+        fs.writeFileSync(namesFile, JSON.stringify(existing, null, 2));
+        console.log(`[globalSetup] Display name saved for ${role}: ${capturedUserName.trim()}`);
+      } else {
+        console.warn(`[globalSetup] Could not capture display name for ${role}`);
+      }
+
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[globalSetup] Login attempt ${attempt}/${maxAttempts} failed for ${role}: ${String(error)}`
+      );
+      if (attempt < maxAttempts) {
+        console.log('[globalSetup] Retrying in 5 seconds...');
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    } finally {
+      await context.close();
     }
-  } finally {
-    await context.close();
   }
+
+  throw new Error(
+    `GlobalSetup failed after 3 attempts — environment may be unreachable. ` +
+      `Role: ${role}, ENV: ${config.env}. Last error: ${String(lastError)}`
+  );
 }
 
 export default globalSetup;

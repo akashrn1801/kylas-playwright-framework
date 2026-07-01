@@ -207,7 +207,7 @@ export class ContactsPage extends BasePage {
     }
   }
 
-  private async waitForContactDetailsPage(): Promise<void> {
+  async waitForContactDetailsPage(): Promise<void> {
     await this.page.waitForURL(/sales\/contacts\/details\//, { timeout: 20000 });
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for contact GET API response — ensures React has contactId in state
@@ -216,6 +216,12 @@ export class ContactsPage extends BasePage {
       (res) => res.url().match(/\/v1\/contacts\/\d+$/) !== null && res.request().method() === 'GET',
       { timeout: 15000 }
     ).catch(() => null);
+  }
+
+  async goToContactDetailsById(id: string | number): Promise<void> {
+    logger.info(`Navigating to contact details: ${id}`);
+    await this.navigateTo(`${config.appUrl}/sales/contacts/details/${id}`);
+    await this.waitForContactDetailsPage();
   }
 
   private async waitForContactListPage(): Promise<void> {

@@ -54,9 +54,9 @@ export default defineConfig({
   use: {
     baseURL: config.appUrl,
     navigationTimeout: isCI ? 90000 : config.timeouts.navigation,
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'on-first-retry',
+    video: 'retain-on-failure',
     headless: isCI ? true : config.browser.headless,
     viewport: { width: 1920, height: 1080 },
     launchOptions: {
