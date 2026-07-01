@@ -280,13 +280,17 @@ test.describe('Companies', () => {
     const contactData = generateContactData();
     const contactId = await companiesPage.addContactFromDirectButton(contactData);
     expect(contactId).not.toBeNull();
-    // WHY: Verify contact card shows the newly added contact.
-    // The Contacts card Name column renders lastName only — assert on lastName not firstName.
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
+    // WHY: Wait for card to show the new contact row before asserting content
+    // Using row-count baseline approach per CLAUDE.md baseline-count pattern
     const contactsCard = adminPage.locator('.card').filter({ hasText: 'Contacts' }).first();
     await contactsCard.scrollIntoViewIfNeeded();
+    // WHY: Wait for contact count to show (1) indicating the new contact rendered
+    await expect(contactsCard).toContainText('Contacts (1)', { timeout: 15000 });
+    // WHY: Assert both firstName AND lastName — the card renders full name
+    await expect(contactsCard).toContainText(contactData.firstName, { timeout: 10000 });
     await expect(contactsCard).toContainText(contactData.lastName, { timeout: 10000 });
-    logger.success(`CO13 passed — contact added: ID=${contactId}, name=${contactData.lastName}`);
+    logger.success(`CO13 passed — contact added: ID=${contactId}, name=${contactData.firstName} ${contactData.lastName}`);
   });
 
   // ── CO14 ──────────────────────────────────────────────────

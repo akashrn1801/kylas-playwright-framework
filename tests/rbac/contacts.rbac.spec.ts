@@ -89,12 +89,7 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     // WHY: Share with Read only — no extra permissions
     await adminContactsPage.shareContact(restrictedUserName, []);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.openEllipsisMenu();
     // WHY: Read only — restricted should NOT see Delete, Share, Reassign
     await restrictedContactsPage.assertEllipsisOptionNotVisible('Delete');
@@ -124,14 +119,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['update']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    // WHY: Wait for page title to confirm contact data fully loaded
-    await restrictedPage.locator('.page-title').waitFor({ state: 'visible', timeout: 10000 }).catch(() => null);
-    await restrictedPage.waitForTimeout(1000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Update permission — edit button (#edit-action) should be visible
     // NOTE: Contacts uses #edit-action (no -btn suffix) unlike Leads (#edit-action-btn)
     await expect(restrictedPage.locator('#edit-action')).toBeVisible({ timeout: 10000 });
@@ -142,12 +130,7 @@ test.describe('Contacts RBAC', () => {
     await restrictedContactsPage.saveEditedContact();
     await restrictedContactsPage.assertContactExistsInList(updatedData.firstName);
     // WHY: Navigate back to verify ellipsis shows only Clone — not Delete/Reassign
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.openEllipsisMenu();
     await restrictedContactsPage.assertEllipsisOptionNotVisible('Delete');
     await restrictedContactsPage.assertEllipsisOptionNotVisible('Reassign');
@@ -170,12 +153,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['note']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Notes');
     await restrictedContactsPage.clickRightPanelIcon('Notes');
     // WHY: Click textarea first to activate CKEditor
@@ -210,12 +188,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['task']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Tasks');
     await restrictedContactsPage.clickRightPanelIcon('Tasks');
     // WHY: Use TasksPage to create quick task from contact detail panel
@@ -251,12 +224,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['meeting']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Meetings');
     await restrictedContactsPage.clickRightPanelIcon('Meetings');
     // WHY: On contact detail, Meetings panel shows #addMeeting button
@@ -273,12 +241,7 @@ test.describe('Contacts RBAC', () => {
       logger.warn('Meeting ID not captured — meeting still created successfully');
     }
     // WHY: Navigate back to contact detail and verify meeting appears in Meetings section
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.clickRightPanelIcon('Meetings');
     await restrictedPage.waitForTimeout(1000);
     const meetingEntry = restrictedPage.locator('.meeting__title').filter({ hasText: meetingTitle });
@@ -303,12 +266,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['call']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
     // WHY: Reload page to ensure Log a call button is fully loaded
@@ -340,12 +298,7 @@ test.describe('Contacts RBAC', () => {
     expect(callLogId).not.toBeNull();
     logger.success(`Call log created: ${callLogId}`);
     // WHY: Navigate back to contact detail and verify call log appears in Call Logs section
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
     await restrictedPage.waitForTimeout(1000);
     const callLogEntry = restrictedPage.locator('.call-log-info').first();
@@ -373,12 +326,7 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     // WHY: Share with Read only — no extra permissions
     await adminContactsPage.shareContact(restrictedUserName, []);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Read only — NO productivity icons should be visible
     await restrictedContactsPage.assertRightPanelIconNotVisible('Notes');
     await restrictedContactsPage.assertRightPanelIconNotVisible('Tasks');
@@ -404,12 +352,7 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     // WHY: Share with all 5 permissions at once
     await adminContactsPage.shareContact(restrictedUserName, ['note', 'task', 'meeting', 'call']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Verify all 5 icons visible
     await restrictedContactsPage.assertRightPanelIconVisible('Notes');
     await restrictedContactsPage.assertRightPanelIconVisible('Tasks');
@@ -454,12 +397,7 @@ test.describe('Contacts RBAC', () => {
       logger.warn('Meeting ID not captured — meeting still created successfully');
     }
     // WHY: Navigate back to contact detail page after meeting creation
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
 
     // WHY: Verify Call — click Call Logs icon, log call
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
@@ -508,12 +446,7 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.reassignContact(restrictedUserName);
     // WHY: Restricted user now owns the contact — can edit and delete
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Verify edit button visible — restricted user is now owner
     // NOTE: Contacts uses #edit-action (no -btn suffix)
     await expect(restrictedPage.locator('#edit-action')).toBeVisible({ timeout: 10000 });
@@ -525,12 +458,7 @@ test.describe('Contacts RBAC', () => {
     await restrictedContactsPage.assertContactExistsInList(updatedData.firstName);
     logger.success('Restricted user edited reassigned contact successfully');
     // WHY: Navigate back to contact detail to verify delete option
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.deleteContact();
     await restrictedContactsPage.assertContactDeletedById(contactId!);
     logger.success('Restricted user deleted reassigned contact successfully');
@@ -581,6 +509,7 @@ test.describe('Contacts RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminContactsPage = new ContactsPage(adminPage);
+    const restrictedContactsPage = new ContactsPage(restrictedPage);
     const contactData = generateSharedContactData();
     await adminContactsPage.goToContactsList();
     const contactId = await adminContactsPage.createContact(contactData);
@@ -588,12 +517,7 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['note']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Click Notes icon to open notes panel
     await restrictedPage
       .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')

@@ -251,4 +251,15 @@ test.describe('Deals', () => {
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');
   });
+
+  // ──────────────────────────────────────────────────────────
+  // Production-safe navigation check
+  // ──────────────────────────────────────────────────────────
+
+  test('@prodSafe admin should navigate to deals list page', async ({ adminPage }) => {
+    const dealsPage = new DealsPage(adminPage);
+    await dealsPage.goToDealsList();
+    await dealsPage.assertOnDealsListPage();
+    logger.success('D-prodSafe passed');
+  });
 });
