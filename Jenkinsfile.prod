@@ -65,18 +65,20 @@ pipeline {
           // Calibrated from real CI data (workers=2): ~20 sec/test average,
           // including network calls, setup, and assertions. Plus a 20-minute
           // buffer for checkout/npm install/browser install/report generation.
+          // WHY: Count only @prodSafe tests — prod runs a read-only subset, not the full suite
           def testCount = sh(
-            script: "grep -rh \"^\\s*test(\" tests/ | wc -l",
+            script: "grep -rh \"@prodSafe\" tests/ | wc -l",
             returnStdout: true
           ).trim().toInteger()
           def secondsPerTest = 20
           def bufferMinutes = 20
           def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
-          echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+          echo "Detected ${testCount} @prodSafe tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
           timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
             sh '''
               ENV=prod npx playwright test \
                 --project=chromium \
+                --grep @prodSafe \
                 --workers=2 \
                 --reporter=line,allure-playwright
             '''
