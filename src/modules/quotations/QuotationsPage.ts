@@ -537,8 +537,21 @@ export class QuotationsPage extends BasePage {
   }
 
   async goToQuotationDetail(id: string): Promise<void> {
+    // WHY: Register response listener BEFORE navigating — on fast API responses the
+    // GET /v1/quotations/{id} may complete before waitForQuotationDetailPage registers
+    // its own listener, causing it to miss the response and return null after 15s.
+    // Registering here guarantees we capture the response regardless of timing.
+    const responsePromise = this.page.waitForResponse(
+      (res) => res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
+      { timeout: 20000 }
+    ).catch(() => null);
     await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
-    await this.waitForQuotationDetailPage();
+    await this.page.waitForURL(/\/quotations\/details\//, { timeout: 20000 });
+    await this.page.waitForLoadState('domcontentloaded');
+    const response = await responsePromise;
+    if (response?.status() === 404) {
+      throw new Error('Quotation detail page returned 404 — quotation does not exist');
+    }
     logger.info(`Navigated to quotation detail: ${id}`);
   }
 
