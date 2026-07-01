@@ -938,6 +938,15 @@ export class MeetingsPage extends BasePage {
     }
     if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
     await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
+    // WHY: Re-verify title after fillMeetingForm — fillRelatedTo iterates 4 entity
+    // types and triggers React re-renders that can reset the title controlled input.
+    const titleAfterFill = await this.titleInput().inputValue().catch(() => '');
+    if (!titleAfterFill || titleAfterFill.trim() === '') {
+      logger.warn('Title cleared during form fill — refilling before save');
+      await this.titleInput().click();
+      await this.titleInput().fill(data.title);
+      await this.page.waitForTimeout(300);
+    }
     const meetingId = await this.saveMeeting();
     logger.success(`Meeting "${data.title}" created`);
     return meetingId;

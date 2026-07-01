@@ -106,10 +106,14 @@ test.describe('Call Logs — RBAC', () => {
       test.setTimeout(480000);
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Deal', outcome: 'Rejected' });
+      // WHY: Pre-create an owned deal before opening the call log form.
+      // fillCreateForm picks randomly from the deal dropdown; SHR/ADM deals are filtered
+      // but if no owned deals exist the fallback selects admin-owned ones → HTTP 403.
+      const ownedDealName = await callLogsPage.ensureOwnedDealExists();
       await callLogsPage.goToCallLogsList();
       await callLogsPage.openLogACallForm();
       await callLogsPage.fillEntityType('Deal');
-      await callLogsPage.fillCreateForm(data);
+      await callLogsPage.fillCreateForm(data, ownedDealName);
       await callLogsPage.assertPhoneFieldDisabled();
       await callLogsPage.assertDurationDisabled();
       const callLogId = await callLogsPage.saveCallLog();
@@ -351,9 +355,12 @@ test.describe('Call Logs — RBAC', () => {
         : `${config.appUrl}${adminEntityUrl}`;
       await restrictedPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded' });
       await restrictedPage.waitForTimeout(1000);
-      const callLogsBtn = restrictedPage.locator("button[data-original-title='Call Logs'] svg");
+      // WHY: Target the button, not the SVG inside it — the SVG is replaced during
+      // React re-renders causing "element was detached from the DOM" on click.
+      const callLogsBtn = restrictedPage.locator("button[data-original-title='Call Logs']");
       const btnVisible = await callLogsBtn.isVisible().catch(() => false);
       if (btnVisible) {
+        await callLogsBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
         await callLogsBtn.click();
         await restrictedPage.waitForTimeout(1000);
         const adminCallLogVisible = await restrictedPage
