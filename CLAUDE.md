@@ -153,7 +153,7 @@ Create feature branches from `dev`. Test on sandbox (`sandbox.yml` auto-detects 
 - GitHub Actions: `dev.yml`, `qa.yml`, `stage.yml`, `prod.yml`, `main.yml`
 - Jenkins: `Jenkinsfile` (multi-branch), `Jenkinsfile.qa`, `Jenkinsfile.staging`, `Jenkinsfile.prod`
 - `sandbox.yml`: selective test detection based on changed files (uses `scripts/reset-sandbox.sh`)
-- Workers forced to 1 in CI (`playwright.config.ts`); retries default to 1
+- Worker count in CI is controlled by the `WORKERS` env var (set per-Jenkinsfile), defaulting to 2 if unset (`playwright.config.ts`); retries default to 1
 
 ## Known Issues
 - Annual Revenue field in `CompaniesPage` — commented out (prod bug)
@@ -170,6 +170,72 @@ Create feature branches from `dev`. Test on sandbox (`sandbox.yml` auto-detects 
 - ✅ Tasks
 - ✅ Quotations
 - ✅ Call Logs (43 tests: 21 UI + 22 RBAC)
+
+---
+
+## AUDIT FINDINGS SUMMARY
+_Full audit performed 2026-07-01 across all modules, core framework, and CI/CD. This is a compact reference — read this before touching any page object, fixture, or CI file to avoid re-introducing known root causes of flakiness._
+
+### Top 10 rules that PREVENT the issues found
+1. Every detail-page navigation must wait for the entity's GET API response (`waitForResponse(/\/v1\/<module>\/\d+$/)`), not just URL + `domcontentloaded`. Several modules skip this — it's the #1 flakiness source.
+2. Every share/reassign/delete/save must capture a `waitForResponse` promise **before** clicking, and await it — never end a mutation with only `waitForTimeout`.
+3. All search/find/retry logic must read from `config.searchRetry`/`config.meetingRetry` via the page object's `retryConfig` getter — never hardcode loop counts or sleep values.
+4. Scope locators to their container (modal/card/row) and use `.first()` or `exact: true` on any text filter — never bare `getByText('Add'|'Save'|'Edit')` at page level.
+5. Never use DOM-position (`nth(n)`) or CSS-in-JS hash classes (`.css-xxxxx`) as locators — prefer stable `id`/`name`/`data-*`/role+accessible-name.
+6. Cross-role (admin+restricted) tests must assume propagation lag — poll/retry on 403, never a single fixed sleep "to prevent permission errors."
+7. Negative/RBAC assertions must distinguish "correctly absent" from "failed to load" — never `if (visible) {assert} else {logger.success('...correct RBAC')}`.
+8. Count-based assertions (notes, list rows) must capture a baseline **before** the mutating action and assert `baseline + N` — never assert an absolute count.
+9. Give every `expect()`/thrown assertion a message with the entity id/name — bare `expect(x).toBeTruthy()` gives zero triage signal on a rotating-flake investigation.
+10. Assume QA/staging data grows unboundedly (no module cleans up) — search/list operations get slower over the life of the environment; budget retries accordingly.
+
+### Anti-patterns to NEVER do (each one is a confirmed root cause in this codebase)
+- Raw `page.goto()` + `waitForURL()` + `waitForTimeout()` in a **test file**, bypassing the page object's own `waitForXDetailsPage()` — the single most repeated anti-pattern (15-18+ sites per RBAC file).
+- Marking `waitForXDetailsPage()`/equivalent `private` — RBAC tests will reinvent a weaker inline version instead of importing the real one (happened in Contacts, Leads).
+- `Promise.race([waitForResponse, elementVisible])` for list/detail readiness — a stale-but-visible container can win the race and satisfy the wait on old data.
+- `.locator(...).filter({ hasText: X }).first().click()` to open a row when `X` may not literally be the row's rendered text (e.g. custom prefix vs. system-generated number) — verify identity **after** navigating, don't trust the click landed right.
+- `click({ force: true })` to bypass actionability checks — masks a real overlay/blocking-element bug instead of surfacing it.
+- Catch-and-log-success on any exception ("...expected behaviour") — converts a real failure into a silent pass.
+- Trusting `playwright.config.ts`'s `workers: isCI ? 2 : ...` to mean "1 worker in CI" — it does not; verify actual config before reasoning about parallel safety.
+- Trusting a `private static` in-memory cache (e.g. `AuthManager`) to synchronize across CI workers — each Playwright worker is a separate OS process; only file locks/atomic writes work cross-process.
+- Writing directly to a shared file (`storageStates/<env>/<role>.json`, `misc-errors.json`) via plain `fs.writeFileSync` from code that can run in multiple workers — write-temp-then-rename or accept last-writer-wins data loss.
+- Appending `|| true` to a CI test-run command — it reports green regardless of failures; the only signal left is a buried email attachment.
+
+### CI/CD flow (as of audit; verify against live Jenkinsfiles/workflows before relying on this)
+| Branch | Scope | Workers | Runner | Known issue |
+|---|---|---|---|---|
+| sandbox | selective via `detect-tests.sh`, fallback `@smoke` | dynamic | GitHub Actions | Jenkins capture (`\| tail -1`) differs from GHA capture — can select wrong scope |
+| dev | `@smoke` (~18 tests) | 1 | GitHub Actions | — |
+| qa | `@regression` (~222 tests) | 2 | GHA + Jenkins | — |
+| stage | full suite, no grep (~234) | 2 | GHA + Jenkins | `staging.yml` has undocumented auto-`promote-to-prod` job |
+| prod | `@prodSafe` only (~13 tests) | 2 | Jenkins (primary) | Deals module has **zero** `@prodSafe` tests |
+| main | full suite, no grep (Jenkins primary) | 2 | Jenkins primary; `main.yml` (GHA, manual) wrongly filters `@regression` only | Two CI paths for `main` cover different scope |
+
+Also confirmed: `Jenkinsfile` (main/prod), `Jenkinsfile.sandbox`, and `staging.yml` append **`|| true`** — these pipelines go green regardless of test outcome. No scheduled/nightly runs exist anywhere. No cross-environment (QA/staging/prod) data-parity check exists.
+
+### Module-specific known issues
+| Module | Known issue |
+|---|---|
+| **Leads** | `waitForLeadDetailsPage()` has no GET-response wait (used by nearly every flow). `shareLead`/`reassignLead`/`convertLeadToAll` end in flat `waitForTimeout`, not a response wait. `assertOwnerOnDetail` uses unscoped `text=` instead of the already-defined (but unused) `detailOwner` locator. |
+| **Contacts** | `waitForContactDetailsPage()` exists and is correct but is `private` — 18+ RBAC call sites bypass it with raw `goto`+2-3s sleep instead. `shareContact`/`reassignContact` same gap as Leads. |
+| **Companies** | C13's "fix" (assert `lastName` instead of `firstName`) treats the symptom, not the cause — real bug is no wait for the Contacts card to refetch after re-navigation; assert **both** fields + wait for card refresh. CLAUDE.md's "Annual Revenue commented out" is **stale** — the field is active; only the detail-page assertion is skipped (currency formatting). |
+| **Deals** | `pipelineControl()`/`sourceControl()` use `nth(2)`/`nth(3)` on generic `div`+text filters — brittle. `campaignControl()` locator chains through CSS-in-JS hash classes (`.css-2b097c-container`) that regenerate on any frontend rebuild — highest single locator risk in the codebase. `saveEditedDeal`/`addProductRow`/`addPartPayments` have no response-listener and no retry (unlike `saveDeal`, which does both correctly). |
+| **Meetings** | `addButton()` is unscoped (`getByRole('button',{name:'Add'})` page-wide) and the open-form retry loop is hardcoded (3 attempts/15s) instead of using `config.meetingRetry` — root cause of the 600s Add-button timeout. Title field has two reactive re-check patches (after fill, after full form fill) but nothing right before the actual save click — medium/location/description fills after the second guard can still clear it. |
+| **Tasks** | No `waitForTaskDetailsPage()` exists at all — `openTaskInDetailPanel()` only does `waitForTimeout(800)`. `waitForListReady()`'s `Promise.race` lets a stale-but-visible list satisfy the wait. Confirmed live bug: `leads.rbac.spec.ts:199` calls `saveQuickTask()` instead of `saveQuickTaskFromEntityDetail()` from a lead-detail-panel context — exactly the documented footgun. |
+| **Quotations** | `searchAndOpenQuotation()` filters list rows by custom-prefix summary/number, but rows render system-generated numbers (`QUO-00042`) — the filter can match the wrong row with no identity check after click (root cause of the "wrong quotation loaded" bug). `assertDetailPageFields()` only `logger.warn()`s on a title mismatch instead of throwing. T7 depends on a shared, non-isolated deal (`config.deals.adminDealName`) instead of creating its own. |
+| **Call-logs** | No retry-on-403 exists anywhere despite a commit message claiming to add "permission propagation retry" (`grep -r propagat src/` returns zero hits). `searchAndSelectEntity`'s ADM/SHR-prefix filter silently falls back to **unfiltered** options when the filtered pool is empty — likely the real cause of "necessary permission" errors on Associated Deal/Contact sub-fields, not a timing race. `callLogsProductivityButton()` still targets `button[...] svg` (detach-prone on React re-render) even though test CL31c already found and fixed this inline — never backported to the shared locator. `assertOnCallLogsListPage()`/`waitForListReady()` cannot distinguish "empty list" from "slow" from "broken search API" (list-search API 404s on QA per existing code comment). |
+| **Core framework** | `playwright.config.ts:12` hardcodes `workers: isCI ? 2 : ...` — **CLAUDE.md's "workers forced to 1 in CI" claim above is false**; Jenkinsfiles set `WORKERS=1` but it's never read for this. `AuthManager`'s `private static` caches only synchronize within one process, not across the real 2 CI workers — concurrent re-login races the shared `storageStates/<env>/<role>.json` file (non-atomic write). `ErrorCollector` writes `misc-errors.json` via plain `fs.writeFileSync` with no cross-process lock — 2 workers writing concurrently means last-writer-wins, silently dropping one worker's errors. `expect.timeout` is hardcoded to `20000` in CI, ignoring `config.timeouts.expect`. |
+
+### Established wait/locator patterns per module (verify before assuming a module is "safe")
+| Module | `waitForXDetailsPage` has GET-response wait? | Retry-find pattern | Primary locator risk |
+|---|---|---|---|
+| Leads | ❌ No | ✅ `retryFindLead` (searchRetry) | Unscoped `text=` for stage/owner |
+| Contacts | ✅ Yes, but `private` (bypassed) | ✅ `retryFindContact` | Whole-body `toContainText` (weak, not field-scoped) |
+| Companies | ✅ Yes, correct | ✅ `retryFindCompany` | Unscoped Add button; no-`.first()` pipeline text |
+| Deals | ❌ No | ✅ `retryFindDeal` (asymmetric — no retry for the negative/not-in-list case) | `nth(2)`/`nth(3)` + CSS-hash locators (critical) |
+| Meetings | ❌ No GET wait anywhere in module | ✅ `retryFindMeetingInList`, but other loops hardcode instead of using `config.meetingRetry` | Unscoped Add button (root cause), `getByText(...).last()` |
+| Tasks | ❌ No `waitForTaskDetailsPage` exists | ✅ `retryFindTask` (searchRetry) | Mostly fine; some unscoped `.dropdown-menu` selectors |
+| Quotations | ⚠️ Partial — `goToQuotationDetail` correct, `searchAndOpenQuotation` has none | ⚠️ `retryFindInList` exists but is NOT used by `searchAndOpenQuotation` | `filter({hasText})` against mismatched row text (T22 root cause) |
+| Call-logs | ❌ Abandoned (QA search API 404s) — DOM-only wait | ✅ `retryFindCallLog`, but search-only; no retry-on-permission | SVG-targeted button locator (detach-prone) |
 
 ---
 
