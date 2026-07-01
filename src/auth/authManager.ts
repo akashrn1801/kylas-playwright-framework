@@ -205,6 +205,11 @@ export class AuthManager {
   }
 
   async loginAndSaveState(role: UserRole): Promise<void> {
+    // WHY: Fast path for same-process concurrent callers (e.g. adminPage +
+    // restrictedPage fixtures both requesting a login in the same worker) —
+    // this Map does NOT protect against a different worker process doing the
+    // same thing, which is why _doLogin below is also wrapped in a cross-process
+    // file lock (withFileLock).
     const existing = AuthManager.loginInProgress.get(role);
 
     if (existing) {
@@ -214,7 +219,20 @@ export class AuthManager {
       return;
     }
 
-    const loginPromise = this._doLogin(role);
+    const loginPromise = this.withFileLock(role, async () => {
+      // WHY: Re-check under the cross-process lock — another worker may have
+      // completed login (and written a fresh state file) while we were
+      // waiting to acquire the lock, making our own login redundant.
+      const stateFile = this.getStorageStateFile(role);
+      if (fs.existsSync(stateFile) && !process.env.CI) {
+        const stats = fs.statSync(stateFile);
+        if (Date.now() - stats.mtimeMs < 60 * 60 * 1000) {
+          logger.info(`Login skipped — fresh state file found under lock for: ${role}`);
+          return;
+        }
+      }
+      await this._doLogin(role);
+    });
 
     AuthManager.loginInProgress.set(role, loginPromise);
 
@@ -222,6 +240,59 @@ export class AuthManager {
       await loginPromise;
     } finally {
       AuthManager.loginInProgress.delete(role);
+    }
+  }
+
+  private getLockPath(role: UserRole): string {
+    return path.join(this.storageStatePath, `${role}.lock`);
+  }
+
+  // WHY: Cross-process advisory lock. Each Playwright worker is a separate OS
+  // process, so the in-memory loginInProgress Map above cannot serialize
+  // logins across workers — two workers could otherwise both decide a session
+  // is stale and both call _doLogin(role) at the same time, racing on the
+  // same admin.json/restricted.json file. fs.mkdirSync is atomic on POSIX
+  // (it either creates the directory or throws EEXIST), making it the
+  // simplest cross-process mutex available without adding a dependency.
+  private async withFileLock<T>(role: UserRole, fn: () => Promise<T>): Promise<T> {
+    const lockPath = this.getLockPath(role);
+    const maxWait = 30000; // 30s max wait for another process to release the lock
+    const interval = 500;
+    let waited = 0;
+
+    while (true) {
+      try {
+        fs.mkdirSync(lockPath);
+        break; // Lock acquired
+      } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+
+        if (waited >= maxWait) {
+          // WHY: Stale lock from a crashed process — remove and give it one
+          // more full wait cycle before considering it stale again.
+          logger.warn(`Stale lock detected for role: ${role} — removing and retrying`);
+          try {
+            fs.rmdirSync(lockPath);
+          } catch {
+            /* another process already removed it */
+          }
+          waited = 0;
+          continue;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, interval));
+        waited += interval;
+      }
+    }
+
+    try {
+      return await fn();
+    } finally {
+      try {
+        fs.rmdirSync(lockPath);
+      } catch {
+        /* already removed or never created */
+      }
     }
   }
 
@@ -288,9 +359,17 @@ export class AuthManager {
 
       const stateFile = this.getStorageStateFile(role);
 
+      // WHY: Write to a per-process temp file then atomically rename — with
+      // multiple CI workers, writing directly to the shared stateFile risks
+      // another worker reading it mid-write (truncated/corrupt JSON). Rename
+      // is atomic on POSIX filesystems since both paths share the same directory.
+      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
+
       await context.storageState({
-        path: stateFile,
+        path: tmpStateFile,
       });
+
+      fs.renameSync(tmpStateFile, stateFile);
 
       logger.info(`Storage state saved: ${stateFile}`);
     } catch (error) {
@@ -364,10 +443,17 @@ export class AuthManager {
   async clearStorageState(role: UserRole): Promise<void> {
     const stateFile = this.getStorageStateFile(role);
 
-    if (fs.existsSync(stateFile)) {
+    // WHY: unlink directly instead of existsSync-then-unlink — eliminates the
+    // TOCTOU race where another worker deletes the file between the check and
+    // the unlink. ENOENT means another worker already deleted it, which is fine.
+    try {
       fs.unlinkSync(stateFile);
-
       logger.info(`Storage state cleared for role: ${role}`);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+      logger.debug(`Storage state already cleared for role: ${role}`);
     }
   }
 
