@@ -107,7 +107,7 @@ REPORT_PATH=reports/playwright-report/results.json
           echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
           sh """
             npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET} \
-              --reporter=line,allure-playwright || true
+              --reporter=line,allure-playwright
           """
         }
       }

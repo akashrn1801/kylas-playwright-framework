@@ -8,8 +8,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: isCI,
   retries: config.execution.retryCount,
-  // WHY: 2 workers on CI — halves run time while maintaining stability
-  workers: isCI ? 2 : config.execution.workers,
+  // WHY: WORKERS env var (set explicitly in Jenkinsfiles) now actually controls
+  // worker count — previously this was hardcoded to 2 in CI regardless of WORKERS,
+  // making the Jenkinsfiles' WORKERS setting dead configuration. Falls back to 2
+  // in CI / config.execution.workers locally when WORKERS is not set.
+  workers: process.env.WORKERS ? Number(process.env.WORKERS) : isCI ? 2 : config.execution.workers,
   timeout: isCI ? 120000 : 480000,
 
   expect: {
