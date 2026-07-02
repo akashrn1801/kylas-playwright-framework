@@ -239,12 +239,27 @@ export class LeadsPage extends BasePage {
     }
   }
 
-  private async waitForLeadDetailsPage(): Promise<void> {
+  async waitForLeadDetailsPage(): Promise<void> {
     await this.page.waitForURL(/sales\/leads\/details\//, {
       timeout: 20000,
     });
 
     await this.page.waitForLoadState('domcontentloaded');
+
+    // WHY: Wait for lead GET API response — ensures React has leadId in state
+    // Without this, share/edit fires before app resolves leadId → /leads/undefined/share
+    await this.page
+      .waitForResponse(
+        (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'GET',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+  }
+
+  async goToLeadDetailsById(id: string | number): Promise<void> {
+    logger.info(`Navigating to lead details: ${id}`);
+    await this.navigateTo(`${config.appUrl}/sales/leads/details/${id}`);
+    await this.waitForLeadDetailsPage();
   }
 
   private async waitForLeadListPage(): Promise<void> {
@@ -1021,8 +1036,18 @@ export class LeadsPage extends BasePage {
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the share-API response wait BEFORE clicking — confirms the
+    // server actually processed the permission change instead of a blind sleep.
+    const shareResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/leads\/\d+\/share$/) !== null && res.request().method() === 'POST',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await this.shareConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    await shareResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Lead shared with: ${restrictedUserName}`);
   }
 
@@ -1047,8 +1072,18 @@ export class LeadsPage extends BasePage {
     await userItem.click();
     await this.page.waitForTimeout(500);
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the reassign-API (owner change) response wait BEFORE
+    // clicking — confirms ownership actually changed server-side.
+    const reassignResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/leads\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await this.reassignConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    await reassignResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Lead reassigned to: ${userDisplayName}`);
   }
 
