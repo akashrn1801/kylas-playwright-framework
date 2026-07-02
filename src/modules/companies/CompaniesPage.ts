@@ -232,7 +232,7 @@ export class CompaniesPage extends BasePage {
     }
   }
 
-  private async waitForCompanyDetailsPage(): Promise<void> {
+  async waitForCompanyDetailsPage(): Promise<void> {
     await this.page.waitForURL(/sales\/companies\/details\//, { timeout: 20000 });
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for company GET API response — ensures React has companyId in state
@@ -242,6 +242,12 @@ export class CompaniesPage extends BasePage {
       (res) => res.url().match(/\/v1\/companies\/\d+$/) !== null && res.request().method() === 'GET',
       { timeout: 15000 }
     ).catch(() => null);
+  }
+
+  async goToCompanyDetailsById(id: string | number): Promise<void> {
+    logger.info(`Navigating to company details: ${id}`);
+    await this.navigateTo(`${config.appUrl}/sales/companies/details/${id}`);
+    await this.waitForCompanyDetailsPage();
   }
 
   private async waitForCompanyListPage(): Promise<void> {
@@ -730,8 +736,18 @@ export class CompaniesPage extends BasePage {
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the share-API response wait BEFORE clicking — confirms the
+    // server actually processed the permission change instead of a blind sleep.
+    const shareResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await this.shareConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    await shareResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Company shared with: ${restrictedUserName}`);
   }
 
@@ -754,8 +770,18 @@ export class CompaniesPage extends BasePage {
     await this.page.waitForTimeout(500);
     const reassignConfirmButton = this.page.locator('.modal.show button.btn-primary.ml-auto').first();
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the reassign-API (owner change) response wait BEFORE
+    // clicking — confirms ownership actually changed server-side.
+    const reassignResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await reassignConfirmButton.click();
-    await this.page.waitForTimeout(1000);
+    await reassignResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Company reassigned to: ${userName}`);
   }
 

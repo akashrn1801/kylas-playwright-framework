@@ -21,7 +21,22 @@ export class MeetingsPage extends BasePage {
   // Locators — List page
   // ──────────────────────────────────────────────────────────
 
-  private readonly addButton = () => this.page.getByRole('button', { name: 'Add' }).first();
+  // WHY: This locator must match Add in TWO distinct DOM contexts, confirmed via
+  // live DOM inspection: (1) the standalone meetings list page, where Add is a
+  // button with accessible name "Add" inside div.page-header-action; (2) the
+  // embedded Meetings panel on another entity's detail page (e.g. a lead's
+  // right panel), where it's a stable #addMeeting button with a completely
+  // different ancestor chain. IMPORTANT: div.page-header-action ALSO exists on
+  // entity detail pages (e.g. lead's Email/Edit/dropdown-toggle buttons) — a
+  // bare CSS class match (button.btn.btn-primary) incorrectly matches those too,
+  // so the list-page branch must filter by accessible name "Add", not just class.
+  // Previously page-wide getByRole('Add'), disambiguated only by .first().
+  private readonly addButton = () =>
+    this.page
+      .locator('div.page-header-action')
+      .getByRole('button', { name: 'Add', exact: true })
+      .or(this.page.locator('#addMeeting'))
+      .first();
   private readonly meetingsList = () => this.page.locator('ul.list-group.list-group-flush');
   private readonly meetingTitleInList = (title: string) =>
     this.page.locator('h2.meeting__title.text-truncate', { hasText: title });
@@ -494,20 +509,31 @@ export class MeetingsPage extends BasePage {
     // to open the form without filling all fields (GPS test, RBAC entity test)
     // WHY: MeetingCreate JS crash on QA — reload page before retry to clear crashed state
     await this.click(this.addButton(), 'Add button');
+    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
+    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
+    const { retries, wait } = this.retryConfig;
     let formOpened = false;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < retries; i++) {
       try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: 15000 });
+        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
         formOpened = true;
         break;
       } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1} — reloading page and retrying`);
-        await this.reloadPage();
-        await this.waitForListReady();
+        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
+        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
+        // makes sense on the standalone meetings list page — reloading an
+        // embedded panel (e.g. a lead's detail page) would close the panel
+        // and lose all context, since this method doesn't know how to reopen it.
+        if (/\/sales\/meetings\/list/.test(this.page.url())) {
+          await this.reloadPage();
+          await this.waitForListReady();
+        } else {
+          await this.page.waitForTimeout(1000);
+        }
         await this.click(this.addButton(), 'Add button retry');
       }
     }
-    if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
+    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
     logger.success('Meeting add form opened');
   }
 
@@ -535,6 +561,12 @@ export class MeetingsPage extends BasePage {
     await this.fillDate(3);
     await this.fillTimePicker(data.timeConfig, 'from');
     await this.fillTimePicker(data.timeConfig, 'to');
+
+    // WHY: Safety guard — if time config crosses midnight despite the factory cap
+    // (e.g. factory used with manual overrides), log a warning for diagnostics
+    if (data.timeConfig.crossesMidnight) {
+      logger.warn('Meeting timeConfig crosses midnight — to time is on the next day. This may cause API validation errors if the form only has one date picker.');
+    }
 
     // Timezone already defaults to GMT+05:30 — no action needed
     logger.info('Timezone left as default GMT+05:30');
@@ -922,27 +954,42 @@ export class MeetingsPage extends BasePage {
   ): Promise<number | null> {
     logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
     await this.click(this.addButton(), 'Add button');
-    // WHY: On GHA the form sometimes does not open on first click — retry up to 3 times
+    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
+    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
+    const { retries, wait } = this.retryConfig;
     let formOpened = false;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < retries; i++) {
       try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: 15000 });
+        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
         formOpened = true;
         break;
       } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1} — reloading page and retrying`);
-        await this.reloadPage();
-        await this.waitForListReady();
+        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
+        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
+        // makes sense on the standalone meetings list page — reloading an
+        // embedded panel (e.g. a lead's detail page) would close the panel
+        // and lose all context, since this method doesn't know how to reopen it.
+        if (/\/sales\/meetings\/list/.test(this.page.url())) {
+          await this.reloadPage();
+          await this.waitForListReady();
+        } else {
+          await this.page.waitForTimeout(1000);
+        }
         await this.click(this.addButton(), 'Add button retry');
       }
     }
-    if (!formOpened) throw new Error('Meeting form did not open after 3 attempts');
+    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
     await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
-    // WHY: Re-verify title after fillMeetingForm — fillRelatedTo iterates 4 entity
-    // types and triggers React re-renders that can reset the title controlled input.
-    const titleAfterFill = await this.titleInput().inputValue().catch(() => '');
-    if (!titleAfterFill || titleAfterFill.trim() === '') {
-      logger.warn('Title cleared during form fill — refilling before save');
+    // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
+    // description can all trigger React re-renders that reset the title controlled
+    // input, not just to empty but potentially to a stale/default value. Checking
+    // for an exact match (not just non-empty) catches both failure modes, and this
+    // check is the last thing that runs before saveMeeting() is called below.
+    const titleBeforeSave = await this.titleInput().inputValue().catch(() => '');
+    if (titleBeforeSave.trim() !== data.title.trim()) {
+      logger.warn(
+        `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
+      );
       await this.titleInput().click();
       await this.titleInput().fill(data.title);
       await this.page.waitForTimeout(300);
