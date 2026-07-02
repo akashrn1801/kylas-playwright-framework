@@ -748,8 +748,24 @@ export class QuotationsPage extends BasePage {
     await this.goToQuotationsList();
     await this.performSearch(quotationNumber);
     await this.page.locator('.rt-tr-group').filter({ hasText: quotationNumber }).first().click();
-    await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
-    await this.page.waitForLoadState('domcontentloaded');
+    // WHY: Use the canonical wait (URL + domcontentloaded + GET-response) instead
+    // of a bare URL wait — confirms the entity data actually loaded.
+    await this.waitForQuotationDetailPage();
+    // WHY: The row click above can land on the WRONG quotation — list rows are
+    // matched by fulltext search, not necessarily the literal row text, so
+    // `.filter({ hasText })` can silently resolve to the wrong row. Verify the
+    // page we actually landed on matches what was searched for before returning.
+    const title = await this.detailPageTitle()
+      .innerText()
+      .catch(() => '');
+    // WHY: Case-insensitive — the detail page title renders the summary in
+    // Title Case while faker-generated summaries are lowercase; a case-sensitive
+    // compare would false-positive-fail on a perfectly correct navigation.
+    if (!title.toLowerCase().includes(quotationNumber.toLowerCase())) {
+      throw new Error(
+        `Wrong quotation loaded — expected "${quotationNumber}" but detail page title was "${title}". Navigation landed on the wrong quotation.`
+      );
+    }
     logger.info(`Opened quotation: ${quotationNumber}`);
   }
 
