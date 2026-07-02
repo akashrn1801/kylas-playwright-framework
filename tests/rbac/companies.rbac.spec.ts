@@ -137,12 +137,7 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['update']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: Update permission — edit button (#edit-action-btn) should be visible
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     // WHY: Restricted user edits the company to verify update permission works
@@ -152,12 +147,7 @@ test.describe('Companies RBAC', () => {
     await restrictedCompaniesPage.saveEditedCompany();
     await restrictedCompaniesPage.assertCompanyExistsInList(updatedData.name);
     // WHY: Navigate back and confirm Delete/Reassign still NOT visible
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.openEllipsisMenu();
     await restrictedCompaniesPage.assertEllipsisOptionNotVisible('Delete');
     await restrictedCompaniesPage.assertEllipsisOptionNotVisible('Reassign');
@@ -180,12 +170,7 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['note']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.assertRightPanelIconVisible('Notes');
     await restrictedCompaniesPage.clickRightPanelIcon('Notes');
     await restrictedPage.locator('textarea.notes-textarea').click();
@@ -216,12 +201,7 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['task']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.assertRightPanelIconVisible('Tasks');
     await restrictedCompaniesPage.clickRightPanelIcon('Tasks');
     // WHY: Use TasksPage to create quick task from company detail panel
@@ -256,12 +236,7 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['meeting']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.assertRightPanelIconVisible('Meetings');
     await restrictedCompaniesPage.clickRightPanelIcon('Meetings');
     // WHY: #addMeeting button opens the meeting creation form from entity detail panel
@@ -277,12 +252,7 @@ test.describe('Companies RBAC', () => {
       logger.warn('Meeting ID not captured — meeting still created successfully');
     }
     // WHY: Navigate back to company detail and verify meeting appears in Meetings section
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.clickRightPanelIcon('Meetings');
     await restrictedPage.waitForTimeout(1000);
     const meetingEntry = restrictedPage.locator('.meeting__title').filter({ hasText: meetingTitle });
@@ -306,12 +276,7 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['quotation']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.assertRightPanelIconVisible('Quotations');
     // WHY: Quotation auto-associates with the company's deal when created from the
     // productivity panel. Company has no deal yet, so restricted user adds their own
@@ -361,12 +326,7 @@ test.describe('Companies RBAC', () => {
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     // WHY: Share with NO extra permissions = read-only access
     await adminCompaniesPage.shareCompany(restrictedUserName, []);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: Read only — no edit button visible
     await expect(restrictedPage.locator('#edit-action-btn')).toBeHidden({ timeout: 10000 });
     // WHY: Read only — restricted should NOT see Delete, Share, Reassign in ellipsis
@@ -399,12 +359,7 @@ test.describe('Companies RBAC', () => {
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     // WHY: Share all productivity + update permissions at once
     await adminCompaniesPage.shareCompany(restrictedUserName, ['update', 'note', 'task', 'meeting', 'quotation']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: Verify Update permission — edit button visible and edit works
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     await restrictedCompaniesPage.clickEditIcon();
@@ -467,12 +422,7 @@ test.describe('Companies RBAC', () => {
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     // WHY: No permissions = read-only — no productivity icons should appear
     await adminCompaniesPage.shareCompany(restrictedUserName, []);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: All productivity icons hidden — no permissions granted
     await restrictedCompaniesPage.assertRightPanelIconNotVisible('Notes');
     await restrictedCompaniesPage.assertRightPanelIconNotVisible('Tasks');
@@ -501,12 +451,7 @@ test.describe('Companies RBAC', () => {
     // NOTE: Unlike contacts (CR14), companies with reassigned ownership show only Share/Clone
     // in the ellipsis menu for restricted users — Delete is NOT available for reassigned companies.
     // Restricted user CAN edit (via #edit-action-btn) but not delete via ellipsis for reassigned companies.
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: Verify edit button visible — restricted user is now owner
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     // WHY: Verify restricted user can edit the company
@@ -551,12 +496,9 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const restrictedUserName = await adminCompaniesPage.getLoggedInUserName('restricted');
     await adminCompaniesPage.shareCompany(restrictedUserName, ['note']);
-    await restrictedPage.goto(
-      `${config.appUrl}/sales/companies/details/${companyId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await restrictedPage.waitForURL(/companies\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(3000);
+    // WHY: COR17 has no restrictedCompaniesPage instance — create one for navigation
+    const restrictedCompaniesPage = new CompaniesPage(restrictedPage);
+    await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     // WHY: Click Notes icon to open notes panel
     await restrictedPage
       .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')

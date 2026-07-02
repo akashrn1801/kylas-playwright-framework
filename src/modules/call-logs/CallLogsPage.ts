@@ -287,10 +287,19 @@ export class CallLogsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
-    // WHY: /v1/call-logs/search returns 404 on QA — wait for DOM only
-    await this.callLogList()
-      .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-      .catch(() => null);
+    // WHY: /v1/call-logs/search returns 404 on QA — wait for DOM only. Race
+    // between the list container (populated case) and the Log a call button
+    // (always present in the header, regardless of list content) — waiting on
+    // callLogList() alone wastes the full timeout every time the list is
+    // legitimately empty, since that element never renders in that state.
+    await Promise.race([
+      this.callLogList()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+      this.logACallButton()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+    ]);
     logger.debug('Call Logs list is ready');
   }
 
@@ -660,6 +669,16 @@ export class CallLogsPage extends BasePage {
     logger.info(`Navigating to call log ID: ${callLogId}`);
     await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
     await this.waitForListReady();
+    // WHY: Wait for call log GET API response — the list-search endpoint 404s
+    // on QA (see waitForListReady), but the single-entity GET is reliable and
+    // confirms the detail panel's data actually loaded, not just DOM presence.
+    await this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/call-logs\/\d+$/) !== null && res.request().method() === 'GET',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await this.detailEntityHeading().waitFor({
       state: 'visible',
       timeout: config.timeouts.navigation,
@@ -822,7 +841,12 @@ export class CallLogsPage extends BasePage {
   async fillCreateForm(
     data: CallLogData,
     selectedEntityName?: string,
-    includeNoteDuringCreate = false
+    includeNoteDuringCreate = false,
+    // WHY: Pre-created owned entity for the secondary field (Associated Contact on
+    // Deal flow, Associated Deal on Contact flow). When omitted, falls back to the
+    // existing searchAndSelectEntity() random-pick behavior — kept optional so
+    // callers that don't need this (e.g. admin-only UI tests) are unaffected.
+    selectedSecondaryEntityName?: string
   ): Promise<{ entityName: string; selectedPhone: string }> {
     logger.info(`Filling create form — entity: ${data.entityType}, outcome: ${data.outcome}`);
 
@@ -838,7 +862,8 @@ export class CallLogsPage extends BasePage {
       logger.info('Deal flow — filling Associated Contact');
       await this.searchAndSelectEntity(
         this.associatedContactForDealInput(),
-        'Associated Contact (Deal flow)'
+        'Associated Contact (Deal flow)',
+        selectedSecondaryEntityName
       );
     }
 
@@ -874,7 +899,11 @@ export class CallLogsPage extends BasePage {
       // WHY: Deal association is optional — contact may not have deals linked
       // Try to select a deal, skip silently if none available
       try {
-        await this.searchAndSelectEntity(dealInput, 'Associated Deal (Contact flow)');
+        await this.searchAndSelectEntity(
+          dealInput,
+          'Associated Deal (Contact flow)',
+          selectedSecondaryEntityName
+        );
       } catch {
         logger.warn('No associated deal available for this contact — skipping deal association');
       }
@@ -934,14 +963,45 @@ export class CallLogsPage extends BasePage {
 
   async saveCallLog(): Promise<number | null> {
     logger.info('Saving call log');
-    // WHY: Register toast capture BEFORE clicking save — toast appears immediately after save
-    const idPromise = this.captureIdFromToast();
-    await this.saveButton().scrollIntoViewIfNeeded();
-    await this.click(this.saveButton(), 'Save button');
-    await this.assertNoFormErrors('call log create form');
-    const callLogId = await idPromise;
-    logger.success(`Call log saved (ID: ${callLogId})`);
-    return callLogId;
+    // WHY: Even with a correctly-owned secondary entity (see createCallLog),
+    // there can be a server-side permission-propagation delay after an entity
+    // was just created — the save can transiently 403 with a "necessary
+    // permission" style error that clears up moments later. Retry a few times
+    // instead of failing outright, but only for permission-shaped errors —
+    // a genuine validation error (e.g. required field) won't be fixed by retrying.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // WHY: Register toast capture BEFORE clicking save — toast appears immediately after save
+      const idPromise = this.captureIdFromToast();
+      await this.saveButton().scrollIntoViewIfNeeded();
+      await this.click(this.saveButton(), 'Save button');
+      try {
+        await this.assertNoFormErrors('call log create form');
+        const callLogId = await idPromise;
+        logger.success(`Call log saved (ID: ${callLogId})`);
+        return callLogId;
+      } catch (error) {
+        const message = String(error);
+        const isPermissionError =
+          /necessary permission|don.t have enough permissions|not authorised to perform this operation/i.test(
+            message
+          );
+        if (!isPermissionError || attempt === maxAttempts) {
+          throw error;
+        }
+        logger.warn(`Permission error on save attempt ${attempt}/${maxAttempts} — waiting 3s before retry`);
+        await this.page.waitForTimeout(3000);
+        // WHY: Make sure the error toast has cleared before retrying — avoids
+        // the retry click landing on a stale toast overlay
+        await this.page
+          .locator('.rrt-middle-container')
+          .filter({ hasText: /uh.?oh/i })
+          .waitFor({ state: 'hidden', timeout: 5000 })
+          .catch(() => null);
+      }
+    }
+    // Unreachable — the loop above always returns or throws
+    return null;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1138,7 +1198,14 @@ export class CallLogsPage extends BasePage {
 
   async assertOnCallLogsListPage(): Promise<void> {
     await this.assertUrl(/\/sales\/calls\/list/);
-    await expect(this.callLogList()).toBeVisible({ timeout: config.timeouts.navigation });
+    // WHY: callLogList() (ul.list-group.list-group-flush) only renders when there
+    // ARE call logs in the list — for a fresh restricted user (or any user) with
+    // zero call logs, that element never appears, and asserting on it directly
+    // cannot distinguish "genuinely empty" from "still loading" from "broken" —
+    // it just times out after 60s with a useless "element not found" error.
+    // logACallButton() is part of the page header/toolbar and is always present
+    // regardless of list content, making it a reliable "page loaded" signal.
+    await expect(this.logACallButton()).toBeVisible({ timeout: config.timeouts.navigation });
     logger.success('Confirmed on Call Logs list page');
   }
 
@@ -1361,7 +1428,10 @@ export class CallLogsPage extends BasePage {
   // WHY: Creates a fresh contact owned by the current user.
   // Contact dropdown may only show SHR/ADM contacts — restricted user cannot create
   // call logs against entities they don't own, causing HTTP 403 on save.
-  private async ensureOwnedContactExists(): Promise<string> {
+  // Public so createCallLog() can pre-create a contact for the Deal flow's mandatory
+  // Associated Contact secondary field, and so RBAC tests (e.g. CL23) can pre-create
+  // one directly when calling fillCreateForm() without going through createCallLog().
+  async ensureOwnedContactExists(): Promise<string> {
     logger.info('Creating owned contact for call log entity selection');
     const contactsPage = new ContactsPage(this.page);
     const contactData = generateContactData();
@@ -1411,11 +1481,27 @@ export class CallLogsPage extends BasePage {
       resolvedEntityName = await this.ensureOwnedDealExists();
       await this.goToCallLogsList();
     }
+    // WHY: Secondary entity fields (Associated Contact on Deal flow — mandatory;
+    // Associated Deal on Contact flow — optional) previously relied on
+    // searchAndSelectEntity()'s no-searchTerm fallback, which picks an UNFILTERED
+    // random option when no clearly-owned option exists — this can select an
+    // admin-owned entity, causing HTTP 403 "necessary permission" on save. Pre-create
+    // an owned secondary entity here (before the modal opens) and pass its name
+    // through, same pattern as the primary entity above.
+    let resolvedSecondaryEntityName: string | undefined;
+    if (data.entityType === 'Deal') {
+      resolvedSecondaryEntityName = await this.ensureOwnedContactExists();
+      await this.goToCallLogsList();
+    } else if (data.entityType === 'Contact' && data.includeAssociatedDeal) {
+      resolvedSecondaryEntityName = await this.ensureOwnedDealExists();
+      await this.goToCallLogsList();
+    }
     await this.openLogACallForm();
     const { entityName, selectedPhone } = await this.fillCreateForm(
       data,
       resolvedEntityName,
-      options.includeNoteDuringCreate ?? false
+      options.includeNoteDuringCreate ?? false,
+      resolvedSecondaryEntityName
     );
     const callLogId = await this.saveCallLog();
 

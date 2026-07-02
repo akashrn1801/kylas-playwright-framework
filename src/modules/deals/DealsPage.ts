@@ -204,9 +204,24 @@ export class DealsPage extends BasePage {
     }
   }
 
-  private async waitForDealDetailsPage(): Promise<void> {
+  async waitForDealDetailsPage(): Promise<void> {
     await this.page.waitForURL(/sales\/deals\/details\//, { timeout: 20000 });
     await this.page.waitForLoadState('domcontentloaded');
+
+    // WHY: Wait for deal GET API response — ensures React has dealId in state
+    // Without this, edit/product/payment actions fire before app resolves dealId
+    await this.page
+      .waitForResponse(
+        (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+  }
+
+  async goToDealDetailsById(id: string | number): Promise<void> {
+    logger.info(`Navigating to deal details: ${id}`);
+    await this.navigateTo(`${config.appUrl}/sales/deals/details/${id}`);
+    await this.waitForDealDetailsPage();
   }
 
   private async waitForDealListPage(): Promise<void> {
