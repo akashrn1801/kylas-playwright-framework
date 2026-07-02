@@ -617,8 +617,18 @@ export class ContactsPage extends BasePage {
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the share-API response wait BEFORE clicking — confirms the
+    // server actually processed the permission change instead of a blind sleep.
+    const shareResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await this.shareConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    await shareResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Contact shared with: ${restrictedUserName}`);
   }
 
@@ -641,8 +651,18 @@ export class ContactsPage extends BasePage {
     await this.page.waitForTimeout(500);
     const reassignConfirmButton = this.page.locator('.modal.show button.btn-primary.ml-auto').first();
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the reassign-API (owner change) response wait BEFORE
+    // clicking — confirms ownership actually changed server-side.
+    const reassignResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     await reassignConfirmButton.click();
-    await this.page.waitForTimeout(1000);
+    await reassignResponsePromise;
+    await this.page.waitForTimeout(300);
     logger.success(`Contact reassigned to: ${userName}`);
   }
 

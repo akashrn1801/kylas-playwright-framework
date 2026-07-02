@@ -23,6 +23,8 @@ export interface MeetingTimeConfig {
   toMinute: number;
   amPmFrom: 'am' | 'pm';
   amPmTo: 'am' | 'pm';
+  // WHY: true when toDate is the next calendar day — meeting form must advance end date by 1
+  crossesMidnight: boolean;
 }
 
 export interface MeetingData {
@@ -51,11 +53,25 @@ export function generateTimeConfig(): MeetingTimeConfig {
   fromDate.setMinutes(minutes % 60, 0, 0);
   if (minutes === 60) fromDate.setHours(fromDate.getHours() + 1);
 
+  // WHY: The meeting form has a SINGLE date picker shared by both from/to times
+  // (see MeetingsPage.ts fillDate — one call sets the date for both). If fromDate
+  // is 10 PM or later, from + 2h crosses midnight onto the next calendar day,
+  // so the API sees toDate on the same date as fromDate but with an earlier
+  // clock time — HTTP 422 "cannot end before it starts". Cap fromDate to 9 AM
+  // whenever it would land at/after 10 PM, so toDate (from + 2h = 11 AM) never
+  // crosses midnight.
+  if (fromDate.getHours() >= 22) {
+    fromDate.setHours(9, 0, 0, 0);
+  }
+
   const toDate = new Date(fromDate.getTime() + 2 * 60 * 60 * 1000);
 
   const fromHour24 = fromDate.getHours();
   const toHour24 = toDate.getHours();
 
+  // WHY: Track if toDate crossed midnight — if so, the meeting end date must be
+  // one day later than the start date, otherwise the API returns 422 "cannot end before it starts"
+  const crossesMidnight = toDate.getDate() !== fromDate.getDate();
   return {
     fromHour: fromHour24 % 12 === 0 ? 12 : fromHour24 % 12,
     fromMinute: fromDate.getMinutes(),
@@ -63,6 +79,7 @@ export function generateTimeConfig(): MeetingTimeConfig {
     toMinute: toDate.getMinutes(),
     amPmFrom: fromHour24 < 12 ? 'am' : 'pm',
     amPmTo: toHour24 < 12 ? 'am' : 'pm',
+    crossesMidnight,
   };
 }
 

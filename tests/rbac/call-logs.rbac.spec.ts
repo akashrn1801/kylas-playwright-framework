@@ -110,10 +110,13 @@ test.describe('Call Logs — RBAC', () => {
       // fillCreateForm picks randomly from the deal dropdown; SHR/ADM deals are filtered
       // but if no owned deals exist the fallback selects admin-owned ones → HTTP 403.
       const ownedDealName = await callLogsPage.ensureOwnedDealExists();
+      // WHY: Deal flow also requires a mandatory Associated Contact — same 403 risk
+      // applies to this secondary field, so pre-create an owned contact too.
+      const ownedContactName = await callLogsPage.ensureOwnedContactExists();
       await callLogsPage.goToCallLogsList();
       await callLogsPage.openLogACallForm();
       await callLogsPage.fillEntityType('Deal');
-      await callLogsPage.fillCreateForm(data, ownedDealName);
+      await callLogsPage.fillCreateForm(data, ownedDealName, false, ownedContactName);
       await callLogsPage.assertPhoneFieldDisabled();
       await callLogsPage.assertDurationDisabled();
       const callLogId = await callLogsPage.saveCallLog();
@@ -353,6 +356,10 @@ test.describe('Call Logs — RBAC', () => {
       const absoluteUrl = adminEntityUrl.startsWith('http')
         ? adminEntityUrl
         : `${config.appUrl}${adminEntityUrl}`;
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded' });
       await restrictedPage.waitForTimeout(1000);
       // WHY: Target the button, not the SVG inside it — the SVG is replaced during
@@ -408,6 +415,10 @@ test.describe('Call Logs — RBAC', () => {
       });
       expect(adminCallLogId).not.toBeNull();
       logger.info(`Admin created call log ID ${adminCallLogId} on restricted user's lead: ${restrictedEntityName}`);
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedCallLogs.goToCallLogById(adminCallLogId!);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);
@@ -445,6 +456,10 @@ test.describe('Call Logs — RBAC', () => {
       const { callLogId } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
       logger.info(`Admin call log ID: ${callLogId}`);
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedCallLogs.assertCallLogNotInList(callLogId!);
       logger.success('CL32 passed');
     }
@@ -462,6 +477,10 @@ test.describe('Call Logs — RBAC', () => {
       await adminCallLogs.goToCallLogsList();
       const { callLogId } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedPage.goto(
         `${config.appUrl}/sales/calls/list?id=${callLogId}`,
         { waitUntil: 'domcontentloaded' }
@@ -492,6 +511,10 @@ test.describe('Call Logs — RBAC', () => {
       const { callLogId, selectedPhone } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
       logger.info(`Admin call log phone: ${selectedPhone}`);
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedCallLogs.goToCallLogsList();
       if (selectedPhone && selectedPhone.trim() !== '') {
         await restrictedCallLogs.searchByPhoneNumber(selectedPhone.trim());
@@ -537,6 +560,10 @@ test.describe('Call Logs — RBAC', () => {
       });
       expect(adminCallLogId).not.toBeNull();
       logger.info(`Admin created call log ID ${adminCallLogId} on restricted user's lead`);
+      // WHY: Wait for server-side write to propagate before restricted user reads
+      // The admin's write (create/share/assign) may not be immediately visible
+      // to the restricted user's session without a brief propagation wait
+      await adminPage.waitForTimeout(3000);
       await restrictedCallLogs.goToCallLogById(adminCallLogId!);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);

@@ -124,6 +124,26 @@ export class TasksPage extends BasePage {
   // Private Helpers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: Tasks has no separate /details/{id} page — the detail panel opens
+  // over /sales/tasks/list?id={id}. This is the canonical wait for that URL
+  // shape, mirroring waitForXDetailsPage() in the other modules.
+  async waitForTaskDetailsPage(): Promise<void> {
+    await this.page.waitForURL(/sales\/tasks\/list\?.*id=/, { timeout: 20000 });
+    await this.page.waitForLoadState('domcontentloaded');
+    await this.page
+      .waitForResponse(
+        (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+  }
+
+  async goToTaskDetailsById(id: string | number): Promise<void> {
+    logger.info(`Navigating to task details: ${id}`);
+    await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${id}`);
+    await this.waitForTaskDetailsPage();
+  }
+
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
@@ -651,19 +671,32 @@ export class TasksPage extends BasePage {
 
   async openTaskInDetailPanel(name: string, taskId?: number | null): Promise<void> {
     logger.info(`Opening task detail panel: "${name}"`);
+    // WHY: Row click doesn't always navigate (panel can open in-place), so we
+    // wait for the task GET response directly instead of a URL change —
+    // confirms the panel's data actually loaded, not just that time passed.
     if (taskId) {
       const itemById = this.taskListItemById(taskId);
       const visible = await itemById.isVisible().catch(() => false);
       if (visible) {
         await itemById.click();
-        await this.page.waitForTimeout(800);
+        await this.page
+          .waitForResponse(
+            (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+            { timeout: 10000 }
+          )
+          .catch(() => null);
         logger.success(`Task ${taskId} opened via ID`);
         return;
       }
     }
     // Fallback to name
     await this.taskListItemByName(name).click();
-    await this.page.waitForTimeout(800);
+    await this.page
+      .waitForResponse(
+        (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+        { timeout: 10000 }
+      )
+      .catch(() => null);
     logger.success(`Task "${name}" opened`);
   }
 
