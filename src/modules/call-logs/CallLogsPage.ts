@@ -124,8 +124,13 @@ export class CallLogsPage extends BasePage {
   private readonly calendarForwardButton = () =>
     this.page.getByLabel('Move forward to switch to the next month.');
 
+  // WHY: aria-label is not always the plain "Weekday, Month Day, Year" string —
+  // confirmed live that react-dates prefixes it with a status word for some
+  // states, e.g. "Selected. Saturday, July 4, 2026" for the default-selected
+  // date, or "Not available. Sunday, July 5, 2026" for a disabled future date.
+  // Match on suffix so any prefix is tolerated.
   private readonly calendarDayByLabel = (label: string) =>
-    this.page.locator(`.SingleDatePicker td[aria-label="${label}"]`);
+    this.page.locator(`.SingleDatePicker td[aria-label$="${label}"]`);
 
   // Time picker
   private readonly timePickerIcon = () =>
@@ -504,13 +509,45 @@ export class CallLogsPage extends BasePage {
     } catch {
       found = false;
     }
+    // WHY: The calendar's default visible month is NOT guaranteed to be the
+    // real-world current month — confirmed live on staging that opening the
+    // picker with no date pre-selected shows the PREVIOUS month. Blindly
+    // preferring "back" whenever the button exists (the old logic) can send
+    // navigation in exactly the wrong direction and burn the full attempt
+    // budget. Instead, read the months actually rendered by the calendar and
+    // navigate toward the target relative to that.
+    const targetMonthKey = date.getFullYear() * 12 + date.getMonth();
     while (!found && attempts < 24) {
+      const visibleMonthKeys: number[] = await this.page.evaluate(() =>
+        Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+          .map((cell) => {
+            // WHY: strip status prefixes like "Selected. "/"Not available. "
+            // before parsing — otherwise those cells are silently dropped.
+            const label = cell.getAttribute('aria-label')?.replace(/^[A-Za-z ]+\.\s*/, '') ?? null;
+            const parsed = label ? new Date(label) : null;
+            return parsed && !isNaN(parsed.getTime())
+              ? parsed.getFullYear() * 12 + parsed.getMonth()
+              : null;
+          })
+          .filter((v): v is number => v !== null)
+      );
       const backButton = this.page.getByLabel('Move backward to switch to the previous month.');
       const backVisible = await backButton.isVisible().catch(() => false);
-      if (backVisible) {
+      const forwardVisible = await this.calendarForwardButton().isVisible().catch(() => false);
+      const minVisibleMonth = visibleMonthKeys.length ? Math.min(...visibleMonthKeys) : null;
+      const maxVisibleMonth = visibleMonthKeys.length ? Math.max(...visibleMonthKeys) : null;
+      const shouldGoBack =
+        minVisibleMonth !== null && targetMonthKey < minVisibleMonth
+          ? true
+          : maxVisibleMonth !== null && targetMonthKey > maxVisibleMonth
+            ? false
+            : backVisible;
+      if (shouldGoBack && backVisible) {
         await backButton.click();
-      } else {
+      } else if (forwardVisible) {
         await this.calendarForwardButton().click();
+      } else if (backVisible) {
+        await backButton.click();
       }
       await this.page.waitForTimeout(400);
       try {
@@ -672,10 +709,13 @@ export class CallLogsPage extends BasePage {
     // WHY: Wait for call log GET API response — the list-search endpoint 404s
     // on QA (see waitForListReady), but the single-entity GET is reliable and
     // confirms the detail panel's data actually loaded, not just DOM presence.
+    // The real request is `/v1/call-logs/{id}?relatedToType=...` — the previous
+    // regex was anchored with `$` right after the digits, which never matches
+    // because of that query string, so this wait always silently timed out.
+    const detailResponsePattern = new RegExp(`/v1/call-logs/${callLogId}(?:\\?.*)?$`);
     await this.page
       .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/call-logs\/\d+$/) !== null && res.request().method() === 'GET',
+        (res) => detailResponsePattern.test(res.url()) && res.request().method() === 'GET',
         { timeout: 15000 }
       )
       .catch(() => null);
@@ -1158,35 +1198,27 @@ export class CallLogsPage extends BasePage {
       await refreshBtn.click();
       await this.page.waitForTimeout(1500);
     }
-    // WHY: Notes render in div.note-content after expanding View Call Notes
-    // Observer confirmed: note text appears in div.note-content inside the notes list
-    const noteContents = this.page.locator('.note-content');
-    await noteContents.first().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY: div.note-content is a real wrapper (confirmed live), but the actual
+    // note body renders inside a CKEditor srcdoc <iframe> nested within it —
+    // .note-content's own textContent only ever contains the surrounding
+    // author/timestamp/delete-menu markup, never the iframe's document content,
+    // since textContent cannot cross into an iframe's own document. Checking
+    // .note-content directly can therefore never find the real note text —
+    // read the iframe content directly instead.
+    const noteIframes = this.page.locator('.note-text-container iframe');
+    await noteIframes.first().waitFor({ state: 'visible', timeout: 15000 });
     await this.page.waitForTimeout(500);
-    const count = await noteContents.count();
+    const iframeCount = await noteIframes.count();
     let found = false;
-    for (let i = 0; i < count; i++) {
-      const noteText = await noteContents.nth(i).textContent() ?? '';
-      logger.info(`Note ${i} text: "${noteText.trim().substring(0, 80)}"`);
-      if (noteText.includes(expectedText)) {
+    for (let i = 0; i < iframeCount; i++) {
+      const iframeText = await noteIframes.nth(i).evaluate((el: any) => {
+        return el.contentDocument?.body?.textContent?.trim() ?? '';
+      });
+      logger.info(`Note ${i} text: "${iframeText.substring(0, 80)}"`);
+      if (iframeText.includes(expectedText)) {
         found = true;
-        logger.success(`Note confirmed: "${noteText.trim().substring(0, 80)}"`);
+        logger.success(`Note confirmed: "${iframeText.substring(0, 80)}"`);
         break;
-      }
-    }
-    if (!found) {
-      // WHY: Also check iframe inside note-text-container as fallback
-      const noteIframes = this.page.locator('.note-text-container iframe');
-      const iframeCount = await noteIframes.count().catch(() => 0);
-      for (let i = 0; i < iframeCount; i++) {
-        const iframeText = await noteIframes.nth(i).evaluate((el: any) => {
-          return el.contentDocument?.body?.textContent?.trim() ?? '';
-        });
-        if (iframeText.includes(expectedText)) {
-          found = true;
-          logger.success(`Note confirmed in iframe: "${iframeText.substring(0, 80)}"`);
-          break;
-        }
       }
     }
     if (!found) throw new Error(`Note "${expectedText}" not found in note list`);

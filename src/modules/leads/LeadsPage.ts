@@ -1136,7 +1136,17 @@ export class LeadsPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 5000 });
+    // WHY: This is called right after an admin share grants the permission
+    // controlling this icon — the write is on the admin's session, but this
+    // read is on the restricted user's separate session, so it can lag behind
+    // the share response by more than a few seconds under load. A short fixed
+    // timeout here (previously 5000ms, on top of a flat pre-sleep in the test)
+    // has no way to recover from that lag. Use the same generous, propagation-
+    // tolerant window already used for cross-role reads elsewhere (e.g.
+    // CallLogsPage.openCallLogsProductivitySection) instead of a short one —
+    // Playwright's expect() already polls internally, so this only costs time
+    // when the icon is genuinely slow to appear, not on the common fast path.
+    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: config.timeouts.navigation });
     logger.success(`Right panel icon visible: ${title}`);
   }
 

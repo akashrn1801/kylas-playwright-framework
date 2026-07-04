@@ -7,7 +7,11 @@ pipeline {
 
     options {
         timestamps()
-        timeout(time: 150, unit: 'MINUTES')
+        // WHY: Must exceed the largest possible dynamic inner-stage timeout
+        // computed below (main branch, 235 tests → ~266 min) plus overhead for
+        // checkout/install/setup/approval — otherwise this outer ceiling kills
+        // the build before the inner timeout ever gets a chance to.
+        timeout(time: 300, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
@@ -155,7 +159,12 @@ REPORT_PATH=reports/playwright-report/results.json
             steps {
                 script {
                     // WHY: Dynamic timeout — scales automatically as the suite grows.
-                    // Calibrated from real CI data (workers=2): ~20 sec/test average.
+                    // Previously calibrated at ~20 sec/test, but a real full-suite local
+                    // run (235 tests, workers=2, 2.9 hours) measured ~44.4 sec/test —
+                    // more than double. 20 sec/test made this timeout the actual cause
+                    // of Jenkins killing the run mid-suite, not a symptom of it. Recalibrated
+                    // to 60 sec/test (~35% margin over the measured rate, to also absorb
+                    // Jenkins hardware being slower than local) plus a larger buffer.
                     // WHY: prod runs only @prodSafe tests (read-only, safe against live data)
                     // main runs the full suite (final validation gate before release)
                     def isProd = env.BRANCH_NAME == 'prod'
@@ -167,8 +176,8 @@ REPORT_PATH=reports/playwright-report/results.json
                         script: countScript,
                         returnStdout: true
                     ).trim().toInteger()
-                    def secondsPerTest = 20
-                    def bufferMinutes = 20
+                    def secondsPerTest = 60
+                    def bufferMinutes = 30
                     def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
                     echo "Detected ${testCount} tests (branch: ${env.BRANCH_NAME}) — dynamic timeout set to ${computedTimeoutMinutes} minutes"
                     timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
