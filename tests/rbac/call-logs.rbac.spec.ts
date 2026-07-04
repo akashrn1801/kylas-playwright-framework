@@ -360,15 +360,21 @@ test.describe('Call Logs — RBAC', () => {
       // The admin's write (create/share/assign) may not be immediately visible
       // to the restricted user's session without a brief propagation wait
       await adminPage.waitForTimeout(3000);
+      // WHY: Instrumentation checkpoint — CI timeout investigation (2026-07-05).
+      logger.info(`CL31c: navigating restricted user to admin entity URL: ${absoluteUrl}`);
       await restrictedPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded' });
+      logger.info('CL31c: navigation complete');
       await restrictedPage.waitForTimeout(1000);
       // WHY: Target the button, not the SVG inside it — the SVG is replaced during
       // React re-renders causing "element was detached from the DOM" on click.
       const callLogsBtn = restrictedPage.locator("button[data-original-title='Call Logs']");
       const btnVisible = await callLogsBtn.isVisible().catch(() => false);
+      logger.info(`CL31c: Call Logs button visible: ${btnVisible}`);
       if (btnVisible) {
         await callLogsBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
+        logger.info('CL31c: about to click Call Logs button');
         await callLogsBtn.click();
+        logger.info('CL31c: Call Logs button clicked');
         await restrictedPage.waitForTimeout(1000);
         const adminCallLogVisible = await restrictedPage
           .locator('ul.list-unstyled.mb-0.card-list li.media')
