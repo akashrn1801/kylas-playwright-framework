@@ -1,4 +1,4 @@
-import { Page, Locator, Response } from '@playwright/test';
+import { Page, Locator, Response, expect } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
 import {
   QuotationData,
@@ -16,6 +16,12 @@ interface GrandTotalComponents {
   additionalTax: number;
   adjustment: number;
   grandTotal: number;
+}
+
+interface InaccessibleEntityRetryResult {
+  succeeded: boolean;
+  removedEntities: Array<'contact' | 'company'>;
+  lastErrorMessage: string;
 }
 
 export class QuotationsPage extends BasePage {
@@ -270,8 +276,15 @@ export class QuotationsPage extends BasePage {
 
   private async captureQuotationIdFromResponse(): Promise<string | null> {
     try {
+      // WHY: Confirmed live — the real create endpoint is `/v1/quotations/`
+      // WITH a trailing slash, which this regex's `$` anchor (right after
+      // "quotations") never matched — same class of bug already found and
+      // fixed in saveQuotationHandlingInaccessibleEntities() and
+      // CallLogsPage.goToCallLogById(). This method has no current callers,
+      // but fixing it anyway rather than leaving a latent trap for whoever
+      // wires it up next.
       const response = await this.page.waitForResponse(
-        (r: Response) => /\/v1\/quotations$/.test(r.url()) && r.request().method() === 'POST',
+        (r: Response) => /\/v1\/quotations\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
         { timeout: 15000 }
       );
       const body = await response.json().catch(() => null);
@@ -726,11 +739,166 @@ export class QuotationsPage extends BasePage {
   async saveQuotation(): Promise<void> {
     logger.info('Saving quotation');
     await this.modalSaveButton().click();
+    // WHY: For an in-place modal edit, the URL never changes on success OR
+    // failure — assertSuccessToast()'s URL-based fallback (used by callers
+    // afterward) cannot tell them apart in that case, which let a real save
+    // failure surface only several steps later as an unrelated-looking
+    // assertion mismatch (T13/quotations.spec.ts:161). Detect the outcome
+    // here instead, at the actual point of failure, using the same
+    // already-proven convention as LeadsPage.saveEditedLead() /
+    // ContactsPage.saveEditedContact() / CompaniesPage.saveEditedCompany():
+    // check for validation/toast errors, then confirm the modal itself
+    // actually closes — a save that server-side rejected leaves the modal
+    // open, which this directly observes rather than inferring from the URL.
+    await this.assertNoFormErrors('quotation save form');
+    await expect(this.modal()).toBeHidden({ timeout: 15000 });
   }
 
   async saveQuotationExpectingError(): Promise<void> {
     logger.info('Saving quotation — expecting error response');
     await this.modalSaveButton().click();
+  }
+
+  // WHY: Confirmed live on staging — a deal-inaccessible-entity save failure
+  // returns HTTP 422 with { errorCode: "029003", message: "Invalid contact -
+  // id: <id>" } (or "Invalid company - id: <id>"). This is the exact same
+  // signal errorFilters.ts's isExpectedRbacError() already keys off of
+  // (message.includes('029003') / apiErrorMessage containing "Invalid
+  // company"/"Invalid contact") — reusing it here instead of inventing a new
+  // detection rule. Also confirmed live: the error TOAST shown in the UI is
+  // generic ("the data is invalid or you do not have the required
+  // permissions on one of the associated entities") and never names the
+  // entity — only this response body does, so the toast alone cannot drive
+  // this decision.
+  private classifyInaccessibleEntityError(
+    status: number,
+    body: any
+  ): { isInaccessibleEntityError: boolean; entity: 'contact' | 'company' | null; rawMessage: string } {
+    const message: string =
+      body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
+    const errorCode: string | undefined = body?.errorCode;
+    const isKnownCode = status === 422 && errorCode === '029003';
+    const isKnownMessage = /Invalid company/i.test(message) || /Invalid contact/i.test(message);
+    const entity: 'contact' | 'company' | null = /Invalid company/i.test(message)
+      ? 'company'
+      : /Invalid contact/i.test(message)
+        ? 'contact'
+        : null;
+    return { isInaccessibleEntityError: isKnownCode || isKnownMessage, entity, rawMessage: message };
+  }
+
+  // WHY: A deal auto-populates its associated Contact and Company onto the
+  // quotation form. If the current (typically restricted) user cannot access
+  // one or both of those auto-populated entities, save fails with the 029003
+  // error above. Separate wrapper (not baked into saveQuotation() itself) —
+  // same precedent as attemptCreateWithInaccessibleEntities() elsewhere in
+  // this file — because this retry dance is only relevant to the narrow
+  // deal-linked-entity RBAC scenario, not the common save path used by every
+  // other caller of saveQuotation().
+  async saveQuotationHandlingInaccessibleEntities(): Promise<InaccessibleEntityRetryResult> {
+    const removedEntities: Array<'contact' | 'company'> = [];
+    let lastErrorMessage = '';
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      logger.info(`Saving quotation — attempt ${attempt}/3`);
+      // WHY: Register the response wait BEFORE clicking — same convention as
+      // captureQuotationIdFromResponse() elsewhere in this file. Match on
+      // parsed pathname (not the raw URL string) so an edit's query string,
+      // if any, can never break the match — the exact class of bug already
+      // found and fixed in CallLogsPage.goToCallLogById(). Confirmed live
+      // that the real create endpoint is `/v1/quotations/` WITH a trailing
+      // slash — the pattern below tolerates one optionally before/after the
+      // id segment, otherwise this silently never matches and times out.
+      const responsePromise = this.page
+        .waitForResponse(
+          (res) =>
+            /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
+            ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
+          { timeout: 20000 }
+        )
+        .catch(() => null);
+      await this.modalSaveButton().click();
+      const response = await responsePromise;
+
+      if (response && response.status() < 400) {
+        logger.success(
+          removedEntities.length
+            ? `Quotation saved after removing: ${removedEntities.join(', ')}`
+            : 'Quotation saved on first attempt — no inaccessible entities'
+        );
+        return { succeeded: true, removedEntities, lastErrorMessage };
+      }
+
+      if (!response) {
+        // WHY: A timed-out response wait must NOT be silently treated as
+        // success — that exact assumption previously masked a URL-matching
+        // bug in this method and hid a real 422 behind a false "succeeded".
+        // Fall back to the same page-state signal assertSuccessToast() uses
+        // elsewhere in this file before concluding anything.
+        const success = await this.successToast()
+          .isVisible()
+          .catch(() => false);
+        const url = this.page.url();
+        const onListOrDetail = url.includes('/quotations/list') || url.includes('/quotations/details/');
+        if (success || onListOrDetail) {
+          logger.warn('Save response not captured, but page state confirms success');
+          return { succeeded: true, removedEntities, lastErrorMessage };
+        }
+        throw new Error(
+          'Could not confirm save outcome — no matching API response captured and page shows ' +
+            `neither a success toast nor navigation away from the form (still on: ${url})`
+        );
+      }
+
+      const body = await response.json().catch(() => ({}));
+      const { isInaccessibleEntityError, entity, rawMessage } = this.classifyInaccessibleEntityError(
+        response.status(),
+        body
+      );
+      lastErrorMessage = rawMessage;
+
+      if (!isInaccessibleEntityError) {
+        // WHY: A genuinely different failure — don't hide it behind this
+        // fallback's retry logic, surface it immediately.
+        throw new Error(
+          `Save failed with an unrelated error (not the inaccessible-entity 029003 error): ` +
+            `HTTP ${response.status()} — "${rawMessage}"`
+        );
+      }
+
+      logger.warn(
+        `Inaccessible entity error on attempt ${attempt} — server identified: ` +
+          `${entity ?? 'unspecified'} ("${rawMessage}")`
+      );
+
+      if (attempt === 1) {
+        logger.info('Removing associated Contact and retrying save');
+        await this.clearAssociatedContacts();
+        removedEntities.push('contact');
+      } else if (attempt === 2) {
+        logger.info(
+          'Still failing after removing Contact — removing associated Company and retrying save'
+        );
+        await this.clearAssociatedCompany();
+        removedEntities.push('company');
+      } else {
+        throw new Error(
+          `Save still fails with an inaccessible-entity error after removing both Contact and ` +
+            `Company (removed: ${removedEntities.join(', ')}): "${rawMessage}"`
+        );
+      }
+
+      // WHY: Clicking a react-select field's clear indicator can leave its
+      // dropdown/menu portal open, intercepting clicks on Save — confirmed
+      // live that a plain retry click then hangs until Playwright's own
+      // actionability timeout. Escape reliably dismisses it without
+      // depending on the portal's CSS-in-JS hash class name.
+      await this.page.keyboard.press('Escape');
+      await this.page.waitForTimeout(500);
+    }
+
+    // Unreachable — the loop above always returns or throws.
+    throw new Error('saveQuotationHandlingInaccessibleEntities: exhausted retries unexpectedly');
   }
 
   // ─── 7. Search and open ──────────────────────────────────────────────────────
@@ -956,31 +1124,45 @@ export class QuotationsPage extends BasePage {
 
   async assertGrandTotalMath(): Promise<GrandTotalComponents> {
     logger.info('Reading grand total components');
-    const subTotal = await this.getNumericValue(this.subTotalInput());
-    const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
-    const additionalTax = await this.getNumericValue(this.additionalTaxInput());
-    const adjustment = await this.getNumericValue(this.adjustmentInput());
-    const grandTotal = await this.getNumericValue(this.grandTotalInput());
-
-    // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
-    const afterDiscount = subTotal * (1 - additionalDiscount / 100);
-    const afterTax = afterDiscount * (1 + additionalTax / 100);
-    const expected = afterTax * (1 + adjustment / 100);
     const tolerance = 1;
+    // WHY: grandTotal is recomputed reactively client-side when the discount/
+    // tax/adjustment fields change — there is no network response to wait for.
+    // Reading it exactly once immediately after the last field fill races the
+    // recompute: on an uncontended machine it's already settled by the time
+    // fill() resolves, but under real system load (concurrent workers/tests)
+    // that recompute can lag behind. Poll until the read-back values satisfy
+    // the formula instead of asserting on a single snapshot.
+    const maxAttempts = 10;
+    let last: GrandTotalComponents | null = null;
+    let expected = 0;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const subTotal = await this.getNumericValue(this.subTotalInput());
+      const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
+      const additionalTax = await this.getNumericValue(this.additionalTaxInput());
+      const adjustment = await this.getNumericValue(this.adjustmentInput());
+      const grandTotal = await this.getNumericValue(this.grandTotalInput());
 
-    if (Math.abs(expected - grandTotal) > tolerance) {
-      throw new Error(
-        `Grand total math failed. Expected: ${expected.toFixed(2)}, Got: ${grandTotal}. ` +
-          `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
-          `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`
-      );
+      // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
+      const afterDiscount = subTotal * (1 - additionalDiscount / 100);
+      const afterTax = afterDiscount * (1 + additionalTax / 100);
+      expected = afterTax * (1 + adjustment / 100);
+      last = { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
+
+      if (Math.abs(expected - grandTotal) <= tolerance) {
+        logger.success(
+          `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`
+        );
+        return last;
+      }
+      if (attempt < maxAttempts) await this.page.waitForTimeout(300);
     }
 
-    logger.success(
-      `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`
+    const { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal } = last!;
+    throw new Error(
+      `Grand total math failed after ${maxAttempts} attempts. Expected: ${expected.toFixed(2)}, Got: ${grandTotal}. ` +
+        `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
+        `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`
     );
-
-    return { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
   }
 
   async assertProductRowsVisible(): Promise<number> {
@@ -1090,20 +1272,22 @@ export class QuotationsPage extends BasePage {
     await this.goToQuotationsList();
     await this.openCreateForm();
     const selectedDeal = await this.fillQuotationForm(data);
-    // WHY: Save and check for inaccessible entity error (029003)
-    // If error toast appears, clear associated contacts and retry save
-    try {
-      await this.saveQuotation();
-    } catch {
-      // WHY: saveQuotation may throw if error toast appears — check and handle
-      const errorVisible = await this.errorToast().isVisible().catch(() => false);
-      if (errorVisible) {
-        logger.warn('Inaccessible entity error on save — clearing contacts and retrying');
-        await this.clearAssociatedContacts().catch(() => null);
-        await this.saveQuotation();
-      } else {
-        throw new Error('Save failed without inaccessible entity error');
-      }
+    // WHY: A randomly-selected deal (the common case here) can auto-populate
+    // an Associated Contact/Company the current user cannot access, causing
+    // a 422 (errorCode 029003) on save. This used to be "handled" by a dead
+    // try/catch — saveQuotation() was a bare click that never threw, so the
+    // catch never fired, and any such failure previously surfaced later as a
+    // confusing, unrelated-looking error further down this method instead of
+    // here. Now that saveQuotation() correctly detects and throws on a real
+    // save failure, route through the dedicated, already-verified handler
+    // (contact-then-company removal, with the dropdown-overlay dismissal
+    // step this old inline logic never had) instead of reintroducing an
+    // incomplete inline retry.
+    const saveResult = await this.saveQuotationHandlingInaccessibleEntities();
+    if (saveResult.removedEntities.length > 0) {
+      logger.warn(
+        `Removed inaccessible deal-linked entities to save: ${saveResult.removedEntities.join(', ')}`
+      );
     }
     // WHY: Capture ID from toast BEFORE navigating away — avoids search index lag
     // on prod where quotation may not appear in list for 30-40s after creation

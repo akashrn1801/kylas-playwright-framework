@@ -245,8 +245,15 @@ test.describe('Tasks RBAC', () => {
     await adminTasks.assertTaskCreated(adminData, taskId);
 
     // Restricted user finds the task via ID filter
+    // WHY: The admin's assignment write and this read happen on separate
+    // sessions — searchTaskById() is a single navigation + wait with no retry,
+    // so if propagation genuinely lags, it silently warns and moves on,
+    // leaving assertDeleteOptionNotVisible() to open the ellipsis on a task
+    // row that was never confirmed present. assertTaskInList() retries across
+    // fresh navigations via retryFindTask() (config.searchRetry), which is
+    // the same mechanism assertTaskCreated() above already relies on.
     await restrictedTasks.goToTasksList();
-    await restrictedTasks.searchTaskById(taskId!);
+    await restrictedTasks.assertTaskInList(adminData.name, taskId);
 
     // WHY: Restricted user is only assignee — cannot delete admin-owned task
     await restrictedTasks.assertDeleteOptionNotVisible(taskId!);
