@@ -588,8 +588,9 @@ test.describe('Leads RBAC', () => {
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
-    await leadsPage.cloneLead();
-    await leadsPage.assertClonedLeadLastName(leadData.lastName);
+    const clonedId = await leadsPage.cloneLead();
+    expect(clonedId).not.toBeNull();
+    await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
     logger.success('L23 passed');
   });
 
