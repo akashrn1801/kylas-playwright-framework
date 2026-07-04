@@ -100,6 +100,63 @@ test.describe('Quotations — RBAC', () => {
     logger.success('T7 passed — inaccessible entity handled, quotation created on retry');
   });
 
+  // ─── T7b ──────────────────────────────────────────────────────────────────
+  // WHY: Distinct from T7 — T7 exercises the deal itself being inaccessible
+  // via a manual inline retry. This exercises saveQuotationHandlingInaccessibleEntities()
+  // directly: a deal that IS selectable, but whose auto-populated Associated
+  // Contact and/or Associated Company the restricted user cannot access —
+  // confirmed live (staging) that this returns HTTP 422 { errorCode: "029003",
+  // message: "Invalid contact - id: <id>" } and the fallback must strip the
+  // named entity (and Company too if still failing) before retrying.
+  test('@regression restricted user should save quotation after fallback removes inaccessible deal-linked contact/company', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const qp = new QuotationsPage(restrictedPage);
+
+    // WHY: Whether the randomly-selected deal's auto-populated Associated
+    // Contact/Company happens to be inaccessible to the restricted user is
+    // NOT something this test controls — it depends entirely on which deal
+    // gets picked. Both outcomes are valid and must PASS: if the 029003 error
+    // is thrown, the fallback must catch it and recover; if it isn't, there
+    // was nothing to fall back from and the save should simply succeed on
+    // the first attempt. Only fail if the save itself doesn't succeed —
+    // never for the error not reproducing this particular run.
+    const data = generateRestrictedQuotationData();
+    await qp.goToQuotationsList();
+    await qp.openCreateForm();
+    await qp.fillQuotationForm(data);
+    const result = await qp.saveQuotationHandlingInaccessibleEntities();
+
+    expect(result.succeeded, 'Save should succeed, whether or not a fallback was needed').toBe(true);
+
+    if (result.removedEntities.length > 0) {
+      // Confirm the fallback's own report of what it identified/removed —
+      // must be exactly 'contact' and/or 'company', nothing else.
+      for (const entity of result.removedEntities) {
+        expect(['contact', 'company']).toContain(entity);
+      }
+      logger.success(
+        `Inaccessible entity error was hit this run — fallback removed [${result.removedEntities.join(', ')}], ` +
+          `server-identified cause: "${result.lastErrorMessage}"`
+      );
+    } else {
+      logger.info(
+        "No inaccessible entity error this run — the randomly-selected deal's linked contact/company " +
+          'were already accessible, so there was nothing to fall back from. This is a valid, passing outcome.'
+      );
+    }
+
+    await qp.assertSuccessToast();
+    await qp.assertOnListPage();
+    await qp.assertQuotationInList(data.summary);
+    logger.success(
+      result.removedEntities.length > 0
+        ? `T7b passed — fallback removed [${result.removedEntities.join(', ')}] and quotation saved`
+        : 'T7b passed — quotation saved directly, no inaccessible entity encountered this run'
+    );
+  });
+
   // ─── T8 ───────────────────────────────────────────────────────────────────
   test('@regression restricted user should not see admin-owned quotation in list', async ({
     adminPage,
