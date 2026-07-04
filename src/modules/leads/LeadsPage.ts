@@ -830,12 +830,27 @@ export class LeadsPage extends BasePage {
     return clonedId;
   }
 
-  async assertClonedLeadLastName(originalLastName: string): Promise<void> {
-    logger.info(`Asserting cloned lead has "Copy" in lastName — original: ${originalLastName}`);
-    // WHY: Clone appends "Copy" to lastName — search for it
+  async assertClonedLeadLastName(originalLastName: string, clonedId: number): Promise<void> {
+    logger.info(`Asserting cloned lead (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`);
     const clonedLastName = `${originalLastName} Copy`;
-    const found = await this.retryFindLead(clonedLastName);
-    expect(found).toBeTruthy();
+    // WHY: Confirmed live on both staging and QA — searching the leads list
+    // for "<lastName> Copy" is unreliable. The list search does a loose,
+    // multi-field OR-match (matches on company name substrings, other
+    // unrelated leads containing "Copy" from other clone tests, etc.),
+    // returning up to 50-80 rows with no guaranteed sort position for the
+    // freshly-cloned lead. Whether the exact-match locator finds it depends
+    // on whether it lands within the page of rows actually rendered — this
+    // is what caused the intermittent "fails once, passes on retry" flake,
+    // not search-index lag. Navigate directly to the cloned lead by ID
+    // instead and read its own detail page — deterministic, no list search.
+    await this.navigateTo(`${config.appUrl}/sales/leads/details/${clonedId}`);
+    await this.waitForLeadDetailsPage();
+    const bodyText = await this.page.locator('body').innerText();
+    if (!bodyText.includes(clonedLastName)) {
+      throw new Error(
+        `Cloned lead ID ${clonedId} detail page does not show expected lastName "${clonedLastName}"`
+      );
+    }
     logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
   }
 
@@ -1136,7 +1151,17 @@ export class LeadsPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 5000 });
+    // WHY: This is called right after an admin share grants the permission
+    // controlling this icon — the write is on the admin's session, but this
+    // read is on the restricted user's separate session, so it can lag behind
+    // the share response by more than a few seconds under load. A short fixed
+    // timeout here (previously 5000ms, on top of a flat pre-sleep in the test)
+    // has no way to recover from that lag. Use the same generous, propagation-
+    // tolerant window already used for cross-role reads elsewhere (e.g.
+    // CallLogsPage.openCallLogsProductivitySection) instead of a short one —
+    // Playwright's expect() already polls internally, so this only costs time
+    // when the icon is genuinely slow to appear, not on the common fast path.
+    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: config.timeouts.navigation });
     logger.success(`Right panel icon visible: ${title}`);
   }
 
