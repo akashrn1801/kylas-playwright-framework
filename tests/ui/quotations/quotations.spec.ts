@@ -328,7 +328,6 @@ test.describe('Quotations — UI', () => {
       shippingAddress: '456 Shipping Street',
       shippingCity: 'Mumbai',
       shippingState: 'Maharashtra',
-      shippingCountry: 'India',
       shippingZipcode: '400001',
     });
 

@@ -623,25 +623,16 @@ export class QuotationsPage extends BasePage {
     await this.fill(this.billingStateInput(), data.billingState, 'Billing State');
     await this.fill(this.billingZipcodeInput(), data.billingZipcode, 'Billing Zipcode');
 
-    // Billing country — scoped to its form group
-    if (data.billingCountry) {
-      const countryFormGroup = this.page
-        .locator('[id="2_31_input_billingCountry"]')
-        .locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
-      const countryControl = countryFormGroup.locator('[class*="is-invalid__control"]');
-      await countryControl.click();
-      await this.page.locator('[id="2_31_input_billingCountry"]').fill(data.billingCountry);
-      await this.page
-        .locator('.is-invalid__option')
-        .filter({ hasText: data.billingCountry })
-        .first()
-        .click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: 10000 })
-        .catch(() => {});
-      logger.debug(`Selected billing country: ${data.billingCountry}`);
-    }
+    // WHY: Billing country — select by random index via selectRandomCountry(),
+    // never by text match. Confirmed live (QA) that filtering options with
+    // `hasText: 'India'` can match "British Indian Ocean Territory" too (it
+    // contains "India" as a substring, inside "Indian"), and .first() picks
+    // whichever renders first — silently submitting the wrong country while
+    // logging the intended one as if it had succeeded. This was the actual
+    // root cause of a backend 500 on quotation save. selectRandomCountry()
+    // reads the real option text after clicking it by index, so it can never
+    // have this collision.
+    await this.selectRandomCountry('2_31_input_billingCountry');
 
     // Shipping toggle
     const toggleChecked = await this.sameAddressToggle().isChecked();
@@ -659,26 +650,9 @@ export class QuotationsPage extends BasePage {
           data.shippingZipcode || '',
           'Shipping Zipcode'
         );
-        if (data.shippingCountry) {
-          const shippingCountryFormGroup = this.page
-            .locator('[id="2_71_input_shippingCountry"]')
-            .locator('xpath=ancestor::div[contains(@class,"dropdownv2")]');
-          const shippingCountryControl = shippingCountryFormGroup.locator(
-            '[class*="is-invalid__control"]'
-          );
-          await shippingCountryControl.click();
-          await this.page.locator('[id="2_71_input_shippingCountry"]').fill(data.shippingCountry);
-          await this.page
-            .locator('.is-invalid__option')
-            .filter({ hasText: data.shippingCountry })
-            .first()
-            .click();
-          await this.page
-            .locator('.is-invalid__menu')
-            .waitFor({ state: 'hidden', timeout: 10000 })
-            .catch(() => {});
-          logger.debug(`Selected shipping country: ${data.shippingCountry}`);
-        }
+        // WHY: same substring-collision risk as billing country above —
+        // select by random index via selectRandomCountry() instead of hasText.
+        await this.selectRandomCountry('2_71_input_shippingCountry');
       }
     }
 
