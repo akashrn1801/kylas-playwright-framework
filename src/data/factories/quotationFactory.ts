@@ -29,13 +29,11 @@ export interface QuotationData {
   billingAddress: string;
   billingCity: string;
   billingState: string;
-  billingCountry: string;
   billingZipcode: string;
   sameShippingAsBilling: boolean;
   shippingAddress?: string;
   shippingCity?: string;
   shippingState?: string;
-  shippingCountry?: string;
   shippingZipcode?: string;
 }
 
@@ -56,7 +54,9 @@ function randomAddressFields() {
     billingAddress: faker.location.streetAddress(),
     billingCity: faker.location.city(),
     billingState: faker.location.state(),
-    billingCountry: 'India',
+    // WHY: billing/shipping country is no longer a factory value — QuotationsPage
+    // selects it via selectRandomCountry() (random index, not text match), so
+    // there's nothing for the factory to generate or pass through here.
     billingZipcode: faker.string.numeric({ length: 6 }),
   };
 }
