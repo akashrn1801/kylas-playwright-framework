@@ -360,8 +360,17 @@ export class DealsPage extends BasePage {
     // exercises different contacts/companies each run.
     const allOptions = this.page.locator('.is-invalid__option');
     const optionCount = await allOptions.count();
+    // WHY: Instrumentation checkpoint — CI timeout investigation (2026-07-05).
+    // No log previously existed between count() and the final success log, so
+    // a hang here was indistinguishable from a hang below. If this line never
+    // appears in a future failure's log, the hang is in count()/menu population.
+    logger.info(`${description}: counted ${optionCount} options`);
     const randomIndex = Math.floor(Math.random() * optionCount);
     const selectedOption = allOptions.nth(randomIndex);
+    // WHY: Instrumentation checkpoint — if this line appears but the final
+    // success log never does, the hang is specifically in textContent()/click()
+    // on this already-resolved element, not in resolving the index itself.
+    logger.info(`${description}: attempting index ${randomIndex} of ${optionCount}`);
     const selectedText = (await selectedOption.textContent())?.trim() ?? 'unknown';
     await selectedOption.click();
     await this.page.waitForTimeout(300);
