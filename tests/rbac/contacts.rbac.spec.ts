@@ -518,12 +518,35 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['note']);
     await restrictedContactsPage.goToContactDetailsById(contactId!);
+    // WHY: Register the response wait BEFORE clicking — confirmed live (staging)
+    // that opening the Notes panel fires GET /v1/notes/relation?...targetEntityType=
+    // CONTACT... to fetch the actual notes list. A flat waitForTimeout(500) here
+    // previously raced that fetch: on a slow load the DOM still shows
+    // react-loading-skeleton placeholder rows (which match the same
+    // div.row.pt-2.pl-2.pr-2 selector used below) instead of the real,
+    // possibly-empty list, so baselineCount could count stale skeleton rows —
+    // the confirmed root cause of this test's flake. Waiting for the real
+    // response makes baselineCount reflect the actual loaded state instead.
+    const notesLoadedPromise = restrictedPage
+      .waitForResponse(
+        (res) =>
+          res.url().includes('/v1/notes/relation') &&
+          res.url().includes('targetEntityType=CONTACT') &&
+          res.request().method() === 'GET',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
     // WHY: Click Notes icon to open notes panel
     await restrictedPage
       .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')
       .first()
       .click();
-    await restrictedPage.waitForTimeout(500);
+    await notesLoadedPromise;
+    // WHY: Small settle wait for React to render the fetched data — the
+    // response promise above is what actually prevents the race; this is
+    // just a bounded margin for the render tick that follows it, not a guess
+    // about how long the fetch itself takes.
+    await restrictedPage.waitForTimeout(300);
     // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
     const baselineCount = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
     // WHY: Add first note — this note will be kept
