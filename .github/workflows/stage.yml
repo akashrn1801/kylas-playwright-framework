@@ -68,3 +68,15 @@ jobs:
           name: playwright-report-stage
           path: reports/playwright-report/
           retention-days: 14
+
+      # WHY: trace.zip/video/screenshots for failed tests land in test-results/
+      # (playwright.config.ts outputDir), not reports/playwright-report/ — without
+      # this, they're generated on every failure but discarded when the runner
+      # tears down, leaving no way to diagnose a failure after the fact.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-stage
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
