@@ -751,7 +751,17 @@ test.describe('Deals RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminDealsPage = new DealsPage(adminPage);
-    const dealData = generateSharedDealData();
+    // WHY: Deterministic contact — same root cause and fix as the Call
+    // "No Contact Associated" test (2026-07-06): fillDealForm's random
+    // pre-existing contact pick can occasionally land on one already
+    // accessible to the restricted user from unrelated historical staging
+    // state, making this test flaky rather than reliably exercising the
+    // inaccessible-contact path. A fresh, admin-only contact guarantees it.
+    const { contactName, companyName } = await createFreshContactAndCompany(adminPage);
+    const dealData = generateSharedDealData({
+      associatedContactName: contactName,
+      associatedCompanyName: companyName,
+    });
     await adminDealsPage.goToDealsList();
     const dealId = await adminDealsPage.createDeal(dealData);
     if (!dealId) throw new Error('Deal ID not captured — cannot share');
