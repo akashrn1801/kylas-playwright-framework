@@ -551,6 +551,14 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form filled');
   }
 
+  // WHY: A substring `hasText` match against the user-selection dropdown can
+  // select the wrong entry whenever one user's display name is a substring
+  // of another's — confirmed live root cause of a similar bug in
+  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
+  private escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   async fillAssignedTo(userName: string): Promise<void> {
     logger.info(`Assigning task to: ${userName}`);
     const input = this.taskAssignedToInput();
@@ -563,11 +571,12 @@ export class TasksPage extends BasePage {
     await this.page.waitForTimeout(1500);
     // WHY: Try both .is-invalid__option and generic react-select option selectors
     // as the class name may differ between environments
-    let option = this.page.locator('.is-invalid__option').filter({ hasText: userName }).first();
+    const exactUserName = new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`);
+    let option = this.page.locator('.is-invalid__option').filter({ hasText: exactUserName }).first();
     const isVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
     if (!isVisible) {
       logger.warn(`'.is-invalid__option' not found — trying generic react-select option`);
-      option = this.page.locator('[class*="__option"]').filter({ hasText: userName }).first();
+      option = this.page.locator('[class*="__option"]').filter({ hasText: exactUserName }).first();
     }
     await option.waitFor({ state: 'visible', timeout: 15000 });
     await option.click();

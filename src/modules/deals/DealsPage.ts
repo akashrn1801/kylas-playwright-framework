@@ -1,6 +1,9 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
 import { DealData, formatDateForCalendarLabel } from '../../data/factories/dealFactory';
+import { TasksPage } from '../tasks/TasksPage';
+import { MeetingsPage } from '../meetings/MeetingsPage';
+import { generateTaskData } from '../../data/factories/taskFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
@@ -162,6 +165,95 @@ export class DealsPage extends BasePage {
       .locator('xpath=ancestor::div[contains(@class,"container")]')
       .locator('[class*="indicator"]:not([class*="separator"])')
       .last();
+
+  // ── Ellipsis menu ──────────────────────────────────────────
+
+  private readonly ellipsisButton = (): Locator =>
+    this.page.locator('button.btn.dropdown-toggle.btn-down-arrow.btn-primary').first();
+
+  private readonly ellipsisMenuItem = (text: string): Locator =>
+    this.page.locator('.dropdown-menu.show a.dropdown-item').filter({ hasText: text });
+
+  // ── Delete ─────────────────────────────────────────────────
+
+  private readonly deleteConfirmButton = (): Locator => this.page.locator('button#confirm.btn-danger');
+
+  // ── Share ──────────────────────────────────────────────────
+
+  // WHY: Confirmed live — Deals' share modal has id="shareModal" (vs generic .modal.show)
+  private readonly shareModal = (): Locator => this.page.locator('#shareModal');
+
+  private readonly shareToUserInput = (): Locator =>
+    this.page.locator('[id="undefined_undefinedundefined_input_toId"]');
+
+  private readonly sharePermissionToggle = (permission: string): Locator =>
+    this.page.locator(`#inp_${permission}`);
+
+  private readonly shareConfirmButton = (): Locator =>
+    this.page.locator('.modal.show button.btn-primary.ml-auto').first();
+
+  // ── Reassign ───────────────────────────────────────────────
+
+  private readonly reassignUserInput = (): Locator =>
+    this.page.locator('[id="undefined_undefinedundefined_input_entitySelection"]');
+
+  private readonly reassignConfirmButton = (): Locator =>
+    this.page.locator('.modal.show button.btn-primary.ml-auto').first();
+
+  // ── Right panel icons ──────────────────────────────────────
+
+  // WHY: Confirmed live — the `title` attribute on these buttons is always empty;
+  // the real label lives in data-original-title (Bootstrap tooltip pattern).
+  private readonly rightPanelIconSvgMap: Record<string, string> = {
+    Notes: 'paint0_linear_972_2654',
+    Tasks: 'clip-Ic_Task',
+    Meetings: 'clip-Ic_Meetings',
+    'Call Logs': 'paint1_linear_deals',
+    Quotations: 'Quotation_Icon-16px_New',
+  };
+
+  private readonly rightPanelIcon = (title: string): Locator => {
+    const svgId = this.rightPanelIconSvgMap[title];
+    if (svgId) {
+      return this.page
+        .locator(
+          `button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[data-original-title="${title}"]`
+        )
+        .first();
+    }
+    return this.page.locator(`button.btn.btn-transparent[data-original-title="${title}"]`);
+  };
+
+  // ── Associated Contacts card ───────────────────────────────
+
+  private readonly associatedContactsCard = (): Locator =>
+    this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Associated Contacts' }) })
+      .first();
+
+  // ── Detail page header fields ──────────────────────────────
+  // WHY: Selectors confirmed live from the details-page-header-section HTML.
+  // WHY: .first() required — confirmed live these ids render twice in the DOM
+  // (responsive duplicate layout), causing a strict-mode violation without it.
+  private readonly ownerFieldValue = (): Locator => this.page.locator('#ownedBy .title').first();
+  private readonly companyFieldValue = (): Locator => this.page.locator('#company .title').first();
+  private readonly productsFieldValue = (): Locator => this.page.locator('#products .title').first();
+  private readonly estimatedValueFieldValue = (): Locator =>
+    this.page.locator('#estimatedValue .title').first();
+  private readonly actualValueFieldValue = (): Locator =>
+    this.page.locator('#actualValue .title').first();
+  private readonly estimatedClosureFieldValue = (): Locator =>
+    this.page.locator('#estimatedClosureOn .title').first();
+  private readonly actualClosureFieldValue = (): Locator =>
+    this.page.locator('#actualClosureDate .title').first();
+  private readonly convertedFromFieldValue = (): Locator =>
+    this.page.locator('#convertedLeads .title').first();
+
+  // ── Closed pipeline stage (Won / Closed Lost / Closed Unqualified) ──
+  // WHY: Confirmed live — closed stages replace the in-progress stage bar
+  // entirely with this element instead of updating .in-progress-stage.
+  private readonly closedPipelineStageEl = (): Locator => this.page.locator('.closed-pipeline-stage');
 
   // ──────────────────────────────────────────────────────────
   // Constructor
@@ -328,7 +420,8 @@ export class DealsPage extends BasePage {
 
   private async selectFirstOptionFromDropdown(
     inputLocator: Locator,
-    description: string
+    description: string,
+    exactName?: string
   ): Promise<void> {
     logger.info(`Selecting ${description}`);
     // WHY: Click the dropdown indicator arrow — more reliable than clicking input.
@@ -355,6 +448,27 @@ export class DealsPage extends BasePage {
       }
     }
     if (!found) throw new Error(`${description} options did not appear after 40s`);
+
+    // WHY: Deterministic path — for tests where the associated contact/
+    // company's ownership matters (share/reassign/permission tests), picking
+    // a random pre-existing entity is unsafe (its owner/share-state is
+    // unknown and uncontrolled). Type the known entity's name and select the
+    // exact match instead of falling back to the random-index behavior below.
+    if (exactName) {
+      const words = exactName.trim().split(' ');
+      const validWord = words.find((w) => w.length >= 3) ?? exactName.trim().substring(0, 3);
+      await inputLocator.fill(validWord);
+      await this.page.waitForTimeout(800);
+      const exactOption = this.page
+        .locator('.is-invalid__option')
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactName)}\\s*$`) })
+        .first();
+      await exactOption.waitFor({ state: 'visible', timeout: 10000 });
+      await exactOption.click();
+      await this.page.waitForTimeout(300);
+      logger.success(`${description} selected: "${exactName}" (exact match)`);
+      return;
+    }
 
     // WHY: Pick a random option instead of always the first —
     // exercises different contacts/companies each run.
@@ -467,9 +581,14 @@ export class DealsPage extends BasePage {
     if (!data.skipAssociatedEntities) {
       await this.selectFirstOptionFromDropdown(
         this.associatedContactsInput(),
-        'associated contact'
+        'associated contact',
+        data.associatedContactName
       );
-      await this.selectFirstOptionFromDropdown(this.associatedCompanyInput(), 'associated company');
+      await this.selectFirstOptionFromDropdown(
+        this.associatedCompanyInput(),
+        'associated company',
+        data.associatedCompanyName
+      );
     } else {
       logger.info('Skipping associated contact and company (skipAssociatedEntities=true)');
     }
@@ -893,7 +1012,19 @@ export class DealsPage extends BasePage {
     await this.assertDealExistsInList(data.name);
   }
 
-  async assertDealUpdated(data: DealData): Promise<void> {
+  async assertDealUpdated(data: DealData, dealId?: number): Promise<void> {
+    // WHY: ID-first — direct navigation is more reliable AND faster than list
+    // search (no filter-panel state, no search-index lag, no ambiguity from
+    // name collisions). List search is only a fallback for when no ID exists.
+    if (dealId) {
+      await this.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+      await this.waitForDealDetailsPage();
+      const bodyText = await this.page.locator('body').innerText();
+      if (!bodyText.includes(data.name)) {
+        throw new Error(`Deal ID ${dealId} detail page does not show expected name "${data.name}"`);
+      }
+      return;
+    }
     await this.goToDealsList();
     await this.assertDealExistsInList(data.name);
   }
@@ -1026,5 +1157,513 @@ export class DealsPage extends BasePage {
     await modal.locator('button[aria-label="Close"]').click();
     await modal.waitFor({ state: 'hidden', timeout: 5000 });
     logger.success('Part payments summary verified');
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Ellipsis Menu Actions
+  // ──────────────────────────────────────────────────────────
+
+  async openEllipsisMenu(): Promise<void> {
+    logger.info('Opening ellipsis menu');
+    await this.ellipsisButton().scrollIntoViewIfNeeded();
+    await this.ellipsisButton().click();
+    await this.page.locator('.dropdown-menu.show').waitFor({ state: 'visible', timeout: 5000 });
+    logger.success('Ellipsis menu opened');
+  }
+
+  async clickEllipsisOption(optionText: string): Promise<void> {
+    logger.info(`Clicking ellipsis option: ${optionText}`);
+    await this.openEllipsisMenu();
+    const item = this.ellipsisMenuItem(optionText);
+    await item.waitFor({ state: 'visible', timeout: 5000 });
+    await item.click();
+    logger.success(`Clicked ellipsis option: ${optionText}`);
+  }
+
+  async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
+    logger.info(`Asserting ellipsis option not visible: ${optionText}`);
+    await this.openEllipsisMenu();
+    const item = this.ellipsisMenuItem(optionText);
+    await expect(item, `Ellipsis option "${optionText}" should not be visible`)
+      .toBeHidden({ timeout: 3000 })
+      .catch(async () => {
+        const count = await item.count();
+        expect(count, `Ellipsis option "${optionText}" should not exist`).toBe(0);
+      });
+    logger.success(`Ellipsis option not visible: ${optionText}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Delete
+  // ──────────────────────────────────────────────────────────
+
+  async deleteDeal(): Promise<void> {
+    logger.info('Deleting deal via ellipsis menu');
+    await this.clickEllipsisOption('Delete');
+    await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Capture the DELETE response before clicking — never end a mutation
+    // with only a blind wait (CLAUDE.md rule #2).
+    const deleteResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'DELETE',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+    await this.deleteConfirmButton().click();
+    await deleteResponsePromise;
+    logger.success('Deal deleted');
+  }
+
+  async assertDealDeletedById(dealId: number): Promise<void> {
+    logger.info(`Asserting deal ${dealId} is deleted`);
+    await this.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+    const detailUrlPattern = new RegExp(`/deals/details/${dealId}$`);
+    const errorToast = this.page.locator('.toastr.rrt-error, .alert-danger, [class*="error-toast"]').first();
+    // WHY: Wait for one of the two real terminal signals — redirected away or
+    // an error toast shown — instead of a blind sleep before checking.
+    await Promise.race([
+      this.page.waitForURL((url) => !detailUrlPattern.test(url.toString()), { timeout: 10000 }).catch(() => null),
+      errorToast.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
+    ]);
+    const isRedirected = !detailUrlPattern.test(this.page.url());
+    const hasErrorToast = await errorToast.isVisible().catch(() => false);
+    expect(
+      isRedirected || hasErrorToast,
+      `Deal ${dealId} should be deleted (redirected away or error toast shown)`
+    ).toBeTruthy();
+    logger.success(`Deal ${dealId} confirmed deleted`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Clone
+  // ──────────────────────────────────────────────────────────
+
+  async cloneDeal(): Promise<number | null> {
+    logger.info('Cloning deal via ellipsis menu');
+    await this.clickEllipsisOption('Clone');
+    await this.editModal().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
+    // and there is no email/phone dedup needed (deal form has neither field, and the
+    // app does not reject a duplicate deal name on save).
+    const dealIdPromise = this.captureDealIdFromResponse();
+    await this.click(this.saveEditButton(), 'clone save button');
+    await this.assertNoFormErrors('deal clone form');
+    const clonedId = await dealIdPromise;
+    await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
+    logger.success(`Deal cloned — new ID: ${clonedId}`);
+    return clonedId;
+  }
+
+  async assertClonedDealName(originalName: string, clonedId: number): Promise<void> {
+    // WHY: ID-first — mirrors LeadsPage.assertClonedLeadLastName's fix. List
+    // search does a loose multi-field match with no guaranteed row position;
+    // navigating directly to the clone's own ID is deterministic.
+    logger.info(`Asserting cloned deal has "Copy" in name — original: ${originalName}`);
+    const clonedName = `${originalName} Copy`;
+    await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
+    await this.waitForDealDetailsPage();
+    const bodyText = await this.page.locator('body').innerText();
+    if (!bodyText.includes(clonedName)) {
+      throw new Error(`Cloned deal ID ${clonedId} detail page does not show expected name "${clonedName}"`);
+    }
+    logger.success(`Cloned deal found with name: ${clonedName}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Share Deal
+  // ──────────────────────────────────────────────────────────
+
+  // WHY: Confirmed live — a substring hasText match against a user/entity
+  // search dropdown can select the wrong option whenever a similarly-named
+  // entity exists (e.g. a name that is a substring of another). Always
+  // anchor-match the exact text when selecting among multiple options by name.
+  private escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async shareDeal(restrictedUserName: string, permissions: string[] = []): Promise<void> {
+    logger.info(`Sharing deal with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
+    await this.clickEllipsisOption('Share');
+    await this.shareModal().waitFor({ state: 'visible', timeout: 10000 });
+
+    // WHY: Open the Share To type dropdown, select "User"
+    const shareTypeControl = this.shareModal().locator('.is-invalid__control').first();
+    await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
+    await shareTypeControl.click();
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await userOption.waitFor({ state: 'visible', timeout: 5000 });
+    await userOption.click();
+
+    // WHY: Search requires >= 3 chars — find first eligible word, fallback to first 3 chars
+    await this.shareToUserInput().waitFor({ state: 'visible', timeout: 5000 });
+    const words = restrictedUserName.trim().split(' ');
+    const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
+    await this.shareToUserInput().fill(validWord);
+    const userItem = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
+      .first();
+    await userItem.waitFor({ state: 'visible', timeout: 10000 });
+    await userItem.click();
+
+    // WHY: Enable specific permissions — JS click on label sibling of input,
+    // then verify the toggle actually reflects checked state before moving on.
+    for (const permission of permissions) {
+      const toggle = this.sharePermissionToggle(permission);
+      const isChecked = await toggle.isChecked().catch(() => false);
+      if (!isChecked) {
+        await this.page.evaluate((perm) => {
+          const input = document.querySelector(`#inp_${perm}`) as HTMLElement;
+          (input?.parentElement?.querySelector('label') as HTMLElement)?.click();
+        }, permission);
+        await expect(toggle, `Permission "${permission}" should be checked after toggling`).toBeChecked({
+          timeout: 3000,
+        });
+      }
+    }
+
+    await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the share-API response wait BEFORE clicking — confirms the
+    // server actually processed the permission change instead of a blind sleep.
+    const shareResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/deals\/\d+\/share$/) !== null && res.request().method() === 'POST',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+    await this.shareConfirmButton().click();
+    await shareResponsePromise;
+    await this.shareModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+    logger.success(`Deal shared with: ${restrictedUserName}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Reassign Deal
+  // ──────────────────────────────────────────────────────────
+
+  async reassignDeal(userName: string): Promise<void> {
+    logger.info(`Reassigning deal to: ${userName}`);
+    await this.clickEllipsisOption('Reassign');
+    await this.reassignUserInput().waitFor({ state: 'visible', timeout: 10000 });
+
+    const words = userName.trim().split(' ');
+    const validWord = words.find((w) => w.length >= 3) ?? userName.trim().substring(0, 3);
+    await this.reassignUserInput().fill(validWord);
+    const userItem = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`) })
+      .first();
+    await userItem.waitFor({ state: 'visible', timeout: 10000 });
+    await userItem.click();
+
+    await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
+    // WHY: Register the reassign-API (owner change) response wait BEFORE
+    // clicking — confirms ownership actually changed server-side.
+    const reassignResponsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(/\/v1\/deals\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+        { timeout: 15000 }
+      )
+      .catch(() => null);
+    await this.reassignConfirmButton().click();
+    await reassignResponsePromise;
+    await this.reassignUserInput().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+    logger.success(`Deal reassigned to: ${userName}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Add Contact
+  // ──────────────────────────────────────────────────────────
+
+  async getAssociatedContactsCount(): Promise<number> {
+    const headerText = await this.associatedContactsCard().locator('h2').textContent().catch(() => '');
+    const match = headerText?.match(/\((\d+)\)/);
+    return match ? parseInt(match[1], 10) : 0;
+  }
+
+  async getAssociatedContactId(): Promise<number | null> {
+    // WHY: ID-first — read the href directly rather than search by name
+    const contactLink = this.associatedContactsCard().locator('a.list__anchor').first();
+    const href = await contactLink.getAttribute('href').catch(() => null);
+    if (!href) return null;
+    const match = href.match(/\/contacts\/details\/(\d+)/);
+    return match ? parseInt(match[1], 10) : null;
+  }
+
+  async getAssociatedContactName(): Promise<string | null> {
+    const nameEl = this.associatedContactsCard().locator('.deal-contact__name').first();
+    return (await nameEl.textContent().catch(() => null))?.trim() ?? null;
+  }
+
+  async getAssociatedCompanyName(): Promise<string | null> {
+    // WHY: The company header field renders as a styled <span>, not an <a href>,
+    // so there's no ID to read directly (unlike the contact link) — name-based
+    // lookup is the practical option here, not a shortcut around ID-first.
+    return (await this.companyFieldValue().textContent().catch(() => null))?.trim() ?? null;
+  }
+
+  async addContactToDeal(): Promise<void> {
+    // WHY: Confirmed live — "Add Contact" in the deal ellipsis menu reuses the
+    // full "Edit Deal" modal scoped to the associatedContacts field. Unlike
+    // Contacts/Companies, Deals has no dedicated new-contact-creation form here —
+    // it only lets you attach an EXISTING contact via the same picker fillDealForm uses.
+    logger.info('Adding existing contact to deal via ellipsis menu');
+    await this.clickEllipsisOption('Add Contact');
+    await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
+    await expect(this.editModal().locator('.modal-title')).toHaveText('Edit Deal', { timeout: 5000 });
+
+    // WHY: Confirmed live via elementFromPoint + control-class polling — unlike
+    // the create-deal flow, when associatedContacts is empty this field's
+    // dropdown AUTO-OPENS itself asynchronously (~500ms after the modal
+    // renders, zero clicks) — verified: control class had no "menu-is-open" at
+    // t=0 (0 options) and had it with 25 options at t=500ms, with no
+    // interaction in between. Manually clicking the indicator (as the shared
+    // selectFirstOptionFromDropdown helper does, correctly, for the create
+    // flow's genuinely-closed case) races this in-flight auto-open — React
+    // replaces the control mid-click, which is what caused the indicator click
+    // to hang forever in an actionability retry loop ("intercepts pointer
+    // events"). Don't click at all on the primary path — just wait for the
+    // auto-opened options; only click as a fallback if it never auto-opens.
+    const control = this.associatedContactsInput().locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
+    const indicator = control.locator('.is-invalid__dropdown-indicator');
+    await indicator.waitFor({ state: 'visible', timeout: 10000 });
+    const firstOption = this.page.locator('.is-invalid__option').first();
+    try {
+      await firstOption.waitFor({ state: 'visible', timeout: 8000 });
+    } catch {
+      logger.info('Associated contacts did not auto-open — clicking indicator as fallback');
+      await indicator.scrollIntoViewIfNeeded();
+      await indicator.click();
+      await firstOption.waitFor({ state: 'visible', timeout: 10000 });
+    }
+    const allOptions = this.page.locator('.is-invalid__option');
+    const optionCount = await allOptions.count();
+    const randomIndex = Math.floor(Math.random() * optionCount);
+    const selectedText = (await allOptions.nth(randomIndex).textContent())?.trim() ?? 'unknown';
+    await allOptions.nth(randomIndex).click();
+    logger.success(`Associated contact selected: "${selectedText}" (index ${randomIndex} of ${optionCount})`);
+
+    await this.saveEditedDeal();
+    logger.success('Contact added to deal');
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Right Panel Icon Actions
+  // ──────────────────────────────────────────────────────────
+
+  async clickRightPanelIcon(title: string): Promise<void> {
+    logger.info(`Clicking right panel icon: ${title}`);
+    const icon = this.rightPanelIcon(title);
+    await icon.waitFor({ state: 'visible', timeout: 10000 });
+    await icon.click();
+    logger.success(`Right panel icon clicked: ${title}`);
+  }
+
+  async assertRightPanelIconVisible(title: string): Promise<void> {
+    logger.info(`Asserting right panel icon visible: ${title}`);
+    await expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be visible`).toBeVisible({
+      timeout: config.timeouts.navigation,
+    });
+    logger.success(`Right panel icon visible: ${title}`);
+  }
+
+  async assertRightPanelIconNotVisible(title: string): Promise<void> {
+    logger.info(`Asserting right panel icon NOT visible: ${title}`);
+    await expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be hidden`).toBeHidden({
+      timeout: 5000,
+    });
+    logger.success(`Right panel icon not visible: ${title}`);
+  }
+
+  async addNoteFromPanel(noteText: string): Promise<void> {
+    logger.info(`Adding note from deal panel: "${noteText}"`);
+    await this.clickRightPanelIcon('Notes');
+    const notesTextarea = this.page.locator('textarea.notes-textarea');
+    await notesTextarea.waitFor({ state: 'visible', timeout: 10000 });
+    await notesTextarea.click();
+    const richTextEditor = this.page.getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill(noteText);
+    const addButton = this.page.getByText('Add', { exact: true });
+    await addButton.waitFor({ state: 'visible', timeout: 5000 });
+    await addButton.click();
+    await this.page.locator('div.row.pt-2.pl-2.pr-2').first().waitFor({ state: 'visible', timeout: 10000 });
+    logger.success(`Note added: "${noteText}"`);
+  }
+
+  async addTaskFromPanel(taskName: string): Promise<void> {
+    logger.info(`Adding task from deal panel: "${taskName}"`);
+    await this.clickRightPanelIcon('Tasks');
+    const tasksPage = new TasksPage(this.page);
+    const taskData = generateTaskData({ name: taskName });
+    await tasksPage.openQuickTaskForm();
+    await tasksPage.fillQuickTaskForm(taskData);
+    await tasksPage.saveQuickTaskFromEntityDetail();
+    logger.success(`Task added from panel: "${taskName}"`);
+  }
+
+  async addMeetingFromPanel(meetingTitle: string): Promise<void> {
+    logger.info(`Adding meeting from deal panel: "${meetingTitle}"`);
+    const dealUrl = this.page.url();
+    await this.clickRightPanelIcon('Meetings');
+    const addMeetingButton = this.page.locator('#addMeeting');
+    await addMeetingButton.waitFor({ state: 'visible', timeout: 10000 });
+    await addMeetingButton.click();
+    const meetingsPage = new MeetingsPage(this.page);
+    await meetingsPage.fillTitleOnly(meetingTitle);
+    // WHY: Save directly without meetingsPage.saveMeeting() — that method
+    // navigates to the meeting's own detail page via a post-save popup, which
+    // would strand us away from the deal detail page mid-flow.
+    const saveBtn = this.page.locator('button.save-button, #editEntityModal button[type="submit"]').first();
+    await saveBtn.waitFor({ state: 'visible', timeout: 10000 });
+    await saveBtn.click();
+    await this.assertNoFormErrors('meeting create form (from deal panel)');
+    await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
+    if (!this.page.url().includes(dealUrl.split('/details/')[1] ?? '___never___')) {
+      await this.navigateTo(dealUrl);
+      await this.waitForDealDetailsPage();
+    }
+    logger.success(`Meeting added from panel: "${meetingTitle}"`);
+  }
+
+  async addQuotationFromPanel(): Promise<string | null> {
+    logger.info('Adding quotation from deal productivity panel');
+    await this.clickRightPanelIcon('Quotations');
+    const quotationsCard = this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
+      .first();
+    await quotationsCard.waitFor({ state: 'visible', timeout: 10000 });
+    await quotationsCard.scrollIntoViewIfNeeded();
+    const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
+    await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
+    await quotationCardAdd.click();
+    await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
+    await expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 });
+
+    const quotationIdPromise = this.page
+      .waitForResponse(
+        (res) =>
+          (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
+          res.request().method() === 'POST' &&
+          (res.status() === 200 || res.status() === 201),
+        { timeout: 30000 }
+      )
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
+        return id ? String(id) : null;
+      })
+      .catch(() => null);
+
+    const timestamp = Date.now();
+    const quotationNumber = `QUO-${timestamp}`;
+    const quotationNumberInput = this.page.locator('[id="0_11_input_quotationNumber"]');
+    await quotationNumberInput.waitFor({ state: 'visible', timeout: 10000 });
+    await this.fill(quotationNumberInput, quotationNumber, 'quotation number');
+    const summaryField = this.page.locator('[id="0_21_input_summary"]');
+    await this.fill(summaryField, `Summary-${timestamp}`, 'summary');
+
+    const firstProductPrice = this.page.locator('[id="1_03_input_products.0.price"]');
+    const firstProductValue = await firstProductPrice.inputValue().catch(() => '');
+    if (!firstProductValue || firstProductValue === '0') {
+      const productInput = this.page.locator('[id*="input_products.0.id"]').first();
+      if (await productInput.isVisible().catch(() => false)) {
+        const productControl = this.page.locator('.is-invalid__control').filter({ has: productInput });
+        await productControl.click();
+        await productInput.fill('BHK');
+        const productOptions = this.page.locator('.is-invalid__option');
+        await productOptions.first().waitFor({ state: 'visible', timeout: 15000 });
+        await productOptions.first().click();
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 10000 })
+          .catch(() => {});
+        const quantityInput = this.page.locator('input[name="products.0.quantity"]').first();
+        if (await quantityInput.isVisible().catch(() => false)) {
+          const qtyVal = await quantityInput.inputValue().catch(() => '');
+          if (!qtyVal || qtyVal === '0') {
+            await quantityInput.fill('1');
+          }
+        }
+      }
+    }
+
+    const modalSaveButton = this.page.locator('#editEntityModal button[type="submit"].btn-primary');
+    await modalSaveButton.waitFor({ state: 'visible', timeout: 5000 });
+    await modalSaveButton.click();
+    await this.assertNoFormErrors('add quotation from panel');
+    await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
+    const quotationId = await quotationIdPromise;
+    logger.success(`Quotation added from panel: ${quotationId}`);
+    return quotationId;
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Detail Page Fields
+  // ──────────────────────────────────────────────────────────
+
+  async assertOwnerOnDetail(expectedOwner: string): Promise<void> {
+    logger.info(`Asserting owner on detail: ${expectedOwner}`);
+    await expect(this.ownerFieldValue(), `Owner field should show "${expectedOwner}"`).toContainText(
+      expectedOwner,
+      { timeout: 10000 }
+    );
+    logger.success(`Owner confirmed: ${expectedOwner}`);
+  }
+
+  async assertDealDetailFields(data: DealData): Promise<void> {
+    logger.info('Asserting deal detail header fields and tabs');
+    await this.assertOnDealDetailPage();
+    await expect(this.ownerFieldValue()).toBeVisible({ timeout: 10000 });
+    await expect(this.companyFieldValue()).toBeVisible({ timeout: 10000 });
+    await expect(this.productsFieldValue()).toBeVisible({ timeout: 10000 });
+    await expect(this.estimatedValueFieldValue()).toContainText('INR', { timeout: 10000 });
+    await expect(this.actualValueFieldValue()).toContainText('INR', { timeout: 10000 });
+    await expect(this.estimatedClosureFieldValue()).toBeVisible({ timeout: 10000 });
+    await expect(this.actualClosureFieldValue()).toBeVisible({ timeout: 10000 });
+    // WHY: Converted From always reads "-" for deals not created via lead
+    // conversion (out of scope here) — presence check only, not value match.
+    await expect(this.convertedFromFieldValue()).toBeVisible({ timeout: 10000 });
+
+    const tabPane = this.page.locator('.tab-pane.active.show');
+
+    await this.page.locator('#nav-tab0-tab').click();
+    await expect(tabPane, 'Basic Information tab should show the deal name').toContainText(data.name, {
+      timeout: 10000,
+      ignoreCase: true,
+    });
+
+    await this.page.locator('#nav-tab1-tab').click();
+    await expect(tabPane, 'Campaign Information tab should show UTM source').toContainText(
+      data.utmSource,
+      { timeout: 10000, ignoreCase: true }
+    );
+    await expect(tabPane).toContainText(data.utmCampaign, { timeout: 10000, ignoreCase: true });
+    await expect(tabPane).toContainText(data.utmMedium, { timeout: 10000, ignoreCase: true });
+    await expect(tabPane).toContainText(data.utmTerm, { timeout: 10000, ignoreCase: true });
+
+    await this.page.locator('#nav-tab2-tab').click();
+    // WHY: Confirmed live — the word "Internals" only labels the tab nav item,
+    // it never appears inside the pane's own content. Assert real content
+    // instead (Created By/Forecasting Type are always present on any deal).
+    await expect(tabPane, 'Internals tab should be active').toContainText('Created By', { timeout: 10000 });
+    await expect(tabPane).toContainText('Forecasting Type');
+
+    logger.success('Deal detail fields verified');
+  }
+
+  async assertClosedPipelineStage(expectedLabel: string): Promise<void> {
+    logger.info(`Asserting closed pipeline stage: ${expectedLabel}`);
+    await expect(
+      this.closedPipelineStageEl(),
+      `Closed pipeline stage should show "${expectedLabel} Deal"`
+    ).toContainText(`${expectedLabel} Deal`, { timeout: 15000 });
+    logger.success(`Closed pipeline stage verified: ${expectedLabel}`);
   }
 }
