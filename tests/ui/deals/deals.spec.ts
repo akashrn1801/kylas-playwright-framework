@@ -1,7 +1,8 @@
-import { test } from '../../../src/fixtures/index';
+import { test, expect } from '../../../src/fixtures/index';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateDealData,
+  generateSharedDealData,
   CLOSED_LOST_REASONS,
   CLOSED_UNQUALIFIED_REASONS,
 } from '../../../src/data/factories/dealFactory';
@@ -250,6 +251,165 @@ test.describe('Deals', () => {
     await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Won pipeline stage
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should change pipeline stage to Won', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+
+    await dealsPage.searchAndOpenDeal(dealData.name, dealId ?? undefined);
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm(dealData);
+    await dealsPage.changePipelineStageInEdit('Won');
+    await dealsPage.assertPaymentReceivedAfterEdit();
+    await dealsPage.saveEditedDeal();
+
+    // WHY: Re-navigate for a real re-fetch — don't trust the in-memory render
+    // right after save; Won replaces .in-progress-stage with .closed-pipeline-stage.
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.assertClosedPipelineStage('Won');
+    logger.success('Pipeline stage changed to Won and verified on reload');
+    logger.success('D30 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Detail page header fields and tabs
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should verify deal detail header fields and tabs', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.assertDealDetailFields(dealData);
+    logger.success('D31 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Share
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should share a deal with restricted user', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const adminDealsPage = new DealsPage(adminPage);
+    const dealData = generateSharedDealData();
+    await adminDealsPage.goToDealsList();
+    const dealId = await adminDealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await adminDealsPage.goToDealDetailsById(dealId!);
+    const restrictedUserName = await adminDealsPage.getLoggedInUserName('restricted');
+    await adminDealsPage.shareDeal(restrictedUserName, []);
+
+    // WHY: Real end-state check — restricted user's own list, not just save success
+    const restrictedDealsPage = new DealsPage(restrictedPage);
+    await restrictedDealsPage.goToDealsList();
+    await restrictedDealsPage.assertDealExistsInList(dealData.name);
+    logger.success('D32 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Reassign
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should reassign deal to restricted user and verify owner changed', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+    const restrictedUserName = await dealsPage.getLoggedInUserName('restricted');
+    await dealsPage.reassignDeal(restrictedUserName);
+    // WHY: Real end-state check — Owner header field actually changed, not just no-error
+    await dealsPage.assertOwnerOnDetail(restrictedUserName);
+    logger.success('D33 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Clone
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should clone a deal via ellipsis menu and verify cloned deal exists', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+    const clonedId = await dealsPage.cloneDeal();
+    expect(clonedId).not.toBeNull();
+    await dealsPage.assertClonedDealName(dealData.name, clonedId!);
+    logger.success('D34 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Add Contact
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should add an existing contact to a deal from ellipsis menu and verify in Associated Contacts', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData({ skipAssociatedEntities: true });
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+    const baselineCount = await dealsPage.getAssociatedContactsCount();
+    await dealsPage.addContactToDeal();
+    // WHY: Real end-state check — reload and re-read the card count
+    await dealsPage.goToDealDetailsById(dealId!);
+    const afterCount = await dealsPage.getAssociatedContactsCount();
+    expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
+    logger.success('D35 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Delete
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should delete a deal and verify it is removed', async ({ adminPage }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.deleteDeal();
+    await dealsPage.assertDealDeletedById(dealId!);
+    await dealsPage.assertDealNotInList(dealData.name);
+    logger.success('D36 passed');
   });
 
   // ──────────────────────────────────────────────────────────
