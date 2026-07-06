@@ -692,6 +692,14 @@ export class CompaniesPage extends BasePage {
     return companyId;
   }
 
+  // WHY: A substring `hasText` match against the user-selection dropdown can
+  // select the wrong entry whenever one user's display name is a substring
+  // of another's — confirmed live root cause of a similar bug in
+  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
+  private escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   async shareCompany(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing company with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -716,7 +724,7 @@ export class CompaniesPage extends BasePage {
     // WHY: Select matching user from dropdown
     const userItem = this.page
       .locator('.is-invalid__option')
-      .filter({ hasText: restrictedUserName })
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
@@ -764,7 +772,7 @@ export class CompaniesPage extends BasePage {
     await reassignUserInput.fill(validWord);
     await this.page.waitForTimeout(800);
     const userItem = this.page.locator('.is-invalid__option')
-      .filter({ hasText: userName }).first();
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`) }).first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
     await this.page.waitForTimeout(500);

@@ -75,6 +75,14 @@ export interface DealData {
   // the restricted user cannot see quotations linked to it.
   skipAssociatedEntities?: boolean;
 
+  // WHY: When set, fillDealForm selects this exact contact/company by name
+  // instead of a random pre-existing one. Required for any test where the
+  // associated entity's ownership/share-state matters (permission tests) —
+  // a random pick could land on an entity already owned/shared unpredictably
+  // by either test user, per a confirmed live investigation (2026-07-06).
+  associatedContactName?: string;
+  associatedCompanyName?: string;
+
   // Attribution
   subSource: string;
   utmSource: string;
@@ -162,6 +170,29 @@ export function generateAdminDealData(overrides: Partial<DealData> = {}): DealDa
     utmCampaign: `adm_campaign_${timestamp}`,
     utmMedium: 'cpc',
     utmContent: `adm_content_${timestamp}`,
+    utmTerm: 'crm',
+    ...overrides,
+  };
+}
+
+// WHY: Shared deal data uses a unique timestamp prefix (SHR<timestamp>) —
+// admin creates it, then shares/reassigns it to the restricted user for
+// share/reassign RBAC isolation, mirroring generateSharedLeadData/
+// generateSharedContactData/generateSharedCompanyData exactly.
+export function generateSharedDealData(overrides: Partial<DealData> = {}): DealData {
+  const timestamp = Date.now().toString();
+  return {
+    name: `SHR${timestamp}-Deal`,
+    estimatedClosureDate: futureDateFromToday(5),
+    pipeline: 'Default Pipeline',
+    productName: '',
+    productQuantity: faker.number.int({ min: 1, max: 5 }),
+    numberOfInstallments: 2,
+    subSource: 'Organic',
+    utmSource: 'google',
+    utmCampaign: `shr_campaign_${timestamp}`,
+    utmMedium: 'cpc',
+    utmContent: `shr_content_${timestamp}`,
     utmTerm: 'crm',
     ...overrides,
   };
