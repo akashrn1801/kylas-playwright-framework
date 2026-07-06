@@ -573,6 +573,14 @@ export class ContactsPage extends BasePage {
     return contactId;
   }
 
+  // WHY: Confirmed live (Deals module investigation) — a substring hasText
+  // match against a user/entity search dropdown can select the wrong option
+  // whenever a similarly-named entity exists. Always anchor-match the exact
+  // text when selecting among multiple options by name.
+  private escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   async shareContact(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing contact with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -594,10 +602,11 @@ export class ContactsPage extends BasePage {
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
     await this.shareToUserInput().fill(validWord);
     await this.page.waitForTimeout(800);
-    // WHY: Select matching user from dropdown
+    // WHY: Select matching user from dropdown — exact match, not substring
+    // (a substring match can select the wrong, similarly-named entity)
     const userItem = this.page
       .locator('.is-invalid__option')
-      .filter({ hasText: restrictedUserName })
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
@@ -645,7 +654,7 @@ export class ContactsPage extends BasePage {
     await reassignUserInput.fill(validWord);
     await this.page.waitForTimeout(800);
     const userItem = this.page.locator('.is-invalid__option')
-      .filter({ hasText: userName }).first();
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`) }).first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
     await this.page.waitForTimeout(500);
