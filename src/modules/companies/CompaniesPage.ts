@@ -652,14 +652,22 @@ export class CompaniesPage extends BasePage {
     logger.success('Company deleted');
   }
 
-  async cloneCompany(): Promise<number | null> {
+  async cloneCompany(): Promise<{ companyId: number | null; clonedName: string }> {
     logger.info('Cloning company via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
     await this.page.waitForTimeout(1000);
-    // WHY: Read original name before any field fills — used for safety check below
+    // WHY: Read original name before any field fills
     const originalName = await this.nameInput().inputValue().catch(() => '');
+    // WHY: Confirmed live (2026-07-06) — unlike Deals, Company name has real
+    // uniqueness validation ("Company with this name already exists"). The
+    // auto-filled "<name> Copy" text collides with pre-existing data in this
+    // long-lived shared environment — force a guaranteed-unique name instead
+    // of saving the pre-filled value unmodified.
+    const clonedName = `${originalName || 'Company'} Copy ${Date.now()}`;
+    await this.nameInput().clear();
+    await this.nameInput().fill(clonedName);
     // WHY: Change email to unique value — same email as original causes duplicate error
     const emailInput = this.emailInput();
     if (await emailInput.isVisible().catch(() => false)) {
@@ -676,20 +684,14 @@ export class CompaniesPage extends BasePage {
       await phoneInput.fill(newPhone);
       logger.debug(`Clone phone updated to: ${newPhone}`);
     }
-    // WHY: Safety check — name may be cleared on some browsers after fill interactions
-    const nameValue = await this.nameInput().inputValue().catch(() => '');
-    if (!nameValue) {
-      logger.warn('name was cleared during clone — re-filling with Copy suffix');
-      await this.nameInput().fill(`${originalName || 'Company'} Copy`);
-    }
     const companyIdPromise = this.captureCompanyIdFromResponse();
     await this.click(this.saveButton(), 'save cloned company');
     await this.assertNoFormErrors('company clone form');
     const companyId = await companyIdPromise;
     // WHY: After clone save, app stays on original company detail — no redirect to list
     await this.page.waitForTimeout(1500);
-    logger.success('Company cloned successfully');
-    return companyId;
+    logger.success(`Company cloned successfully: "${clonedName}"`);
+    return { companyId, clonedName };
   }
 
   // WHY: A substring `hasText` match against the user-selection dropdown can
@@ -1306,12 +1308,17 @@ export class CompaniesPage extends BasePage {
     logger.success(`Company ${companyId} confirmed deleted`);
   }
 
-  async assertClonedCompanyName(originalName: string): Promise<void> {
-    logger.info(`Asserting cloned company has "Copy" in name — original: ${originalName}`);
-    // WHY: Clone appends " Copy" to the company name — search for it in list
-    const clonedName = `${originalName} Copy`;
-    const found = await this.retryFindCompany(clonedName);
-    expect(found).toBeTruthy();
+  async assertClonedCompanyName(clonedName: string, clonedId: number): Promise<void> {
+    // WHY: ID-first — mirrors DealsPage.assertClonedDealName's fix. List/name
+    // search is unreliable once the cloned name carries a unique suffix and
+    // risks matching the wrong row; navigating directly to the clone's own
+    // ID is deterministic.
+    logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
+    await this.goToCompanyDetailsById(clonedId);
+    const bodyText = await this.page.locator('body').innerText();
+    if (!bodyText.includes(clonedName)) {
+      throw new Error(`Cloned company ID ${clonedId} detail page does not show expected name "${clonedName}"`);
+    }
     logger.success(`Cloned company found with name: ${clonedName}`);
   }
 

@@ -103,8 +103,9 @@ test.describe('Companies', () => {
     const companyId = await companiesPage.createCompany(companyData);
     expect(companyId).not.toBeNull();
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
-    await companiesPage.cloneCompany();
-    await companiesPage.assertClonedCompanyName(companyData.name);
+    const { companyId: clonedId, clonedName } = await companiesPage.cloneCompany();
+    if (!clonedId) throw new Error('Cloned company ID not captured — cannot verify');
+    await companiesPage.assertClonedCompanyName(clonedName, clonedId);
     logger.success('CO6 passed');
   });
 
