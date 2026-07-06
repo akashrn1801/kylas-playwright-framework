@@ -687,7 +687,18 @@ test.describe('Deals RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminDealsPage = new DealsPage(adminPage);
-    const dealData = generateSharedDealData();
+    // WHY: Deterministic contact — confirmed live (2026-07-06) that an
+    // inaccessible contact and a genuinely-absent contact produce the exact
+    // same "No Contact Associated" dialog, so this test's premise was always
+    // correct; the flake was fillDealForm's random pre-existing contact pick
+    // occasionally landing on one already accessible to the restricted user
+    // from unrelated historical staging state. A fresh, admin-only contact
+    // guarantees genuine inaccessibility instead of leaving it to chance.
+    const { contactName, companyName } = await createFreshContactAndCompany(adminPage);
+    const dealData = generateSharedDealData({
+      associatedContactName: contactName,
+      associatedCompanyName: companyName,
+    });
     await adminDealsPage.goToDealsList();
     const dealId = await adminDealsPage.createDeal(dealData);
     if (!dealId) throw new Error('Deal ID not captured — cannot share');
