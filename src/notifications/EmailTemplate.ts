@@ -1,4 +1,5 @@
 import { ParsedReport, ModuleStats, TestResult } from './ReportParser';
+import { RunDelta } from './RunHistory';
 
 export interface EmailContext {
   report: ParsedReport;
@@ -11,6 +12,11 @@ export interface EmailContext {
   runSource?: 'local' | 'github-actions' | 'jenkins';
   allureUrl?: string;
   miscErrors?: any;
+  // WHY: optional, same graceful-absence pattern as miscErrors — populated by
+  // scripts/syncHistory.ts (P2 of the 2026-07-07 reporting overhaul) when the
+  // history-sync step ran and there was a previous run to compare against.
+  historyDelta?: RunDelta | null;
+  recurringFlaky?: Array<{ title: string; flakyInLastNRuns: number; ofLastNRuns: number }>;
 }
 
 export class EmailTemplate {
@@ -32,6 +38,8 @@ export class EmailTemplate {
       triggeredBy,
       runSource,
       allureUrl,
+      historyDelta,
+      recurringFlaky,
     } = ctx;
     const sourceLabel =
       runSource === 'github-actions'
@@ -95,11 +103,21 @@ export class EmailTemplate {
 
     const failedRows = report.failedTests
       .map(
+        // WHY: Confirmed live (2026-07-07 reporting overhaul, P3) — a real
+        // repo-relative path to the failure's trace.zip, sourced from
+        // Playwright's own JSON attachments (see ReportParser.extractTracePath),
+        // not a reconstructed guess at Playwright's directory-naming scheme. A
+        // true one-click deep link isn't reliable here: GitHub Actions artifact
+        // URLs are opaque IDs assigned at upload time, not derivable from the
+        // run ID + artifact name without calling the GitHub API — so this is the
+        // path-only fallback, which is what a reader needs after downloading
+        // and extracting the test-results artifact zip regardless.
         (t: TestResult) => `
       <tr style="border-bottom:1px solid #fee2e2;">
         <td style="padding:8px;color:#1f2937;font-size:12px;">${this.esc(t.title)}</td>
         <td style="padding:8px;color:#6b7280;font-size:11px;">${t.file.split('/').pop() || ''}</td>
         <td style="padding:8px;color:#ef4444;font-size:11px;font-family:monospace;">${this.esc(t.error || 'Unknown error')}</td>
+        <td style="padding:8px;color:#6b7280;font-size:10px;font-family:monospace;word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : '<span style="color:#d1d5db;">no trace captured</span>'}</td>
       </tr>`
       )
       .join('');
@@ -195,6 +213,8 @@ export class EmailTemplate {
   </div>
 </td></tr>
 
+${this.trendSection(historyDelta, recurringFlaky)}
+
 <tr><td style="padding:8px 32px;">
   <div style="background:#f9fafb;border-radius:12px;padding:20px;">
     <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px;">🧪 Test Type Split</div>
@@ -266,6 +286,7 @@ ${
         <th style="padding:6px 8px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">Test</th>
         <th style="padding:6px 8px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">File</th>
         <th style="padding:6px 8px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">Error</th>
+        <th style="padding:6px 8px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">Trace</th>
       </tr>
       ${failedRows}
     </table>
@@ -290,6 +311,58 @@ ${this.miscErrorsSection(ctx.miscErrors)}
 </table>
 </body></html>`;
   }
+
+  // WHY: renders the P2 (2026-07-07 reporting overhaul) trend section — a delta
+  // vs the previous run, plus a "recurring flaky" callout. Deliberately terse
+  // by design (a directive from the overhaul's standing rules): one delta line
+  // and a short list of test titles, not a full historical dashboard per test —
+  // the goal is signal a reader actually looks at, not data nobody reads.
+  private trendSection(
+    delta: EmailContext['historyDelta'],
+    recurringFlaky: EmailContext['recurringFlaky']
+  ): string {
+    if (!delta && (!recurringFlaky || recurringFlaky.length === 0)) return '';
+    const fmtDelta = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
+    const deltaColor = (n: number, goodWhenPositive: boolean): string => {
+      if (n === 0) return '#6b7280';
+      const good = goodWhenPositive ? n > 0 : n < 0;
+      return good ? '#16a34a' : '#ef4444';
+    };
+    const deltaLine = delta
+      ? delta.previousRun === null
+        ? `<div style="font-size:12px;color:#6b7280;">No prior run to compare — this is the first recorded run for this environment.</div>`
+        : `<div style="font-size:13px;color:#374151;">
+             <strong>Δ vs previous run</strong> (build #${this.esc(delta.previousRun.buildNumber)}):
+             <span style="color:${deltaColor(delta.passedDelta, true)};font-weight:700;margin-left:6px;">${fmtDelta(delta.passedDelta)} passed</span>
+             <span style="color:${deltaColor(delta.failedDelta, false)};font-weight:700;margin-left:8px;">${fmtDelta(delta.failedDelta)} failed</span>
+             <span style="color:${deltaColor(delta.flakyDelta, false)};font-weight:700;margin-left:8px;">${fmtDelta(delta.flakyDelta)} flaky</span>
+             <span style="color:#6b7280;margin-left:8px;">(${fmtDelta(delta.totalDelta)} total tests)</span>
+           </div>`
+      : '';
+    const recurringRows = (recurringFlaky || [])
+      .map(
+        (f) =>
+          `<div style="font-size:12px;color:#92400e;padding:3px 0;">⚠️ <strong>${this.esc(f.title)}</strong> — flaky in ${f.flakyInLastNRuns} of the last ${f.ofLastNRuns} runs</div>`
+      )
+      .join('');
+    const recurringBlock =
+      recurringFlaky && recurringFlaky.length > 0
+        ? `<div style="margin-top:${deltaLine ? '10px' : '0'};padding-top:${deltaLine ? '10px' : '0'};${deltaLine ? 'border-top:1px solid #fde68a;' : ''}">
+             <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:4px;">Recurring flaky tests (not just today):</div>
+             ${recurringRows}
+           </div>`
+        : '';
+    if (!deltaLine && !recurringBlock) return '';
+    return `
+<tr><td style="padding:8px 32px;">
+  <div style="background:#fffbeb;border-radius:12px;padding:16px 20px;border:1px solid #fde68a;">
+    <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:8px;">📈 Trend</div>
+    ${deltaLine}
+    ${recurringBlock}
+  </div>
+</td></tr>`;
+  }
+
   private miscErrorsSection(miscErrors: any): string {
     if (!miscErrors || miscErrors.totalErrors === 0) {
       return `
@@ -323,11 +396,19 @@ ${this.miscErrorsSection(ctx.miscErrors)}
     const errorRows = Array.from(byTest.entries())
       .map(([testTitle, errors]) => {
         const details = errors
-          .map(
-            (e) =>
-              `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
+          .map((e) => {
+            // WHY: Confirmed live (2026-07-07 reporting overhaul) — expected no
+            // longer implies RBAC specifically; a background-noise error tagged
+            // "Expected RBAC" would be actively misleading about what happened.
+            const expectedBadge =
+              e.expectedReason === 'rbac'
+                ? ' <span style="font-size:10px;background:#fef9c3;padding:1px 4px;border-radius:3px;margin-left:4px;">✓ Expected RBAC</span>'
+                : e.expectedReason === 'background-noise'
+                  ? ' <span style="font-size:10px;background:#dbeafe;padding:1px 4px;border-radius:3px;margin-left:4px;">🔵 Known Background Noise</span>'
+                  : '';
+            return `<div style="background:#fff8f0;border-left:3px solid #f97316;padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
         <div style="font-size:11px;font-weight:700;color:${e.expected ? '#92400e' : '#ea580c'};">
-          [${e.type}]${e.expected ? ' <span style="font-size:10px;background:#fef9c3;padding:1px 4px;border-radius:3px;margin-left:4px;">✓ Expected RBAC</span>' : ''}
+          [${e.type}]${expectedBadge}
         </div>
         ${e.method ? `<div style="font-size:10px;color:#374151;margin-top:2px;"><strong>Method:</strong> ${e.method}</div>` : ''}
         <div style="font-size:11px;color:#374151;margin-top:2px;"><strong>Error:</strong> ${this.esc((e.message || '').substring(0, 150))}</div>
@@ -336,8 +417,8 @@ ${this.miscErrorsSection(ctx.miscErrors)}
         ${e.apiErrorMessage ? `<div style="font-size:11px;color:#dc2626;margin-top:3px;font-weight:600;background:#fff1f2;padding:4px 6px;border-radius:4px;">⚠️ Server Error: ${this.esc(e.apiErrorMessage)}</div>` : ''}
         ${e.responseBody && !e.apiErrorMessage ? `<div style="font-size:10px;color:#374151;margin-top:2px;font-family:monospace;background:#f3f4f6;padding:3px 6px;border-radius:3px;word-break:break-all;"><strong>Response:</strong> ${this.esc(e.responseBody.substring(0, 300))}</div>` : ''}
         <div style="font-size:10px;color:#9ca3af;margin-top:2px;">⏰ ${e.timestamp}</div>
-      </div>`
-          )
+      </div>`;
+          })
           .join('');
         const more = '';
         return `<tr style="border-bottom:1px solid #fed7aa;"><td style="padding:8px;">
@@ -354,8 +435,9 @@ ${this.miscErrorsSection(ctx.miscErrors)}
       <div style="margin-bottom:8px;display:flex;gap:8px;">
         ${miscErrors.unexpectedErrors > 0 ? `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🔴 ${miscErrors.unexpectedErrors} Unexpected (raise bugs)</span>` : ''}
         ${miscErrors.expectedRbacErrors > 0 ? `<span style="background:#fefce8;border:1px solid #fef08a;color:#92400e;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🟡 ${miscErrors.expectedRbacErrors} Expected RBAC behaviour</span>` : ''}
+        ${miscErrors.expectedBackgroundNoiseErrors > 0 ? `<span style="background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🔵 ${miscErrors.expectedBackgroundNoiseErrors} Known background noise</span>` : ''}
       </div>
-      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">Unexpected = review and raise bugs. Expected RBAC = correct app security behaviour (restricted user access denied).</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">Unexpected = review and raise bugs. Expected RBAC = correct app security behaviour (restricted user access denied). Known background noise = non-load-bearing side-widget failure, confirmed never to affect a test outcome.</div>
       <div style="margin-bottom:12px;">
         <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">By Error Type:</div>
         <table width="200" cellpadding="0" cellspacing="0">${byTypeRows}</table>

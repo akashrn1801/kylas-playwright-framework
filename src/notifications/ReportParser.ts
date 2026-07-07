@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 
 export interface TestResult {
   title: string;
@@ -7,6 +8,15 @@ export interface TestResult {
   error?: string;
   retries: number;
   file: string;
+  // WHY: repo-relative path to the failure's trace.zip, e.g.
+  // "test-results/qa/rbac-deals.rbac-.../trace.zip" — sourced from Playwright's
+  // own JSON report attachments array (already absolute paths on disk), not
+  // reconstructed from the test title. A relative path is what actually matches
+  // what a reader finds after downloading/extracting the CI artifact zip; an
+  // absolute path from the CI runner's filesystem would be meaningless to them.
+  // Undefined when no trace was captured (e.g. a test that failed before any
+  // browser context existed) — callers must handle that, not assume presence.
+  tracePath?: string;
 }
 
 export interface ModuleStats {
@@ -130,6 +140,7 @@ export class ReportParser {
               error: error ? error.substring(0, 300) : undefined,
               retries,
               file: currentFile,
+              tracePath: this.extractTracePath(lastResult),
             });
           }
         }
@@ -138,6 +149,20 @@ export class ReportParser {
     };
     for (const suite of raw.suites || []) walkSuite(suite);
     return results;
+  }
+
+  // WHY: Confirmed live (2026-07-07 reporting overhaul, P3) — Playwright's own
+  // JSON reporter already embeds each result's real attachment paths (absolute,
+  // as written on the CI runner's disk). Convert to repo-relative so the path
+  // shown in a report/email still means something after the CI runner is gone —
+  // it should match what a reader finds inside the downloaded/extracted
+  // test-results artifact zip, not a path that only ever existed on a machine
+  // nobody can access anymore.
+  private extractTracePath(result: any): string | undefined {
+    const attachments = result?.attachments as Array<{ name: string; path?: string }> | undefined;
+    const trace = attachments?.find((a) => a.name === 'trace' && a.path);
+    if (!trace?.path) return undefined;
+    return path.relative(process.cwd(), trace.path).split(path.sep).join('/');
   }
 
   private mapStatus(

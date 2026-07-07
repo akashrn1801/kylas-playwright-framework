@@ -80,6 +80,20 @@ jobs:
           echo "📊 Tests: $TEST_COUNT | Workers: $WORKERS | Time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
+      # WHY: see qa.yml for the full explanation. NOTE: sandbox runs a different,
+      # dynamically-selected test subset each time (see Detect Changed Tests
+      # above), so its total/passed/failed delta is not apples-to-apples run to
+      # run the way a fixed-suite branch's is — the recurring-flaky callout is
+      # still meaningful here, but treat the raw pass/fail delta with that caveat.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: qa
+          BRANCH_NAME: sandbox
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
+
       - name: Send notification email
         if: always()
         env:
