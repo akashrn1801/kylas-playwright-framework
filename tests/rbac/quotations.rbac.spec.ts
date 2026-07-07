@@ -318,7 +318,23 @@ test.describe('Quotations — RBAC', () => {
   test('@regression restricted user should verify grand total math', async ({ restrictedPage }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
-    const data = generateRestrictedQuotationData();
+    // WHY: Confirmed live (2026-07-06) — this test doesn't care which deal backs
+    // the quotation, only the discount/tax/adjustment math, so relying on
+    // fillQuotationForm's selectRandomDeal() (any deal visible to the restricted
+    // user, including ones shared with only partial associated-entity access)
+    // risked landing on a deal whose linked contact/company the restricted user
+    // can't fully access, tripping the "required permissions on associated
+    // entities" (029003) error on save — this test has no strip-and-retry
+    // handling for that, unlike T7/T7b. A self-created deal with NO associated
+    // entities (skipAssociatedEntities) removes that failure class entirely
+    // rather than just narrowing its odds.
+    const restrictedDealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData({ skipAssociatedEntities: true });
+    await restrictedDealsPage.goToDealsList();
+    await restrictedDealsPage.createDeal(dealData);
+    logger.info(`Restricted-owned deal created (no associated entities): "${dealData.name}"`);
+
+    const data = generateRestrictedQuotationData({ dealName: dealData.name });
     const productRow = generateProductRowData({ discount: 3, tax: 5 });
 
     await qp.goToQuotationsList();

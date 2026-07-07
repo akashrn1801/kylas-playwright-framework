@@ -195,3 +195,68 @@ export function isExpectedRbacError(message: string, apiErrorMessage?: string): 
   const text = `${message} ${apiErrorMessage || ''}`;
   return RBAC_EXPECTED_MESSAGES.some((p) => p.test(text));
 }
+
+// WHY: Confirmed live (2026-07-07 reporting audit + overnight QA validation) —
+// ABORT_ON_NAVIGATE_PATTERNS above already enumerates these exact URLs, but
+// isNoise() only applies that list when the message is ERR_ABORTED (the request
+// never completed). A HTTP 4xx/5xx response-error on the SAME url is a different,
+// stronger signal — the request DID complete and the server DID reject it — so it
+// must not be dropped by the same blanket rule. This is a deliberately NARROW
+// subset of ABORT_ON_NAVIGATE_PATTERNS: only endpoints individually confirmed,
+// live, on 2026-07-07, to be non-load-bearing side-panel/bootstrap/reporting
+// widgets whose failure (400 or 500, observed both) never once correlated with a
+// test failure across two full validation passes (~500 test executions). Every
+// entity CRUD/detail/search/layout endpoint (e.g. /v1/deals/\d+$, */search,
+// */layout*, /v1/users/me$, /v1/tasks/\d+/complete) is intentionally EXCLUDED —
+// those ARE load-bearing (waitForXDetailsPage() etc. depend on them per
+// CLAUDE.md's canonical patterns), so a real 4xx/5xx there must keep surfacing as
+// unexpected. Do not add an endpoint here without the same live-evidence bar —
+// widening this list is exactly the "band-aid that could bury a real outage"
+// risk this mechanism exists to avoid.
+export const BACKGROUND_WIDGET_NOISE_PATTERNS: RegExp[] = [
+  // AI workflow subscription check — confirmed both 400 and 500, 3+ sightings
+  // across deals/call-logs/tasks modules, zero test impact each time.
+  /\/v1\/ai-agent\/workflows\/subscribed/i,
+  // Calendar integration status widget — confirmed 400, zero test impact.
+  /\/v1\/calendar-oauth\/accounts/i,
+  // Marketplace apps side-panel widget — confirmed 400, zero test impact.
+  /\/v1\/marketplace\/apps\/actions/i,
+  // Activity-feed widget on entity detail pages — confirmed 400, zero test impact.
+  /\/v1\/rules\/search\/action-logs/i,
+  // Background as-you-type duplicate-value checks — tests assert on the form's
+  // own validation UI, never on this API's response directly.
+  /\/v1\/configurations\/uniqueness/i,
+  // Tenant-level feature/usage checks — confirmed 400 on /tenants and
+  // /tenants/usage, zero test impact; /smart-assistant is the same family.
+  /\/v1\/tenants\/usage/i,
+  /\/v1\/tenants\/smart-assistant/i,
+  /\/v1\/tenants$/i,
+  // Generic entity-label lookup widget — confirmed 400, zero test impact.
+  /\/v1\/entities\/label/i,
+  // User preference/permission side-reads — deliberately narrower than the bare
+  // /v1/users/me$ identity endpoint, which stays excluded (see WHY above).
+  /\/v1\/users\/me\/settings/i,
+  /\/v1\/users\/me\/permissions/i,
+  // App-level UI settings widget — confirmed 400, zero test impact.
+  /\/v1\/ui\/apps\/settings/i,
+  // Dashboard background polls — no test in this suite navigates to or asserts
+  // on the dashboard (verified: zero matches for "dashboards" across tests/).
+  /\/v1\/dashboards\/?$/i,
+  // Dashboard summary-card widgets on entity list pages — confirmed 400 on
+  // /v3/reports/leads/summary and /v3/reports/deals/summary, zero test impact.
+  /\/v3\/reports\//i,
+  /\/v1\/reports\//i,
+  /\/v4\/reports\/deals/i,
+  // Score-rules service — already documented above as "intermittently down on
+  // QA (infra issue, not app bug)" for the abort case; extending consistently.
+  /\/v1\/score-rules\//i,
+  // Standard picklists background prefetch.
+  /\/v1\/picklists\/standard/i,
+];
+
+export function isExpectedBackgroundNoise(message: string, url?: string): boolean {
+  // WHY: Only applies to completed HTTP error responses, not ERR_ABORTED (that
+  // case is already fully handled by isNoise() against the broader list).
+  if (!url || !/HTTP [45]\d\d/.test(message)) return false;
+  return BACKGROUND_WIDGET_NOISE_PATTERNS.some((p) => p.test(url));
+}

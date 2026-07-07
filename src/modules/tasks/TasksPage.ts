@@ -418,6 +418,14 @@ export class TasksPage extends BasePage {
     const idPromise = this.captureIdFromResponse();
     await this.click(this.quickTaskAddButton(), 'Add Task button');
     const id = await idPromise;
+    // WHY: Confirmed live (2026-07-07) — a failed save (e.g. backend 4xx/5xx) left this
+    // silently returning null while logging success, and the backdrop below never hides
+    // because the app never closed its own quick-task overlay; a later, unrelated click
+    // then gets stuck behind it until the whole test's timeout kills the browser context.
+    // Fail fast here instead, matching the "Fresh company ID not captured" convention.
+    if (!id) {
+      throw new Error('Quick task ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     // WHY: Quick task form closes after save — stays on same /sales/tasks/list URL
     await this.quickTaskBackdrop()
       .waitFor({ state: 'hidden', timeout: 10000 })
@@ -432,6 +440,12 @@ export class TasksPage extends BasePage {
     const idPromise = this.captureIdFromResponse();
     await this.click(this.quickTaskAddButton(), 'Add Task button');
     const id = await idPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveQuickTask() above.
+    if (!id) {
+      throw new Error(
+        'Quick task ID not captured after save from entity detail — cannot proceed (save likely failed silently)'
+      );
+    }
     // WHY: When saving from entity detail page — no list to wait for
     await this.quickTaskBackdrop()
       .waitFor({ state: 'hidden', timeout: 10000 })
@@ -665,6 +679,12 @@ export class TasksPage extends BasePage {
     await this.click(this.detailedTaskSaveButton(), 'save button');
     await this.assertNoFormErrors('task create form');
     const id = await idPromise;
+    // WHY: Confirmed live (2026-07-07) — fail fast on a silently-failed save instead of
+    // waiting on a modal that will never close, matching the fail-fast convention already
+    // established for company/contact ID capture elsewhere in this codebase.
+    if (!id) {
+      throw new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     // WHY: Modal closes on successful save — wait for it to hide
     await this.detailedTaskModal()
       .waitFor({ state: 'hidden', timeout: 15000 })
@@ -1020,6 +1040,10 @@ export class TasksPage extends BasePage {
     await this.click(this.detailedTaskSaveButton(), 'save button');
     await this.assertNoFormErrors('clone task form');
     const id = await idPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDetailedTask() above.
+    if (!id) {
+      throw new Error('Cloned task ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     await this.detailedTaskModal()
       .waitFor({ state: 'hidden', timeout: 15000 })
       .catch(() => {});

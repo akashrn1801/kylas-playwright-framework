@@ -1,3 +1,12 @@
+# WHY: Confirmed live (2026-07-07 reporting overhaul, P5) — this file's name is
+# easily confused with staging-promotion-gate.yml (formerly staging.yml). They
+# are NOT the same pipeline:
+#
+# TRIGGER: push to the `stage` branch (also manually via workflow_dispatch).
+# RESPONSIBILITY: ordinary CI for that branch — run the full suite against QA-
+# style credentials/env, report results, upload artifacts. No approval gate,
+# no auto-merge, no promotion to anywhere. If you're looking for the pipeline
+# that gates merging into prod, that's staging-promotion-gate.yml, not this one.
 name: CI — stage (full suite)
 
 on:
@@ -50,6 +59,16 @@ jobs:
           SECONDS=$((ELAPSED % 60))
           echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
+
+      # WHY: see qa.yml for the full explanation — must run before notify so its
+      # delta output exists in time for the email; never fails the build.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: staging
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
 
       - name: Send notification email
         if: always()
