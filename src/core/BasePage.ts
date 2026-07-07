@@ -77,7 +77,16 @@ export class BasePage {
     timeout = config.timeouts.navigation
   ): Promise<void> {
     logger.info(`Waiting for URL: ${urlPattern}`);
-    await this.page.waitForURL(urlPattern, { timeout });
+    // WHY: Confirmed live (2026-07-07) — Playwright's waitForURL defaults to
+    // waitUntil: 'load' when not specified, which waits for EVERY resource on
+    // the page (images, third-party embeds/chat-widget iframes, analytics
+    // beacons) to finish, not just the URL changing. Under real-world load
+    // this occasionally exceeds even a 60s timeout despite the navigation
+    // having functionally succeeded already. Every other navigation-wait in
+    // this codebase (waitForXDetailsPage() etc.) already uses
+    // domcontentloaded for exactly this reason — bring this shared helper in
+    // line with that established, proven convention.
+    await this.page.waitForURL(urlPattern, { timeout, waitUntil: 'domcontentloaded' });
   }
 
   // ─── Assertion Helpers ────────────────────────────────────

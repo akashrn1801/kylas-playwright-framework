@@ -510,7 +510,18 @@ export class LeadsPage extends BasePage {
     await this.fill(this.companyZipcodeInput(), data.companyZipcode, 'company zipcode');
 
     // Pipeline Stage (optional)
-    if (data.pipelineStage) {
+    // WHY: Confirmed live (2026-07-07) — 'Open' is the app's own default
+    // pipeline stage on a new lead (same auto-populate-on-create behavior
+    // already confirmed live for Deals' pipelineStage). Every current
+    // create-time caller only ever requests 'Open', so this manual
+    // click-the-indicator-then-click-the-option interaction was always
+    // redundant work reselecting a value already there — and the proven
+    // source of a severe flake: one run saw the indicator's click blocked by
+    // an intercepting `.search-autocomplete` overlay for 755 retries before
+    // the whole 8-minute test timeout fired. Skip the interaction entirely
+    // when the target is the default; still supports a genuine non-default
+    // stage if a caller ever needs one at creation time.
+    if (data.pipelineStage && data.pipelineStage !== 'Open') {
       logger.info(`Selecting pipeline stage: ${data.pipelineStage}`);
       const indicator = this.pipelineStageDropdownIndicator();
       await indicator.waitFor({ state: 'visible', timeout: 10000 });
@@ -523,6 +534,8 @@ export class LeadsPage extends BasePage {
       await stageOption.waitFor({ state: 'visible', timeout: 10000 });
       await stageOption.click();
       logger.success(`Pipeline stage selected: ${data.pipelineStage}`);
+    } else if (data.pipelineStage === 'Open') {
+      logger.info("Pipeline stage 'Open' is already the default — skipping redundant selection");
     }
     logger.success('Lead form filled');
   }
@@ -562,6 +575,14 @@ export class LeadsPage extends BasePage {
     await this.assertNoFormErrors('lead create form');
 
     const leadId = await leadIdPromise;
+
+    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
+    // logged "Lead saved successfully" and returned null, letting callers proceed on a lead
+    // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
+    // convention already used elsewhere in this codebase.
+    if (!leadId) {
+      throw new Error('Lead ID not captured after save — cannot proceed (save likely failed silently)');
+    }
 
     await this.waitForLeadListPage();
 
@@ -824,6 +845,10 @@ export class LeadsPage extends BasePage {
     await this.click(this.saveButton(), 'clone save button');
     await this.assertNoFormErrors('clone lead form');
     const clonedId = await cloneIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveLead() above.
+    if (!clonedId) {
+      throw new Error('Cloned lead ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     // WHY: After clone save, stay on same lead detail page — no redirect to list
     await this.page.waitForTimeout(1500);
     logger.success(`Lead cloned — new ID: ${clonedId}`);
@@ -845,12 +870,12 @@ export class LeadsPage extends BasePage {
     // instead and read its own detail page — deterministic, no list search.
     await this.navigateTo(`${config.appUrl}/sales/leads/details/${clonedId}`);
     await this.waitForLeadDetailsPage();
-    const bodyText = await this.page.locator('body').innerText();
-    if (!bodyText.includes(clonedLastName)) {
-      throw new Error(
-        `Cloned lead ID ${clonedId} detail page does not show expected lastName "${clonedLastName}"`
-      );
-    }
+    // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+    // waitForLeadDetailsPage's GET-response wait resolves the instant the
+    // network response is observed, not once React has re-rendered the DOM
+    // with it. A one-shot body.innerText() read right after can race ahead
+    // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+    await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
     logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
   }
 

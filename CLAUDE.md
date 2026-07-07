@@ -217,11 +217,13 @@ _Full audit performed 2026-07-01 across all modules, core framework, and CI/CD. 
 | sandbox | selective via `detect-tests.sh`, fallback `@smoke` | dynamic | GitHub Actions | Jenkins capture (`\| tail -1`) differs from GHA capture — can select wrong scope |
 | dev | `@smoke` (~18 tests) | 1 | GitHub Actions | — |
 | qa | `@regression` (~222 tests) | 2 | GHA + Jenkins | — |
-| stage | full suite, no grep (~234) | 2 | GHA + Jenkins | `staging.yml` has undocumented auto-`promote-to-prod` job |
+| stage | full suite, no grep (~234) | 2 | GHA + Jenkins | — |
 | prod | `@prodSafe` only (~13 tests) | 2 | Jenkins (primary) | Deals module has **zero** `@prodSafe` tests |
 | main | full suite, no grep (Jenkins primary) | 2 | Jenkins primary; `main.yml` (GHA, manual) wrongly filters `@regression` only | Two CI paths for `main` cover different scope |
 
-Also confirmed: `Jenkinsfile` (main/prod), `Jenkinsfile.sandbox`, and `staging.yml` append **`|| true`** — these pipelines go green regardless of test outcome. No scheduled/nightly runs exist anywhere. No cross-environment (QA/staging/prod) data-parity check exists.
+Also confirmed: `Jenkinsfile` (main/prod), `Jenkinsfile.sandbox`, and (formerly) `staging.yml` append **`|| true`** — these pipelines go green regardless of test outcome. No scheduled/nightly runs exist anywhere. No cross-environment (QA/staging/prod) data-parity check exists.
+
+**Renamed 2026-07-07 (reporting overhaul, P5):** `staging.yml` → `staging-promotion-gate.yml`. It was never actually "CI for the stage branch" (that's `stage.yml`, push-triggered on `stage`) — it's a manually-dispatched pipeline (`workflow_dispatch` only) that runs the full suite against `STAGING_*` secrets and then gates an approval-based auto-merge of `staging` into `prod`. The near-identical name to `stage.yml` was a standing source of confusion; the new name states what it actually does. It also previously had **no failure notification at all** despite gating a promotion to prod — fixed in the same change (see the file's own header comment for the full explanation).
 
 ### Module-specific known issues
 | Module | Known issue |

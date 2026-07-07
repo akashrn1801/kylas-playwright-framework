@@ -71,11 +71,15 @@ pipeline {
           echo "Detected ${testCount} tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
           timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
             catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+              // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
+              // --reporter=line,allure-playwright override, which was replacing
+              // (not merging with) playwright.config.ts's full reporter array and
+              // silently disabling html/json/MiscErrorReporter here. See
+              // Jenkinsfile.qa for the full explanation — same fix, same reasoning.
               sh '''
                 ENV=staging npx playwright test \
                   --project=chromium \
-                  --workers=2 \
-                  --reporter=line,allure-playwright
+                  --workers=2
               '''
             }
           }
@@ -83,7 +87,7 @@ pipeline {
       }
       post {
         always {
-          sh 'mv allure-results allure-results-staging || true'
+          sh 'mv reports/allure-results allure-results-staging || true'
           allure([
             includeProperties: false,
             jdk: '',
@@ -98,6 +102,22 @@ pipeline {
     success  { echo '✅ Staging tests passed' }
     unstable { echo '⚠️ Staging tests have failures — check Allure report' }
     failure  { echo '❌ Staging pipeline failed' }
-    always   { cleanWs() }
+    always {
+      // WHY: Confirmed live (2026-07-07 reporting audit) — archive before
+      // cleanWs() wipes the workspace, same reasoning as Jenkinsfile.qa.
+      archiveArtifacts(
+        artifacts: 'reports/**,test-results/**',
+        allowEmptyArchive: true
+      )
+      publishHTML(target: [
+        allowMissing         : true,
+        alwaysLinkToLastBuild: true,
+        keepAll              : true,
+        reportDir            : 'reports/playwright-report',
+        reportFiles          : 'index.html',
+        reportName           : 'Playwright HTML Report — Staging'
+      ])
+      cleanWs()
+    }
   }
 }

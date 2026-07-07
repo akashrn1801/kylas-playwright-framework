@@ -50,10 +50,24 @@ jobs:
           echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
+      # WHY: Confirmed live (2026-07-07 reporting overhaul) — additional bug found
+      # while wiring history sync, same root cause as NotificationService.ts's
+      # MISC_ERRORS_PATH fix: this step previously set ENV: qa while the actual
+      # test run above uses ENV: prod, so this workflow's email has never
+      # correctly read its own run's misc-errors.json — it was looking in
+      # reports/qa/ while the run wrote to reports/prod/. Fixed to match.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: prod
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
+
       - name: Send notification email
         if: always()
         env:
-          ENV: qa
+          ENV: prod
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com

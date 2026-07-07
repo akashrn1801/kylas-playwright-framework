@@ -498,6 +498,14 @@ export class CompaniesPage extends BasePage {
 
     const companyId = await companyIdPromise;
 
+    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
+    // logged "Company saved successfully" and returned null, letting callers proceed on a
+    // company that doesn't exist. Fail fast instead, matching the "Fresh company ID not
+    // captured" convention already used elsewhere in this codebase.
+    if (!companyId) {
+      throw new Error('Company ID not captured after save — cannot proceed (save likely failed silently)');
+    }
+
     await this.waitForCompanyListPage();
 
     logger.success('Company saved successfully');
@@ -652,19 +660,24 @@ export class CompaniesPage extends BasePage {
     logger.success('Company deleted');
   }
 
-  async cloneCompany(): Promise<{ companyId: number | null; clonedName: string }> {
+  async cloneCompany(originalName: string): Promise<{ companyId: number | null; clonedName: string }> {
     logger.info('Cloning company via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
     await this.page.waitForTimeout(1000);
-    // WHY: Read original name before any field fills
-    const originalName = await this.nameInput().inputValue().catch(() => '');
-    // WHY: Confirmed live (2026-07-06) — unlike Deals, Company name has real
-    // uniqueness validation ("Company with this name already exists"). The
-    // auto-filled "<name> Copy" text collides with pre-existing data in this
-    // long-lived shared environment — force a guaranteed-unique name instead
-    // of saving the pre-filled value unmodified.
+    // WHY: Confirmed live (2026-07-06) — the clone form's name field arrives
+    // PRE-FILLED by the app as "<name> Copy". Earlier code read that
+    // already-suffixed value back off the DOM and labeled it "originalName"
+    // before appending another " Copy <timestamp>" — producing a real,
+    // saved "<name> Copy Copy <timestamp>" instead of the intended single
+    // suffix. Take the true original name from the caller (already known —
+    // it's the name used to create the company) instead of re-reading the
+    // DOM, so there's exactly one " Copy" suffix regardless of what the app
+    // pre-fills. Company name also has real uniqueness validation ("Company
+    // with this name already exists"), so the timestamp suffix is still
+    // required to avoid colliding with pre-existing data in this long-lived
+    // shared environment.
     const clonedName = `${originalName || 'Company'} Copy ${Date.now()}`;
     await this.nameInput().clear();
     await this.nameInput().fill(clonedName);
@@ -688,6 +701,10 @@ export class CompaniesPage extends BasePage {
     await this.click(this.saveButton(), 'save cloned company');
     await this.assertNoFormErrors('company clone form');
     const companyId = await companyIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!companyId) {
+      throw new Error('Cloned company ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     // WHY: After clone save, app stays on original company detail — no redirect to list
     await this.page.waitForTimeout(1500);
     logger.success(`Company cloned successfully: "${clonedName}"`);
@@ -823,12 +840,18 @@ export class CompaniesPage extends BasePage {
     // WHY: Click Quotations right panel icon to open quotations section
     await this.clickRightPanelIcon('Quotations');
     await this.page.waitForTimeout(2000);
-    // WHY: Scroll to Quotations card first — it may be below the fold
     const quotationsCard = this.page
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
+    // own related-quotations list independently of the main entity GET.
+    // scrollIntoViewIfNeeded() right after the panel opens can grab a
+    // reference to a card mid-refetch that React then replaces, hanging in
+    // its "wait for stable position" check. An auto-retrying expect()
+    // re-queries the locator on every poll; click() below auto-scrolls its
+    // own target, so no manual scroll is needed.
+    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
@@ -893,6 +916,10 @@ export class CompaniesPage extends BasePage {
     await this.assertNoFormErrors('add quotation from panel');
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const quotationId = await quotationIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!quotationId) {
+      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Quotation added from panel: ${quotationId}`);
     return quotationId;
   }
@@ -1039,6 +1066,10 @@ export class CompaniesPage extends BasePage {
     await this.page.locator('#editEntityModal button.save-button').click();
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const contactId = await contactIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!contactId) {
+      throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Contact added from direct button: ID=${contactId}`);
     return contactId;
   }
@@ -1128,6 +1159,10 @@ export class CompaniesPage extends BasePage {
     await this.page.locator('#editEntityModal button.save-button').click();
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const contactId = await contactIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!contactId) {
+      throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Contact added from ellipsis: ID=${contactId}`);
     return contactId;
   }
@@ -1172,6 +1207,10 @@ export class CompaniesPage extends BasePage {
     await this.page.locator('#editEntityModal button.save-button').click();
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const dealId = await dealIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!dealId) {
+      throw new Error('Deal ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Deal added from direct button: ID=${dealId}`);
     return dealId;
   }
@@ -1212,6 +1251,10 @@ export class CompaniesPage extends BasePage {
     await this.page.locator('#editEntityModal button.save-button').click();
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const dealId = await dealIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!dealId) {
+      throw new Error('Deal ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Deal added from ellipsis: ID=${dealId}`);
     return dealId;
   }
@@ -1246,6 +1289,10 @@ export class CompaniesPage extends BasePage {
       .catch(() => {});
     await this.page.waitForTimeout(1000);
     const taskId = await taskIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
+    if (!taskId) {
+      throw new Error('Task ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Task added from pending activity: ID=${taskId}`);
     return { taskId };
   }
@@ -1315,10 +1362,13 @@ export class CompaniesPage extends BasePage {
     // ID is deterministic.
     logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
     await this.goToCompanyDetailsById(clonedId);
-    const bodyText = await this.page.locator('body').innerText();
-    if (!bodyText.includes(clonedName)) {
-      throw new Error(`Cloned company ID ${clonedId} detail page does not show expected name "${clonedName}"`);
-    }
+    // WHY: Confirmed live (2026-07-06) — waitForCompanyDetailsPage's GET-response
+    // wait resolves the instant the network response is observed, not once React
+    // has re-rendered the DOM with it. A one-shot body.innerText() read right
+    // after can race ahead of the render (reproduced: GET returned 200, but body
+    // was still just the app shell). Use an auto-retrying assertion instead of a
+    // fixed extra sleep — it polls until the real DOM condition is met.
+    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
     logger.success(`Cloned company found with name: ${clonedName}`);
   }
 

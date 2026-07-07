@@ -105,15 +105,20 @@ REPORT_PATH=reports/playwright-report/results.json
       steps {
         script {
           echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
+          // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
+          // --reporter=line,allure-playwright override, which was replacing (not
+          // merging with) playwright.config.ts's full reporter array and silently
+          // disabling html/json/MiscErrorReporter here. See Jenkinsfile.qa for the
+          // full explanation. archiveArtifacts/publishHTML below already existed
+          // and will now actually have html/json/misc-errors.json to publish.
           sh """
-            npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET} \
-              --reporter=line,allure-playwright
+            npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}
           """
         }
       }
       post {
         always {
-          sh 'mv allure-results allure-results-sandbox || true'
+          sh 'mv reports/allure-results allure-results-sandbox || true'
           allure([
             includeProperties: false,
             jdk: '',
@@ -140,6 +145,13 @@ REPORT_PATH=reports/playwright-report/results.json
         reportName           : 'Playwright HTML Report — Sandbox'
       ])
       script {
+        try {
+          // WHY: see Jenkinsfile (main) for the full explanation — must run
+          // before notify so its delta output exists in time for the email.
+          sh 'npm run history:sync || true'
+        } catch (e) {
+          echo 'History sync failed — continuing'
+        }
         try {
           sh 'npm run notify || true'
         } catch (e) {
