@@ -102,5 +102,12 @@ export default defineConfig({
         },
       ],
 
-  outputDir: 'test-results/',
+  // WHY: Confirmed live (2026-07-07) — matches the env-namespacing already
+  // used above for html/json/allure reporters locally. Without this, two
+  // concurrent runs against different environments (e.g. QA + Staging run in
+  // parallel) would write trace/screenshot artifacts for the SAME test name
+  // into the SAME directory (names are derived from test title, identical
+  // across environments), corrupting each other's evidence. CI behavior
+  // (single job at a time) is preserved unchanged.
+  outputDir: process.env.CI ? 'test-results/' : `test-results/${config.env}`,
 });

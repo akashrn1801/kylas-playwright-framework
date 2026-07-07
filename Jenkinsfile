@@ -205,6 +205,17 @@ REPORT_PATH=reports/playwright-report/results.json
             ])
             script {
                 try {
+                    // WHY: Confirmed live (2026-07-07 reporting overhaul, P2) —
+                    // must run before notify so its delta output exists in time
+                    // for the email. Reads ENV from the .env file written during
+                    // the test stage above (via loadDotEnv.ts), same as notify
+                    // already does — this pipeline resolves ENV dynamically per
+                    // branch (staging/prod), never a fixed value.
+                    sh 'npm run history:sync || true'
+                } catch (e) {
+                    echo 'History sync failed — continuing'
+                }
+                try {
                     sh 'npm run notify || true'
                 } catch (e) {
                     echo 'Notification failed — continuing'

@@ -70,19 +70,29 @@ pipeline {
           def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
           echo "Detected ${testCount} @regression tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
           timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
+            // WHY: Confirmed live (2026-07-07 reporting audit) — this used to pass
+            // --reporter=line,allure-playwright, which REPLACES (not merges with)
+            // playwright.config.ts's full reporter array. That silently disabled
+            // the html/json reporters and MiscErrorReporter on every Jenkins-run
+            // branch, so no results.json, no misc-errors.json, no HTML report ever
+            // existed here — only a bare terminal list and Allure. Dropping the
+            // override lets the config's full array run, matching what GitHub
+            // Actions already gets for this same branch. Allure results now land
+            // at reports/allure-results (per playwright.config.ts's CI path)
+            // instead of allure-playwright's own bare ./allure-results default —
+            // see the `mv` line below, updated to match.
             sh '''
               ENV=qa npx playwright test \
                 --project=chromium \
                 --grep @regression \
-                --workers=2 \
-                --reporter=line,allure-playwright
+                --workers=2
             '''
           }
         }
       }
       post {
         always {
-          sh 'mv allure-results allure-results-qa || true'
+          sh 'mv reports/allure-results allure-results-qa || true'
           allure([
             includeProperties: false,
             jdk: '',
@@ -96,6 +106,25 @@ pipeline {
   post {
     success  { echo '✅ QA tests passed' }
     failure  { echo '❌ QA tests failed' }
-    always   { cleanWs() }
+    always {
+      // WHY: Confirmed live (2026-07-07 reporting audit) — without archiving
+      // before cleanWs() below wipes the workspace, the html/json/misc-errors
+      // reports restored above would be generated and then immediately
+      // destroyed, making the reporter fix a no-op in practice. Matches the
+      // archive+publish pattern already used by Jenkinsfile/Jenkinsfile.sandbox.
+      archiveArtifacts(
+        artifacts: 'reports/**,test-results/**',
+        allowEmptyArchive: true
+      )
+      publishHTML(target: [
+        allowMissing         : true,
+        alwaysLinkToLastBuild: true,
+        keepAll              : true,
+        reportDir            : 'reports/playwright-report',
+        reportFiles          : 'index.html',
+        reportName           : 'Playwright HTML Report — QA'
+      ])
+      cleanWs()
+    }
   }
 }

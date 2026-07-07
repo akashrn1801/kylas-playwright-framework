@@ -444,14 +444,30 @@ export class CallLogsPage extends BasePage {
       // WHY: Use last word of name for search — full name may not filter correctly
       // e.g. "ADM1781854620513 Nienow" → search "Nienow"
       const searchQuery = searchTerm.trim().split(' ').pop() ?? searchTerm;
-      logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}")`);
-      await this.page.keyboard.type(searchQuery, { delay: 50 });
-      // WHY: Poll for filtered options after typing
+      const { retries, wait } = this.retryConfig;
       let filteredCount = 0;
-      for (let i = 0; i < 10; i++) {
-        filteredCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
-        if (filteredCount > 0) break;
-        await this.page.waitForTimeout(500);
+      for (let attempt = 1; attempt <= retries && filteredCount === 0; attempt++) {
+        logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}"), attempt ${attempt}/${retries}`);
+        await this.page.keyboard.type(searchQuery, { delay: 50 });
+        // WHY: Poll for filtered options after typing
+        for (let i = 0; i < 10; i++) {
+          filteredCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
+          if (filteredCount > 0) break;
+          await this.page.waitForTimeout(500);
+        }
+        if (filteredCount === 0 && attempt < retries) {
+          // WHY: Confirmed live — a just-created entity can take a moment to hit
+          // the search index. Without this retry, zero filtered matches falls
+          // straight through to the blind "click first option" fallback below,
+          // which can land on an unrelated (possibly inaccessible) entity and
+          // surface as a false-positive "necessary permission" error later.
+          logger.warn(
+            `No filtered options for "${searchQuery}" — entity may not be search-indexed yet, retrying in ${wait}ms`
+          );
+          await this.page.keyboard.press('Control+A');
+          await this.page.keyboard.press('Backspace');
+          await this.page.waitForTimeout(wait);
+        }
       }
       logger.debug(`Filtered options after typing: ${filteredCount}`);
     }

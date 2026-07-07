@@ -641,10 +641,22 @@ test.describe('Deals RBAC', () => {
       .locator('.card')
       .filter({ has: restrictedPage.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — same root cause as CompaniesPage's
+    // Quotations card (tests/ui/companies/companies.spec.ts CO12): the card
+    // refetches its own related-quotations list independently of the main
+    // deal GET. scrollIntoViewIfNeeded() right after re-navigation can grab a
+    // reference to a card mid-refetch that React then replaces, hanging in
+    // its "wait for stable position" check until the whole test's timeout
+    // fires — surfaces as "Target page ... closed", the timeout kill, not
+    // the real cause. An auto-retrying expect() re-queries the locator on
+    // every poll instead of holding one DOM snapshot; no manual scroll is
+    // needed for a pure visibility check.
+    await expect(quotationsCard, 'Quotations card should be visible after refetch').toBeVisible({
+      timeout: 15000,
+    });
     const quotationEntry = quotationsCard.locator('ul.card-list li, .list-item, a').first();
     await expect(quotationEntry, 'Quotations card should show at least one entry').toBeVisible({
-      timeout: 10000,
+      timeout: 15000,
     });
     logger.success('D22 passed');
   });
