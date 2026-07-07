@@ -1,4 +1,18 @@
-name: Staging Pipeline
+# WHY: Confirmed live (2026-07-07 reporting overhaul, P5) — renamed from
+# staging.yml. That name was near-identical to stage.yml (the actual push-
+# triggered CI for the `stage` branch) despite being a completely different
+# pipeline — manual-only, runs against STAGING_* secrets, and gates an
+# approval-based auto-merge of `staging` into `prod`. The near-identical
+# names were a standing source of confusion (see CLAUDE.md's CI/CD table).
+#
+# TRIGGER: manual only (workflow_dispatch) — never runs on push.
+# RESPONSIBILITY: run the full suite against the Staging environment, then —
+# only if that passes and a human approves via the `production-approval`
+# GitHub Environment gate — auto-merge `staging` into `prod` with no further
+# review. Given that blast radius, a failure here must never go unnoticed;
+# see the "Send notification email" step below, added in this same change —
+# this pipeline previously had NO failure notification at all.
+name: Staging → Prod Promotion Gate
 
 on:
   workflow_dispatch:
@@ -38,6 +52,33 @@ jobs:
           WORKERS: 2
           RETRY_COUNT: 1
         run: npx playwright test --project=chromium
+
+      # WHY: Confirmed live (2026-07-07 reporting overhaul, P5) — this pipeline
+      # previously had NO failure-notification step at all, despite gating an
+      # unattended auto-merge into prod behind only a manual approval click. A
+      # failing staging run was visible only to someone who happened to check
+      # the Actions tab. `if: always()` so a failure is reported the same as a
+      # pass — silence on failure is exactly the gap being closed here.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: staging
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
+
+      - name: Send notification email
+        if: always()
+        env:
+          ENV: staging
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_SMTP_HOST: smtp.gmail.com
+          GMAIL_SMTP_PORT: '587'
+          NOTIFY_ENABLED: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run notify || true
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v6

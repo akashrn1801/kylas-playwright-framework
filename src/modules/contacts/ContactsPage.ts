@@ -308,12 +308,27 @@ export class ContactsPage extends BasePage {
     // WHY: Click the ancestor .is-invalid__control wrapper — clicking the input alone
     // does not reliably trigger the React Select open handler on portalled dropdowns
     const control = input.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+    const menu = this.page.locator('.is-invalid__menu');
     await control.click();
+    // WHY: Confirmed live — a control click can occasionally fail to register (e.g.
+    // scroll/animation still settling right after a modal opens), which previously
+    // just burned the full menu-visible timeout for a click that never landed. Check
+    // for the menu portal being ATTACHED (React mounts it immediately on open, well
+    // before any visible-state CSS transition finishes) as a fast, safe signal the
+    // click worked. Only re-click if it's genuinely not attached — re-clicking an
+    // already-open dropdown would just toggle it closed.
+    const opened = await menu
+      .waitFor({ state: 'attached', timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!opened) {
+      logger.warn(`Dropdown did not open on first click for ${inputId} — retrying click`);
+      await control.click();
+    }
     // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
     await input.fill(optionText);
     // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
     // options are rendered in the portal. Prevents racing against another open dropdown.
-    const menu = this.page.locator('.is-invalid__menu');
     await menu.waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Scope the option click to the visible menu container — avoids clicking options
     // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
@@ -413,6 +428,13 @@ export class ContactsPage extends BasePage {
     await this.click(this.saveButton(), 'save button');
     await this.assertNoFormErrors('contact create form');
     const contactId = await contactIdPromise;
+    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
+    // logged "Contact saved successfully" and returned null, letting callers proceed on a
+    // contact that doesn't exist. Fail fast instead, matching the "Fresh company ID not
+    // captured" convention already used elsewhere in this codebase.
+    if (!contactId) {
+      throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     await this.waitForContactListPage();
     logger.success('Contact saved successfully');
     return contactId;
@@ -567,6 +589,10 @@ export class ContactsPage extends BasePage {
     await this.click(this.saveButton(), 'save cloned contact');
     await this.assertNoFormErrors('contact clone form');
     const contactId = await contactIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveContact() above.
+    if (!contactId) {
+      throw new Error('Cloned contact ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     // WHY: After clone save, app stays on original contact detail — no redirect to list
     await this.page.waitForTimeout(1500);
     logger.success('Contact cloned successfully');
@@ -690,12 +716,18 @@ export class ContactsPage extends BasePage {
     await this.clickRightPanelIcon('Quotations');
     await this.page.waitForTimeout(2000);
     // WHY: Add button is button.btn-primary.btn-xs inside Quotations card
-    // Scroll to Quotations card first — it may be below the fold
     const quotationsCard = this.page
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
+    // own related-quotations list independently of the main entity GET.
+    // scrollIntoViewIfNeeded() right after the panel opens can grab a
+    // reference to a card mid-refetch that React then replaces, hanging in
+    // its "wait for stable position" check. An auto-retrying expect()
+    // re-queries the locator on every poll; click() below auto-scrolls its
+    // own target, so no manual scroll is needed.
+    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
@@ -763,6 +795,10 @@ export class ContactsPage extends BasePage {
     await this.assertNoFormErrors('add quotation from panel');
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const quotationId = await quotationIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveContact() above.
+    if (!quotationId) {
+      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Quotation added from panel: ${quotationId}`);
     return quotationId;
   }
@@ -966,7 +1002,16 @@ export class ContactsPage extends BasePage {
     await this.saveEditedContact();
   }
 
-  async assertContactUpdated(data: ContactData): Promise<void> {
+  async assertContactUpdated(data: ContactData, contactId?: number): Promise<void> {
+    // WHY: ID-first — mirrors DealsPage.assertDealUpdated. List search via
+    // retryFindContact is subject to search-index/list-refresh lag under
+    // load; direct navigation to the known ID is deterministic. List search
+    // remains the fallback for callers with no ID.
+    if (contactId) {
+      await this.goToContactDetailsById(contactId);
+      await expect(this.page.locator('body')).toContainText(data.firstName, { timeout: 15000 });
+      return;
+    }
     await this.goToContactsList();
     await this.assertContactExistsInList(data.firstName);
   }

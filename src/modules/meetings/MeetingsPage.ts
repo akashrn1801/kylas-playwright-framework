@@ -613,15 +613,23 @@ export class MeetingsPage extends BasePage {
     await this.page.waitForTimeout(1500);
 
     // WHY: After save a popup appears with span.link-primary containing meeting ID
+    // WHY: Confirmed live (2026-07-06/07) — this popup is a toast that can
+    // auto-dismiss on its own. The waitFor() above only confirms it was
+    // visible at that instant; a bare click() with no timeout has no bound
+    // of its own, so if the toast vanished in the gap between waitFor and
+    // click, the click hung until the WHOLE TEST's timeout fired instead of
+    // being caught by this try/catch's already-correct fallback design.
+    // Give both clicks an explicit bound so a vanished toast fails fast and
+    // falls through to the existing safe fallback, as originally intended.
     try {
       await this.meetingIdPopup().waitFor({ state: 'visible', timeout: 5000 });
-      await this.meetingIdPopup().click();
+      await this.meetingIdPopup().click({ timeout: 5000 });
       await this.page.waitForTimeout(1000);
       logger.success('Clicked meeting popup');
     } catch {
       try {
         await this.meetingIdPopupFallback().waitFor({ state: 'visible', timeout: 3000 });
-        await this.meetingIdPopupFallback().click();
+        await this.meetingIdPopupFallback().click({ timeout: 3000 });
         await this.page.waitForTimeout(1000);
         logger.success('Clicked meeting popup (fallback)');
       } catch {

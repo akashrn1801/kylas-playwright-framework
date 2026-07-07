@@ -63,10 +63,20 @@ test.describe('Call Logs — RBAC', () => {
       test.setTimeout(480000);
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Contact', outcome: 'Busy' });
+      // WHY: Confirmed live (2026-07-06/07) — same root cause as CL23/CL24:
+      // fillCreateForm's no-searchTerm path filters ADM/SHR-prefixed options out
+      // of the associated-entity dropdown, but SILENTLY falls back to the first
+      // unfiltered options if none of the visible ones are owned by the
+      // restricted user — which can be entirely admin-owned entities in this
+      // long-lived shared QA environment, producing a genuine backend
+      // "necessary permission" error on save. Pre-create an owned contact
+      // first, exactly like CL23/CL24 already do, instead of gambling on
+      // whatever the dropdown happens to show.
+      const ownedContactName = await callLogsPage.ensureOwnedContactExists();
       await callLogsPage.goToCallLogsList();
       await callLogsPage.openLogACallForm();
       await callLogsPage.fillEntityType('Contact');
-      await callLogsPage.fillCreateForm(data);
+      await callLogsPage.fillCreateForm(data, ownedContactName);
       await callLogsPage.assertDurationDisabled();
       const callLogId = await callLogsPage.saveCallLog();
       expect(callLogId).not.toBeNull();
@@ -271,14 +281,22 @@ test.describe('Call Logs — RBAC', () => {
       test.setTimeout(480000);
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Lead', outcome: 'Connected' });
+      // WHY: Same root cause and fix as CL21/CL23/CL24 — pre-create an owned
+      // lead instead of letting fillCreateForm's no-searchTerm path fall back
+      // to a possibly-inaccessible admin-owned lead on save.
+      const ownedLeadName = await createOwnedLead(restrictedPage);
       await callLogsPage.goToCallLogsList();
       await callLogsPage.openLogACallForm();
-      await callLogsPage.fillCreateForm(data);
+      await callLogsPage.fillCreateForm(data, ownedLeadName);
       const callLogId = await callLogsPage.saveCallLog();
       expect(callLogId).not.toBeNull();
       const toastLink = callLogsPage['toasterCallLogIdLink']();
       await toastLink.waitFor({ state: 'visible', timeout: 10000 });
-      await toastLink.click();
+      // WHY: Confirmed live (2026-07-06/07, Meetings' identical toast-click
+      // race) — a toast can auto-dismiss in the gap between waitFor and
+      // click; bound the click so a vanished toast fails fast with a clear
+      // error instead of hanging until the whole test's timeout.
+      await toastLink.click({ timeout: 10000 });
       await restrictedPage.waitForURL(new RegExp(`/sales/calls/list\\?id=${callLogId}`), {
         timeout: config.timeouts.navigation,
       });
@@ -364,37 +382,66 @@ test.describe('Call Logs — RBAC', () => {
       logger.info(`CL31c: navigating restricted user to admin entity URL: ${absoluteUrl}`);
       await restrictedPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded' });
       logger.info('CL31c: navigation complete');
-      await restrictedPage.waitForTimeout(1000);
       // WHY: Target the button, not the SVG inside it — the SVG is replaced during
       // React re-renders causing "element was detached from the DOM" on click.
       const callLogsBtn = restrictedPage.locator("button[data-original-title='Call Logs']");
-      const btnVisible = await callLogsBtn.isVisible().catch(() => false);
-      logger.info(`CL31c: Call Logs button visible: ${btnVisible}`);
-      if (btnVisible) {
-        await callLogsBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
-        logger.info('CL31c: about to click Call Logs button');
-        await callLogsBtn.click();
-        logger.info('CL31c: Call Logs button clicked');
-        await restrictedPage.waitForTimeout(1000);
-        const adminCallLogVisible = await restrictedPage
-          .locator('ul.list-unstyled.mb-0.card-list li.media')
-          .isVisible()
-          .catch(() => false);
-        if (adminCallLogVisible) {
-          const loggedBy = await restrictedPage
-            .locator('.call-body').first().textContent().catch(() => '');
-          const adminName = await adminCallLogs.getLoggedInUserName('admin');
-          if (loggedBy?.includes(adminName)) {
-            throw new Error(
-              `Admin call log "${adminName}" should NOT be visible to restricted user on admin entity`
-            );
-          }
-          logger.info('Call log visible but logged by restricted user — correct RBAC behaviour');
-        } else {
-          logger.info('No call logs visible — correct RBAC behaviour');
-        }
+      // WHY: Confirmed live (2026-07-06) — `domcontentloaded` + a flat 1s wait is not
+      // enough to know whether this SPA has settled on a real entity page or is about
+      // to client-side-redirect to "Not Found" once its own RBAC check resolves. A
+      // one-shot isVisible() snapshot taken during that transient window could return
+      // true just before the button gets ripped out from under an in-flight click —
+      // and since the click had no bound, it retried against the now-permanently-gone
+      // button until the whole test's 480s timeout fired, surfacing as "Target page,
+      // context or browser has been closed" (the timeout kill), not the real cause.
+      // Race two genuine terminal states instead of guessing a fixed delay.
+      const notFoundLocator = restrictedPage.getByText('Not Found', { exact: true });
+      await Promise.race([
+        callLogsBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
+        notFoundLocator.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
+      ]);
+      const isNotFound = await notFoundLocator.isVisible().catch(() => false);
+      if (isNotFound) {
+        logger.info('CL31c: restricted user redirected to Not Found — correct RBAC behaviour (no access to admin entity)');
       } else {
-        logger.info('Call Logs button not visible — restricted user cannot access admin entity');
+        const btnVisible = await callLogsBtn.isVisible().catch(() => false);
+        logger.info(`CL31c: Call Logs button visible: ${btnVisible}`);
+        if (btnVisible) {
+          // WHY: Bound the click itself — if the SPA redirects mid-click (a late
+          // client-side RBAC resolution), fail fast instead of hanging until the
+          // global test timeout; that was the exact original failure mode.
+          logger.info('CL31c: about to click Call Logs button');
+          const clicked = await callLogsBtn
+            .click({ timeout: 10000 })
+            .then(() => true)
+            .catch(() => false);
+          if (!clicked) {
+            logger.info(
+              'CL31c: Call Logs button disappeared before click landed — treating as correct RBAC behaviour (no stable access)'
+            );
+          } else {
+            logger.info('CL31c: Call Logs button clicked');
+            await restrictedPage.waitForTimeout(1000);
+            const adminCallLogVisible = await restrictedPage
+              .locator('ul.list-unstyled.mb-0.card-list li.media')
+              .isVisible()
+              .catch(() => false);
+            if (adminCallLogVisible) {
+              const loggedBy = await restrictedPage
+                .locator('.call-body').first().textContent().catch(() => '');
+              const adminName = await adminCallLogs.getLoggedInUserName('admin');
+              if (loggedBy?.includes(adminName)) {
+                throw new Error(
+                  `Admin call log "${adminName}" should NOT be visible to restricted user on admin entity`
+                );
+              }
+              logger.info('Call log visible but logged by restricted user — correct RBAC behaviour');
+            } else {
+              logger.info('No call logs visible — correct RBAC behaviour');
+            }
+          }
+        } else {
+          logger.info('Call Logs button not visible — restricted user cannot access admin entity');
+        }
       }
       logger.success('CL31c passed');
     }

@@ -49,7 +49,7 @@ test.describe('Contacts RBAC', () => {
     const contactId = await contactsPage.createContact(contactData);
     const updatedData = generateContactData();
     await contactsPage.updateContact(updatedData, contactData.firstName, contactId ?? undefined);
-    await contactsPage.assertContactUpdated(updatedData);
+    await contactsPage.assertContactUpdated(updatedData, contactId ?? undefined);
     logger.success('CR3 passed');
   });
 

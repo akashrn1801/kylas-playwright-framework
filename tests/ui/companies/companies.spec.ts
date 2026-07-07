@@ -103,7 +103,7 @@ test.describe('Companies', () => {
     const companyId = await companiesPage.createCompany(companyData);
     expect(companyId).not.toBeNull();
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
-    const { companyId: clonedId, clonedName } = await companiesPage.cloneCompany();
+    const { companyId: clonedId, clonedName } = await companiesPage.cloneCompany(companyData.name);
     if (!clonedId) throw new Error('Cloned company ID not captured — cannot verify');
     await companiesPage.assertClonedCompanyName(clonedName, clonedId);
     logger.success('CO6 passed');
@@ -260,9 +260,26 @@ test.describe('Companies', () => {
     // WHY: Verify quotation appears in Quotations card on company detail
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const quotationsCard = adminPage.locator('.card').filter({ has: adminPage.locator('h2').filter({ hasText: 'Quotations' }) }).first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06) — the Quotations card refetches its own
+    // related-quotations list independently of the main company GET that
+    // waitForCompanyDetailsPage() already waits for. Calling
+    // scrollIntoViewIfNeeded() right after re-navigation can grab a reference
+    // to a card mid-refetch that React then replaces, throwing "Element is
+    // not attached to the DOM" (seen live) or hanging until Playwright's own
+    // action-stability wait exhausts the full test timeout, surfacing as
+    // "Target page ... closed" (also seen live, on retry) — a symptom of the
+    // timeout kill, not a separate bug. An auto-retrying expect() re-queries
+    // the locator on every poll instead of holding one DOM snapshot, and a
+    // pure visibility check doesn't require the element to stop reflowing
+    // the way scrollIntoViewIfNeeded's stability wait does. No manual scroll
+    // needed for a visibility assertion.
+    await expect(quotationsCard, 'Quotations card should be visible after refetch').toBeVisible({
+      timeout: 15000,
+    });
     const quotationEntry = quotationsCard.locator('ul.card-list li, .list-item, a').first();
-    await expect(quotationEntry).toBeVisible({ timeout: 10000 });
+    await expect(quotationEntry, 'Newly created quotation should appear in the Quotations card').toBeVisible({
+      timeout: 15000,
+    });
     logger.success(`CO12 passed — quotation created and verified: ${quotationId}`);
   });
 
@@ -285,7 +302,12 @@ test.describe('Companies', () => {
     // WHY: Wait for card to show the new contact row before asserting content
     // Using row-count baseline approach per CLAUDE.md baseline-count pattern
     const contactsCard = adminPage.locator('.card').filter({ hasText: 'Contacts' }).first();
-    await contactsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — related-entity cards (Contacts,
+    // Quotations) refetch independently of the main entity GET, and
+    // scrollIntoViewIfNeeded() right after re-navigation can grab a
+    // reference to a card mid-refetch that React replaces, hanging until the
+    // test timeout. toContainText() below already auto-retries and doesn't
+    // need scrolling — drop the scroll entirely rather than race it.
     // WHY: Wait for contact count to show (1) indicating the new contact rendered
     await expect(contactsCard).toContainText('Contacts (1)', { timeout: 15000 });
     // WHY: Assert both firstName AND lastName — the card renders full name
@@ -344,8 +366,9 @@ test.describe('Companies', () => {
     // WHY: Verify second contact appears in the Contacts card
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const contactsCard = adminPage.locator('.card').filter({ hasText: 'Contacts' }).first();
-    await contactsCard.scrollIntoViewIfNeeded();
-    await expect(contactsCard).toContainText(secondContactData.firstName, { timeout: 10000 });
+    // WHY: Confirmed live (2026-07-06/07) — see CO13 above; drop the manual
+    // scroll, toContainText() already auto-retries and doesn't need it.
+    await expect(contactsCard).toContainText(secondContactData.firstName, { timeout: 15000 });
     logger.success(`CO15 passed — second contact added via ellipsis: ID=${secondContactId}`);
   });
 

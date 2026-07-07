@@ -705,6 +705,13 @@ export class DealsPage extends BasePage {
     await this.click(this.saveButton(), 'save button');
     await this.assertNoFormErrors('deal create form');
     const dealId = await dealIdPromise;
+    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
+    // logged "Deal saved successfully" and returned null, letting callers proceed on a deal
+    // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
+    // convention already used elsewhere in this codebase.
+    if (!dealId) {
+      throw new Error('Deal ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     await this.waitForDealListPage();
     logger.success('Deal saved successfully');
     return dealId;
@@ -1019,10 +1026,12 @@ export class DealsPage extends BasePage {
     if (dealId) {
       await this.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
       await this.waitForDealDetailsPage();
-      const bodyText = await this.page.locator('body').innerText();
-      if (!bodyText.includes(data.name)) {
-        throw new Error(`Deal ID ${dealId} detail page does not show expected name "${data.name}"`);
-      }
+      // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+      // waitForDealDetailsPage's GET-response wait resolves the instant the
+      // network response is observed, not once React has re-rendered the DOM
+      // with it. A one-shot body.innerText() read right after can race ahead
+      // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+      await expect(this.page.locator('body')).toContainText(data.name, { timeout: 15000 });
       return;
     }
     await this.goToDealsList();
@@ -1250,6 +1259,10 @@ export class DealsPage extends BasePage {
     await this.click(this.saveEditButton(), 'clone save button');
     await this.assertNoFormErrors('deal clone form');
     const clonedId = await dealIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above.
+    if (!clonedId) {
+      throw new Error('Cloned deal ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     logger.success(`Deal cloned — new ID: ${clonedId}`);
     return clonedId;
@@ -1263,10 +1276,12 @@ export class DealsPage extends BasePage {
     const clonedName = `${originalName} Copy`;
     await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
     await this.waitForDealDetailsPage();
-    const bodyText = await this.page.locator('body').innerText();
-    if (!bodyText.includes(clonedName)) {
-      throw new Error(`Cloned deal ID ${clonedId} detail page does not show expected name "${clonedName}"`);
-    }
+    // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+    // waitForDealDetailsPage's GET-response wait resolves the instant the
+    // network response is observed, not once React has re-rendered the DOM
+    // with it. A one-shot body.innerText() read right after can race ahead
+    // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
     logger.success(`Cloned deal found with name: ${clonedName}`);
   }
 
@@ -1538,8 +1553,13 @@ export class DealsPage extends BasePage {
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.waitFor({ state: 'visible', timeout: 10000 });
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07, D22) — the Quotations card refetches
+    // its own related-quotations list independently of the main deal GET.
+    // A scrollIntoViewIfNeeded() right after this waitFor still has a narrow
+    // window to grab a reference to a card React is about to replace,
+    // hanging in its "wait for stable position" check. click() below
+    // auto-scrolls its own target, so drop the manual scroll entirely.
+    await quotationsCard.waitFor({ state: 'visible', timeout: 15000 });
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
@@ -1600,6 +1620,12 @@ export class DealsPage extends BasePage {
     await this.assertNoFormErrors('add quotation from panel');
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const quotationId = await quotationIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above. Does not
+    // affect the permission-denied test path, which throws earlier via assertNoFormErrors()
+    // on the visible validation banner before this line is ever reached.
+    if (!quotationId) {
+      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Quotation added from panel: ${quotationId}`);
     return quotationId;
   }
