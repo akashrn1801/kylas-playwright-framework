@@ -1172,15 +1172,15 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertOwnerOnDetailPage(ownerName: string): Promise<void> {
-    // WHY: Wait for detail page to fully render before grabbing body text.
-    // In CI the page loads slower — grabbing innerText too early misses async-rendered fields.
+    // WHY: Wait for detail page to fully render before checking body text.
     await this.page.waitForLoadState('domcontentloaded');
     await this.detailPageTitle().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await this.page.waitForTimeout(1500);
-    const detailText = await this.page.locator('body').innerText();
-    if (!detailText.includes(ownerName)) {
-      throw new Error(`Expected owner "${ownerName}" not found on detail page`);
-    }
+    // WHY: Confirmed live (2026-07-06, Companies clone investigation) — a
+    // fixed sleep before a one-shot body.innerText() read doesn't scale with
+    // variable render time under load and can still race under heavier CI
+    // load than this was calibrated for. Use an auto-retrying assertion
+    // instead — it polls until the real DOM condition is met.
+    await expect(this.page.locator('body')).toContainText(ownerName, { timeout: 15000 });
     logger.success(`Owner confirmed: ${ownerName}`);
   }
 

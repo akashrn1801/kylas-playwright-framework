@@ -275,10 +275,20 @@ test.describe('Contacts', () => {
     // WHY: Verify quotation appears in Quotations card on contact detail
     await contactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const quotationsCard = adminPage.locator('.card').filter({ has: adminPage.locator('h2').filter({ hasText: 'Quotations' }) }).first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
+    // own related-quotations list independently of the main contact GET.
+    // scrollIntoViewIfNeeded() right after re-navigation can grab a reference
+    // to a card mid-refetch that React then replaces, hanging until the test
+    // timeout ("Target page ... closed", the timeout kill, not the real
+    // cause — reproduced live on the equivalent Companies/Deals cards). An
+    // auto-retrying expect() re-queries the locator each poll; no manual
+    // scroll needed for a visibility check.
+    await expect(quotationsCard, 'Quotations card should be visible after refetch').toBeVisible({
+      timeout: 15000,
+    });
     // WHY: Quotations card should now show at least 1 quotation entry
     const quotationEntry = quotationsCard.locator('ul.card-list li, .list-item, a').first();
-    await expect(quotationEntry).toBeVisible({ timeout: 10000 });
+    await expect(quotationEntry).toBeVisible({ timeout: 15000 });
     logger.success(`C14 passed — quotation created and verified on contact: ${quotationId}`);
   });
 

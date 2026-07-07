@@ -13,7 +13,7 @@
  * 3. ErrorCollector.clearCurrentTest() in the use() callback
  */
 
-import { test as base, Page, BrowserContext } from '@playwright/test';
+import { test as base, Page, BrowserContext, Browser, TestInfo } from '@playwright/test';
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
@@ -128,6 +128,138 @@ function attachErrorListeners(page: Page): void {
   });
 }
 
+// ── Role page lifecycle (shared by adminPage + restrictedPage) ────────────────
+
+type NavOutcome = 'sales' | 'signIn' | 'timeout';
+
+// WHY: Confirmed live (2026-07-06) — this used to be duplicated 2x per fixture
+// (once for the "fresh" path, once for the "session expired" path), and the
+// ONLY session-expiry detection was a one-shot check of page.url() for
+// '/signIn'/'/login' taken right after goto(). If the page was neither on
+// signIn NOR yet on /sales/ within the timeout (a one-off slow load, or a
+// session that expired in the brief window between AuthManager's own
+// validation and this page's navigation), there was NO recovery path at
+// all — a hard, unrecoverable `waitForURL` timeout failed the test outright.
+// This raced the two genuine terminal outcomes instead of a blind wait, so a
+// signIn/login redirect is caught whenever it actually happens, and gives a
+// bounded number of forced-relogin retries before finally throwing — a real
+// failure (e.g. the app is genuinely down) still fails loudly, it's just no
+// longer indistinguishable from an ordinary, recoverable session expiry.
+async function navigateAndConfirmLoggedIn(
+  page: Page,
+  role: 'admin' | 'restricted'
+): Promise<NavOutcome> {
+  // WHY: QA env has intermittent TCP timeouts under parallel load — retry the
+  // raw navigation itself before ever judging where it landed.
+  for (let gotoAttempt = 1; gotoAttempt <= 3; gotoAttempt++) {
+    try {
+      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      break;
+    } catch (e) {
+      if (gotoAttempt === 3) throw e;
+      logger.warn(`${role}Page goto attempt ${gotoAttempt} failed — retrying in 3s`);
+      await page.waitForTimeout(3000);
+    }
+  }
+
+  return Promise.race([
+    page
+      .waitForURL(/sales\//, { timeout: config.timeouts.navigation })
+      .then((): NavOutcome => 'sales')
+      .catch((): NavOutcome => 'timeout'),
+    page
+      .waitForURL(/\/(signIn|login)/, { timeout: config.timeouts.navigation })
+      .then((): NavOutcome => 'signIn')
+      .catch((): NavOutcome => 'timeout'),
+  ]);
+}
+
+async function dismissStartupPopup(page: Page): Promise<void> {
+  try {
+    const popup = page.locator('#cancel[data-dismiss="modal"]');
+    await popup.waitFor({ state: 'visible', timeout: 3000 });
+    await popup.click();
+    await popup.waitFor({ state: 'hidden', timeout: 3000 });
+  } catch {
+    /* no popup — continue */
+  }
+}
+
+async function createRolePage(
+  browser: Browser,
+  role: 'admin' | 'restricted',
+  testInfo: TestInfo,
+  use: (page: Page) => Promise<void>
+): Promise<void> {
+  // WHY: Set current test context so errors captured during this test
+  // are tagged with the correct test title and file
+  ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
+
+  // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
+  // AuthManager validates the session before creating the context and
+  // re-logins automatically if expired. This prevents mid-suite session
+  // expiry from causing flaky failures.
+  const authManager = new AuthManager(browser);
+  let context = await authManager.getContextForRole(role);
+  let page = await context.newPage();
+
+  // WHY: Attach error listeners before navigating so we capture ALL errors
+  // from the very first page load, not just after the test starts
+  attachErrorListeners(page);
+  attachSessionExpiryListener(page, role, authManager);
+
+  // WHY: Stagger restricted user initialization on CI to avoid concurrent session conflicts
+  if (role === 'restricted' && process.env.CI) {
+    await page.waitForTimeout(Math.floor(Math.random() * 3000));
+  }
+
+  const maxAttempts = 2;
+  let landed = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const outcome = await navigateAndConfirmLoggedIn(page, role);
+    if (outcome === 'sales') {
+      landed = true;
+      break;
+    }
+
+    if (attempt === maxAttempts) {
+      throw new Error(
+        `${role} page failed to reach the app's /sales/ area after ${maxAttempts} login ` +
+          `attempts (last outcome: ${outcome}, current URL: ${page.url()}). This is a genuine ` +
+          `failure, not a session-expiry false positive a retry could paper over — investigate ` +
+          `the app/environment.`
+      );
+    }
+
+    logger.warn(
+      `${role} page did not land on /sales/ (outcome: ${outcome}, url: ${page.url()}) — ` +
+        `forcing a fresh login and retrying (attempt ${attempt}/${maxAttempts})`
+    );
+    await authManager.clearStorageState(role).catch(() => {});
+    AuthManager['lastValidated'].delete(role);
+    await authManager.loginAndSaveState(role);
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+    context = await authManager.getContextForRole(role);
+    page = await context.newPage();
+    attachErrorListeners(page);
+    attachSessionExpiryListener(page, role, authManager);
+  }
+
+  if (!landed) {
+    // Unreachable — the loop above either sets landed=true or throws — but
+    // keeps TypeScript's control-flow analysis happy without a non-null cast.
+    throw new Error(`${role} page never landed on /sales/ — see prior log for details`);
+  }
+
+  await dismissStartupPopup(page);
+
+  await use(page);
+
+  ErrorCollector.clearCurrentTest();
+  await context.close();
+}
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 export type TestFixtures = {
@@ -139,123 +271,11 @@ export type TestFixtures = {
 
 export const test = base.extend<TestFixtures>({
   adminPage: async ({ browser }, use, testInfo) => {
-    // WHY: Set current test context so errors captured during this test
-    // are tagged with the correct test title and file
-    ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
-
-    // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
-    // AuthManager validates the session before creating the context and
-    // re-logins automatically if expired. This prevents mid-suite session
-    // expiry from causing flaky failures.
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('admin');
-    const page = await context.newPage();
-
-    // WHY: Attach error listeners before navigating so we capture ALL errors
-    // from the very first page load, not just after the test starts
-    attachErrorListeners(page);
-    attachSessionExpiryListener(page, 'admin', authManager);
-
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-
-    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
-    const adminUrl = page.url();
-    if (adminUrl.includes('/signIn') || adminUrl.includes('/login')) {
-      logger.warn('Admin session expired mid-run — re-logging in');
-      await authManager.loginAndSaveState('admin');
-      const freshContext = await authManager.getContextForRole('admin');
-      const freshPage = await freshContext.newPage();
-      attachErrorListeners(freshPage);
-      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-      try {
-        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
-        await popup.waitFor({ state: 'visible', timeout: 3000 });
-        await popup.click();
-        await popup.waitFor({ state: 'hidden', timeout: 3000 });
-      } catch { /* no popup */ }
-      await use(freshPage);
-      ErrorCollector.clearCurrentTest();
-      await freshContext.close();
-      await context.close();
-      return;
-    }
-
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-
-    try {
-      const popup = page.locator('#cancel[data-dismiss="modal"]');
-      await popup.waitFor({ state: 'visible', timeout: 3000 });
-      await popup.click();
-      await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch {
-      /* no popup — continue */
-    }
-
-    await use(page);
-
-    ErrorCollector.clearCurrentTest();
-    await context.close();
+    await createRolePage(browser, 'admin', testInfo, use);
   },
 
   restrictedPage: async ({ browser }, use, testInfo) => {
-    ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
-    // WHY: Use AuthManager.getContextForRole() — validates session before
-    // creating context and re-logins if expired. Same as adminPage.
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('restricted');
-    const page = await context.newPage();
-    // WHY: Attach error listeners before any navigation
-    attachErrorListeners(page);
-    attachSessionExpiryListener(page, 'restricted', authManager);
-    // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
-    if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
-    // WHY: QA env has intermittent TCP timeouts under parallel load — mirror AuthManager 3-retry pattern.
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        break;
-      } catch (e) {
-        if (attempt === 3) throw e;
-        logger.warn(`restrictedPage goto attempt ${attempt} failed — retrying in 3s`);
-        await page.waitForTimeout(3000);
-      }
-    }
-    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
-    const restrictedUrl = page.url();
-    if (restrictedUrl.includes('/signIn') || restrictedUrl.includes('/login')) {
-      logger.warn('Restricted session expired mid-run — re-logging in');
-      await authManager.loginAndSaveState('restricted');
-      const freshContext = await authManager.getContextForRole('restricted');
-      const freshPage = await freshContext.newPage();
-      attachErrorListeners(freshPage);
-      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-      try {
-        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
-        await popup.waitFor({ state: 'visible', timeout: 3000 });
-        await popup.click();
-        await popup.waitFor({ state: 'hidden', timeout: 3000 });
-      } catch { /* no popup */ }
-      await use(freshPage);
-      ErrorCollector.clearCurrentTest();
-      await freshContext.close();
-      await context.close();
-      return;
-    }
-
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-    try {
-      const popup = page.locator('#cancel[data-dismiss="modal"]');
-      await popup.waitFor({ state: 'visible', timeout: 3000 });
-      await popup.click();
-      await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch {
-      /* no popup — continue */
-    }
-    await use(page);
-    ErrorCollector.clearCurrentTest();
-    await context.close();
+    await createRolePage(browser, 'restricted', testInfo, use);
   },
 
   adminContext: async ({ browser }, use) => {
