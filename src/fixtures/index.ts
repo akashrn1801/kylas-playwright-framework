@@ -223,9 +223,19 @@ async function createRolePage(
     }
 
     if (attempt === maxAttempts) {
+      // WHY: Confirmed live (2026-07-07 reporting-overhaul investigation) —
+      // this used to throw directly, leaking the context/page created above
+      // (or re-created on a prior loop iteration) since a throw before
+      // reaching `await use(page)` skips this fixture's own teardown code
+      // entirely. Every time this genuine-failure path fired, one browser
+      // context leaked for the rest of the worker's lifetime. Capture the URL
+      // before closing — page.url() after close() is not reliable.
+      const failureUrl = page.url();
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
       throw new Error(
         `${role} page failed to reach the app's /sales/ area after ${maxAttempts} login ` +
-          `attempts (last outcome: ${outcome}, current URL: ${page.url()}). This is a genuine ` +
+          `attempts (last outcome: ${outcome}, current URL: ${failureUrl}). This is a genuine ` +
           `failure, not a session-expiry false positive a retry could paper over — investigate ` +
           `the app/environment.`
       );

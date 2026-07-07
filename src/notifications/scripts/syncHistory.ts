@@ -39,14 +39,28 @@ loadDotEnv();
 // a branch where a rebase-retry is the ONLY thing that can conflict, never a
 // real code change.
 const HISTORY_BRANCH_NAME = process.env.HISTORY_BRANCH_NAME || 'ci/reporting-history';
-// WHY: defaults to the current checkout's own `origin` — in real CI (Jenkins or
-// GitHub Actions) that remote is already configured with fetch access from
-// `checkout scm` / actions/checkout, and push access wherever a credentialed
-// remote URL or token is already wired up (this repo already proves that
-// pattern works today in staging.yml's promote-to-prod job). Overridable so
-// this can be pointed at a throwaway local repo for verification without ever
-// touching the real remote.
-const HISTORY_GIT_REMOTE = process.env.HISTORY_GIT_REMOTE || 'origin';
+// WHY: Confirmed live (2026-07-07) — `git clone` needs an actual URL/path, it
+// cannot resolve a remote NAME the way `git pull origin main` can, since a
+// fresh clone target has no `.git/config` yet to look "origin" up in. The
+// original version of this passed the literal string "origin" straight to
+// `git clone`, which fails with "repository 'origin' does not exist" every
+// single time — caught gracefully by the try/catch (so it never broke the
+// build), but it meant the whole history feature silently never persisted
+// anything, defeating its purpose. Resolve the real URL from the ALREADY-
+// checked-out repo's own configured "origin" remote (present in real CI via
+// `checkout scm` / actions/checkout) instead of assuming the name resolves on
+// its own. HISTORY_GIT_REMOTE remains a full override (a URL or local path)
+// for verification against a throwaway repo without ever touching the real one.
+function resolveGitRemoteUrl(): string {
+  if (process.env.HISTORY_GIT_REMOTE) return process.env.HISTORY_GIT_REMOTE;
+  try {
+    return execSync('git remote get-url origin', { cwd: process.cwd() }).toString().trim();
+  } catch {
+    throw new Error(
+      'Could not resolve origin remote URL — set HISTORY_GIT_REMOTE explicitly or ensure this runs inside a checked-out git repo with an "origin" remote configured'
+    );
+  }
+}
 const MAX_PUSH_RETRIES = 3;
 
 function sh(cmd: string, cwd: string): string {
@@ -137,11 +151,12 @@ async function main() {
   const historyFileRelPath = `history/${env}.jsonl`;
 
   try {
+    const gitRemoteUrl = resolveGitRemoteUrl();
     // WHY: shallow, single-branch clone — this branch only ever needs its tip,
     // never full history, and a shallow clone keeps every CI run's sync step
     // fast regardless of how many runs have accumulated over the project's life.
     const cloneAttempt = shSafe(
-      `git clone --depth 50 --branch ${HISTORY_BRANCH_NAME} --single-branch ${HISTORY_GIT_REMOTE} "${tempDir}/repo"`,
+      `git clone --depth 50 --branch ${HISTORY_BRANCH_NAME} --single-branch ${gitRemoteUrl} "${tempDir}/repo"`,
       tempDir
     );
     const repoDir = path.join(tempDir, 'repo');
@@ -152,7 +167,7 @@ async function main() {
       // history/size.
       console.log('[syncHistory] History branch not found — creating it as a fresh orphan branch');
       fs.mkdirSync(repoDir, { recursive: true });
-      sh(`git clone ${HISTORY_GIT_REMOTE} .`, repoDir);
+      sh(`git clone ${gitRemoteUrl} .`, repoDir);
       sh(`git checkout --orphan ${HISTORY_BRANCH_NAME}`, repoDir);
       sh(`git rm -rf . --quiet || true`, repoDir);
       fs.writeFileSync(path.join(repoDir, '.gitkeep'), '');

@@ -124,10 +124,16 @@ export class EmailTemplate {
 
     const flakyRows = report.flakyTests
       .map(
+        // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
+        // t.tracePath now points at the FAILING attempt's trace for a flaky
+        // test (see ReportParser.extractResults), which is the one actually
+        // useful for debugging why it flaked — the passing retry has nothing
+        // to explain.
         (t: TestResult) => `
       <tr style="border-bottom:1px solid #fef3c7;">
         <td style="padding:6px 0;font-size:12px;color:#374151;">${this.esc(t.title)}</td>
-        <td style="padding:6px 0;text-align:right;font-size:11px;color:#f59e0b;font-weight:600;">${t.retries} retry</td>
+        <td style="padding:6px 0;text-align:right;font-size:11px;color:#f59e0b;font-weight:600;white-space:nowrap;">${t.retries} retry</td>
+        <td style="padding:6px 0 6px 12px;color:#6b7280;font-size:10px;font-family:monospace;word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : '<span style="color:#d1d5db;">no trace captured</span>'}</td>
       </tr>`
       )
       .join('');
@@ -269,7 +275,14 @@ ${
 <tr><td style="padding:8px 32px;">
   <div style="background:#fffbeb;border-radius:12px;padding:20px;border:1px solid #fde68a;">
     <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px;">⚠️ Flaky Tests (${report.flakyTests.length})</div>
-    <table width="100%" cellpadding="0" cellspacing="0">${flakyRows}</table>
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <th style="padding:0 0 4px;text-align:left;font-size:10px;color:#9ca3af;font-weight:600;">Test</th>
+        <th style="padding:0 0 4px;text-align:right;font-size:10px;color:#9ca3af;font-weight:600;"></th>
+        <th style="padding:0 0 4px 12px;text-align:left;font-size:10px;color:#9ca3af;font-weight:600;">Trace (failing attempt)</th>
+      </tr>
+      ${flakyRows}
+    </table>
   </div>
 </td></tr>`
     : ''

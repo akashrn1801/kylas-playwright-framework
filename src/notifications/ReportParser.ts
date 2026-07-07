@@ -60,13 +60,26 @@ export class ReportParser {
     const failed = results.filter((r) => r.status === 'failed').length;
     const skipped = results.filter((r) => r.status === 'skipped').length;
     const flaky = results.filter((r) => r.status === 'flaky').length;
-    const duration = results.reduce((sum, r) => sum + r.duration, 0);
+    // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) — summing
+    // every test's own duration double-counts time whenever workers run tests
+    // concurrently (each overlapping test's time gets added, not overlapped).
+    // raw.stats.duration is Playwright's own measured wall-clock duration —
+    // verified against a live run: matched Playwright's own "Total time"
+    // output to within a second, while the summed value was ~2x too high
+    // (reported email showed 4h35m for a run that actually took 2h31m).
+    const duration = raw.stats?.duration ?? results.reduce((sum, r) => sum + r.duration, 0);
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
     const status: ParsedReport['status'] =
       failed > 0 ? 'failed' : flaky > 0 ? 'unstable' : 'passed';
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
-    const startTime = raw.startTime || new Date().toISOString();
+    // WHY: Confirmed live (same incident) — raw.startTime does not exist at
+    // the top level of Playwright's JSON report, only raw.stats.startTime.
+    // The old fallback to "now" silently produced the run's real END time
+    // labeled as "start" (confirmed: matched exactly, to the second, against
+    // a real run's reported email times — "start" was actually the real end,
+    // and "end" was that mislabeled time plus the inflated summed duration).
+    const startTime = raw.stats?.startTime || raw.startTime || new Date().toISOString();
     const endTime = new Date(new Date(startTime).getTime() + duration).toISOString();
     const moduleMap = new Map<string, ModuleStats>();
     for (const r of results) {
@@ -133,6 +146,16 @@ export class ReportParser {
             //   but should be 'failed', not 'flaky'
             const status = this.mapStatus(test.status, lastResult?.status);
             const error = lastResult?.error?.message || lastResult?.error?.value || undefined;
+            // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
+            // for a flaky test, lastResult is the PASSING retry, which has no
+            // trace attachment (trace: 'retain-on-failure' only keeps traces
+            // for failed attempts). That made trace links silently absent for
+            // exactly the tests where they're most valuable — debugging why
+            // something flaked, not just confirming a permanent failure.
+            // Verified against real data: all 4 flaky tests in that run had a
+            // trace on their failing attempt(s), none on the passing one.
+            const traceSourceResult =
+              status === 'flaky' ? [...allResults].reverse().find((r) => r.status !== 'passed') : lastResult;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
               status,
@@ -140,7 +163,7 @@ export class ReportParser {
               error: error ? error.substring(0, 300) : undefined,
               retries,
               file: currentFile,
-              tracePath: this.extractTracePath(lastResult),
+              tracePath: this.extractTracePath(traceSourceResult),
             });
           }
         }
