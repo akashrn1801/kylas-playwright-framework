@@ -1281,12 +1281,34 @@ export class LeadsPage extends BasePage {
     // WHY: Fill mandatory deal name
     await this.convertDealNameInput().waitFor({ state: 'visible', timeout: 10000 });
     await this.convertDealNameInput().fill(dealName);
-    // WHY: Fill estimated value — required field for deal
+    // WHY: Fill estimated value — required field for deal. Confirmed live
+    // (2026-07-09) — the app now pre-populates this field with a server-
+    // computed value and disables it once Deal auto-mapping is available
+    // (class="... auto-mapped", value already set, e.g. "400000") — a QA-
+    // environment/app-side change, not something this framework's Lead
+    // field additions caused (git blame on this block predates that work,
+    // and the pre-filled value never matches any Lead-side data this suite
+    // controls). isVisible() alone doesn't reflect fillability — an element
+    // can be visible and disabled at the same time — so check isEnabled()
+    // too. When disabled, skip: the field already carries a valid non-empty
+    // value, so the deal's own "required" validation is satisfied without
+    // us touching it. Filling a disabled field previously caused
+    // Playwright's actionability retry loop to hammer this locator for the
+    // test's entire timeout (~800 retries over ~7-8 minutes).
     const estimatedValue = this.page.locator('[id="1_21_input_deal.details.estimatedValue"]');
     await estimatedValue.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
-    if (await estimatedValue.isVisible().catch(() => false)) {
+    const estimatedValueVisible = await estimatedValue.isVisible().catch(() => false);
+    const estimatedValueEnabled = estimatedValueVisible
+      ? await estimatedValue.isEnabled().catch(() => false)
+      : false;
+    if (estimatedValueEnabled) {
       await estimatedValue.fill('100000');
       logger.debug('Estimated value filled: 100000');
+    } else if (estimatedValueVisible) {
+      const existingValue = await estimatedValue.inputValue().catch(() => '');
+      logger.info(
+        `Estimated value field is disabled (auto-populated by the app with "${existingValue}") — skipping fill`
+      );
     }
     // WHY: Company name must be unique — auto-mapped name may already exist
     const companyNameInput = this.page.locator('[id="3_11_input_company.details.name"]');
