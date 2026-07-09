@@ -171,6 +171,7 @@ Create feature branches from `dev`. Test on sandbox (`sandbox.yml` auto-detects 
   **Caveat added 2026-07-06:** all six experiments above were conducted *before* two subsequently-discovered client-side bugs were known — (a) a substring `hasText` contact-selection match that could silently pick the wrong, inaccessible "`<name>` Copy" clone contact, and (b) `DealsPage.fillDealForm()`'s associated contact/company pickers selecting an arbitrary existing entity (via `selectFirstOptionFromDropdown`) rather than a freshly-created, known-owned one. Either could have contaminated any of the six runs without being visible in the isolation experiments as designed. This makes the "session corruption" / "no consistent mechanism" conclusion **uncertain, not disproven with full confidence** — not a new investigation, just a downgrade of confidence in the existing one.
   **Resolution (2026-07-06):** the combined-six-permission test was split into D24a (Update/Note/Task/Meeting, one shared deal — passes reliably) and a since-deleted D24b (Call+Quotation shared together on one deal). D24b was removed rather than kept red or worked around, since every fix attempt above failed and a permanently-failing test is just noise. Individual coverage for both permissions still exists and passes reliably: see `admin shares deal Call permission restricted user sees Call Logs icon and can log call` and `admin shares deal Quotation permission restricted user sees Quotations icon and can create quotation` in `tests/rbac/deals.rbac.spec.ts`. What's *not* covered by any current test: Call and Quotation permissions granted to the same user in the same share action — that scenario is exactly what triggers this bug, and reintroducing a test for it should wait until someone with backend/network access has actually diagnosed the mechanism above.
 - **`DealsPage.fillDealForm()`'s associated contact/company selection is random by design — know why before "fixing" it (2026-07-06):** `selectFirstOptionFromDropdown()` picks a **random** index from the unfiltered dropdown, not the first one. That randomization was itself a deliberate 2026-07-05 fix for a *different* problem (CI hangs/timeouts on this picker) — nobody connected it to the side effect of landing on an arbitrary pre-existing contact/company with unknown, uncontrolled ownership/share-state until the 2026-07-06 investigation above. For any **new** Deals test where the associated contact/company's ownership matters (sharing, reassigning, permission checks, or any contact-specific action) — pass the new `associatedContactName`/`associatedCompanyName` fields on `DealData` to select a freshly-created, known entity by exact-match name instead of relying on the random pick. Passing neither preserves the original random-index behavior unchanged (verified 2026-07-06 against `D30`/`D31`) — don't revert the randomization itself to "fix" a timeout without re-checking this trade-off first.
+- **Lead multi-select fields ("chip drop") — root-caused and fixed (2026-07-08):** `BasePage.selectRandomFromMultiValueReactSelect()` (the generic helper behind Lead's Multi Pick List custom field and Products or Services standard field) used to silently drop a previously-landed chip mid-sequence, first suspected as an app-level React race. Confirmed via `document.elementFromPoint()` instrumentation at the exact coordinate about to be clicked: the bug was in this codebase's own click targeting. The method's "reopen the menu" step clicked the control div itself, and Playwright's default click lands on the CENTER of an element's bounding box — as chips accumulate and wrap onto multiple lines, that center point can drift onto a previously-added chip's own remove icon instead of empty control space, silently un-selecting it instead of reopening the dropdown. **Fix:** the reopen click now targets the control's own `<input>` element (a distinct child node that never overlaps a chip's remove icon) instead of the control div. The very first open (before any chips exist) still clicks the control div, since react-select's empty-state placeholder text covers the input at that point and would intercept the click. Verified stable on both create (4 fresh-lead runs, up to 9/11 selected, zero drops) and edit (6 repeated clear-and-reselect cycles on one lead, up to 11/11 selected, zero drops) — no retry involved, no create/edit distinction needed. If this ever resurfaces, re-run the `document.elementFromPoint()` instrumentation before assuming the same fix still holds — this was verified against QA's live DOM structure as of 2026-07-08, not derived from source access.
 
 ## Module Status
 - ✅ Leads (38 tests: 16 UI + 22 RBAC)
@@ -579,3 +580,112 @@ const contactId = await contactIdPromise;
 
 **Standalone contact create form IDs differ:** `input[name="firstName"]`, `input[name="emails[0].value"]`  
 **Edit mode email/phone IDs:** `[id="1_11_input_email_0"]`, `[id="1_12_input_phone_0"]`
+
+---
+
+### 9. Custom Fields pattern (generic helpers + per-module constants + environment safety)
+
+Built 2026-07-08 for Lead's 9 custom fields (Text, Paragraph, Number, PickList, MultiPickList,
+Checkbox, Date, DateTimePicker, URL). **Read this before adding custom-field support to any other
+module (Contacts/Companies/Deals/Meetings/Tasks) — reuse the BasePage methods, don't re-implement
+them.**
+
+**Where things live, and why:**
+
+| Piece | Lives in | Why |
+|---|---|---|
+| Fill/select/assert methods for each of the 9 field *types* | `BasePage.ts` (generic, reusable) | Parameterized by a raw Kylas field-name **string** (e.g. `"TextField"`), not by any typed constant — so every module can call the exact same methods unchanged. |
+| Detail-page date/date-time display formatters | `BasePage.ts`, `protected` (`formatCustomFieldDetailDate`, `formatCustomFieldDetailDateTime`) | The rendered format (`"Jul 13, 2026"` / `"Jul 13, 2026 at 10:30 am"`) is a **Kylas-platform convention**, not Lead-specific — confirmed live. `protected` (not `private`) so subclasses can call them directly. |
+| The exact field **names** for one module (e.g. `LEAD_CUSTOM_FIELD_NAMES`) | that module's own factory (e.g. `leadFactory.ts`) | Each module defines and owns its own `<MODULE>_CUSTOM_FIELD_NAMES` constant — **mirror this pattern per module, never import one module's constant into another's.** Each entity gets these fields added independently and by hand; a shared constant would create false coupling and collision risk the moment two modules' field sets diverge (different names, or one module getting a field type the other doesn't have yet). |
+| The `LeadCustomFieldData` interface + `generateLeadCustomFieldData()` | `leadFactory.ts` | Same reasoning — module-owned data shape, not shared. |
+| The actual fill/verify call sites | `LeadsPage.fillLeadCustomFields()` (private) + `LeadsPage.assertLeadCustomFieldsOnDetail()` (public) | Each module gets its own thin `fill<Entity>CustomFields()` / `assert<Entity>CustomFieldsOnDetail()` wrapper that calls the generic BasePage methods with its own `<MODULE>_CUSTOM_FIELD_NAMES` constant. |
+
+**The environment-safety contract (non-negotiable for every new fill method):**
+
+Custom fields get added to one entity, on one environment, by hand — QA today, Stage/Prod later,
+often weeks apart, with identical names once added. Every BasePage custom-field method therefore:
+1. Checks DOM presence first (`isCustomFieldPresent()` — an `input[id$=...], textarea[id$=...]`
+   suffix match, count > 0).
+2. If absent: logs a clear `logger.info(...)` line naming the field and stating **why** it's being
+   skipped (so CI output is self-explanatory without reading source), then returns — **never
+   throws**.
+3. If present: fills/selects/asserts normally.
+
+This means the exact same call site (e.g. `fillLeadCustomFields()`, wired into both
+`fillLeadForm()` and `fillEditForm()`) starts working the moment the fields exist in a new
+environment — **zero code changes required**. Do not add a "does this environment have custom
+fields" branch anywhere else; the presence check inside each BasePage method is the only gate.
+
+**Locator strategy — match by suffix, not the numeric prefix:**
+
+Kylas's live custom-field ids look like `7_11_input_customFieldValues.cfTextField`. The numeric
+prefix (`7_11`) was confirmed live (2026-07-08, three independent passes: fresh create-form, the
+same form after a full reload, and an edit-form on an existing record) to be a static per-render
+wrapper index — identical across all three. `customFieldInputLocator()` still matches on the
+**suffix** (`_input_customFieldValues.cf<Name>`) rather than the full id, scoped to
+`input[id$=...], textarea[id$=...]` — this is strictly safer at zero extra cost (the numeric
+prefix could in principle change; the suffix cannot) and, critically, **avoids a real collision**:
+react-dates renders an accessibility `<p id="DateInput__screen-reader-message-<the real input's
+id>">` next to every Date/DateTimePicker field, which — being built by prefixing the real input's
+own id — *also* ends with the same suffix and breaks an unscoped `[id$=...]` match. Confirmed live
+the hard way; don't drop the tag-name scoping when reusing this pattern.
+
+**DateTimePicker is two independent widgets, not one:** a `SingleDatePicker` (react-dates, same
+widget as the plain `Date` field and `QuotationsPage.selectDateInPicker()`) for the date half, plus
+a **separate** `rc-time-picker` (same widget already handled in `MeetingsPage.fillTimePicker()` /
+`CallLogsPage`) for time — the time input starts `disabled` and only becomes enabled once a date is
+picked. Don't assume a "DateTimePicker"-named field uses one combined widget just because the name
+suggests it; confirm live per field.
+
+**Validation mechanisms differ per field — don't assume one applies to all:**
+- Some fields validate client-side, inline, on blur (`.invalid-feedback`/`.help-text.error`) —
+  confirmed for `TextField` (max length) and `UrlField` (malformed URL).
+- Some fields have **no client-side check at all** and are only rejected server-side on Save, via a
+  **generic** toast that never names the field (`assertFormErrorToast()`) — confirmed for
+  `ParagraphText` (its length limit exists only in the raw API error response, never in the UI).
+- Some fields (e.g. a native `<input type="number">`) make an invalid value **impossible to enter
+  via the UI at all** — Playwright's `fill()` itself throws on non-numeric text, and a real browser
+  blocks the keystrokes too. Don't manufacture a fake negative-test scenario for these; skip them
+  explicitly with a comment saying why (see `leadFactory.ts`'s `generateLeadCustomFieldInvalidUrl`
+  region for the precedent).
+
+**Reference implementation to copy from:** `src/modules/leads/LeadsPage.ts`
+(`fillLeadCustomFields()`, `assertLeadCustomFieldsOnDetail()`, the `showRequiredToggle`/
+`openOtherDetailsFormSection()` visibility-gating pair) + `src/data/factories/leadFactory.ts`
+(`LEAD_CUSTOM_FIELD_NAMES`, `LeadCustomFieldData`, `generateLeadCustomFieldData()`) +
+`src/core/BasePage.ts`'s "Custom Field Helpers" section. When Contacts/Companies/Deals get their
+own custom fields, start by reading these three files, not by re-deriving the pattern from scratch.
+
+**One toggle gotcha worth knowing before you copy `openOtherDetailsFormSection()`-style
+visibility-gating elsewhere:** the "Show Required & Important Fields" toggle's on/off state is
+**not** re-initialized per form open — it persists across sessions (server/localStorage-backed).
+`disableRequiredFieldsToggle()` used to click it unconditionally whenever visible; fixed to check
+`showRequiredToggleCheckbox().isChecked()` first, because a blind click on an *already-off* toggle
+flips it back **on**, hiding the very section you're trying to reach. If another module's
+equivalent toggle has the same persistence behavior, apply the same idempotency check.
+
+---
+
+### 10. Custom field Internal Name vs Label — renaming a field's display label is always safe
+
+Confirmed live (2026-07-08) by inspecting the actual field edit dialog at
+`/setup/fields/leads/list` (Settings → Customizations → Form Fields → Lead) — not inferred from the
+API response alone. Kylas custom fields have **two separate identifiers**:
+
+- **Label** — the user-facing display name (e.g. "Text Field"). Editable anytime by an admin.
+- **Internal Name** — e.g. `cfTextField`. Set once at field creation and **architecturally
+  impossible to change afterward**: the field's own Edit dialog exposes only a "Display Name"
+  input (plus Description, Is Filterable, Is Sortable) — there is no "Internal Name" field
+  present anywhere in that form, not merely disabled.
+
+All Lead custom-field locators in this codebase (`customFieldInputLocator()` in `BasePage.ts`, the
+`LEAD_CUSTOM_FIELD_NAMES` constants in `leadFactory.ts`) are built on the **Internal Name**, and so
+is the app's own API — `customFieldValues` in a lead's GET response is keyed by `cf<Name>`
+(confirmed via the raw API response, e.g. `customFieldValues.cfTextField`), not by the label. This
+means **renaming a custom field's display label in the app is always safe and requires zero code
+changes** on this side.
+
+**One real exception, not a rename:** if a field is *deleted and recreated* with a different
+internal name, that would break every locator built on the old name — but that's a field
+re-creation, not a rename, and a separate, much rarer risk. Worth remembering if a field's
+"identity" (not just its label) ever genuinely changes.
