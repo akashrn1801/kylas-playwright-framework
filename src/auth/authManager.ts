@@ -466,4 +466,111 @@ export class AuthManager {
 
     logger.info('All storage states cleared');
   }
+
+  // WHY: mid-test session recovery (2026-07-09 investigation) — a real,
+  // reproducible Kylas QA backend hiccup ("001002 we are not able to
+  // recognize you") can occasionally hit a request mid-test and cause the
+  // app's own frontend to redirect to /signIn, unrelated to the token's
+  // actual ~12h lifetime (confirmed by decoding the stored JWT — expiresIn
+  // is 43199s). loginAndSaveState() already knows how to re-login safely
+  // (cross-process file lock, reused as-is) — this method additionally
+  // pushes the freshly-written storage state's cookies/localStorage into
+  // the CALLER'S already-open page/context, since the test's page object
+  // holds references into that specific page and can't simply be handed a
+  // brand-new browser context.
+  async reauthenticatePage(page: Page, role: UserRole): Promise<void> {
+    logger.warn(`Mid-test session redirect detected for role ${role} — re-authenticating in place`);
+
+    await this.loginAndSaveState(role);
+
+    const stateFile = this.getStorageStateFile(role);
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8')) as {
+      cookies?: Parameters<BrowserContext['addCookies']>[0];
+      origins?: Array<{ origin: string; localStorage?: Array<{ name: string; value: string }> }>;
+    };
+
+    if (state.cookies?.length) {
+      await page.context().addCookies(state.cookies);
+    }
+
+    const origin =
+      state.origins?.find((o) => o.origin === config.appUrl) ?? state.origins?.[0];
+    if (origin?.localStorage?.length) {
+      await page.evaluate((items) => {
+        for (const item of items) {
+          window.localStorage.setItem(item.name, item.value);
+        }
+      }, origin.localStorage);
+    }
+
+    logger.info(`Re-authentication complete for role: ${role}`);
+  }
+}
+
+// ── Mid-test session recovery ────────────────────────────────────────────────
+// WHY a module-level registry, not a constructor param on BasePage: every
+// page object in this codebase extends BasePage with just `super(page)` —
+// changing that signature everywhere would be a huge, unrelated diff. A
+// WeakMap keyed by the Page instance lets fixtures/index.ts register the
+// (role, AuthManager) pairing once per page, and BasePage's click()/fill()
+// look it up without needing to know about roles or AuthManager at all.
+
+const pageRecoveryRegistry = new WeakMap<Page, { authManager: AuthManager; role: UserRole }>();
+
+export function registerPageForRecovery(
+  page: Page,
+  role: UserRole,
+  authManager: AuthManager
+): void {
+  pageRecoveryRegistry.set(page, { authManager, role });
+}
+
+export function isSignInUrl(url: string): boolean {
+  return /\/(signIn|login)/.test(url);
+}
+
+// WHY this exact phrasing: matches CallLogsPage.ts's own existing
+// permission-error detection (`isPermissionError` there) — reusing the same
+// signal this codebase already trusts to identify a genuine RBAC denial,
+// rather than inventing a second, possibly-inconsistent pattern.
+const PERMISSION_ERROR_PATTERN =
+  /necessary permission|don.t have enough permissions|not authorised to perform this operation/i;
+
+// WHY this must throw (never silently return false) on every non-recoverable
+// path: a caller (BasePage.click()/fill()) treats a normal return as "safe to
+// retry the original action" — any ambiguity here would risk retrying into a
+// masked RBAC failure, which is the one thing this mechanism must never do.
+// WHY `returnUrl` is a required param, not derived from page.url() inside
+// this function: by the time this is called, the page is ALREADY on
+// /signIn (that's the very condition that triggered recovery) — deriving
+// "where to go back to" from the current URL would just navigate back to
+// signIn itself. The caller must capture page.url() BEFORE the original
+// action was attempted, while the page was still on the real target page.
+export async function tryRecoverSessionForPage(page: Page, returnUrl: string): Promise<void> {
+  const ctx = pageRecoveryRegistry.get(page);
+  if (!ctx) {
+    throw new Error(
+      'Page was not registered for session recovery (registerPageForRecovery was never ' +
+        'called for it) — cannot recover without a known role'
+    );
+  }
+  const { authManager, role } = ctx;
+
+  await authManager.reauthenticatePage(page, role);
+  await page.goto(returnUrl, { waitUntil: 'domcontentloaded' });
+
+  if (isSignInUrl(page.url())) {
+    throw new Error(
+      `Session recovery for role ${role} failed — still on ${page.url()} after ` +
+        `re-authenticating and navigating back to ${returnUrl}`
+    );
+  }
+
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  if (PERMISSION_ERROR_PATTERN.test(bodyText)) {
+    throw new Error(
+      `Session recovery for role ${role} landed on a permission-denied page, not a genuine ` +
+        `session blip — refusing to retry the original action. Body snippet: ${bodyText.slice(0, 300)}`
+    );
+  }
 }
