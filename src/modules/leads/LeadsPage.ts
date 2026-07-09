@@ -1,6 +1,6 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import { LeadData } from '../../data/factories/leadFactory';
+import { LeadData, LEAD_CUSTOM_FIELD_NAMES } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
@@ -40,6 +40,48 @@ export class LeadsPage extends BasePage {
     this.page.locator('label').filter({
       hasText: 'Show Required & Important Fields',
     });
+
+  // WHY: the actual checkbox behind the toggle above — confirmed live
+  // (2026-07-08) as id="00_input_important_field". Needed to check its
+  // current checked state rather than blindly clicking the label every time.
+  // WHY xpath sibling, not `#00_input_important_field`: confirmed live
+  // (2026-07-08 custom-fields regression investigation) — an id selector
+  // whose value starts with a digit is invalid, unescaped CSS syntax; every
+  // call threw a SyntaxError that was silently swallowed by this method's
+  // own `.catch(() => true)` fallback, defaulting to "checked" and therefore
+  // clicking the toggle UNCONDITIONALLY every time — the exact bug this
+  // idempotency check was written to prevent. Harmless on create (the toggle
+  // genuinely starts checked there), but on edit it clicked an
+  // already-unchecked toggle back on, hiding "Other Details" and silently
+  // no-opping every custom-field fill for the whole update path. Locating by
+  // DOM relationship instead of a raw id sidesteps the escaping problem
+  // entirely.
+  private readonly showRequiredToggleCheckbox = (): Locator =>
+    this.showRequiredToggle().locator('xpath=preceding-sibling::input[@type="checkbox"]');
+
+  // ── Custom fields ("Other Details" section) ─────────────────
+  // WHY: scoped to the modal — the background page behind an edit modal can
+  // render its own element with the exact same "Other Details" text (its
+  // read-only detail tab), and an unscoped locator can resolve to that one
+  // instead, then hang waiting for the modal covering it. Confirmed live
+  // (2026-07-08) as the root cause of a stuck edit-form custom-field fill.
+  private readonly otherDetailsFormSectionNav = (): Locator =>
+    this.editModal().locator('a.nav-link').filter({ hasText: 'Other Details' });
+
+  private readonly otherDetailsDetailPageTab = (): Locator =>
+    this.page.locator('a[data-targetid="Other Details"]');
+
+  private readonly requirementDetailPageTab = (): Locator =>
+    this.page.locator('a[data-targetid="Requirement"]');
+
+  // WHY: confirmed live (2026-07-08) — same id as Contact's own Salutation
+  // field (`0_11_input_salutation`), but Lead's fill strategy differs: this
+  // codebase selects a random LIVE option (never a hardcoded value), unlike
+  // Contact's selectFromContactDropdown() which types a specific value.
+  private readonly salutationControl = (): Locator =>
+    this.page
+      .locator('[id="0_11_input_salutation"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
 
   private readonly firstNameInput = (): Locator => this.page.locator('input[name="firstName"]');
 
@@ -86,6 +128,56 @@ export class LeadsPage extends BasePage {
   private readonly companyZipcodeInput = (): Locator =>
     this.page.locator('input[name="companyZipcode"]');
 
+  // ── Campaign Information ────────────────────────────────────
+  // WHY: confirmed live (2026-07-08) — Campaign and Source are react-select
+  // dropdowns (Lead has both; Contact/Deal's equivalent section only has
+  // Campaign, no standalone Source — verified live, not assumed identical).
+  // The rest are plain text inputs, located by `name` like every other base
+  // Lead field in this file — no numeric-prefix dependency for those.
+  private readonly campaignControl = (): Locator =>
+    this.page
+      .locator('[id="6_11_input_campaign"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly sourceControl = (): Locator =>
+    this.page
+      .locator('[id="6_12_input_source"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly subSourceInput = (): Locator => this.page.locator('input[name="subSource"]');
+
+  private readonly utmSourceInput = (): Locator => this.page.locator('input[name="utmSource"]');
+
+  private readonly utmCampaignInput = (): Locator => this.page.locator('input[name="utmCampaign"]');
+
+  private readonly utmMediumInput = (): Locator => this.page.locator('input[name="utmMedium"]');
+
+  private readonly utmContentInput = (): Locator => this.page.locator('input[name="utmContent"]');
+
+  private readonly utmTermInput = (): Locator => this.page.locator('input[name="utmTerm"]');
+
+  // ── Requirement (Products or Services, Currency, Budget) ─────
+  // WHY: confirmed live (2026-07-08) — "Products or Services" is technically
+  // a lookup field against real Product records (class="look-up
+  // multi-lookup", placeholder "Search..." not "Choose"), not a static
+  // picklist. Confirmed it still behaves identically to a plain multi-select
+  // for this codebase's purposes: opening it without typing anything shows a
+  // default option list, and clearing existing chips reliably repopulates
+  // the menu with whatever was just freed up — so the same generic
+  // selectRandomFromMultiValueReactSelect() helper applies unmodified.
+  private readonly productsControl = (): Locator =>
+    this.page
+      .locator('[id="5_21_input_products"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly currencyControl = (): Locator =>
+    this.page
+      .locator('[id="5_22_input_requirementCurrency"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly budgetInput = (): Locator =>
+    this.page.locator('[id="5_23_input_requirementBudget"]');
+
   private readonly saveButton = (): Locator =>
     this.page.locator('button[type="submit"].save-button');
 
@@ -93,8 +185,20 @@ export class LeadsPage extends BasePage {
 
   private readonly editModal = (): Locator => this.page.locator('#editEntityModal');
 
+  // WHY: scoped to #editEntityModal, not page-wide — confirmed live
+  // (2026-07-08) that this app has at least 6 different modal templates
+  // (filterModal, createSmartListModal, editEntityModal, confirmModal, and
+  // 2 others) that all share the generic `data-dismiss="modal"` attribute
+  // on their own close/cancel buttons. An unscoped `.first()` resolved to a
+  // hidden, 0×0 button belonging to an unrelated, closed "filterModal"
+  // template instead of the real, visible editEntityModal close button —
+  // Playwright then waited forever for an element that could never become
+  // visible, since it belongs to a modal that was never open. This stayed
+  // dormant for months because closeModalIfOpen() only runs at the start of
+  // goToLeadsList(), and every existing Lead test calls goToLeadsList() only
+  // once, before any modal is ever open — never triggering this click.
   private readonly modalCancelButton = (): Locator =>
-    this.page.locator('button[data-dismiss="modal"]').first();
+    this.editModal().locator('button[data-dismiss="modal"]').first();
 
   // ── Ellipsis menu ──────────────────────────────────────────
   // WHY: Action dropdown on lead detail — Reassign/Share/Convert/Clone/Delete
@@ -113,8 +217,10 @@ export class LeadsPage extends BasePage {
     this.page.locator('button.btn-primary.dropdown-toggle-split').first();
 
   private readonly closeLeadDropdownItem = (stage: string): Locator =>
-    this.page.locator('.dropdown-menu.closed-stage-list .close-stage-title')
-      .filter({ hasText: stage }).first();
+    this.page
+      .locator('.dropdown-menu.closed-stage-list .close-stage-title')
+      .filter({ hasText: stage })
+      .first();
 
   // ── Won/Closed stage popup ─────────────────────────────────
   private readonly stagePopupYesButton = (): Locator =>
@@ -134,8 +240,7 @@ export class LeadsPage extends BasePage {
     this.page.locator('text=Lead Converted').first();
 
   // ── Share ──────────────────────────────────────────────────
-  private readonly shareToTypeInput = (): Locator =>
-    this.page.locator('#input_toType');
+  private readonly shareToTypeInput = (): Locator => this.page.locator('#input_toType');
 
   private readonly shareToUserInput = (): Locator =>
     this.page.locator('[id="undefined_undefinedundefined_input_toId"]');
@@ -154,11 +259,14 @@ export class LeadsPage extends BasePage {
     this.page.locator('.modal.show button.btn-primary.ml-auto').first();
 
   // ── Detail page assertions ─────────────────────────────────
-  private readonly detailTabPane = (): Locator =>
-    this.page.locator('.tab-pane.active.show');
+  private readonly detailTabPane = (): Locator => this.page.locator('.tab-pane.active.show');
 
   private readonly detailOwner = (): Locator =>
-    this.page.locator('.detail-section').filter({ hasText: 'Owner' }).locator('p, span, div').first();
+    this.page
+      .locator('.detail-section')
+      .filter({ hasText: 'Owner' })
+      .locator('p, span, div')
+      .first();
 
   private readonly validationError = (fieldId: string): Locator =>
     this.page.locator(`#${fieldId} .invalid-feedback, #${fieldId} .help-text.error`).first();
@@ -166,18 +274,22 @@ export class LeadsPage extends BasePage {
   // ── Right panel icons ──────────────────────────────────────
   // WHY: Map title to SVG ID — restricted user pages don't have title attributes
   private readonly rightPanelIconSvgMap: Record<string, string> = {
-    'Notes': 'paint0_linear_972_2654',
-    'Tasks': 'clip-Ic_Task',
-    'Meetings': 'clip-Ic_Meetings',
+    Notes: 'paint0_linear_972_2654',
+    Tasks: 'clip-Ic_Task',
+    Meetings: 'clip-Ic_Meetings',
     'Call Logs': 'paint1_linear_leads',
-    'Documents': 'Rectangle_5931',
+    Documents: 'Rectangle_5931',
   };
 
   private readonly rightPanelIcon = (title: string): Locator => {
     // WHY: Try title attribute first (admin view), fallback to SVG ID (restricted view)
     const svgId = this.rightPanelIconSvgMap[title];
     if (svgId) {
-      return this.page.locator(`button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[title="${title}"]`).first();
+      return this.page
+        .locator(
+          `button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[title="${title}"]`
+        )
+        .first();
     }
     return this.page.locator(`button.btn.btn-transparent[title="${title}"]`);
   };
@@ -275,7 +387,10 @@ export class LeadsPage extends BasePage {
       if (await modal.isVisible()) {
         logger.info('Closing existing modal');
 
-        await this.modalCancelButton().click();
+        // WHY: explicit timeout — a raw, unbounded click() here previously
+        // inherited the whole test's timeout (up to 8 minutes) on failure
+        // instead of failing fast into this method's own try/catch.
+        await this.modalCancelButton().click({ timeout: 10000 });
 
         await modal.waitFor({
           state: 'hidden',
@@ -294,6 +409,20 @@ export class LeadsPage extends BasePage {
       const toggle = this.showRequiredToggle();
 
       if (await toggle.isVisible()) {
+        // WHY: confirmed live (2026-07-08) — this toggle's on/off state is
+        // NOT re-initialized per form open; it can already be off from a
+        // prior action in the same session. A blind, unconditional click
+        // here would flip an already-off toggle back ON — hiding the "Other
+        // Details" section (and its custom fields) right when a caller
+        // needs it visible. Only click when it's actually checked.
+        const isChecked = await this.showRequiredToggleCheckbox()
+          .isChecked()
+          .catch(() => true);
+        if (!isChecked) {
+          logger.debug('Show Required & Important Fields already disabled — skipping click');
+          return;
+        }
+
         logger.info('Disabling Show Required & Important Fields');
 
         await toggle.click();
@@ -307,6 +436,152 @@ export class LeadsPage extends BasePage {
     } catch (error) {
       logger.debug(`Toggle not available: ${String(error)}`);
     }
+  }
+
+  // WHY: the 9 custom fields live in the "Other Details" section, which only
+  // renders once disableRequiredFieldsToggle() has run — shared by both the
+  // create form (fillLeadForm) and the edit form (fillEditForm) so custom
+  // fields are reachable from either path.
+  private async openOtherDetailsFormSection(): Promise<void> {
+    const nav = this.otherDetailsFormSectionNav();
+    if (!(await nav.isVisible({ timeout: 5000 }).catch(() => false))) {
+      logger.debug(
+        '"Other Details" nav item not visible — custom fields section unavailable on this form'
+      );
+      return;
+    }
+    await nav.click();
+    await this.page.waitForTimeout(500);
+  }
+
+  // WHY: fills the Campaign Information section — Campaign and Source are
+  // react-select dropdowns with account-configured, live-read options
+  // (never hardcode a value); the rest are plain text inputs. Mutates
+  // `data.campaignInfo.campaign`/`.source` in place with whatever was
+  // actually selected live, same reasoning as fillLeadCustomFields()'s
+  // PickList/MultiPickList handling below — the caller's `data` object
+  // needs to reflect reality for later verification.
+  //
+  // WHY this exists as its own method rather than folded into
+  // fillLeadCustomFields(): Campaign Information and "Other Details" are two
+  // entirely separate form sections with no shared fields — keeping them
+  // separate avoids the exact class of ordering/insertion bug this method
+  // was added to investigate (a section's fill logic getting silently lost
+  // by being interleaved into an unrelated section's routine).
+  private async fillLeadCampaignInfo(data: LeadData): Promise<void> {
+    const info = data.campaignInfo;
+
+    const campaign = await this.selectRandomFromSingleReactSelect(
+      this.campaignControl(),
+      'Campaign'
+    );
+    info.campaign = campaign;
+
+    const source = await this.selectRandomFromSingleReactSelect(this.sourceControl(), 'Source');
+    info.source = source;
+
+    await this.fill(this.subSourceInput(), info.subSource, 'sub source');
+    await this.fill(this.utmSourceInput(), info.utmSource, 'utm source');
+    await this.fill(this.utmCampaignInput(), info.utmCampaign, 'utm campaign');
+    await this.fill(this.utmMediumInput(), info.utmMedium, 'utm medium');
+    await this.fill(this.utmContentInput(), info.utmContent, 'utm content');
+    await this.fill(this.utmTermInput(), info.utmTerm, 'utm term');
+
+    logger.success('Campaign Information filled');
+  }
+
+  // WHY: Salutation is a General Information field (react-select, live
+  // options read at fill time, never hardcoded — confirmed live 2026-07-08
+  // options are ["Mr","Mrs","Miss"], identical for admin and restricted
+  // user). Mutates `data.salutation` in place with whatever was actually
+  // selected, same reasoning as every other live-selected field above.
+  private async fillLeadSalutation(data: LeadData): Promise<void> {
+    data.salutation = await this.selectRandomFromSingleReactSelect(
+      this.salutationControl(),
+      'Salutation'
+    );
+  }
+
+  // WHY: fills the Requirement section's 3 standard fields. Products or
+  // Services and Currency are react-select fields whose live options are
+  // read at fill time — Products is technically a lookup against real
+  // Product records, confirmed live (2026-07-08) to behave identically to a
+  // plain multi-select for fill/clear purposes (see productsControl's own
+  // comment). Mutates `data.requirement.productsOrServices`/`.currency` in
+  // place with whatever was actually selected.
+  //
+  // WHY the currency value is stripped of its parenthetical suffix: confirmed
+  // live — the dropdown option reads "India Rupees (INR)" but the detail
+  // page displays only "India Rupees". Storing the stripped form here means
+  // the same `data.requirement.currency` value is directly comparable to the
+  // detail page later, instead of every caller needing to know about this
+  // display transform.
+  private async fillLeadRequirement(data: LeadData): Promise<void> {
+    const req = data.requirement;
+
+    const products = await this.selectRandomFromMultiValueReactSelect(
+      this.productsControl(),
+      'Products or Services'
+    );
+    req.productsOrServices = products;
+
+    const rawCurrency = await this.selectRandomFromSingleReactSelect(
+      this.currencyControl(),
+      'Currency'
+    );
+    req.currency = rawCurrency.replace(/\s*\([^)]*\)\s*$/, '');
+
+    await this.fill(this.budgetInput(), String(req.budget), 'budget');
+
+    logger.success('Requirement fields filled');
+  }
+
+  // WHY: single choke point for filling all 9 Lead custom fields — called
+  // from both fillLeadForm() (create) and fillEditForm() (update) so every
+  // Lead creation/update path in the codebase attempts these fields, per the
+  // environment-safety contract: each BasePage helper checks DOM presence
+  // and skips gracefully when a field doesn't exist yet in the current
+  // environment (see BasePage's custom-field-helpers section for why).
+  //
+  // Mutates `data.customFields.pickList`/`.multiPickList` in place with
+  // whatever was actually selected live — PickList/MultiPickList options are
+  // read from the DOM at fill time, so the caller's `data` object needs to
+  // be updated to reflect reality before it's used for later verification.
+  private async fillLeadCustomFields(data: LeadData): Promise<void> {
+    await this.openOtherDetailsFormSection();
+    const cf = data.customFields;
+
+    await this.fillTextLikeCustomField(
+      LEAD_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.fillTextLikeCustomField(
+      LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.fillTextLikeCustomField(LEAD_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+    await this.fillTextLikeCustomField(LEAD_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    await this.setCheckboxCustomField(LEAD_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.selectDateCustomField(LEAD_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    await this.selectDateTimeCustomField(
+      LEAD_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker'
+    );
+
+    const pickedValue = await this.selectPicklistCustomField(
+      LEAD_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+
+    const pickedValues = await this.selectMultiPicklistCustomField(
+      LEAD_CUSTOM_FIELD_NAMES.multiPickList,
+      'Multi Pick List'
+    );
+    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
   }
 
   private async performSearch(searchText: string): Promise<void> {
@@ -449,6 +724,11 @@ export class LeadsPage extends BasePage {
 
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
 
+    // WHY: Salutation is part of the default General Information section —
+    // visible without needing disableRequiredFieldsToggle(), unlike Campaign
+    // Information/Other Details below.
+    await this.fillLeadSalutation(data);
+
     // WHY: Pipeline must be selected before Pipeline Stage —
     // Stage options depend on the selected pipeline.
     logger.info('Selecting pipeline');
@@ -537,6 +817,18 @@ export class LeadsPage extends BasePage {
     } else if (data.pipelineStage === 'Open') {
       logger.info("Pipeline stage 'Open' is already the default — skipping redundant selection");
     }
+
+    // WHY: fill order matches the form's own top-to-bottom DOM order —
+    // Requirement, then Campaign Information, then Other Details (confirmed
+    // live 2026-07-08). Keeping fill order aligned with visual order avoids
+    // any risk of one section's interaction (scrolling, focus, react-select
+    // menu portals) landing on the wrong section's fields.
+    await this.fillLeadRequirement(data);
+
+    await this.fillLeadCampaignInfo(data);
+
+    await this.fillLeadCustomFields(data);
+
     logger.success('Lead form filled');
   }
 
@@ -581,7 +873,9 @@ export class LeadsPage extends BasePage {
     // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
     // convention already used elsewhere in this codebase.
     if (!leadId) {
-      throw new Error('Lead ID not captured after save — cannot proceed (save likely failed silently)');
+      throw new Error(
+        'Lead ID not captured after save — cannot proceed (save likely failed silently)'
+      );
     }
 
     await this.waitForLeadListPage();
@@ -641,6 +935,24 @@ export class LeadsPage extends BasePage {
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
 
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
+
+    // WHY: Salutation is part of the default General Information section —
+    // visible on edit without needing disableRequiredFieldsToggle(), same as
+    // on create.
+    await this.fillLeadSalutation(data);
+
+    // WHY: the "Other Details"/Requirement sections (and their fields) are
+    // hidden behind the same toggle as the create form — reveal it here too
+    // so the update path can reach them, not just create.
+    await this.disableRequiredFieldsToggle();
+
+    // WHY: Salutation/Products/Currency/Budget must work on both create and
+    // update (unlike Campaign Information, which is create-only per its own
+    // explicit scope) — fill order still matches DOM order (Requirement
+    // before Other Details).
+    await this.fillLeadRequirement(data);
+
+    await this.fillLeadCustomFields(data);
 
     logger.success('Edit form updated');
   }
@@ -771,11 +1083,13 @@ export class LeadsPage extends BasePage {
     logger.info(`Asserting ellipsis option not visible: ${optionText}`);
     await this.openEllipsisMenu();
     const item = this.ellipsisMenuItem(optionText);
-    await expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
-      // WHY: Option may not exist at all — check count
-      const count = await item.count();
-      expect(count).toBe(0);
-    });
+    await expect(item)
+      .toBeHidden({ timeout: 3000 })
+      .catch(async () => {
+        // WHY: Option may not exist at all — check count
+        const count = await item.count();
+        expect(count).toBe(0);
+      });
     logger.success(`Ellipsis option not visible: ${optionText}`);
   }
 
@@ -800,13 +1114,17 @@ export class LeadsPage extends BasePage {
     const url = this.page.url();
     // WHY: Check either URL redirected away OR error toast/message is visible
     const urlRedirected = !url.includes(`/leads/details/${leadId}`);
-    const errorVisible = await this.page.locator('.toast-error, .alert-danger, [class*="error"]')
+    const errorVisible = await this.page
+      .locator('.toast-error, .alert-danger, [class*="error"]')
       .filter({ hasText: /doesn't|does not|exist|permission/i })
       .first()
       .isVisible()
       .catch(() => false);
     // WHY: Also check page content for error message
-    const pageText = await this.page.locator('body').textContent().catch(() => '');
+    const pageText = await this.page
+      .locator('body')
+      .textContent()
+      .catch(() => '');
     const hasErrorText = /doesn't|does not|exist|permission/i.test(pageText ?? '');
     expect(urlRedirected || errorVisible || hasErrorText).toBeTruthy();
     logger.success(`Lead ${leadId} confirmed deleted`);
@@ -832,8 +1150,8 @@ export class LeadsPage extends BasePage {
     // WHY: Change phone to unique value — same phone as original causes duplicate error
     const phoneInput = this.phoneInput();
     if (await phoneInput.isVisible().catch(() => false)) {
-      const digits = Array.from({length: 9}, () => Math.floor(Math.random() * 10)).join('');
-      const phone = ['6','7','8','9'][Math.floor(Math.random()*4)] + digits;
+      const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
+      const phone = ['6', '7', '8', '9'][Math.floor(Math.random() * 4)] + digits;
       await phoneInput.click({ clickCount: 3 });
       await phoneInput.press('Control+a');
       await phoneInput.fill('');
@@ -847,7 +1165,9 @@ export class LeadsPage extends BasePage {
     const clonedId = await cloneIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveLead() above.
     if (!clonedId) {
-      throw new Error('Cloned lead ID not captured after save — cannot proceed (save likely failed silently)');
+      throw new Error(
+        'Cloned lead ID not captured after save — cannot proceed (save likely failed silently)'
+      );
     }
     // WHY: After clone save, stay on same lead detail page — no redirect to list
     await this.page.waitForTimeout(1500);
@@ -856,7 +1176,9 @@ export class LeadsPage extends BasePage {
   }
 
   async assertClonedLeadLastName(originalLastName: string, clonedId: number): Promise<void> {
-    logger.info(`Asserting cloned lead (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`);
+    logger.info(
+      `Asserting cloned lead (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`
+    );
     const clonedLastName = `${originalLastName} Copy`;
     // WHY: Confirmed live on both staging and QA — searching the leads list
     // for "<lastName> Copy" is unreliable. The list search does a loose,
@@ -904,7 +1226,9 @@ export class LeadsPage extends BasePage {
       const randomIndex = Math.floor(Math.random() * count);
       await radios.nth(randomIndex).click();
       // WHY: Get the label text of the selected reason for verification
-      const reasonLabel = this.page.locator('.modal.show .reasons-container label').nth(randomIndex);
+      const reasonLabel = this.page
+        .locator('.modal.show .reasons-container label')
+        .nth(randomIndex);
       selectedReason = (await reasonLabel.textContent())?.trim() ?? '';
       logger.info(`Selected reason: ${selectedReason}`);
     }
@@ -957,12 +1281,34 @@ export class LeadsPage extends BasePage {
     // WHY: Fill mandatory deal name
     await this.convertDealNameInput().waitFor({ state: 'visible', timeout: 10000 });
     await this.convertDealNameInput().fill(dealName);
-    // WHY: Fill estimated value — required field for deal
+    // WHY: Fill estimated value — required field for deal. Confirmed live
+    // (2026-07-09) — the app now pre-populates this field with a server-
+    // computed value and disables it once Deal auto-mapping is available
+    // (class="... auto-mapped", value already set, e.g. "400000") — a QA-
+    // environment/app-side change, not something this framework's Lead
+    // field additions caused (git blame on this block predates that work,
+    // and the pre-filled value never matches any Lead-side data this suite
+    // controls). isVisible() alone doesn't reflect fillability — an element
+    // can be visible and disabled at the same time — so check isEnabled()
+    // too. When disabled, skip: the field already carries a valid non-empty
+    // value, so the deal's own "required" validation is satisfied without
+    // us touching it. Filling a disabled field previously caused
+    // Playwright's actionability retry loop to hammer this locator for the
+    // test's entire timeout (~800 retries over ~7-8 minutes).
     const estimatedValue = this.page.locator('[id="1_21_input_deal.details.estimatedValue"]');
     await estimatedValue.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
-    if (await estimatedValue.isVisible().catch(() => false)) {
+    const estimatedValueVisible = await estimatedValue.isVisible().catch(() => false);
+    const estimatedValueEnabled = estimatedValueVisible
+      ? await estimatedValue.isEnabled().catch(() => false)
+      : false;
+    if (estimatedValueEnabled) {
       await estimatedValue.fill('100000');
       logger.debug('Estimated value filled: 100000');
+    } else if (estimatedValueVisible) {
+      const existingValue = await estimatedValue.inputValue().catch(() => '');
+      logger.info(
+        `Estimated value field is disabled (auto-populated by the app with "${existingValue}") — skipping fill`
+      );
     }
     // WHY: Company name must be unique — auto-mapped name may already exist
     const companyNameInput = this.page.locator('[id="3_11_input_company.details.name"]');
@@ -1044,8 +1390,10 @@ export class LeadsPage extends BasePage {
     await this.clickEllipsisOption('Share');
     await this.page.waitForTimeout(1000);
     // WHY: Click the Share To type dropdown control — opens User/Team options
-    const shareTypeControl = this.page.locator('.modal.show')
-      .locator('.is-invalid__control').first();
+    const shareTypeControl = this.page
+      .locator('.modal.show')
+      .locator('.is-invalid__control')
+      .first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
     await shareTypeControl.click();
     await this.page.waitForTimeout(500);
@@ -1057,14 +1405,16 @@ export class LeadsPage extends BasePage {
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
-    const validWord = words.find(w => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
+    const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     const searchTerm = validWord;
     logger.debug(`Share search term: "${searchTerm}" (from: "${restrictedUserName}")`);
     await this.shareToUserInput().fill(searchTerm);
     await this.page.waitForTimeout(800);
     // WHY: Select matching user from dropdown
-    const userItem = this.page.locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) }).first();
+    const userItem = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
+      .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
     await this.page.waitForTimeout(500);
@@ -1109,13 +1459,15 @@ export class LeadsPage extends BasePage {
     await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     const words = userDisplayName.trim().split(' ');
-    const validWord = words.find(w => w.length >= 3) ?? userDisplayName.trim().substring(0, 3);
+    const validWord = words.find((w) => w.length >= 3) ?? userDisplayName.trim().substring(0, 3);
     logger.debug(`Reassign search term: "${validWord}" (from: "${userDisplayName}")`);
     await this.reassignUserInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.reassignUserInput().fill(validWord);
     await this.page.waitForTimeout(800);
-    const userItem = this.page.locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userDisplayName)}\\s*$`) }).first();
+    const userItem = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userDisplayName)}\\s*$`) })
+      .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
     await userItem.click();
     await this.page.waitForTimeout(500);
@@ -1152,7 +1504,7 @@ export class LeadsPage extends BasePage {
     // WHY: Click tab by ID, then check active pane text content
     await this.page.locator(`#${tabId}`).click();
     await this.page.waitForTimeout(800);
-    const paneText = (await this.detailTabPane().textContent() ?? '').toLowerCase();
+    const paneText = ((await this.detailTabPane().textContent()) ?? '').toLowerCase();
     for (const value of expectedValues) {
       // WHY: Compare lowercase — detail page may display in different case
       expect(paneText).toContain(value.toLowerCase());
@@ -1163,10 +1515,146 @@ export class LeadsPage extends BasePage {
 
   async assertValidationError(message: string): Promise<void> {
     logger.info(`Asserting validation error: ${message}`);
-    const error = this.page.locator('.invalid-feedback, .help-text.error')
-      .filter({ hasText: message }).first();
+    const error = this.page
+      .locator('.invalid-feedback, .help-text.error')
+      .filter({ hasText: message })
+      .first();
     await error.waitFor({ state: 'visible', timeout: 5000 });
     logger.success(`Validation error confirmed: ${message}`);
+  }
+
+  // WHY: full per-field verification against the Lead detail page's "Other
+  // Details" tab — only used by the 3 dedicated custom-field tests (per
+  // scope: every other Lead test only needs the fill-if-present behavior to
+  // run without erroring, not a full value-by-value assertion here).
+  async assertLeadCustomFieldsOnDetail(data: LeadData): Promise<void> {
+    logger.info('Asserting all 9 custom field values on lead detail page');
+    const tab = this.otherDetailsDetailPageTab();
+    // WHY: confirmed live (2026-07-08) — a 5s timeout here was too short for
+    // the restricted user's detail page to finish rendering the tab bar,
+    // causing this to silently skip ALL verification and report the calling
+    // test as passed without having checked a single value. Direct DOM
+    // inspection confirmed the tab genuinely exists for restricted user —
+    // this was a render-timing gap, not a real absence. Uses
+    // config.timeouts.navigation, the same generous, propagation-tolerant
+    // window already established for cross-role detail-page reads elsewhere
+    // (see assertRightPanelIconVisible's own comment for the precedent).
+    //
+    // WHY throw instead of skip-and-return: unlike the fill-path helpers
+    // (which run from every generic Lead test across the codebase and must
+    // tolerate genuinely not having these fields on Stage/Prod yet), this
+    // method is called ONLY from the 3 dedicated custom-field tests, which
+    // always run on an environment where these fields are confirmed to
+    // exist. A silent skip here can never be "correct environment-safety
+    // behavior" for this method's actual callers — it can only mean the
+    // verification didn't happen, which must fail loudly, not report a
+    // false pass.
+    await expect(
+      tab,
+      '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
+    ).toBeVisible({ timeout: config.timeouts.navigation });
+    await tab.click();
+    await this.page.waitForTimeout(500);
+
+    const cf = data.customFields;
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      LEAD_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
+    }
+    if (cf.multiPickList.length > 0) {
+      await this.assertMultiPicklistCustomFieldOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.multiPickList,
+        cf.multiPickList,
+        'Multi Pick List'
+      );
+    }
+    logger.success('All 9 custom field values verified on lead detail page');
+  }
+
+  // WHY: verifies the 4 standard fields (Salutation, Products or Services,
+  // Currency, Budget) alongside the 9 custom fields — same scope rule as
+  // assertLeadCustomFieldsOnDetail() above: only the 3 dedicated tests need
+  // full value verification, every other Lead test just needs the
+  // fill-if-present behavior to run without erroring.
+  //
+  // WHY Salutation is verified differently: confirmed live (2026-07-08) it
+  // displays as a prefix in the page HEADER ("Mr. LastName(#id)"), not under
+  // any tab — same mechanism already established for Contact
+  // (ContactsPage.ts's own "Salutation appears in page header/name area"
+  // comment). Verify via body-text-contains instead of a tab/container id.
+  async assertLeadStandardFieldsOnDetail(data: LeadData): Promise<void> {
+    logger.info(
+      'Asserting Salutation, Products or Services, Currency, and Budget on lead detail page'
+    );
+
+    if (data.salutation) {
+      await expect(
+        this.page.locator('body'),
+        `Expected Salutation "${data.salutation}" to appear on the lead detail page header, but it never appeared`
+      ).toContainText(data.salutation, { timeout: config.timeouts.expect });
+      logger.success(`Salutation verified on detail page: "${data.salutation}"`);
+    }
+
+    const tab = this.requirementDetailPageTab();
+    await expect(
+      tab,
+      '"Requirement" tab did not appear on the detail page — standard field verification cannot proceed'
+    ).toBeVisible({ timeout: config.timeouts.navigation });
+    await tab.click();
+    await this.page.waitForTimeout(500);
+
+    const req = data.requirement;
+    if (req.productsOrServices.length > 0) {
+      await this.assertMultiValueFieldOnDetailByContainerId(
+        'products',
+        req.productsOrServices,
+        'Products or Services'
+      );
+    }
+    await this.assertFieldOnDetailByContainerId('requirementCurrency', req.currency, 'Currency');
+    await this.assertFieldOnDetailByContainerId('requirementBudget', String(req.budget), 'Budget');
+
+    logger.success(
+      'Salutation, Products or Services, Currency, and Budget verified on lead detail page'
+    );
   }
 
   // ──────────────────────────────────────────────────────────

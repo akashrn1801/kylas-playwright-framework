@@ -571,7 +571,17 @@ export class DealsPage extends BasePage {
     logger.info('Selecting pipeline');
     await this.pipelineControl().click();
     const pipelineOption = this.page.getByText('Default Deal Pipeline', { exact: true });
-    await pipelineOption.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: aligned with config.timeouts.navigation (2026-07-09) — this
+    // specific wait was hardcoded to 10000ms, out of step with the rest of
+    // the framework's already-established convention of using the
+    // generous, propagation-tolerant navigation timeout for exactly this
+    // class of "wait for a slow-to-populate dropdown" interaction (see
+    // assertRightPanelIconVisible's own precedent). Investigated live
+    // (2026-07-09) as part of a CI failure root-cause pass — this
+    // particular occurrence traced to a session/auth issue, not raw
+    // render slowness, but the hardcoded value was still an inconsistency
+    // worth fixing on its own regardless of that finding.
+    await pipelineOption.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await pipelineOption.click();
     logger.success('Pipeline selected');
 
@@ -1065,7 +1075,10 @@ export class DealsPage extends BasePage {
       .locator('.is-invalid__option')
       .filter({ hasText: newStage })
       .first();
-    await stageOption.waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: aligned with config.timeouts.navigation — see pipelineControl's
+    // own comment above (fillDealForm) for the full rationale; same fix,
+    // same investigation, same class of interaction.
+    await stageOption.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await stageOption.click();
     logger.success(`Pipeline stage changed to: ${newStage}`);
 
