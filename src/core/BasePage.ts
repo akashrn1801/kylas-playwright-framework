@@ -3,6 +3,7 @@ import { Page, Locator, expect } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
+import { isSignInUrl, tryRecoverSessionForPage } from '../auth/authManager';
 
 export class BasePage {
   protected page: Page;
@@ -35,11 +36,42 @@ export class BasePage {
 
   async click(locator: Locator, description = 'element', force = false): Promise<void> {
     logger.info(`Clicking: ${description}`);
-    // WHY: Explicit timeout prevents silent infinite hang when an element never renders.
-    // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
-    // then hangs until Playwright teardown instead of failing with an actionable error.
-    await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await locator.click({ timeout: 15000, force });
+    // WHY: captured BEFORE the action, not inside the catch block — by the
+    // time an exception is caught here, the page may already be on
+    // /signIn (that's the trigger condition itself), so deriving "where to
+    // go back to" at that point would just point back at signIn.
+    const urlBeforeAction = this.page.url();
+    try {
+      // WHY: Explicit timeout prevents silent infinite hang when an element never renders.
+      // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
+      // then hangs until Playwright teardown instead of failing with an actionable error.
+      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await locator.click({ timeout: 15000, force });
+    } catch (error) {
+      // WHY: mid-test session recovery (2026-07-09) — confirmed live and via
+      // CI logs that Kylas's QA backend occasionally returns a spurious
+      // auth-recognition failure on an unrelated request, which the app's
+      // own frontend responds to by redirecting to /signIn — unrelated to
+      // the actual ~12h token lifetime. Gated strictly on actually being on
+      // that URL right now (never on "any error") so a real RBAC denial —
+      // which this app expresses as an in-page toast, confirmed via
+      // CallLogsPage's own permission-error handling, never a redirect —
+      // can't be mistaken for this. tryRecoverSessionForPage() itself
+      // throws (not returns false) if it lands on a permission-denied page
+      // after recovering, so that case still surfaces as a real failure
+      // here too. The retry below is the same, unwrapped Playwright call —
+      // no second recovery attempt, no swallowing — so a failure on retry
+      // (including a second redirect) propagates directly as a genuine error.
+      if (!isSignInUrl(this.page.url())) {
+        throw error;
+      }
+      logger.warn(
+        `"${description}" failed while on a signIn/login page — attempting one-time session recovery`
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeAction);
+      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await locator.click({ timeout: 15000, force });
+    }
   }
 
   async clickByText(text: string): Promise<void> {
@@ -51,9 +83,27 @@ export class BasePage {
 
   async fill(locator: Locator, value: string, description = 'field'): Promise<void> {
     logger.info(`Filling ${description} with: ${value}`);
-    await locator.waitFor({ state: 'visible' });
-    await locator.clear();
-    await locator.fill(value);
+    // WHY: see click()'s identical comment — must capture before the try.
+    const urlBeforeAction = this.page.url();
+    try {
+      await locator.waitFor({ state: 'visible' });
+      await locator.clear();
+      await locator.fill(value);
+    } catch (error) {
+      // WHY: same mid-test session recovery as click() above — see that
+      // method's comment for the full rationale. Kept as a single,
+      // non-recursive retry of the exact same calls.
+      if (!isSignInUrl(this.page.url())) {
+        throw error;
+      }
+      logger.warn(
+        `Filling "${description}" failed while on a signIn/login page — attempting one-time session recovery`
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeAction);
+      await locator.waitFor({ state: 'visible' });
+      await locator.clear();
+      await locator.fill(value);
+    }
   }
 
   async selectOption(locator: Locator, value: string, description = 'dropdown'): Promise<void> {

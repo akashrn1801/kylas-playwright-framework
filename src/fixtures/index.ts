@@ -17,7 +17,7 @@ import { test as base, Page, BrowserContext, Browser, TestInfo } from '@playwrig
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
-import { AuthManager } from '../auth/authManager';
+import { AuthManager, registerPageForRecovery } from '../auth/authManager';
 import { logger } from '../utils/logger';
 
 const stateFor = (role: string) =>
@@ -207,6 +207,12 @@ async function createRolePage(
   // from the very first page load, not just after the test starts
   attachErrorListeners(page);
   attachSessionExpiryListener(page, role, authManager);
+  // WHY: registers (role, authManager) for this exact page so BasePage's
+  // click()/fill() can call tryRecoverSessionForPage() if a mid-test
+  // redirect to /signIn is ever hit — see authManager.ts's own comment for
+  // the full mechanism and why a WeakMap registry instead of a constructor
+  // param on every page object.
+  registerPageForRecovery(page, role, authManager);
 
   // WHY: Stagger restricted user initialization on CI to avoid concurrent session conflicts
   if (role === 'restricted' && process.env.CI) {
@@ -254,6 +260,7 @@ async function createRolePage(
     page = await context.newPage();
     attachErrorListeners(page);
     attachSessionExpiryListener(page, role, authManager);
+    registerPageForRecovery(page, role, authManager);
   }
 
   if (!landed) {
