@@ -1,6 +1,14 @@
 import { test, expect } from '../../../src/fixtures/index';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
-import { generateLeadData } from '../../../src/data/factories/leadFactory';
+import {
+  generateLeadData,
+  generateLeadCustomFieldData,
+  generateLeadCustomFieldInvalidTextField,
+  generateLeadCustomFieldInvalidParagraphText,
+  generateLeadCustomFieldInvalidUrl,
+  LEAD_CUSTOM_FIELD_NAMES,
+  LeadCustomFieldData,
+} from '../../../src/data/factories/leadFactory';
 import { faker } from '@faker-js/faker';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
@@ -115,14 +123,18 @@ test.describe('Leads', () => {
 
   // ── L7 ────────────────────────────────────────────────────
 
-  test('@regression admin should verify all detail fields after creating a lead', async ({ adminPage }) => {
+  test('@regression admin should verify all detail fields after creating a lead', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
-    await adminPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, { waitUntil: 'domcontentloaded' });
+    await adminPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
+      waitUntil: 'domcontentloaded',
+    });
     await adminPage.waitForURL(/leads\/details\//, { timeout: 20000 });
     // WHY: Verify Communication tab fields
     await leadsPage.assertDetailTabContent('nav-tab0-tab', [leadData.email]);
@@ -131,13 +143,19 @@ test.describe('Leads', () => {
     // WHY: Verify Social tab fields
     await leadsPage.assertDetailTabContent('nav-tab2-tab', [leadData.facebook, leadData.twitter]);
     // WHY: Verify Professional tab fields
-    await leadsPage.assertDetailTabContent('nav-tab3-tab', [leadData.companyName, leadData.department, leadData.designation]);
+    await leadsPage.assertDetailTabContent('nav-tab3-tab', [
+      leadData.companyName,
+      leadData.department,
+      leadData.designation,
+    ]);
     logger.success('L7 passed');
   });
 
   // ── L8 ────────────────────────────────────────────────────
 
-  test('@regression admin should delete a lead and verify it is removed from list', async ({ adminPage }) => {
+  test('@regression admin should delete a lead and verify it is removed from list', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     // WHY: Use ADM prefix to guarantee uniqueness — only this test creates this lead
@@ -154,7 +172,9 @@ test.describe('Leads', () => {
 
   // ── L9 ────────────────────────────────────────────────────
 
-  test('@regression admin should clone a lead and verify new lead has Copy in lastName', async ({ adminPage }) => {
+  test('@regression admin should clone a lead and verify new lead has Copy in lastName', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -170,7 +190,9 @@ test.describe('Leads', () => {
 
   // ── L10 ───────────────────────────────────────────────────
 
-  test('@regression admin should mark lead as Won via Close Lead dropdown and verify stage', async ({ adminPage }) => {
+  test('@regression admin should mark lead as Won via Close Lead dropdown and verify stage', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -185,7 +207,9 @@ test.describe('Leads', () => {
 
   // ── L11 ───────────────────────────────────────────────────
 
-  test('@regression admin should mark lead as Closed Lost via Close Lead dropdown select reason and verify stage', async ({ adminPage }) => {
+  test('@regression admin should mark lead as Closed Lost via Close Lead dropdown select reason and verify stage', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -200,7 +224,9 @@ test.describe('Leads', () => {
 
   // ── L12 ───────────────────────────────────────────────────
 
-  test('@regression admin should mark lead as Closed Unqualified via Close Lead dropdown select reason and verify stage', async ({ adminPage }) => {
+  test('@regression admin should mark lead as Closed Unqualified via Close Lead dropdown select reason and verify stage', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -215,7 +241,9 @@ test.describe('Leads', () => {
 
   // ── L13 ───────────────────────────────────────────────────
 
-  test('@regression admin should convert lead to Deal Contact and Company and verify Lead Converted badge', async ({ adminPage }) => {
+  test('@regression admin should convert lead to Deal Contact and Company and verify Lead Converted badge', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -231,7 +259,9 @@ test.describe('Leads', () => {
 
   // ── L14 ───────────────────────────────────────────────────
 
-  test('@regression admin should reassign lead to restricted user and verify owner changed', async ({ adminPage }) => {
+  test('@regression admin should reassign lead to restricted user and verify owner changed', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
@@ -247,7 +277,9 @@ test.describe('Leads', () => {
 
   // ── L15 ───────────────────────────────────────────────────
 
-  test('@regression admin should get validation error when saving lead without lastName', async ({ adminPage }) => {
+  test('@regression admin should get validation error when saving lead without lastName', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     await leadsPage.goToLeadsList();
@@ -262,10 +294,143 @@ test.describe('Leads', () => {
 
   // ── L16 ───────────────────────────────────────────────────
 
-  test('@prodSafe admin should navigate to leads list page on production', async ({ adminPage }) => {
+  test('@prodSafe admin should navigate to leads list page on production', async ({
+    adminPage,
+  }) => {
     const leadsPage = new LeadsPage(adminPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
     logger.success('L16 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Custom Fields ("Other Details" section)
+  // ──────────────────────────────────────────────────────────
+  // WHY: these 9 fields exist only on QA today (2026-07-08) and are expected
+  // on Stage/Prod later with identical names — see LeadsPage/BasePage's
+  // custom-field helpers for the environment-safety skip logic that makes
+  // these tests (and every other Lead create/update path) work unchanged
+  // once that happens.
+
+  // ── L17 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a lead with all custom fields and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateLeadData();
+
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    await leadsPage.assertLeadCustomFieldsOnDetail(leadData);
+    await leadsPage.assertLeadStandardFieldsOnDetail(leadData);
+    logger.success('L17 passed');
+  });
+
+  // ── L18 ───────────────────────────────────────────────────
+
+  test("@regression admin should update a lead's custom fields and verify updated values", async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateLeadData();
+
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateLeadData();
+    await leadsPage.updateLead(updatedData, leadData.firstName, leadId ?? undefined);
+
+    // WHY: updateLead() leaves the browser on the same lead detail page
+    // (edit is an in-place modal, not a route change) — no re-navigation needed.
+    await leadsPage.assertLeadCustomFieldsOnDetail(updatedData);
+    await leadsPage.assertLeadStandardFieldsOnDetail(updatedData);
+    logger.success('L18 passed');
+  });
+
+  // ── L19 ───────────────────────────────────────────────────
+
+  test('@regression admin should see validation errors for invalid custom field values and not save the lead', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+
+    interface InvalidCustomFieldCase {
+      description: string;
+      customFieldOverrides: Partial<LeadCustomFieldData>;
+      assertError: () => Promise<void>;
+    }
+
+    // WHY: Number is deliberately excluded — confirmed live (2026-07-08) that
+    // it renders as a native <input type="number">, which rejects non-numeric
+    // characters at the browser level. Playwright's fill() itself throws
+    // ("Cannot type text into input[type=number]") before the app ever sees
+    // an invalid value, so there is no realistic UI path to trigger this case.
+    const cases: InvalidCustomFieldCase[] = [
+      {
+        description: 'TextField exceeding 255 characters',
+        customFieldOverrides: { textField: generateLeadCustomFieldInvalidTextField() },
+        // WHY: confirmed live — client-side, on-blur inline validation.
+        assertError: () =>
+          leadsPage.assertCustomFieldValidationError(
+            LEAD_CUSTOM_FIELD_NAMES.textField,
+            'Enter value having maximum 255 characters',
+            'Text Field'
+          ),
+      },
+      {
+        description: 'UrlField with a malformed URL',
+        customFieldOverrides: { urlField: generateLeadCustomFieldInvalidUrl() },
+        // WHY: confirmed live — client-side, on-blur inline validation.
+        assertError: () =>
+          leadsPage.assertCustomFieldValidationError(
+            LEAD_CUSTOM_FIELD_NAMES.urlField,
+            'Enter a valid URL',
+            'URL Field'
+          ),
+      },
+      {
+        description: 'ParagraphText exceeding 2,550 characters',
+        customFieldOverrides: { paragraphText: generateLeadCustomFieldInvalidParagraphText() },
+        // WHY: confirmed live — unlike TextField/UrlField, ParagraphText has
+        // NO client-side length check at all (no inline error on blur). The
+        // only rejection is server-side on Save, surfaced as a generic toast
+        // ("Uhoh! Your data is invalid...") — the field-specific detail
+        // ("must be <= 2,550") exists only in the raw API response, never in
+        // the UI.
+        assertError: () =>
+          leadsPage.assertFormErrorToast('Uhoh! Your data is invalid', 'lead create form'),
+      },
+    ];
+
+    for (const testCase of cases) {
+      logger.info(`Negative custom field case: ${testCase.description}`);
+      await leadsPage.goToLeadsList();
+      await leadsPage.clickAddLead();
+
+      const leadData = generateLeadData({
+        customFields: generateLeadCustomFieldData(testCase.customFieldOverrides),
+      });
+      await leadsPage.fillLeadForm(leadData);
+      await adminPage.locator('button[type="submit"].save-button').click();
+
+      await testCase.assertError();
+
+      await expect(
+        adminPage.locator('button[type="submit"].save-button'),
+        `Lead should NOT have been saved for case: ${testCase.description}`
+      ).toBeVisible();
+
+      logger.success(`Validation error confirmed for: ${testCase.description}`);
+    }
+
+    logger.success('L19 passed');
   });
 });
