@@ -3,7 +3,7 @@ import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
 import { TaskData } from '@data/factories/taskFactory';
-
+class InaccessibleRelationError extends Error {}
 export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
   // Retry Config
@@ -672,20 +672,53 @@ export class TasksPage extends BasePage {
       await this.page.waitForTimeout(600);
     }
   }
+  private classifyTaskInaccessibleEntityError(
+    status: number,
+    body: any
+  ): { isInaccessibleEntityError: boolean; rawMessage: string } {
+    const message: string = body?.message || '';
+    // WHY: matches company.not.found, lead.not.found, deal.not.found,
+    // contact.not.found — any of the four Relation entity types can be
+    // the inaccessible one, and the API expresses all of them with this
+    // same "<entity>.not.found" shape (confirmed live: 007043 company.not.found).
+    const isKnownMessage = /\b(lead|deal|contact|company)\.not\.found\b/i.test(message);
+    return { isInaccessibleEntityError: status === 400 && isKnownMessage, rawMessage: message };
+  }
 
   async saveDetailedTask(): Promise<number | null> {
     logger.info('Saving Detailed Task');
     const idPromise = this.captureIdFromResponse();
+    const responsePromise = this.page
+      .waitForResponse(
+        (res) => /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+        { timeout: 20000 }
+      )
+      .catch(() => null);
     await this.click(this.detailedTaskSaveButton(), 'save button');
+    const response = await responsePromise;
+
+    if (response && response.status() >= 400) {
+      const body = await response.json().catch(() => ({}));
+      const { isInaccessibleEntityError, rawMessage } = this.classifyTaskInaccessibleEntityError(
+        response.status(),
+        body
+      );
+      if (isInaccessibleEntityError) {
+        // WHY: surface a typed signal the retry wrapper in createDetailedTask
+        // can catch specifically — see that method for the retry-with-
+        // skipRelation strategy. Chip-level removal for the Relation field
+        // isn't confirmed supported (unlike quotations' Company/Contact
+        // fields), so the retry re-does the whole form without any relation
+        // rather than guessing at DOM removal.
+        throw new InaccessibleRelationError(rawMessage);
+      }
+    }
+
     await this.assertNoFormErrors('task create form');
     const id = await idPromise;
-    // WHY: Confirmed live (2026-07-07) — fail fast on a silently-failed save instead of
-    // waiting on a modal that will never close, matching the fail-fast convention already
-    // established for company/contact ID capture elsewhere in this codebase.
     if (!id) {
       throw new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)');
     }
-    // WHY: Modal closes on successful save — wait for it to hide
     await this.detailedTaskModal()
       .waitFor({ state: 'hidden', timeout: 15000 })
       .catch(() => {});
@@ -1087,7 +1120,7 @@ export class TasksPage extends BasePage {
     return await this.saveQuickTask();
   }
 
-  async createDetailedTask(
+ async createDetailedTask(
     data: TaskData,
     assignedToName?: string,
     skipRelation = false
@@ -1095,9 +1128,30 @@ export class TasksPage extends BasePage {
     logger.info(`Creating detailed task: "${data.name}"`);
     await this.openDetailedTaskForm();
     await this.fillDetailedTaskForm(data, assignedToName, skipRelation);
-    return await this.saveDetailedTask();
+    try {
+      return await this.saveDetailedTask();
+    } catch (error) {
+      if (!(error instanceof InaccessibleRelationError) || skipRelation) {
+        throw error;
+      }
+      // WHY: a randomly-selected Relation entity (Lead/Deal/Contact/Company)
+      // was inaccessible to this user — same root cause as quotations'
+      // "Invalid company" flake, different API error shape (007043
+      // "<entity>.not.found"). No confirmed per-chip removal for the
+      // Relation field, so retry the whole form once with relation skipped
+      // entirely rather than guessing at DOM chip-removal.
+      logger.warn(
+        `Save failed due to inaccessible relation entity ("${error.message}") — ` +
+          `retrying without relation`
+      );
+      await this.detailedTaskModal()
+        .waitFor({ state: 'hidden', timeout: 5000 })
+        .catch(() => {});
+      await this.openDetailedTaskForm();
+      await this.fillDetailedTaskForm(data, assignedToName, true);
+      return await this.saveDetailedTask();
+    }
   }
-
   async createQuickTaskThenSwitchToDetailed(data: TaskData): Promise<number | null> {
     logger.info(`Creating task via Quick → Detailed toggle: "${data.name}"`);
     await this.openQuickTaskForm();
