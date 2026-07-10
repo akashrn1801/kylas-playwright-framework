@@ -1343,10 +1343,22 @@ export class QuotationsPage extends BasePage {
       } else {
         await this.searchAndOpenQuotation(quotationNumber);
       }
-      await this.clickEditButton();
-      await this.fillEditForm(changes);
-      await this.saveQuotation();
-      await this.assertSuccessToast();
+     await this.clickEditButton();
+await this.fillEditForm(changes);
+// WHY: Plain saveQuotation() has no resilience against the same
+// inaccessible-entity (029004 "Invalid company"/"Invalid contact") error
+// createQuotation() already retries around — a randomly-selected
+// Company/Contact in the edit form can be just as inaccessible as one
+// selected during create. saveQuotationHandlingInaccessibleEntities()
+// already matches PATCH/PUT as well as POST and already confirms success
+// via toast/URL fallback, so this covers the edit modal without any
+// changes to that method itself. See T13 (quotations.spec.ts:161) flake.
+const result = await this.saveQuotationHandlingInaccessibleEntities();
+if (result.removedEntities.length) {
+  logger.warn(
+    `updateQuotation removed inaccessible entities to save: ${result.removedEntities.join(', ')}`
+  );
+}
       // Navigate back to detail page after save
       if (id) {
         await this.goToQuotationDetail(id);
