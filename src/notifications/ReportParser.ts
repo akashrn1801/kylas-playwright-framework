@@ -1,11 +1,44 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+// WHY: Confirmed live (2026-07-14, isolated no-login test run against a
+// throwaway config) — Playwright's JSON reporter does NOT strip terminal
+// ANSI color escape codes from error.message/error.stack (e.g. the raw
+// "[2mexpect([22m..." sequences a terminal renders as dim/colored
+// text). Left in, these render as garbage characters in an HTML email and can
+// break exact-string clustering in FailureAnalyzer (two failures with the
+// same real message would only match if both retain identical escape codes,
+// which isn't guaranteed). Strip once, here, before anything downstream sees
+// the text — not a cosmetic-only concern.
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, '');
+}
+
+export interface ErrorLocation {
+  file: string;
+  line: number;
+  column: number;
+}
+
 export interface TestResult {
   title: string;
   status: 'passed' | 'failed' | 'skipped' | 'flaky';
   duration: number;
+  // WHY: full, untruncated, ANSI-stripped error message. Truncation for
+  // display now happens at render time in EmailTemplate, not here — an
+  // earlier version truncated to 300 chars at parse time, which is fine for
+  // display but throws away exactly the detail FailureAnalyzer needs to tell
+  // two genuinely different failures apart when their first 300 chars match
+  // (e.g. two "toBeVisible" timeouts on different locators past char 300).
   error?: string;
+  // WHY: Confirmed live in the same schema check — Playwright's raw JSON
+  // includes error.stack and error.location (file/line/column) alongside
+  // error.message; ReportParser previously discarded both. FailureAnalyzer
+  // uses these for same-stack-location clustering, a real signal distinct
+  // from message-text matching.
+  errorStack?: string;
+  errorLocation?: ErrorLocation;
   retries: number;
   file: string;
   // WHY: repo-relative path to the failure's trace.zip, e.g.
@@ -27,6 +60,13 @@ export interface ModuleStats {
   failed: number;
   flaky: number;
   skipped: number;
+  // WHY: previously always 0 (see syncHistory.ts's old WHY comment) — "Report
+  // Parser doesn't track per-module duration today." Fixed here by summing
+  // each result's own duration into its module bucket, which was already
+  // computed per-test and simply never accumulated. Needed for per-module
+  // health/trend and for the Module Analytics "time" column on the target
+  // feature list.
+  duration: number;
 }
 
 export interface ParsedReport {
@@ -44,8 +84,21 @@ export interface ParsedReport {
   passRate: number;
   modules: ModuleStats[];
   slowestTests: TestResult[];
+  // WHY: top-20, not top-5 — feeds RunHistory's per-test slow-test-regression
+  // tracking (needs more depth than the email's own top-5 display), computed
+  // from the same sort as slowestTests so the work isn't done twice.
+  slowestTestsTop20: TestResult[];
   uiCount: number;
   rbacCount: number;
+  totalRetries: number;
+  // WHY: sourced from Playwright's own raw.config — real, not guessed. Feeds
+  // the new Environment Info block (browsers actually exercised, worker
+  // count Playwright itself resolved, and the Playwright version that
+  // produced this exact report — useful when an old report's shape doesn't
+  // match current code).
+  playwrightVersion?: string;
+  workers?: number;
+  projects: string[];
 }
 
 export class ReportParser {
@@ -84,19 +137,29 @@ export class ReportParser {
     const moduleMap = new Map<string, ModuleStats>();
     for (const r of results) {
       const fp = r.file || '';
-      const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
       const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac')
         ? 'RBAC'
         : fp.includes('ui')
           ? 'UI'
           : 'Other';
+      const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
       const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
       const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
       const key = `${type}:${name}`;
       if (!moduleMap.has(key))
-        moduleMap.set(key, { name, type, total: 0, passed: 0, failed: 0, flaky: 0, skipped: 0 });
+        moduleMap.set(key, {
+          name,
+          type,
+          total: 0,
+          passed: 0,
+          failed: 0,
+          flaky: 0,
+          skipped: 0,
+          duration: 0,
+        });
       const mod = moduleMap.get(key)!;
       mod.total++;
+      mod.duration += r.duration;
       if (r.status === 'passed') mod.passed++;
       if (r.status === 'failed') mod.failed++;
       if (r.status === 'flaky') mod.flaky++;
@@ -105,9 +168,15 @@ export class ReportParser {
     const modules = Array.from(moduleMap.values()).sort(
       (a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name)
     );
-    const slowestTests = [...results].sort((a, b) => b.duration - a.duration).slice(0, 5);
+    const sortedByDuration = [...results].sort((a, b) => b.duration - a.duration);
+    const slowestTests = sortedByDuration.slice(0, 5);
+    const slowestTestsTop20 = sortedByDuration.slice(0, 20);
     const uiCount = results.filter((r) => r.file?.includes('ui')).length;
     const rbacCount = results.filter((r) => r.file?.includes('rbac')).length;
+    const totalRetries = results.reduce((sum, r) => sum + r.retries, 0);
+    const projects: string[] = Array.isArray(raw.config?.projects)
+      ? raw.config.projects.map((p: any) => p.name).filter(Boolean)
+      : [];
     return {
       total,
       passed,
@@ -123,8 +192,13 @@ export class ReportParser {
       passRate,
       modules,
       slowestTests,
+      slowestTestsTop20,
       uiCount,
       rbacCount,
+      totalRetries,
+      playwrightVersion: raw.config?.version,
+      workers: raw.config?.workers,
+      projects,
     };
   }
 
@@ -145,7 +219,14 @@ export class ReportParser {
             // - Using retries > 0 alone is wrong: a test that fails twice has retries=1
             //   but should be 'failed', not 'flaky'
             const status = this.mapStatus(test.status, lastResult?.status);
-            const error = lastResult?.error?.message || lastResult?.error?.value || undefined;
+            const rawMessage = lastResult?.error?.message || lastResult?.error?.value || undefined;
+            const error = rawMessage ? stripAnsi(rawMessage) : undefined;
+            const rawStack = lastResult?.error?.stack;
+            const errorStack = rawStack ? stripAnsi(rawStack) : undefined;
+            const loc = lastResult?.error?.location;
+            const errorLocation: ErrorLocation | undefined = loc
+              ? { file: loc.file, line: loc.line, column: loc.column }
+              : undefined;
             // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
             // for a flaky test, lastResult is the PASSING retry, which has no
             // trace attachment (trace: 'retain-on-failure' only keeps traces
@@ -155,12 +236,16 @@ export class ReportParser {
             // Verified against real data: all 4 flaky tests in that run had a
             // trace on their failing attempt(s), none on the passing one.
             const traceSourceResult =
-              status === 'flaky' ? [...allResults].reverse().find((r) => r.status !== 'passed') : lastResult;
+              status === 'flaky'
+                ? [...allResults].reverse().find((r) => r.status !== 'passed')
+                : lastResult;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
               status,
               duration: lastResult?.duration || 0,
-              error: error ? error.substring(0, 300) : undefined,
+              error,
+              errorStack,
+              errorLocation,
               retries,
               file: currentFile,
               tracePath: this.extractTracePath(traceSourceResult),
