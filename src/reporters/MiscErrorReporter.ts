@@ -79,7 +79,11 @@ class MiscErrorReporter implements Reporter {
       const merged = {
         capturedAt: new Date().toISOString(),
         totalErrors: mergedErrors.length,
-        unexpectedErrors: mergedErrors.filter((e) => !e.expected).length,
+        // WHY: reads expectedReason directly — the redundant `expected`
+        // boolean (always exactly !!e.expectedReason) was removed 2026-07-14
+        // after an exhaustive grep confirmed exactly 3 real consumers, all
+        // migrated to expectedReason together in the same change.
+        unexpectedErrors: mergedErrors.filter((e) => !e.expectedReason).length,
         // WHY: Confirmed live (2026-07-07 reporting overhaul) — must filter by the
         // specific expectedReason, not the bare `expected` boolean, now that a
         // second expected reason (background-noise) exists. Before this change
