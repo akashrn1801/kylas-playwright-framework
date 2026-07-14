@@ -25,7 +25,6 @@ export interface MiscError {
   statusCode?: number;
   responseBody?: string;
   apiErrorMessage?: string;
-  expected?: boolean; // WHY: true = expectedReason is set — kept for back-compat with existing readers
   expectedReason?: ExpectedReason;
   testTitle?: string;
   testFile?: string;
@@ -104,11 +103,9 @@ class ErrorCollectorSingleton {
       } else if (isExpectedBackgroundNoise(error.message, error.url)) {
         expectedReason = 'background-noise';
       }
-      const expected = !!expectedReason;
 
       const entry: MiscError = {
         ...error,
-        expected,
         expectedReason,
         testTitle: this.currentTestTitle,
         testFile: this.currentTestFile,
@@ -144,7 +141,12 @@ class ErrorCollectorSingleton {
     for (const e of this.errors) {
       byType[e.type] = (byType[e.type] || 0) + 1;
     }
-    const unexpectedErrors = this.errors.filter((e) => !e.expected).length;
+    // WHY: removed the redundant `expected` boolean (2026-07-14) — it was
+    // always exactly `!!e.expectedReason`, confirmed via exhaustive grep to
+    // have exactly 3 real consumers (this one, MiscErrorReporter.ts, and
+    // EmailTemplate.ts's background-errors rendering), all now reading
+    // expectedReason directly instead of a redundant derived field.
+    const unexpectedErrors = this.errors.filter((e) => !e.expectedReason).length;
     const expectedRbacErrors = this.errors.filter((e) => e.expectedReason === 'rbac').length;
     const expectedBackgroundNoiseErrors = this.errors.filter(
       (e) => e.expectedReason === 'background-noise'
