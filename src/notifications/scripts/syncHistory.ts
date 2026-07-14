@@ -1,8 +1,8 @@
 /**
  * Syncs the current run's result into the rolling run-history ledger (P2 of the
- * 2026-07-07 reporting overhaul) and writes a small delta/recurring-flaky
- * summary that NotificationService.ts optionally reads, the same way it already
- * optionally reads misc-errors.json.
+ * 2026-07-07 reporting overhaul, extended 2026-07-14 with deeper multi-run
+ * trending) and writes a small delta/trend summary that NotificationService.ts
+ * optionally reads, the same way it already optionally reads misc-errors.json.
  *
  * WHY a dedicated git branch, not an artifact or an external store — see the
  * WHY comment on HISTORY_BRANCH_NAME below for the full tradeoff writeup.
@@ -25,7 +25,18 @@ import {
   parseHistory,
   computeDelta,
   computeRecurringFlaky,
+  computeRecurringFailures,
+  computeModuleTrend,
+  computeSlowTestTrend,
+  detectSuiteDrift,
+  buildPassRateSeries,
   RunHistoryRecord,
+  RunDelta,
+  RecurringIssue,
+  ModuleTrend,
+  SlowTestTrend,
+  SuiteDrift,
+  PassRatePoint,
 } from '../RunHistory';
 
 // WHY: must load before reading process.env.ENV below — see loadDotEnv.ts for
@@ -63,6 +74,26 @@ function resolveGitRemoteUrl(): string {
 }
 const MAX_PUSH_RETRIES = 3;
 
+// WHY: added 2026-07-14 — this file had its own, separate, older branch-name
+// derivation that never received the local-git fallback fix applied to the
+// email-facing code (notify.ts's resolveNotificationInput()). A bare local
+// sync (no BRANCH_NAME/GITHUB_REF_NAME) wrote a literal "unknown" into the
+// history ledger's own branch field, even though the real branch is one
+// command away in any real git checkout. Mirrors notify.ts's identical
+// helper exactly — same reasoning, same graceful degrade to null on error
+// (e.g. a stripped checkout with no git metadata) rather than throwing,
+// since this script must never fail the build.
+function localGitFallback(cmd: string): string | null {
+  try {
+    const out = execSync(cmd, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 function sh(cmd: string, cwd: string): string {
   return execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
 }
@@ -75,7 +106,13 @@ function shSafe(cmd: string, cwd: string): { ok: boolean; output: string } {
   }
 }
 
-function buildCurrentRecord(env: string, branch: string, buildNumber: string, runSource: RunHistoryRecord['runSource'], jsonReportPath: string): RunHistoryRecord {
+function buildCurrentRecord(
+  env: string,
+  branch: string,
+  buildNumber: string,
+  runSource: RunHistoryRecord['runSource'],
+  jsonReportPath: string
+): RunHistoryRecord {
   const parser = new ReportParser();
   const report = parser.parse(jsonReportPath);
   return {
@@ -91,21 +128,64 @@ function buildCurrentRecord(env: string, branch: string, buildNumber: string, ru
     skipped: report.skipped,
     duration: report.duration,
     flakyTestTitles: report.flakyTests.map((t) => t.title),
+    // WHY: added 2026-07-14 — mirrors flakyTestTitles; without this, "has this
+    // test failed before" was structurally unanswerable from history.
+    failedTestTitles: report.failedTests.map((t) => t.title),
+    // WHY: added 2026-07-14 — top-20 (report.slowestTestsTop20), not the
+    // email's top-5 display list — see ReportParser.ts's WHY comment on that
+    // field for why 20 was chosen over "every test."
+    slowestTests: report.slowestTestsTop20.map((t) => ({ title: t.title, duration: t.duration })),
     modules: report.modules.map((m) => ({
       name: m.name,
+      // WHY: `type` and `total` added 2026-07-14 — see ModuleHistoryStats's
+      // WHY comment in RunHistory.ts; without `type`, a same-named UI/RBAC
+      // module pair collides on lookup.
+      type: m.type,
+      total: m.total,
       passed: m.passed,
       failed: m.failed,
       flaky: m.flaky,
-      duration: 0, // WHY: ReportParser's ModuleStats doesn't track per-module duration today —
-      // left as 0 rather than guessed; a future enhancement could thread this
-      // through if per-module duration trend becomes a priority.
+      // WHY: previously hardcoded to 0 — "ReportParser's ModuleStats doesn't
+      // track per-module duration today." Fixed 2026-07-14: ReportParser now
+      // sums each result's duration into its module bucket.
+      duration: m.duration,
     })),
   };
 }
 
+interface HistoryDeltaOutput {
+  delta: RunDelta | null;
+  recurringFlaky: RecurringIssue[];
+  recurringFailures: RecurringIssue[];
+  moduleTrend: ModuleTrend[];
+  slowTestTrend: SlowTestTrend[];
+  suiteDrift: SuiteDrift | null;
+  passRateSeries: PassRatePoint[];
+}
+
+const EMPTY_DELTA_OUTPUT: HistoryDeltaOutput = {
+  delta: null,
+  recurringFlaky: [],
+  recurringFailures: [],
+  moduleTrend: [],
+  slowTestTrend: [],
+  // WHY: null, not {occurred:false,...} — a genuinely-computed "no drift"
+  // and "sync never ran / failed before computing" are different states, and
+  // NotificationService should be able to tell "no signal available" apart
+  // from "computed, and there is no drift" if it ever needs to (today both
+  // render identically — no drift banner — but the distinction is cheap to
+  // keep and costs nothing to preserve).
+  suiteDrift: null,
+  passRateSeries: [],
+};
+
 async function main() {
   const env = process.env.ENV || 'qa';
-  const branch = process.env.BRANCH_NAME || process.env.GITHUB_REF_NAME || 'unknown';
+  const branch =
+    process.env.BRANCH_NAME ||
+    process.env.GITHUB_REF_NAME ||
+    localGitFallback('git branch --show-current') ||
+    'unknown';
   const buildNumber = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || 'local';
   const runSource: RunHistoryRecord['runSource'] = process.env.JENKINS_URL
     ? 'jenkins'
@@ -124,15 +204,15 @@ async function main() {
   // throws, notify.ts still finds a well-formed (empty) file instead of a
   // missing one, and the two failure modes ("sync never ran" vs "sync failed
   // partway") don't need to be distinguished by a downstream reader.
-  const writeEmptyDelta = () => {
+  const writeDeltaOutput = (output: HistoryDeltaOutput) => {
     try {
       fs.mkdirSync(path.dirname(deltaOutputPath), { recursive: true });
-      fs.writeFileSync(deltaOutputPath, JSON.stringify({ delta: null, recurringFlaky: [] }, null, 2));
+      fs.writeFileSync(deltaOutputPath, JSON.stringify(output, null, 2));
     } catch {
       /* best-effort */
     }
   };
-  writeEmptyDelta();
+  writeDeltaOutput(EMPTY_DELTA_OUTPUT);
 
   if (!fs.existsSync(jsonReportPath)) {
     console.warn(`[syncHistory] No results.json at ${jsonReportPath} — skipping history sync`);
@@ -195,8 +275,7 @@ async function main() {
     // never conflict with each other by construction — there is no patch to
     // reconcile, only ordinary lost-update races that a plain retry resolves.
     let pushed = false;
-    let delta: ReturnType<typeof computeDelta> | null = null;
-    let recurringFlaky: ReturnType<typeof computeRecurringFlaky> = [];
+    let deltaOutput: HistoryDeltaOutput = EMPTY_DELTA_OUTPUT;
     for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
       if (attempt > 1) {
         console.log(`[syncHistory] Attempt ${attempt}/${MAX_PUSH_RETRIES} — fetching latest and recomputing fresh`);
@@ -208,8 +287,16 @@ async function main() {
       const existingJsonl = fs.existsSync(historyFilePath) ? fs.readFileSync(historyFilePath, 'utf-8') : '';
       const historyBeforeAppend = parseHistory(existingJsonl);
 
-      delta = computeDelta(historyBeforeAppend, current);
-      recurringFlaky = computeRecurringFlaky(historyBeforeAppend, current);
+      const delta = computeDelta(historyBeforeAppend, current);
+      deltaOutput = {
+        delta,
+        recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
+        recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
+        moduleTrend: computeModuleTrend(historyBeforeAppend, current),
+        slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
+        suiteDrift: detectSuiteDrift(delta),
+        passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
+      };
 
       const updatedJsonl = appendAndPrune(existingJsonl, current);
       fs.mkdirSync(path.dirname(historyFilePath), { recursive: true });
@@ -234,19 +321,14 @@ async function main() {
       console.log(`[syncHistory] Push attempt ${attempt}/${MAX_PUSH_RETRIES} rejected (concurrent update) — will retry`);
     }
 
-    // WHY: write delta/recurring-flaky AFTER the loop, from whichever attempt
-    // actually succeeded — an earlier attempt's delta could be stale (computed
-    // against a tip that a concurrent run has since moved past).
-    try {
-      fs.mkdirSync(path.dirname(deltaOutputPath), { recursive: true });
-      fs.writeFileSync(deltaOutputPath, JSON.stringify({ delta, recurringFlaky }, null, 2));
-    } catch (err) {
-      console.warn('[syncHistory] Failed to write delta output:', err);
-    }
+    // WHY: write delta/trend output AFTER the loop, from whichever attempt
+    // actually succeeded — an earlier attempt's numbers could be stale
+    // (computed against a tip that a concurrent run has since moved past).
+    writeDeltaOutput(deltaOutput);
 
     if (!pushed) {
       console.warn(
-        `[syncHistory] Could not push history after ${MAX_PUSH_RETRIES} attempts — this run's own record was not persisted to the ledger this time. The delta/recurring-flaky output above is still the best available (from the last attempt), but treat it as approximate.`
+        `[syncHistory] Could not push history after ${MAX_PUSH_RETRIES} attempts — this run's own record was not persisted to the ledger this time. The delta/trend output above is still the best available (from the last attempt), but treat it as approximate.`
       );
     } else {
       console.log(`[syncHistory] History updated: ${historyFileRelPath} (${env}, build #${buildNumber})`);
@@ -262,7 +344,16 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.warn('[syncHistory] Fatal error — history sync skipped, build continues:', err);
-  process.exit(0);
-});
+// WHY: guarded behind require.main === module (2026-07-14) — added
+// preventatively after discovering the identical unguarded pattern in
+// notify.ts caused an unintended real email send when something imported
+// from that file (see notify.ts's own WHY comment on this same guard for the
+// full incident). This file has the same shape (real git push side effects
+// on the real ci/reporting-history branch reachable from main()), so it gets
+// the same fix even though it wasn't the one that misfired this time.
+if (require.main === module) {
+  main().catch((err) => {
+    console.warn('[syncHistory] Fatal error — history sync skipped, build continues:', err);
+    process.exit(0);
+  });
+}

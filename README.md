@@ -170,9 +170,11 @@ kylas-playwright-framework/
 │   │   │   ├── loadDotEnv.ts
 │   │   │   ├── notify.ts                # `npm run notify` — sends the run-summary email
 │   │   │   └── syncHistory.ts           # `npm run history:sync` — appends to ci/reporting-history
-│   │   ├── EmailTemplate.ts             # HTML email renderer
-│   │   ├── NotificationService.ts       # Orchestrates parse → history → email
-│   │   └── RunHistory.ts                # Pure logic: append/prune, delta, recurring-flaky detection
+│   │   ├── EmailTemplate.ts             # HTML email renderer — orchestrator + one buildXxx() per section
+│   │   ├── NotificationService.ts       # Orchestrates parse → history → analysis → email
+│   │   ├── RunHistory.ts                # Pure logic: append/prune, delta, recurring-flaky/-failing, module trend, slow-test trend, suite drift, pass-rate series
+│   │   ├── FailureAnalyzer.ts           # Pure logic: classifies + clusters failures on real matching signal only
+│   │   └── AutomationHealth.ts          # Pure logic: weighted 0-100 health score + label + factors
 │   ├── reporters/
 │   │   └── MiscErrorReporter.ts         # Merges per-worker error files → reports/<env>/misc-errors.json
 │   └── utils/
@@ -365,34 +367,195 @@ Read each file's own header comment if you're ever unsure which is which — bot
 
 ## Reporting and Notifications
 
+_Restrained-enterprise email redesign (2026-07-14) — full rewrite of `EmailTemplate.ts` into an
+orchestrator plus one `buildXxx()` method per section, two new pure-logic modules
+(`FailureAnalyzer.ts`, `AutomationHealth.ts`), and an extended `RunHistory.ts` schema. Every
+capability described below as of the 2026-07-07 P0–P5 overhaul is preserved; what's new is called
+out explicitly._
+
 ### Email summary (`npm run notify` → `src/notifications/scripts/notify.ts`)
 
-After (almost) every run, `NotificationService` parses the Playwright JSON report via `ReportParser`, reads `reports/<env>/misc-errors.json`, reads `reports/<env>/history-delta.json` (if present), and renders an HTML email via `EmailTemplate`. It's sent through Gmail/Zoho SMTP (`src/notifications/config/notificationConfig.ts`) to a QA team recipient list, chosen per-branch first, falling back to per-environment.
+After (almost) every run, `NotificationService` parses the Playwright JSON report via `ReportParser`,
+reads `reports/<env>/misc-errors.json`, reads `reports/<env>/history-delta.json` (if present), derives
+a failure-cluster list and an automation-health score, and renders an HTML email via `EmailTemplate`.
+It's sent through Gmail/Zoho SMTP (`src/notifications/config/notificationConfig.ts`) to a QA team
+recipient list, chosen per-branch first, falling back to per-environment.
 
-The email includes:
-- Pass/fail/flaky/skipped counts and pass rate, correct wall-clock duration and real start/end time (see the Bug 2A note below).
-- A per-module breakdown table.
-- Failed and flaky test tables, each with a link to that test's **trace file** — for a flaky test, the link points at the **failing attempt's** trace, not the passing retry (see the trace-linking note below — this is the more useful debugging artifact).
-- A background-errors section distinguishing three states per error: unexpected (needs investigation), `✓ Expected RBAC`, and `🔵 Known Background Noise` — see [§2](#architecture--how-its-built)'s error-collection section for what each means.
-- A trend section (only rendered when history data exists — see below): a Δ vs. the previous run on this branch, and any test that's been flaky in ≥2 of its last 5 runs ("recurring flaky").
+The email now includes:
+- A **masthead + full-width status banner**: brand, Automation Health label, and a prominent
+  PASSED/FAILED/UNSTABLE banner (✅/❌/⚠️) directly below it — a deliberate two-block layout (not
+  one pill doing both jobs), so status is visible at a glance without opening the email.
+- A **stale-report warning** (see [Report freshness check](#report-freshness-check) below) — rendered
+  as the very first thing in the email, above the masthead, when the underlying data is suspiciously
+  old.
+- **Header metadata badges** (ENV/BRANCH/BUILD/SOURCE) — color-coded by actual value, not one flat
+  color: ENV varies by environment (prod/staging/qa each a distinct color), SOURCE varies by CI source
+  (Jenkins/GitHub Actions/local each a distinct color, with 🔧/🐙/💻 to match), BRANCH/BUILD are flat.
+  This mirrors the pre-2026-07-14 template's exact color values and structure — checked directly via
+  `git show` against that version rather than guessed. See
+  [Email design & compatibility](#email-design--compatibility) below for why these are solid hex
+  colors, not the more "obvious" `rgba()` choice.
+- An **Executive Summary** — plain-language deployment recommendation, prominently flagging any
+  **suite drift** (see below) and any multi-test failure cluster.
+- An **Automation Health** score (0–100, Excellent/Good/Needs Attention/Critical) with its weighted
+  factors, in the masthead and its own dedicated block.
+- A **KPI dashboard** — total/passed/failed/skipped/flaky/pass-rate/duration/modules/retries (each tile
+  tinted a subtle semantic color — light green/red/amber — matching its status, not flat white), plus
+  conditional signal chips for background errors, infra-classified failures, new failures (vs. the
+  previous run), and recurring-flaky count.
+- A **trend section**: Δ vs. the previous run, a pass-rate **sparkline** across the last ~10 runs,
+  recurring-flaky *and* recurring-failing tests (see the lookback note below), and modules trending
+  worse.
+- **Module Analytics** — the per-module breakdown table, now ranked by health (not alphabetical) with
+  a per-module trend arrow, and a one-line Total/UI/RBAC caption above it (previously its own
+  standalone "Test Type Split" block).
+- **Slowest Tests** (top 5, unchanged) — now with previous-duration/diff and a regression flag.
+- **Flaky Tests** — now with historical frequency and a derived risk level (High/Medium/Low/New).
+- **Failure Clusters** (replaces the old flat failed-tests table) — failures sharing a *real* matching
+  signal (identical error message, same source location, or same failing API endpoint+status,
+  cross-referenced against `misc-errors.json`) are grouped under one header showing "N tests
+  affected," each with its own full title/file/error/trace detail still listed underneath — nothing is
+  summarized away, and two failures are never merged without a real shared signal.
+- A **background-errors** section (unchanged in substance) distinguishing unexpected / `Expected RBAC`
+  / `Known Background Noise`, now also split into app-level vs. infra-level (5xx) within "unexpected."
+- An **Action Required** list, synthesized from suite drift, failure clusters, flaky tests, background
+  errors, and slow-test regressions, sorted by priority.
+- An **Environment** block — Playwright version, worker count, and browsers actually exercised (sourced
+  from the JSON report's own `raw.config`, not guessed), plus the reporting process's own Node
+  version/OS.
+- A **CI/CD & Artifacts** block — the repo-relative reports directory, the run URL, and (when real,
+  never fabricated) a **re-run link** (Jenkins: the job's standard `/build` trigger endpoint, derived
+  from a real `buildUrl`; GitHub Actions: honestly labeled as "re-run available from this page," since
+  GitHub exposes no plain re-run URL) and a **full-history link** to this environment's ledger file on
+  `ci/reporting-history`, resolved from `git remote get-url origin` — omitted, not faked, when the
+  remote isn't GitHub.
+- A footer line with the report's generation timestamp and its own `REPORT_ENGINE_VERSION` constant
+  (independent of `package.json`'s version — the template's structure changes on its own schedule).
 
 ### Run history / trend tracking (`ci/reporting-history` branch)
 
 `npm run history:sync` (`src/notifications/scripts/syncHistory.ts`) maintains a small, append-only, capped ledger of past run stats, so the email can show a trend instead of just one run's numbers in isolation.
 
-**Storage decision:** the ledger lives as a JSONL file on a dedicated, never-merged git branch (`ci/reporting-history`), one branch per environment history — not a database, not a GitHub Actions cache, not an external service. Rationale: it needs to survive across CI runners (rules out local disk/cache), needs no new infrastructure or secret to provision (rules out a database), and a plain-text, human-readable, git-diffable ledger is easy to inspect/debug directly (`git show ci/reporting-history:reports/qa/history.jsonl`) without any tooling. The branch is capped at `MAX_RECORDS_PER_ENV = 100` (oldest records pruned on write) so it never grows unbounded.
+**Storage decision:** the ledger lives as a JSONL file on a dedicated, never-merged git branch (`ci/reporting-history`), one branch per environment history — not a database, not a GitHub Actions cache, not an external service. Rationale: it needs to survive across CI runners (rules out local disk/cache), needs no new infrastructure or secret to provision (rules out a database), and a plain-text, human-readable, git-diffable ledger is easy to inspect/debug directly (`git show ci/reporting-history:reports/qa/history.jsonl`) without any tooling. The branch is capped at `MAX_RECORDS_PER_ENV = 100` (oldest records pruned on write).
 
 **Concurrent-write handling:** two CI runs finishing around the same time will race to push to `ci/reporting-history`. The retry loop is **fetch + `reset --hard` + recompute the delta/append fresh** on each retry attempt — not a rebase. A rebase was tried first and was dropped after it demonstrably produced real, unresolvable merge conflicts on the plain-text ledger when two pushes landed close together; reset-and-recompute never conflicts because it never tries to replay a diff.
 
-"Recurring flaky" means: this test has been marked `flaky` (failed at least once, then passed on Playwright's own retry) in at least 2 of its last 5 recorded runs on this branch (`RECURRING_FLAKY_LOOKBACK = 5`, `RECURRING_FLAKY_THRESHOLD = 2`).
+**Extended 2026-07-14** — each record now also stores `failedTestTitles` (mirroring the existing
+`flakyTestTitles`) and the top-20 slowest test durations, and each module entry now carries its `type`
+(fixing a latent bug where a same-named UI and RBAC module could collide on lookup) and its real
+duration (previously always `0`). The lookback used for "recurring" issues was widened from 5 to 10
+runs. **"Recurring flaky"/"recurring failing"** now means: flaky (or failing) in more than 2 of the
+last 10 recorded runs on this branch (`RECURRING_FLAKY_LOOKBACK = 10`, `RECURRING_FLAKY_THRESHOLD =
+2`, both overridable per call). **Suite drift** is flagged whenever the current run has *any* fewer
+tests than the previous run (no percentage floor — a dropped test is treated as a signal worth
+confirming, never as an acceptable margin, since it's frequently a silently-broken test file rather
+than genuine improvement); growth in test count is never flagged, since the suite grows continuously
+as normal development. Real measured ledger size at this suite's scale (263 tests, 16 module/type
+combinations): the pre-2026-07-14 schema was already ~196KB/100KB records on a typical run (not the
+"~40-60KB" originally estimated); the extended schema above is ~448KB/100 records typical, ~975KB
+worst-case, per environment (~1.35MB across all 3 env files at the full cap) — an accepted tradeoff,
+and git's own compression keeps the real on-disk/network cost below these raw-byte figures.
+
+**Branch/commit local-git fallback (added 2026-07-14):** both `notify.ts` (the email-facing
+`resolveNotificationInput()`) and `syncHistory.ts`'s own separate `branch` derivation previously ended
+their fallback chain at a static `'unknown'` string whenever no CI env var (`BRANCH_NAME`/
+`GITHUB_REF_NAME`, `GIT_COMMIT`/`GITHUB_SHA`) was set — even for a plain local run inside a real git
+checkout, where the actual branch/commit is one command away. Both now fall back to real local
+`git branch --show-current` / `git rev-parse --short HEAD` (wrapped in try/catch — a checkout with no
+git metadata still degrades to `'unknown'`, not a thrown error). Confirmed live, twice independently:
+a bare local `notify` run resolved the real current branch/commit instead of "unknown," and a bare
+local `history:sync` run wrote the real branch into the ledger instead of "unknown."
+
+### Failure clustering (`src/notifications/FailureAnalyzer.ts`)
+
+New in this redesign. `classifyFailure()` assigns one of 11 categories (locator/assertion/timeout/
+api/auth/network/environment/infra/console/js/unknown) per failed test, preferring a real HTTP-status
+signal from `misc-errors.json` (cross-referenced by test title) over guessing from message text alone
+where one exists. `clusterFailures()` groups failures only on a real matching signal — exact error
+message, identical source location, or identical failing endpoint+status — never on partial/fuzzy
+similarity, since a false merge would hide a genuinely separate bug inside another one's summary. A
+failure sharing no signal with any other becomes its own single-test "cluster," rendered identically
+to a normal standalone failure.
+
+### Automation health score (`src/notifications/AutomationHealth.ts`)
+
+New in this redesign. A weighted 0-100 score (Excellent ≥90 / Good ≥75 / Needs Attention ≥50 /
+Critical <50) factoring in pass rate, failure count, flakiness, unexpected background errors, suite
+drift, **recurring failures/flakiness**, and **report staleness** — all six can fire together on the
+same run (confirmed live: a run with recurring issues plus a stale report scored 30/Critical, with all
+five applicable factors listed individually). The weights are a starting point, documented as such in
+the source — revisit once real multi-run data accumulates, the same convention already used for the
+slow-test regression threshold below.
+
+**Recurring failures/flakiness** (added 2026-07-14, same day as the redesign): a real gap found by
+running this against 4 sequential test runs — a test that had failed (or flaked) in 3 of the last 4
+recorded runs still scored the overall run "Excellent," because the score only weighed that run's raw
+counts, never the recurring-issue history the same email's Trend section already surfaces. Fixed by
+penalizing recurring failures more heavily than recurring flakiness (a test that keeps failing outright
+is a stronger "known, unaddressed problem" signal than one that keeps eventually passing on retry) —
+confirmed live: the same 4-run scenario now scores 79/Good instead of 91/Excellent once a recurring
+issue is present, without changing the 3 earlier runs' scores (they didn't have enough history yet for
+anything to qualify as "recurring").
+
+### Report freshness check (`NotificationService.checkReportFreshness()`)
+
+Added 2026-07-14 after two real sent emails both showed report content several days older than the
+actual send date — traced to `notify.ts` silently reusing whatever stale
+`reports/<env>/latest/playwright-report/results.json` happened to be on disk, with **no check anywhere
+in the pipeline** for how old that data actually was (confirmed via grep across the entire
+`src/notifications` tree before this fix — zero references to freshness/staleness). `checkReportFreshness()`
+compares `report.endTime` against `Date.now()` (the latter passed as an explicit parameter, not called
+internally, so the function stays pure/testable); if the gap exceeds `STALE_REPORT_THRESHOLD_HOURS`
+(default 4, overridable via env var — a starting heuristic, not statistically tuned, same convention as
+the health-score weights), the email gets:
+- A full-width warning banner as the very first thing in the email, above the masthead.
+- `⚠️ STALE REPORT — ` prepended to the subject line, so it's visible even in an inbox list view before
+  the email is opened.
+- A `-30` "Data freshness" factor in the automation health score (see above) — one of the largest single
+  penalties, since a stale report undermines trust in every other number in the email.
+
+Confirmed live against the genuinely stale (4-day-old) `reports/qa/latest` artifact: correctly detected,
+correctly dropped health from 100 to 70, correctly prefixed the subject.
+
+### Email design & compatibility
+
+The masthead/header row went through several rounds of real, evidence-based fixes worth knowing about
+before touching them again:
+
+- **Container width is fully fluid (`width="100%"`, no `max-width`), by design — not an oversight.**
+  Checked the actual pre-2026-07-14 template (`git show <old-commit>:src/notifications/EmailTemplate.ts`)
+  rather than guessing: it also had no width cap, ever. A capped width (600px, then 750px were both
+  tried) always leaves visible white space once the reading pane is wider than the cap — there is no
+  fixed number that fills every pane. The trade-off, same as the old template already had: on a very
+  wide monitor, line-length and tile spacing stretch out rather than staying at a fixed comfortable
+  width. Accepted explicitly, not a regression.
+- **Outlook desktop renders the email body with Microsoft Word's layout engine, not a browser engine** —
+  a real, documented, longstanding Microsoft architecture choice (since Outlook 2007). Word implements
+  only a small legacy CSS subset: it does **not** understand `max-width` at all (any table relying on
+  CSS `max-width` alone renders however its literal HTML `width` *attribute* resolves in Outlook,
+  uncapped), and it silently drops unsupported property *values* — including `rgba()` transparency —
+  rather than degrading them, which can produce a background color that's simply invisible with no other
+  symptom. Both of these were real bugs caught in this redesign (a `max-width`-only container, and
+  `rgba()`-based badge colors) — fixed by using literal HTML `width` attributes and solid opaque hex
+  colors, which Word's engine has always supported.
+- **Badge chips are joined with a real space character, not just CSS `margin`.** An earlier version
+  relied entirely on margin for the visual gap between adjacent badges; any context that doesn't render
+  margin — plain-text view, a client that strips inline styles, copy-paste, a screen reader — ran the
+  label/value text of adjacent badges together with zero separation. Confirmed by stripping all HTML
+  tags from the real rendered output and checking the extracted text reads correctly.
+- **Emoji are scoped to two specific contextual "what am I looking at" indicators** (the status banner,
+  the SOURCE badge) — reintroduced 2026-07-14, matching the old template's exact choices for exactly
+  these two fields (✅/❌/⚠️ for status, 🔧/🐙/💻 for Jenkins/GitHub Actions/local). The rest of the
+  email's section headers (Module Analytics, Trend, etc.) stay emoji-free — a deliberate, narrower scope
+  than the old template's emoji-everywhere style, not an oversight.
 
 ### Background-error report (`reports/<env>/misc-errors.json`)
 
-Each Playwright worker process runs its own `ErrorCollector` instance and writes its own `misc-errors-worker-<N>.json` (namespaced by env and worker index specifically to survive two workers, or two concurrent cross-environment runs, writing at once without clobbering each other). `MiscErrorReporter` (a Playwright reporter, wired into `playwright.config.ts`) merges all worker files into the final `reports/<env>/misc-errors.json` once the run ends, and prints a terminal summary tagging each error `[Expected RBAC]` / `[Known background noise]` / neither.
+Each Playwright worker process runs its own `ErrorCollector` instance and writes its own `misc-errors-worker-<N>.json` (namespaced by env and worker index specifically to survive two workers, or two concurrent cross-environment runs, writing at once without clobbering each other). `MiscErrorReporter` (a Playwright reporter, wired into `playwright.config.ts`) merges all worker files into the final `reports/<env>/misc-errors.json` once the run ends, and prints a terminal summary tagging each error `[Expected RBAC]` / `[Known background noise]` / neither. The redundant `expected: boolean` field (always exactly `!!expectedReason`) was removed 2026-07-14 after an exhaustive grep confirmed its only 3 real consumers; all 3 now read `expectedReason` directly.
 
 ### Trace files
 
-Every failure retains a Playwright trace (`trace: 'retain-on-failure'` in `playwright.config.ts`), plus a screenshot and video. `ReportParser` reads the trace path straight out of Playwright's own JSON report `attachments` array and converts it to a repo-relative path, so the link in the email still means something after the CI runner that produced it is gone — it matches what you'll find inside the downloaded `test-results` artifact zip.
+Every failure retains a Playwright trace (`trace: 'retain-on-failure'` in `playwright.config.ts`), plus a screenshot and video. `ReportParser` reads the trace path straight out of Playwright's own JSON report `attachments` array and converts it to a repo-relative path, so the link in the email still means something after the CI runner that produced it is gone — it matches what you'll find inside the downloaded `test-results` artifact zip. As of 2026-07-14, `ReportParser` also extracts each failure's `error.stack` and `error.location` (file/line/column) — both were previously discarded — and strips terminal ANSI color escape codes from error text (Playwright's JSON reporter embeds them raw; left in, they rendered as garbage characters and could break exact-message clustering).
 
 ---
 
@@ -426,6 +589,7 @@ Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes —
 - **A confirmed, unresolved app-level flake in Deals** (investigated 2026-07-06, no confirmed mechanism found across six controlled experiments): logging a Call on a deal shared with the restricted user intermittently fails with a permission error even when contact/company sharing is verified correct via screenshots. Two later-discovered client-side bugs (a substring-match contact-selector bug, and `DealsPage.fillDealForm()`'s random associated-contact/company picker) could have contaminated the original six experiments without being visible at the time, so the "no consistent mechanism" conclusion is downgraded to uncertain, not disproven. Full history and every experiment's evidence: see `CLAUDE.md`'s "Known Issues" section. Real fix requires backend/network-level access this suite doesn't have — do not re-attempt a client-side isolation without it.
 - **`DealsPage.fillDealForm()`'s associated contact/company selection is intentionally randomized**, as a deliberate 2026-07-05 fix for a CI-hang/timeout problem in that picker — not a bug. For any new Deals test where the associated contact/company's *specific identity* matters (sharing, reassigning, ownership-dependent actions), pass `associatedContactName`/`associatedCompanyName` on `DealData` to select a known, freshly-created entity by exact name instead. Passing neither preserves the original random-pick behavior.
 - **Recently built, not yet proven under a real live CI run at the time of writing:** the P0–P5 reporting overhaul (tiered error classification, run-history/trend tracking, trace-linking fixes, the `staging-promotion-gate.yml` rename) and the two sandbox-CI bug fixes (`tsconfig.json`'s `"types": ["node"]` fix for `ts-node`'s intermittent `@types/node` resolution failure; the `createRolePage()` browser-context leak fix) were all verified via isolated local execution and real (non-push) script runs, but not yet exercised end-to-end by an actual CI pipeline run against real GitHub/Jenkins infrastructure. Treat the very first live CI run after this work lands as still partially a verification step, not a routine run.
+- **The 2026-07-14 email/reporting redesign** (restrained-enterprise `EmailTemplate.ts` rewrite, `FailureAnalyzer.ts`, `AutomationHealth.ts`, the extended `RunHistory.ts` schema, the freshness check, the local-git fallback) compiles cleanly (`tsc --noEmit`, `eslint`, zero errors) and has now been run end-to-end multiple times: a combined pass exercising every feature at once (real Playwright execution, real failure clusters, real recurring-issue and freshness penalties stacking together, real git-derived branch/commit) against a throwaway `ci/reporting-history` ledger, plus one real send via the actual SMTP path (recipient temporarily scoped to one address for that test, reverted immediately after — confirmed via empty `git diff`). What's genuinely still open: **the real `ci/reporting-history` branch itself has never been touched by any of this verification** (by design, to avoid polluting it) — the first real CI run after this ships is effectively run #1 for that branch. The automation-health weights, the 4-hour staleness threshold, and the slow-test 20%-regression threshold are all documented in source as starting heuristics, not statistically-tuned constants — expect to revisit them once real multi-run data accumulates. Real Outlook desktop rendering was verified structurally (literal HTML `width` attributes, solid non-`rgba()` colors — the specific things Word's engine is documented to require) but never captured from an actual Outlook client; likewise, email dark-mode support is best-effort CSS (`prefers-color-scheme`) never verified against a real Gmail/Outlook dark-mode render.
 - **A related, deliberately unresolved architectural question:** whether long CI jobs (`qa`/`stage`, ~220+ tests on 2 workers) should be split into parallel shards is flagged but intentionally not implemented — it was raised while investigating a browser-context resource-exhaustion incident, but splitting job topology is a bigger, separate decision than the incident's actual fix warranted.
 - **`SETUP.md` is legacy and describes an older, now-superseded version of this framework** (a single `playwright.yml`, a `develop`/`main`-only branch model, one `leadFactory.ts`, no error-collector or reporting system). It predates the current `dev→qa→stage→prod→main` pipeline and the multi-module suite described in this README. Prefer this README, `GIT_WORKFLOW.md`, and `CLAUDE.md` over `SETUP.md` for anything current.
 
