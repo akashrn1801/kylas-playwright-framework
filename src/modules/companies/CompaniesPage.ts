@@ -663,9 +663,14 @@ export class CompaniesPage extends BasePage {
   async cloneCompany(originalName: string): Promise<{ companyId: number | null; clonedName: string }> {
     logger.info('Cloning company via ellipsis menu');
     await this.clickEllipsisOption('Clone');
-    // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors
+    // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors.
+    // WHY no extra wait after saveButton becomes visible (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1000)): confirmed live on this same
+    // clone modal (LeadsPage.cloneLead()/ContactsPage.cloneContact()
+    // investigation, identical widget) — pre-filled values are already
+    // fully populated the instant the save button becomes visible, so
+    // saveButton().waitFor() is already the correct, sufficient condition.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    await this.page.waitForTimeout(1000);
     // WHY: Confirmed live (2026-07-06) — the clone form's name field arrives
     // PRE-FILLED by the app as "<name> Copy". Earlier code read that
     // already-suffixed value back off the DOM and labeled it "originalName"
@@ -705,8 +710,13 @@ export class CompaniesPage extends BasePage {
     if (!companyId) {
       throw new Error('Cloned company ID not captured after save — cannot proceed (save likely failed silently)');
     }
-    // WHY: After clone save, app stays on original company detail — no redirect to list
-    await this.page.waitForTimeout(1500);
+    // WHY: After clone save, app stays on original company detail — no
+    // redirect to list. No trailing wait needed here (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1500)): assertNoFormErrors() and
+    // the ID capture above already confirm the save genuinely completed
+    // server-side, and the caller's very next action is always a fresh
+    // navigation to the CLONE's own detail page (assertClonedCompanyName's
+    // ID-direct-nav), which has its own proper GET-response wait.
     logger.success(`Company cloned successfully: "${clonedName}"`);
     return { companyId, clonedName };
   }
@@ -1355,20 +1365,33 @@ export class CompaniesPage extends BasePage {
     logger.success(`Company ${companyId} confirmed deleted`);
   }
 
-  async assertClonedCompanyName(clonedName: string, clonedId: number): Promise<void> {
+  async assertClonedCompanyName(clonedName: string, clonedId?: number | null): Promise<void> {
     // WHY: ID-first — mirrors DealsPage.assertClonedDealName's fix. List/name
     // search is unreliable once the cloned name carries a unique suffix and
     // risks matching the wrong row; navigating directly to the clone's own
     // ID is deterministic.
-    logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
-    await this.goToCompanyDetailsById(clonedId);
-    // WHY: Confirmed live (2026-07-06) — waitForCompanyDetailsPage's GET-response
-    // wait resolves the instant the network response is observed, not once React
-    // has re-rendered the DOM with it. A one-shot body.innerText() read right
-    // after can race ahead of the render (reproduced: GET returned 200, but body
-    // was still just the app shell). Use an auto-retrying assertion instead of a
-    // fixed extra sleep — it polls until the real DOM condition is met.
-    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+    //
+    // WHY clonedId is optional with a list-search fallback (2026-07-16):
+    // same reasoning as LeadsPage.assertClonedLeadLastName() — a caller
+    // whose ID capture genuinely failed shouldn't hard-fail the whole test
+    // on that alone; fall back to the existing retry-based list search as
+    // a last resort rather than a primary path.
+    if (clonedId) {
+      logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
+      await this.goToCompanyDetailsById(clonedId);
+      // WHY: Confirmed live (2026-07-06) — waitForCompanyDetailsPage's GET-response
+      // wait resolves the instant the network response is observed, not once React
+      // has re-rendered the DOM with it. A one-shot body.innerText() read right
+      // after can race ahead of the render (reproduced: GET returned 200, but body
+      // was still just the app shell). Use an auto-retrying assertion instead of a
+      // fixed extra sleep — it polls until the real DOM condition is met.
+      await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+      logger.success(`Cloned company found with name: ${clonedName}`);
+      return;
+    }
+    logger.warn('Cloned company ID not available — falling back to list search');
+    const found = await this.retryFindCompany(clonedName);
+    expect(found, `Cloned company "${clonedName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned company found with name: ${clonedName}`);
   }
 

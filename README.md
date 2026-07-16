@@ -42,14 +42,14 @@ This document is written so a new engineer — or any of us in six months — ca
 |---|---:|---:|---:|
 | Call Logs | 21 | 22 | 43 |
 | Companies | 17 | 20 | 37 |
-| Contacts | 15 | 17 | 32 |
+| Contacts | 19 | 18 | 37 |
 | Dashboard/Login | 4 | — | 4 |
 | Deals | 17 | 22 | 39 |
 | Leads | 16 | 24 | 40 |
 | Meetings | 7 | 7 | 14 |
 | Quotations | 15 | 14 | 29 |
 | Tasks | 11 | 10 | 21 |
-| **Total** | **123** | **136** | **259** |
+| **Total** | **127** | **137** | **264** |
 
 ---
 
@@ -104,6 +104,16 @@ One factory per module (`leadFactory.ts`, `contactFactory.ts`, `companyFactory.t
 **Why the prefix+timestamp convention exists:** an RBAC test's entire assertion is "restricted user provably cannot see this record unless it's shared with them." Two problems make a plain Faker name insufficient for that: (1) the QA/staging environments never get cleaned up — every module's data accumulates indefinitely — so a search by a generic name can collide with old leftover records from a previous run and produce a false pass; (2) without a distinguishing prefix, there's no cheap way to tell "genuinely admin-owned, never shared" data apart from "shared" data when both need to exist side-by-side in the same test. The `ADM`/`SHR` prefix plus a timestamp makes every run's records uniquely searchable and unambiguously classifiable, which is what makes the negative assertion ("restricted user does NOT see this") trustworthy rather than accidental.
 
 `Country` defaults to `India` in every factory — a hard CRM-side validation requirement, not a test choice.
+
+### Custom fields and GPS address lookup
+
+Lead and Contact each have 9 admin-configured custom fields (Text, Paragraph, Number, PickList, MultiPickList, Checkbox, Date, DateTimePicker, URL) added by hand on QA today — they are environment-conditional, not guaranteed to exist on Stage/Prod yet. `BasePage`'s "Custom Field Helpers" section holds every generic fill/select/assert method (parameterized by the raw Kylas field name, e.g. `"TextField"`), so a module only needs its own `<MODULE>_CUSTOM_FIELD_NAMES` constant (in its own factory) plus a thin `fill<Entity>CustomFields()`/`assert<Entity>CustomFieldsOnDetail()` wrapper — never a full reimplementation. Each generic method checks DOM presence first and skips gracefully (logging why) when a field doesn't exist in the current environment, so the exact same call site starts working unchanged the moment a field is added elsewhere.
+
+Contact's address field (and Meeting's location field) also expose a "Get GPS Address" lookup — a live, Google-Places-style autocomplete search, not browser geolocation. `BasePage.fillAddressViaGpsOrManual()` (generalized out of `MeetingsPage.ts`, which had this logic private to itself until Contact needed it too) tries the GPS search first and falls back to the manual address string if the trigger isn't present or no predictions come back — returning whichever value was actually entered, since a live third-party lookup's result can't be hardcoded or assumed.
+
+Building Contact's custom-field support (2026-07-14/15) surfaced three real, pre-existing `ContactsPage.ts` bugs, fixed along the way rather than worked around: (1) `disableRequiredFieldsToggle()` clicked unconditionally, which could flip an already-off toggle back on and hide the fields it was meant to reveal; (2) `fillEditForm()` never called that toggle at all, so custom fields were unreachable on update; (3) `modalCancelButton()` was an unscoped, page-wide locator that could resolve to the wrong (hidden, 0×0) modal's close button and hang for the full test timeout — reproduced live as an 805-retry, 8-minute stall before being scoped to the actual open modal. All three mirror bugs already fixed in `LeadsPage.ts` at some point, just never triggered in Contact until a test exercised the exact code path that exposed them.
+
+See `CLAUDE.md`'s "Custom Fields pattern" and "Reference Patterns" sections for the full field-by-field mechanism breakdown (validation quirks per field type, the DateTimePicker's two-widget split, the Internal-Name-vs-Label rename safety note, etc.) — this README section is intentionally just the map, not the territory.
 
 ### Retry / flake mitigation
 

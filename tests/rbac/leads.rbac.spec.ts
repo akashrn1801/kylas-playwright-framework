@@ -119,7 +119,7 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     // WHY: Navigate back to verify ellipsis shows only Clone
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
@@ -280,7 +280,7 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('L15 passed');
   });
 
@@ -365,7 +365,10 @@ test.describe('Leads RBAC', () => {
     const meetingTitle = `Meeting-${Date.now()}`;
     await meetingsPage.openAddForm();
     await meetingsPage.fillTitleOnly(meetingTitle);
-    const meetingId = await meetingsPage.saveMeeting();
+    // WHY: retries specifically on the confirmed lead-summary permission-
+    // propagation race (backend 422/01503001) — see MeetingsPage's own
+    // comment for the live evidence this is based on.
+    const meetingId = await meetingsPage.saveMeetingRetryOnLeadSummaryLag();
     // WHY: meetingId can be null on CI when POST response is slow
     // Meeting was created (popup clicked) — ID capture is best-effort only
     if (meetingId) {
@@ -498,7 +501,10 @@ test.describe('Leads RBAC', () => {
     const meetingTitle2 = `Meeting-${Date.now()}`;
     await meetingsPage2.openAddForm();
     await meetingsPage2.fillTitleOnly(meetingTitle2);
-    const meetingId2 = await meetingsPage2.saveMeeting();
+    // WHY: same lead-summary permission-propagation race as the Meeting
+    // permission test above — see MeetingsPage.saveMeetingRetryOnLeadSummaryLag()'s
+    // own comment for the live evidence.
+    const meetingId2 = await meetingsPage2.saveMeetingRetryOnLeadSummaryLag();
     // WHY: meetingId can be null on CI — log warning but continue
     if (meetingId2) {
       logger.success(`Meeting created: ${meetingId2}`);
@@ -578,7 +584,7 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('Restricted user edited reassigned lead successfully');
     // WHY: Navigate back to lead detail to verify delete option
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
@@ -871,7 +877,10 @@ test.describe('Leads RBAC', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     // WHY: reuses LeadsPage.assertLeadCustomFieldsOnDetail() unchanged — the
