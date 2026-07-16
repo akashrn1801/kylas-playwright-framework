@@ -477,8 +477,9 @@ test.describe('Contacts RBAC', () => {
     const contactId = await contactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();
     await contactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
-    await contactsPage.cloneContact();
-    await contactsPage.assertClonedContactLastName(contactData.lastName);
+    const clonedId = await contactsPage.cloneContact();
+    expect(clonedId).not.toBeNull();
+    await contactsPage.assertClonedContactLastName(contactData.lastName, clonedId!);
     logger.success('CR15 passed');
   });
 
@@ -613,6 +614,35 @@ test.describe('Contacts RBAC', () => {
     await contactsPage.goToContactsList();
     await contactsPage.assertOnContactsListPage();
     logger.success('CR19 passed');
+  });
+
+  // ── CR20 ──────────────────────────────────────────────────
+  // WHY: generateContactData() (NOT generateAdminContactData()) — this is a
+  // restricted user creating and owning their own contact, not a cross-role
+  // isolation scenario, so the ADM-prefix uniqueness guarantee doesn't apply
+  // here. Mirrors LeadsPage's equivalent restricted-user dedicated test
+  // (L29) for the same reason.
+
+  test('@regression restricted user can create a contact with all custom fields, verified on details', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateContactData();
+
+    await contactsPage.goToContactsList();
+    await contactsPage.clickAddContact();
+    await contactsPage.skipIfCustomFieldsAbsent();
+    await contactsPage.fillContactForm(contactData);
+    const contactId = await contactsPage.saveContact();
+    expect(contactId, 'Contact ID should be captured after create').not.toBeNull();
+
+    // WHY: reuses ContactsPage.assertContactCustomFieldsOnDetail() unchanged —
+    // the same BasePage-generic method admin's tests use — to confirm the
+    // custom-field design is genuinely role-agnostic, not admin-specific.
+    await contactsPage.goToContactDetailsById(contactId!);
+    await contactsPage.assertContactCustomFieldsOnDetail(contactData);
+    logger.success('CR20 passed');
   });
 
 });

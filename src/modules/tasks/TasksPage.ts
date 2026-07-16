@@ -827,7 +827,7 @@ export class TasksPage extends BasePage {
   // Filter by Task ID (same pattern as MeetingsPage.searchMeetingById)
   // ──────────────────────────────────────────────────────────
 
-  async searchTaskById(taskId: number): Promise<void> {
+  async searchTaskById(taskId: number): Promise<boolean> {
     // WHY: Navigate directly to ?id=<taskId> — same native URL pattern as meetings.
     // Filter panel approach was unreliable: detail panel intercepts filter button clicks.
     logger.info(`Navigating to task by ID: ${taskId}`);
@@ -835,17 +835,22 @@ export class TasksPage extends BasePage {
     await this.waitForListReady();
     // WHY: Use try/catch instead of bare waitFor — if the item is not visible within
     // the timeout (e.g. search index lag), we want assertTaskInList to fall through
-    // to the retryFindTask name-search fallback rather than throwing here.
+    // to the retryFindTask name-search fallback rather than throwing here. Returns
+    // the outcome (2026-07-16 fix) so assertTaskInList can rely on this method's own
+    // already-robust, auto-retrying wait instead of redundantly re-checking with a
+    // weaker one-shot isVisible() snapshot that had no retry of its own.
     try {
       await this.taskListItemById(taskId).waitFor({
         state: 'visible',
         timeout: config.timeouts.navigation,
       });
       logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
+      return true;
     } catch {
       logger.warn(
         `Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`
       );
+      return false;
     }
   }
 
@@ -864,18 +869,29 @@ export class TasksPage extends BasePage {
       logger.info(`Verifying task via ID filter: ${taskId}`);
       // WHY: Use ID filter to bypass smartlist (My Tasks / My Open Tasks etc)
       // Smartlists filter by owner/due date and hide newly created tasks
-      // ID filter always finds the task regardless of smartlist state
-      await this.searchTaskById(taskId);
-      const itemById = this.taskListItemById(taskId);
-      const visibleById = await itemById.isVisible().catch(() => false);
-      if (visibleById) {
+      // ID filter always finds the task regardless of smartlist state.
+      //
+      // WHY relying on searchTaskById()'s own return value (2026-07-16 fix):
+      // this used to ignore that method's result and re-check with its own
+      // one-shot isVisible().catch(() => false) — a single, non-retrying
+      // snapshot layered UNDER an already-robust, auto-retrying waitFor()
+      // inside searchTaskById() itself. That made the real wait pointless:
+      // by the time the immediate re-check ran, a still-loading row would
+      // read as "not visible" and fall back to name-search even though the
+      // primary ID path would have found it moments later. Using the
+      // already-correct boolean directly is the same "primary ID / fallback
+      // search" structure as Leads/Companies/Deals/Contacts' ID-direct-nav,
+      // just with a query-param list view instead of a standalone detail
+      // page since Tasks has no such page.
+      const foundById = await this.searchTaskById(taskId);
+      if (foundById) {
         logger.success(`Task ID ${taskId} confirmed in list`);
         return;
       }
       logger.warn(`Task ID ${taskId} not visible via filter — falling back to name search`);
     }
     const found = await this.retryFindTask(name);
-    expect(found).toBeTruthy();
+    expect(found, `Task "${name}" should exist in list`).toBeTruthy();
     logger.success(`Task "${name}" confirmed in list`);
   }
 

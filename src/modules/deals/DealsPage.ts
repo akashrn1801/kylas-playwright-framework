@@ -1281,20 +1281,33 @@ export class DealsPage extends BasePage {
     return clonedId;
   }
 
-  async assertClonedDealName(originalName: string, clonedId: number): Promise<void> {
+  async assertClonedDealName(originalName: string, clonedId?: number | null): Promise<void> {
     // WHY: ID-first — mirrors LeadsPage.assertClonedLeadLastName's fix. List
     // search does a loose multi-field match with no guaranteed row position;
     // navigating directly to the clone's own ID is deterministic.
-    logger.info(`Asserting cloned deal has "Copy" in name — original: ${originalName}`);
+    //
+    // WHY clonedId is optional with a list-search fallback (2026-07-16):
+    // same reasoning as LeadsPage/CompaniesPage's equivalents — a caller
+    // whose ID capture genuinely failed shouldn't hard-fail the whole test
+    // on that alone; fall back to the existing retry-based list search as
+    // a last resort rather than a primary path.
     const clonedName = `${originalName} Copy`;
-    await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
-    await this.waitForDealDetailsPage();
-    // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
-    // waitForDealDetailsPage's GET-response wait resolves the instant the
-    // network response is observed, not once React has re-rendered the DOM
-    // with it. A one-shot body.innerText() read right after can race ahead
-    // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+    if (clonedId) {
+      logger.info(`Asserting cloned deal has "Copy" in name — original: ${originalName}`);
+      await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
+      await this.waitForDealDetailsPage();
+      // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+      // waitForDealDetailsPage's GET-response wait resolves the instant the
+      // network response is observed, not once React has re-rendered the DOM
+      // with it. A one-shot body.innerText() read right after can race ahead
+      // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+      await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+      logger.success(`Cloned deal found with name: ${clonedName}`);
+      return;
+    }
+    logger.warn('Cloned deal ID not available — falling back to list search');
+    const found = await this.retryFindDeal(clonedName);
+    expect(found, `Cloned deal "${clonedName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned deal found with name: ${clonedName}`);
   }
 

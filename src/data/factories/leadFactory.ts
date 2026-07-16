@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Campaign Information
@@ -109,20 +110,6 @@ export interface LeadCustomFieldData {
   date: Date;
   dateTimePicker: Date;
   urlField: string;
-}
-
-// WHY: today through today+1 month, computed relative to the real current
-// date at runtime — never a hardcoded date. Includes a random hour/minute
-// for dateTimePicker's use; the plain Date field simply ignores the time
-// portion when it's filled.
-function randomFutureDateWithinOneMonth(): Date {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const offsetDays = Math.floor(Math.random() * 31); // 0..30 inclusive
-  const result = new Date(today);
-  result.setDate(result.getDate() + offsetDays);
-  result.setHours(Math.floor(Math.random() * 24), Math.floor(Math.random() * 60), 0, 0);
-  return result;
 }
 
 export function generateLeadCustomFieldData(

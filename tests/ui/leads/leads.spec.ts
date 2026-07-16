@@ -322,7 +322,10 @@ test.describe('Leads', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
@@ -341,7 +344,10 @@ test.describe('Leads', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     const updatedData = generateLeadData();
@@ -414,6 +420,11 @@ test.describe('Leads', () => {
       logger.info(`Negative custom field case: ${testCase.description}`);
       await leadsPage.goToLeadsList();
       await leadsPage.clickAddLead();
+      // WHY: cheap, harmless no-op when fields are present (a handful of
+      // DOM count() queries) — checked every iteration rather than only the
+      // first for simplicity, since a skip on any iteration ends the test
+      // immediately anyway.
+      await leadsPage.skipIfCustomFieldsAbsent();
 
       const leadData = generateLeadData({
         customFields: generateLeadCustomFieldData(testCase.customFieldOverrides),

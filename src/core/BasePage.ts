@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, expect } from '@playwright/test';
+import { Page, Locator, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -268,6 +268,35 @@ export class BasePage {
 
   private async isCustomFieldPresent(fieldName: string): Promise<boolean> {
     return (await this.customFieldInputLocator(fieldName).count()) > 0;
+  }
+
+  // WHY: PART C (2026-07-15) — a DEDICATED-TEST-level skip mechanism, built
+  // for the first time here (not a retrofit of an existing thing — only the
+  // per-field, silently-graceful isCustomFieldPresent() above existed
+  // before, already reused automatically by every generic fill method).
+  // A dedicated custom-field test's own detail-page assertion
+  // (assertLeadCustomFieldsOnDetail()/assertContactCustomFieldsOnDetail())
+  // intentionally THROWS rather than skips when a field is missing — a
+  // silent skip there would hide the fact that verification never ran, for
+  // methods whose only callers are the handful of dedicated tests that
+  // always expect these fields to exist. This method is the counterpart at
+  // the OUTER, whole-test level: called once, right after the relevant
+  // create/edit form is open (custom-field inputs don't exist in the DOM
+  // before then), it checks whether ANY of the module's fields are present
+  // at all, and skips the entire test with a clear reason if none are —
+  // rather than letting the test proceed only to fail loudly and
+  // confusingly at the assertion step on an environment (e.g. Stage/Prod
+  // today) that simply doesn't have these fields yet.
+  protected async skipDedicatedCustomFieldTestIfAbsent(
+    fieldNames: string[],
+    moduleName: string
+  ): Promise<void> {
+    const presence = await Promise.all(fieldNames.map((name) => this.isCustomFieldPresent(name)));
+    const anyPresent = presence.some(Boolean);
+    test.skip(
+      !anyPresent,
+      `No ${moduleName} custom fields present in this environment — skipping dedicated custom-field test`
+    );
   }
 
   private logCustomFieldSkipped(description: string, fieldName: string, action: string): void {
@@ -906,6 +935,74 @@ export class BasePage {
     logger.success(
       `Custom field "${description}" validation error confirmed: "${expectedMessage}"`
     );
+  }
+
+  // ─── GPS Address Helpers (generic — reusable across entities/modules) ─────
+  // WHY: generalized out of MeetingsPage.ts (2026-07-15), which had this
+  // logic private to itself. Confirmed live that Contact's address field
+  // exposes the identical "Get GPS Address" trigger — a Google-Places-style
+  // autocomplete search, not browser geolocation — so this is parameterized
+  // by the actual address input to fill (never coupled to Meeting's own
+  // "location" field) for Contact today and Lead/Company later.
+  private readonly gpsAddressButton = (): Locator => this.page.getByText('Get GPS Address');
+
+  private readonly gpsAddressSearchInput = (): Locator =>
+    this.page.getByPlaceholder('Search for area, street name');
+
+  private readonly gpsAddressPrediction = (): Locator =>
+    this.page.locator('.autocomplete-prediction').first();
+
+  // WHY: returns the value actually entered (GPS-selected prediction text OR
+  // the manual fallback) — never hardcode/assume the GPS service's result,
+  // since it's a live third-party lookup. Callers need this to verify the
+  // saved entity's detail page against whatever genuinely ended up in the
+  // field, not a guessed string.
+  protected async fillAddressViaGpsOrManual(
+    addressInput: Locator,
+    manualAddress: string,
+    description = 'address'
+  ): Promise<string> {
+    logger.info(`Filling ${description} via GPS lookup if available`);
+    const gpsVisible = await this.gpsAddressButton()
+      .isVisible()
+      .catch(() => false);
+    if (gpsVisible) {
+      await this.click(this.gpsAddressButton(), `Get GPS Address button (${description})`);
+      await this.page.waitForTimeout(1500);
+      // WHY: Kylas gates this feature behind a paid "Field Sales" addon on
+      // some accounts/environments — confirmed live (Meetings module) this
+      // shows a purchase-upsell dialog instead of the search box. Detect it
+      // and fall through to manual entry rather than hanging on a search
+      // input that will never appear.
+      const addonDialog = await this.page
+        .locator('text=purchase')
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (!addonDialog) {
+        // WHY: the search API needs a real place-name fragment, not the
+        // full manual address string — first comma-segment, capped short,
+        // mirrors MeetingsPage's proven approach.
+        const citySearch = manualAddress.split(',')[0].trim().substring(0, 10);
+        await this.gpsAddressSearchInput().fill(citySearch);
+        await this.page
+          .waitForSelector('.autocomplete-prediction', { timeout: 5000 })
+          .catch(() => null);
+        const predictionsVisible = await this.gpsAddressPrediction()
+          .isVisible()
+          .catch(() => false);
+        if (predictionsVisible) {
+          await this.gpsAddressPrediction().click();
+          await this.page.waitForTimeout(500);
+          const gpsValue = await addressInput.inputValue().catch(() => '');
+          logger.success(`GPS ${description} selected: ${gpsValue}`);
+          return gpsValue;
+        }
+      }
+    }
+    await this.fill(addressInput, manualAddress, description);
+    logger.info(`Manual ${description} entered: ${manualAddress}`);
+    return manualAddress;
   }
 
   async getLoggedInUserName(role: 'admin' | 'restricted' = 'restricted'): Promise<string> {
