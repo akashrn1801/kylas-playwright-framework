@@ -368,11 +368,9 @@ export class TasksPage extends BasePage {
     try {
       const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
       await assignedToOptions.first().waitFor({ state: 'visible', timeout: 5000 });
-      const count = await assignedToOptions.count();
-      const idx = Math.floor(Math.random() * count);
-      const selectedUser = await assignedToOptions.nth(idx).textContent();
-      await assignedToOptions.nth(idx).click();
-      logger.success(`Assigned To set: ${selectedUser?.trim()}`);
+      // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
+      // textContent()+click() on a random option, same bug class.
+      await this.selectRandomOptionWithRetry(assignedToOptions, 'Assigned To set');
     } catch {
       logger.warn('Assigned To options not found — skipping');
       await this.page.keyboard.press('Escape');
@@ -565,13 +563,8 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form filled');
   }
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async fillAssignedTo(userName: string): Promise<void> {
     logger.info(`Assigning task to: ${userName}`);
@@ -660,11 +653,12 @@ export class TasksPage extends BasePage {
       // Step 4: Pick a random option
       const count = await options.count().catch(() => 0);
       if (count > 0) {
-        const idx = Math.floor(Math.random() * Math.min(count, 5));
-        const optionText = await options.nth(idx).textContent();
-        await options.nth(idx).click();
+        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+        // before — was an unbounded textContent()+click() on a random option.
+        await this.selectRandomOptionWithRetry(options, `Selected ${entityType} relation`, {
+          maxOptions: 5,
+        });
         await this.page.waitForTimeout(300);
-        logger.success(`Selected ${entityType} relation: ${optionText?.trim()}`);
       } else {
         logger.warn(`No ${entityType} records found — skipping`);
         await this.page.keyboard.press('Escape');
@@ -860,7 +854,7 @@ export class TasksPage extends BasePage {
   // Filter by Task ID (same pattern as MeetingsPage.searchMeetingById)
   // ──────────────────────────────────────────────────────────
 
-  async searchTaskById(taskId: number): Promise<void> {
+  async searchTaskById(taskId: number): Promise<boolean> {
     // WHY: Navigate directly to ?id=<taskId> — same native URL pattern as meetings.
     // Filter panel approach was unreliable: detail panel intercepts filter button clicks.
     logger.info(`Navigating to task by ID: ${taskId}`);
@@ -868,17 +862,22 @@ export class TasksPage extends BasePage {
     await this.waitForListReady();
     // WHY: Use try/catch instead of bare waitFor — if the item is not visible within
     // the timeout (e.g. search index lag), we want assertTaskInList to fall through
-    // to the retryFindTask name-search fallback rather than throwing here.
+    // to the retryFindTask name-search fallback rather than throwing here. Returns
+    // the outcome (2026-07-16 fix) so assertTaskInList can rely on this method's own
+    // already-robust, auto-retrying wait instead of redundantly re-checking with a
+    // weaker one-shot isVisible() snapshot that had no retry of its own.
     try {
       await this.taskListItemById(taskId).waitFor({
         state: 'visible',
         timeout: config.timeouts.navigation,
       });
       logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
+      return true;
     } catch {
       logger.warn(
         `Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`
       );
+      return false;
     }
   }
 
@@ -897,18 +896,29 @@ export class TasksPage extends BasePage {
       logger.info(`Verifying task via ID filter: ${taskId}`);
       // WHY: Use ID filter to bypass smartlist (My Tasks / My Open Tasks etc)
       // Smartlists filter by owner/due date and hide newly created tasks
-      // ID filter always finds the task regardless of smartlist state
-      await this.searchTaskById(taskId);
-      const itemById = this.taskListItemById(taskId);
-      const visibleById = await itemById.isVisible().catch(() => false);
-      if (visibleById) {
+      // ID filter always finds the task regardless of smartlist state.
+      //
+      // WHY relying on searchTaskById()'s own return value (2026-07-16 fix):
+      // this used to ignore that method's result and re-check with its own
+      // one-shot isVisible().catch(() => false) — a single, non-retrying
+      // snapshot layered UNDER an already-robust, auto-retrying waitFor()
+      // inside searchTaskById() itself. That made the real wait pointless:
+      // by the time the immediate re-check ran, a still-loading row would
+      // read as "not visible" and fall back to name-search even though the
+      // primary ID path would have found it moments later. Using the
+      // already-correct boolean directly is the same "primary ID / fallback
+      // search" structure as Leads/Companies/Deals/Contacts' ID-direct-nav,
+      // just with a query-param list view instead of a standalone detail
+      // page since Tasks has no such page.
+      const foundById = await this.searchTaskById(taskId);
+      if (foundById) {
         logger.success(`Task ID ${taskId} confirmed in list`);
         return;
       }
       logger.warn(`Task ID ${taskId} not visible via filter — falling back to name search`);
     }
     const found = await this.retryFindTask(name);
-    expect(found).toBeTruthy();
+    expect(found, `Task "${name}" should exist in list`).toBeTruthy();
     logger.success(`Task "${name}" confirmed in list`);
   }
 
