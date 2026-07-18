@@ -105,6 +105,14 @@ export interface ContactData {
   utmMedium: string;
   utmContent: string;
   utmTerm: string;
+  // WHY: placeholders, overwritten in place by ContactsPage.fillContactForm()
+  // with whatever was actually selected live — same reasoning as
+  // salutation/campaign/source above. Company specifically is a live,
+  // role-scoped async lookup against real Company records (confirmed live
+  // 2026-07-16 that admin and restricted user see genuinely different result
+  // sets for the same search term) — never hardcode a company name here.
+  timezone: string;
+  company: string;
   customFields: ContactCustomFieldData;
 }
 
@@ -140,6 +148,8 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
     utmMedium: faker.helpers.arrayElement(['cpc', 'email', 'social', 'banner']),
     utmContent: faker.lorem.slug(2),
     utmTerm: faker.lorem.word(),
+    timezone: '',
+    company: '',
     customFields: generateContactCustomFieldData(customFieldOverrides),
     ...restOverrides,
   };
@@ -179,6 +189,8 @@ export function generateAdminContactData(overrides: Partial<ContactData> = {}): 
     utmMedium: 'cpc',
     utmContent: faker.lorem.slug(2),
     utmTerm: faker.lorem.word(),
+    timezone: '',
+    company: '',
     customFields: generateContactCustomFieldData(customFieldOverrides),
     ...restOverrides,
   };
@@ -216,6 +228,8 @@ export function generateSharedContactData(overrides: Partial<ContactData> = {}):
     utmMedium: 'cpc',
     utmContent: faker.lorem.slug(2),
     utmTerm: faker.lorem.word(),
+    timezone: '',
+    company: '',
     customFields: generateContactCustomFieldData(customFieldOverrides),
     ...restOverrides,
   };
@@ -253,6 +267,8 @@ export function generateRestrictedContactData(overrides: Partial<ContactData> = 
     utmMedium: 'cpc',
     utmContent: faker.lorem.slug(2),
     utmTerm: faker.lorem.word(),
+    timezone: '',
+    company: '',
     customFields: generateContactCustomFieldData(customFieldOverrides),
     ...restOverrides,
   };

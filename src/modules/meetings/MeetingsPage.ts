@@ -462,13 +462,13 @@ export class MeetingsPage extends BasePage {
 
       // Step 5: Pick random option
       if (count > 0) {
-        const randomIdx = Math.floor(Math.random() * Math.min(count, 5));
-        const selectedOption = this.relationOptions().nth(randomIdx);
-        const optionText = await selectedOption.textContent();
-        await selectedOption.click();
+        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+        // before — was an unbounded textContent()+click() on a random option.
+        await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
+          maxOptions: 5,
+        });
         await this.page.waitForTimeout(300);
         await this.relatedToInput().press('Enter');
-        logger.success(`Selected ${entityType} (${randomIdx + 1}/${count}): ${optionText?.trim()}`);
       } else {
         logger.warn(`No ${entityType} records found - skipping`);
         await this.page.keyboard.press('Escape');
@@ -634,7 +634,19 @@ export class MeetingsPage extends BasePage {
   // Meetings module's own 14 passing tests keeps using that method
   // unchanged; this wrapper exists only for callers creating a meeting
   // immediately after a fresh cross-role share.
-  async saveMeetingRetryOnLeadSummaryLag(maxAttempts = 3): Promise<number | null> {
+  //
+  // WHY renamed from saveMeetingRetryOnLeadSummaryLag (2026-07-16) —
+  // confirmed live this exact errorCode+propagation-lag mechanism ALSO
+  // occurs for Contact+Company (message reads "Invalid company summary
+  // response." instead of "Invalid lead summary response.", same errorCode
+  // 01503001): sharing a Contact's associated Company and then immediately
+  // creating a Meeting from that contact can hit the identical transient
+  // lag — confirmed via a real run where the company share had genuinely
+  // succeeded seconds earlier, then the meeting POST still 422'd once before
+  // succeeding on retry. The check below was already generic (matches on
+  // errorCode only, never the message text), so only the name needed
+  // updating to stop implying this is Lead-only.
+  async saveMeetingRetryOnEntitySummaryLag(maxAttempts = 3): Promise<number | null> {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const lagResponsePromise = this.page
         .waitForResponse(
@@ -656,7 +668,7 @@ export class MeetingsPage extends BasePage {
         const isKnownPropagationLag = await lagResponsePromise;
         if (isKnownPropagationLag && attempt < maxAttempts) {
           logger.warn(
-            `Meeting save hit the confirmed lead-summary permission-propagation lag ` +
+            `Meeting save hit the confirmed entity-summary permission-propagation lag ` +
               `(attempt ${attempt}/${maxAttempts}) — waiting and retrying the same save`
           );
           await this.page.waitForTimeout(3000);

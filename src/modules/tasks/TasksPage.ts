@@ -368,11 +368,9 @@ export class TasksPage extends BasePage {
     try {
       const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
       await assignedToOptions.first().waitFor({ state: 'visible', timeout: 5000 });
-      const count = await assignedToOptions.count();
-      const idx = Math.floor(Math.random() * count);
-      const selectedUser = await assignedToOptions.nth(idx).textContent();
-      await assignedToOptions.nth(idx).click();
-      logger.success(`Assigned To set: ${selectedUser?.trim()}`);
+      // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
+      // textContent()+click() on a random option, same bug class.
+      await this.selectRandomOptionWithRetry(assignedToOptions, 'Assigned To set');
     } catch {
       logger.warn('Assigned To options not found — skipping');
       await this.page.keyboard.press('Escape');
@@ -565,13 +563,8 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form filled');
   }
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async fillAssignedTo(userName: string): Promise<void> {
     logger.info(`Assigning task to: ${userName}`);
@@ -660,11 +653,12 @@ export class TasksPage extends BasePage {
       // Step 4: Pick a random option
       const count = await options.count().catch(() => 0);
       if (count > 0) {
-        const idx = Math.floor(Math.random() * Math.min(count, 5));
-        const optionText = await options.nth(idx).textContent();
-        await options.nth(idx).click();
+        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+        // before — was an unbounded textContent()+click() on a random option.
+        await this.selectRandomOptionWithRetry(options, `Selected ${entityType} relation`, {
+          maxOptions: 5,
+        });
         await this.page.waitForTimeout(300);
-        logger.success(`Selected ${entityType} relation: ${optionText?.trim()}`);
       } else {
         logger.warn(`No ${entityType} records found — skipping`);
         await this.page.keyboard.press('Escape');
