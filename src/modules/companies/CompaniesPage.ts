@@ -78,7 +78,15 @@ export class CompaniesPage extends BasePage {
   private readonly addPhoneButton = (): Locator =>
     this.page.locator('button').filter({ hasText: 'Add Phone' }).first();
 
-  private readonly phoneInput = (): Locator => this.page.locator('input[id*="input_phone_0"]');
+  // WHY: exact `name` match, not a loose `id*="input_phone_0"` substring
+  // (2026-07-16 fix) — that pattern is confirmed live to collide with any
+  // future repeatable field whose first entry also ends in "_input_phone_0"
+  // (confirmed via the identical bug in LeadsPage.ts, caused there by its
+  // new Company Phones field). Companies has no such field today, but
+  // `name="phoneNumbers[0]"` is the actual bound form field and is strictly
+  // safer at zero cost, so it's fixed here too rather than left as a latent
+  // risk for whenever this module grows a similar field.
+  private readonly phoneInput = (): Locator => this.page.locator('input[name="phoneNumbers[0]"]');
 
   private readonly addressInput = (): Locator => this.page.locator('input[name="address"]');
 
@@ -359,6 +367,19 @@ export class CompaniesPage extends BasePage {
       const response = await this.page.waitForResponse(
         (res) =>
           res.url().includes('companies') &&
+          // WHY: defensive exclusion added 2026-07-16 — DealsPage's identical
+          // `.includes('/deals')` predicate was confirmed live (this same run)
+          // to also match an unrelated `/v4/reports/deals?...` background
+          // analytics POST, winning the response race against the real create/
+          // clone POST and silently capturing a null id (2/2 reproductions).
+          // This method's bare `.includes('companies')` is even less specific
+          // (no version-prefix requirement at all) and is the same shape of
+          // bug, just not yet observed failing here — excluding `/reports/`
+          // only, not adding a `/v1/` requirement, since (unlike Deals) the
+          // exact real company create/clone endpoint hasn't been directly
+          // confirmed in this run's own logs; narrower and lower-risk than
+          // guessing the full path.
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
         { timeout: 30000 }
@@ -368,7 +389,7 @@ export class CompaniesPage extends BasePage {
 
       const companyId = body?.id ?? body?.data?.id ?? null;
 
-      logger.success(`Captured company ID: ${companyId}`);
+      logger.success(`Captured company ID: ${companyId} from ${response.url()}`);
 
       return companyId;
     } catch (_error) {
@@ -721,13 +742,8 @@ export class CompaniesPage extends BasePage {
     return { companyId, clonedName };
   }
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async shareCompany(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing company with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);

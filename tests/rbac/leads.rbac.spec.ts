@@ -368,7 +368,7 @@ test.describe('Leads RBAC', () => {
     // WHY: retries specifically on the confirmed lead-summary permission-
     // propagation race (backend 422/01503001) — see MeetingsPage's own
     // comment for the live evidence this is based on.
-    const meetingId = await meetingsPage.saveMeetingRetryOnLeadSummaryLag();
+    const meetingId = await meetingsPage.saveMeetingRetryOnEntitySummaryLag();
     // WHY: meetingId can be null on CI when POST response is slow
     // Meeting was created (popup clicked) — ID capture is best-effort only
     if (meetingId) {
@@ -502,9 +502,9 @@ test.describe('Leads RBAC', () => {
     await meetingsPage2.openAddForm();
     await meetingsPage2.fillTitleOnly(meetingTitle2);
     // WHY: same lead-summary permission-propagation race as the Meeting
-    // permission test above — see MeetingsPage.saveMeetingRetryOnLeadSummaryLag()'s
+    // permission test above — see MeetingsPage.saveMeetingRetryOnEntitySummaryLag()'s
     // own comment for the live evidence.
-    const meetingId2 = await meetingsPage2.saveMeetingRetryOnLeadSummaryLag();
+    const meetingId2 = await meetingsPage2.saveMeetingRetryOnEntitySummaryLag();
     // WHY: meetingId can be null on CI — log warning but continue
     if (meetingId2) {
       logger.success(`Meeting created: ${meetingId2}`);

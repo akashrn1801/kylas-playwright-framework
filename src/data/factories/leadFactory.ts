@@ -42,17 +42,27 @@ export function generateLeadCampaignData(
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Requirement section (Products or Services, Currency, Budget)
+// Requirement section (Requirement, Products or Services, Currency, Budget)
 // ──────────────────────────────────────────────────────────────────────────
-// WHY: confirmed live (2026-07-08) — these are standard, always-present Lead
-// fields (not environment-conditional custom fields), identical for admin
-// and restricted user. Products or Services and Currency are react-select
-// fields whose live options are read at fill time (Products is technically a
-// lookup against real Product records, but confirmed live to show a default
-// list without typing and to correctly repopulate its menu after clearing —
-// same interaction shape as a plain picklist in practice). Budget is a plain
-// native number input.
+// WHY: confirmed live (2026-07-08) — Products/Currency/Budget are standard,
+// always-present Lead fields (not environment-conditional custom fields),
+// identical for admin and restricted user. Products or Services and
+// Currency are react-select fields whose live options are read at fill time
+// (Products is technically a lookup against real Product records, but
+// confirmed live to show a default list without typing and to correctly
+// repopulate its menu after clearing — same interaction shape as a plain
+// picklist in practice). Budget is a plain native number input.
+//
+// WHY "requirementName" (2026-07-16, added later) — confirmed live this is
+// a genuine, separate plain text field labeled "Requirement" (internal name
+// `requirementName`, id `5_11_input_requirementName`) — distinct from the
+// section's own "Requirement" h2 heading and from the 3 fields above. It's
+// actually the FIRST field in the section (DOM order confirmed live:
+// Requirement text → Products or Services → Currency → Budget), not fourth
+// as the fields above were declared/filled in. No maxlength or client-side
+// validation observed.
 export interface LeadRequirementData {
+  requirementName: string;
   // WHY: placeholders, overwritten in place by LeadsPage at fill time with
   // whatever was actually selected live — same reasoning as
   // LeadCustomFieldData.pickList/multiPickList above.
@@ -65,6 +75,7 @@ export function generateLeadRequirementData(
   overrides: Partial<LeadRequirementData> = {}
 ): LeadRequirementData {
   return {
+    requirementName: faker.lorem.sentence(),
     productsOrServices: [],
     currency: '',
     budget: faker.number.int({ min: 1000, max: 1000000 }),
@@ -194,6 +205,20 @@ export interface LeadData {
   companyState: string;
   companyZipcode: string;
   companyCountry: string;
+  // WHY: placeholders, overwritten in place by LeadsPage.fillLeadForm() with
+  // whichever live option was actually selected — same pattern as
+  // salutation/campaign/source above. Country specifically may also end up
+  // populated by a successful GPS address selection rather than an explicit
+  // random pick — confirmed live (2026-07-16) that a real GPS-selected
+  // address auto-fills Country, so this placeholder gets overwritten either
+  // way, just via a different path depending on whether GPS or the manual
+  // fallback was used.
+  timezone: string;
+  companyIndustry: string;
+  companyBusinessType: string;
+  companyEmployees: string;
+  companyAnnualRevenue: number;
+  companyWebsite: string;
   pipelineStage?: LeadPipelineStage;
   customFields: LeadCustomFieldData;
   campaignInfo: LeadCampaignData;
@@ -236,6 +261,12 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
     companyState: faker.location.state(),
     companyZipcode: faker.location.zipCode('#####'),
     companyCountry: 'India',
+    timezone: '',
+    companyIndustry: '',
+    companyBusinessType: '',
+    companyEmployees: '',
+    companyAnnualRevenue: faker.number.int({ min: 10000, max: 10000000 }),
+    companyWebsite: faker.internet.url(),
     pipelineStage: 'Open' as LeadPipelineStage,
     customFields: generateLeadCustomFieldData(customFieldOverrides),
     campaignInfo: generateLeadCampaignData(campaignInfoOverrides),
@@ -282,6 +313,12 @@ export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadDa
     companyState: faker.location.state(),
     companyZipcode: faker.location.zipCode('#####'),
     companyCountry: 'India',
+    timezone: '',
+    companyIndustry: '',
+    companyBusinessType: '',
+    companyEmployees: '',
+    companyAnnualRevenue: faker.number.int({ min: 10000, max: 10000000 }),
+    companyWebsite: faker.internet.url(),
     pipelineStage: 'Open' as LeadPipelineStage,
     customFields: generateLeadCustomFieldData(customFieldOverrides),
     campaignInfo: generateLeadCampaignData(campaignInfoOverrides),
@@ -326,6 +363,12 @@ export function generateSharedLeadData(overrides: Partial<LeadData> = {}): LeadD
     companyState: faker.location.state(),
     companyZipcode: faker.location.zipCode('#####'),
     companyCountry: 'India',
+    timezone: '',
+    companyIndustry: '',
+    companyBusinessType: '',
+    companyEmployees: '',
+    companyAnnualRevenue: faker.number.int({ min: 10000, max: 10000000 }),
+    companyWebsite: faker.internet.url(),
     pipelineStage: 'Open' as LeadPipelineStage,
     customFields: generateLeadCustomFieldData(customFieldOverrides),
     campaignInfo: generateLeadCampaignData(campaignInfoOverrides),

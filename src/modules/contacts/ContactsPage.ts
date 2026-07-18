@@ -59,7 +59,15 @@ export class ContactsPage extends BasePage {
   private readonly addPhoneButton = (): Locator =>
     this.page.getByText('Add Phone', { exact: true }).first();
 
-  private readonly phoneInput = (): Locator => this.page.locator('input[id*="input_phone_0"]');
+  // WHY: exact `name` match, not a loose `id*="input_phone_0"` substring
+  // (2026-07-16 fix) — that pattern is confirmed live to collide with any
+  // future repeatable field whose first entry also ends in "_input_phone_0"
+  // (confirmed via the identical bug in LeadsPage.ts, caused there by its
+  // new Company Phones field). Contact has no such field today, but
+  // `name="phoneNumbers[0]"` is the actual bound form field and is strictly
+  // safer at zero cost, so it's fixed here too rather than left as a latent
+  // risk for whenever Contact grows a similar field.
+  private readonly phoneInput = (): Locator => this.page.locator('input[name="phoneNumbers[0]"]');
 
   private readonly addressInput = (): Locator => this.page.locator('input[name="address"]');
 
@@ -75,6 +83,23 @@ export class ContactsPage extends BasePage {
 
   // NOTE: contacts use 'linkedin' (all lowercase) — leads use 'linkedIn'
   private readonly linkedinInput = (): Locator => this.page.locator('input[name="linkedin"]');
+
+  // WHY: confirmed live (2026-07-16) — same field/id as Lead's Timezone,
+  // sitting at the same Communication/Location DOM boundary. Company is a
+  // live async lookup (not a static picklist) against real Company records —
+  // confirmed live it requires 3+ typed characters before returning results
+  // ("Type atleast 3 characters..." shown below that threshold) and that
+  // admin vs. restricted user see genuinely different, role-scoped result
+  // sets for the identical search term.
+  private readonly timezoneControl = (): Locator =>
+    this.page
+      .locator('[id="1_22_input_timezone"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly companyInput = (): Locator => this.page.locator('[id="4_11_input_company"]');
+
+  private readonly companyControl = (): Locator =>
+    this.companyInput().locator('xpath=ancestor::div[contains(@class,"__control")]');
 
   private readonly departmentInput = (): Locator => this.page.locator('input[name="department"]');
 
@@ -514,18 +539,50 @@ export class ContactsPage extends BasePage {
     await this.click(this.addPhoneButton(), 'add phone button');
     await expect(this.phoneInput()).toBeVisible();
     await this.fill(this.phoneInput(), data.phone, 'phone');
+    // WHY: Timezone sits at the same Communication/Location DOM boundary as
+    // Lead's, filled here to match top-to-bottom form order. Mutated in
+    // place with whatever was actually selected, same reasoning as
+    // salutation/campaign/source.
+    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
     // WHY: mutate data.address in place with whatever actually ended up in
     // the field — a live GPS/autocomplete lookup when available, the
     // manual value otherwise — so later detail-page verification checks
     // reality, not the pre-fill guess. Same reasoning as PickList/Campaign
     // fields elsewhere in this method.
-    data.address = await this.fillAddressViaGpsOrManual(this.addressInput(), data.address, 'address');
+    //
+    // WHY pass the Location section container explicitly (2026-07-16
+    // hardening): Contact only has one "Get GPS Address" trigger today, but
+    // scoping to its own section keeps this robust even if a second
+    // GPS-enabled field is ever added to this form — the same helper Lead
+    // now depends on for its two triggers.
+    data.address = await this.fillAddressViaGpsOrManual(
+      this.addressInput(),
+      data.address,
+      'address',
+      this.getFormSectionContainer('Location')
+    );
     await this.fill(this.cityInput(), data.city, 'city');
     await this.fill(this.stateInput(), data.state, 'state');
     await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
     await this.fill(this.facebookInput(), data.facebook, 'facebook');
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
     await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+    // WHY: Company sits right after LinkedIn and before Department (confirmed
+    // live DOM order). A live async lookup, not a static picklist — searched
+    // and selected within THIS page's own current role/session, so the
+    // result set is naturally role-scoped without any explicit branching.
+    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+    // data.company with a known, freshly-created company name (e.g. so it
+    // can independently share that exact company too) gets that exact
+    // company selected instead of a random pick; passing '' (the default
+    // placeholder) preserves the original random-pick behavior unchanged.
+    data.company = await this.selectRandomFromSearchableReactSelect(
+      this.companyControl(),
+      this.companyInput(),
+      'com',
+      'Company',
+      data.company || undefined
+    );
     await this.fill(this.departmentInput(), data.department, 'department');
     await this.fill(this.designationInput(), data.designation, 'designation');
     // WHY: UTM fields sit below address and may be off-screen.
@@ -636,9 +693,17 @@ export class ContactsPage extends BasePage {
     await this.fill(this.page.locator('[id="1_11_input_email_0"]'), data.email, 'email');
     // WHY: Update phone — id="1_12_input_phone_0"
     await this.fill(this.page.locator('[id="1_12_input_phone_0"]'), data.phone, 'phone');
+    // WHY: Update timezone — same field/mutate-in-place reasoning as create
+    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
     // WHY: Update address fields — same GPS-or-manual mutate-in-place
-    // reasoning as fillContactForm() above.
-    data.address = await this.fillAddressViaGpsOrManual(this.addressInput(), data.address, 'address');
+    // reasoning as fillContactForm() above, including the section-scoped
+    // GPS trigger (2026-07-16 hardening).
+    data.address = await this.fillAddressViaGpsOrManual(
+      this.addressInput(),
+      data.address,
+      'address',
+      this.getFormSectionContainer('Location')
+    );
     await this.fill(this.cityInput(), data.city, 'city');
     await this.fill(this.stateInput(), data.state, 'state');
     await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
@@ -646,6 +711,19 @@ export class ContactsPage extends BasePage {
     await this.fill(this.facebookInput(), data.facebook, 'facebook');
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
     await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+    // WHY: Update company — same live, role-scoped lookup reasoning as create
+    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+    // data.company with a known, freshly-created company name (e.g. so it
+    // can independently share that exact company too) gets that exact
+    // company selected instead of a random pick; passing '' (the default
+    // placeholder) preserves the original random-pick behavior unchanged.
+    data.company = await this.selectRandomFromSearchableReactSelect(
+      this.companyControl(),
+      this.companyInput(),
+      'com',
+      'Company',
+      data.company || undefined
+    );
     // WHY: Update professional fields
     await this.fill(this.departmentInput(), data.department, 'department');
     await this.fill(this.designationInput(), data.designation, 'designation');
@@ -742,13 +820,8 @@ export class ContactsPage extends BasePage {
     return contactId;
   }
 
-  // WHY: Confirmed live (Deals module investigation) — a substring hasText
-  // match against a user/entity search dropdown can select the wrong option
-  // whenever a similarly-named entity exists. Always anchor-match the exact
-  // text when selecting among multiple options by name.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async shareContact(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing contact with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
@@ -1040,13 +1113,19 @@ export class ContactsPage extends BasePage {
     await expect(this.page.locator('body')).toContainText(data.lastName, { timeout: 5000 });
     // WHY: Same tab pattern as LeadsPage.assertDetailTabContent()
     const tabPane = this.page.locator('.tab-pane.active.show');
-    // WHY: Verify Communication tab — email, phone
+    // WHY: Verify Communication tab — email, phone, timezone
     await this.page.locator('#nav-tab0-tab').click();
     await this.page.waitForTimeout(800);
     const tab0Text = (await tabPane.textContent() ?? '').toLowerCase();
     expect(tab0Text).toContain(data.email.toLowerCase());
     expect(tab0Text).toContain(data.phone);
-    logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone}`);
+    // WHY: confirmed live (2026-07-17) via direct DOM inspection of a fresh
+    // contact's detail page — Timezone renders on this same Communication
+    // tab, container id "timezone", same as Lead's equivalent field.
+    if (data.timezone) {
+      expect(tab0Text).toContain(data.timezone.toLowerCase());
+    }
+    logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone} | timezone: ${data.timezone}`);
     // WHY: Verify Location tab — address, city, state, zipcode
     await this.page.locator('#nav-tab1-tab').click();
     await this.page.waitForTimeout(800);
@@ -1070,13 +1149,18 @@ export class ContactsPage extends BasePage {
     expect(tab2Text).toContain(data.twitter.toLowerCase());
     expect(tab2Text).toContain(data.linkedin.toLowerCase());
     logger.debug(`Social tab — facebook: ${data.facebook} | twitter: ${data.twitter} | linkedin: ${data.linkedin}`);
-    // WHY: Verify Professional tab — department, designation
+    // WHY: Verify Professional tab — department, designation, company
     await this.page.locator('#nav-tab3-tab').click();
     await this.page.waitForTimeout(800);
     const tab3Text = (await tabPane.textContent() ?? '').toLowerCase();
     expect(tab3Text).toContain(data.department.toLowerCase());
     expect(tab3Text).toContain(data.designation.toLowerCase());
-    logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation}`);
+    // WHY: confirmed live (2026-07-17) via direct DOM inspection — Company
+    // renders on this same Professional tab, container id "company".
+    if (data.company) {
+      expect(tab3Text).toContain(data.company.toLowerCase());
+    }
+    logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation} | company: ${data.company}`);
     // WHY: Salutation appears in page header/name area — assert in body text
     if (data.salutation) {
       await expect(this.page.locator('body')).toContainText(data.salutation, { timeout: 5000 });
