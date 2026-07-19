@@ -886,9 +886,13 @@ export class CompaniesPage extends BasePage {
     await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
+    // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
+    // no /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
     const quotationIdPromise = this.page.waitForResponse(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -1079,9 +1083,13 @@ export class CompaniesPage extends BasePage {
       await designationInput.fill(contactData.designation);
     }
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
+    // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
+    // /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
     const contactIdPromise = this.page.waitForResponse(
       (res) =>
         res.url().includes('/v1/contacts') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -1172,9 +1180,13 @@ export class CompaniesPage extends BasePage {
     if (await designationInputE.isVisible().catch(() => false)) {
       await designationInputE.fill(contactData.designation);
     }
+    // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
+    // /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
     const contactIdPromise = this.page.waitForResponse(
       (res) =>
         res.url().includes('/v1/contacts') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -1220,9 +1232,18 @@ export class CompaniesPage extends BasePage {
       }
     }
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
+    // WHY: hardened 2026-07-19 — this exact `.includes('/deals')` substring is
+    // the SAME pattern already confirmed live (2026-07-16) to collide with an
+    // unrelated `/v4/reports/deals?...` background analytics POST when
+    // DealsPage's own captureDealIdFromResponse() had this shape — this inline
+    // copy was never updated when that one was fixed. Highest-risk of the
+    // ID-capture gaps found in this audit; not independently re-reproduced
+    // here, but the collision mechanism is already proven, just on a
+    // different call site with the identical predicate.
     const dealIdPromise = this.page.waitForResponse(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -1264,9 +1285,12 @@ export class CompaniesPage extends BasePage {
         logger.debug('Estimated value filled: 50000');
       }
     }
+    // WHY: hardened 2026-07-19 — same proven '/v4/reports/deals' collision
+    // pattern as the sibling dealIdPromise above; fixed identically.
     const dealIdPromise = this.page.waitForResponse(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -1298,9 +1322,13 @@ export class CompaniesPage extends BasePage {
     await editor.click();
     await editor.fill(taskName);
     // WHY: Set up response listener BEFORE clicking save
+    // WHY: hardened 2026-07-19 — bare '/v1/tasks' substring had no /reports/
+    // exclusion, same bug class found across the codebase's other ID-capture
+    // methods; fixed as defense-in-depth.
     const taskIdPromise = this.page.waitForResponse(
       (res) =>
         res.url().includes('/v1/tasks') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }

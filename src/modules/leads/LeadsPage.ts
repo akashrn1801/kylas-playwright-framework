@@ -686,9 +686,21 @@ export class LeadsPage extends BasePage {
     try {
       const response = await this.page.waitForResponse(
         (res) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class already fixed
+          // in DealsPage/CompaniesPage/Deals' quotation-panel flow: a bare
+          // `.includes('/v1/leads')` substring with no `/reports/` exclusion
+          // and no 201 acceptance. 7 live reproductions (fresh page load,
+          // tight timing matching this test's own flow) found NO endpoint
+          // that actually collides with this substring for Leads — unlike the
+          // confirmed Deals/Companies cases, no live race was reproduced here.
+          // Hardening applied anyway as defense-in-depth (zero downside, same
+          // established shape) since the reported CI flake's true mechanism
+          // remains unconfirmed — do not read this comment as claiming a
+          // confirmed collision the way the Deals/Companies ones are.
           res.url().includes('/v1/leads') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
+          (res.status() === 200 || res.status() === 201),
         {
           timeout: config.timeouts.navigation,
         }
