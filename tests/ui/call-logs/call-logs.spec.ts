@@ -1,5 +1,6 @@
 import { test } from '../../../src/fixtures/index';
 import { expect } from '@playwright/test';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { CallLogsPage } from '../../../src/modules/call-logs/CallLogsPage';
 import {
   generateCallLogData,
@@ -252,9 +253,11 @@ test.describe('Call Logs', () => {
     const toastLink = callLogsPage['toasterCallLogIdLink']();
     await toastLink.waitFor({ state: 'visible', timeout: 10000 });
     await toastLink.click();
-    await adminPage.waitForURL(new RegExp(`/sales/calls/list\\?id=${callLogId}`), {
-      timeout: config.timeouts.navigation,
-    });
+    await safeWaitForURL(
+      adminPage,
+      new RegExp(`/sales/calls/list\\?id=${callLogId}`),
+      config.timeouts.navigation
+    );
     expect(adminPage.url()).toContain(`?id=${callLogId}`);
     logger.info(`Navigated to: ${adminPage.url()}`);
     logger.success('CL11 passed');

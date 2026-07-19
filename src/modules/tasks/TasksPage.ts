@@ -128,7 +128,11 @@ export class TasksPage extends BasePage {
   // over /sales/tasks/list?id={id}. This is the canonical wait for that URL
   // shape, mirroring waitForXDetailsPage() in the other modules.
   async waitForTaskDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/tasks\/list\?.*id=/, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/tasks\/list\?.*id=/, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     await this.page
       .waitForResponse(

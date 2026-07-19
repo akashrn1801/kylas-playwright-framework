@@ -341,7 +341,7 @@ export class QuotationsPage extends BasePage {
   // from /v1/quotations/{id} — causing the edit modal to open with disabled fields or
   // failing entirely when the session is under load. Mirrors waitForContactDetailsPage.
   private async waitForQuotationDetailPage(): Promise<void> {
-    await this.page.waitForURL(/\/quotations\/details\//, { timeout: 20000 });
+    await this.waitForUrl(/\/quotations\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Await the GET /v1/quotations/{id} API response — React depends on this to
     // populate the edit form. If it returns 404, fail fast instead of waiting for timeout.
@@ -556,7 +556,7 @@ export class QuotationsPage extends BasePage {
       { timeout: 20000 }
     ).catch(() => null);
     await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
-    await this.page.waitForURL(/\/quotations\/details\//, { timeout: 20000 });
+    await this.waitForUrl(/\/quotations\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     const response = await responsePromise;
     if (response?.status() === 404) {
@@ -1265,7 +1265,7 @@ export class QuotationsPage extends BasePage {
       // WHY: ID-first navigation — go directly to detail URL, no search needed
       logger.info(`ID-first navigation to quotation: ${id}`);
       await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
-      await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
+      await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
       const urlId = await this.captureIdFromUrl();
       if (urlId) id = urlId;
       logger.success(`Navigated to quotation detail: ${id}`);
@@ -1288,7 +1288,7 @@ export class QuotationsPage extends BasePage {
       if (firstNonEmptyIndex !== -1) {
         await allRows.nth(firstNonEmptyIndex).click();
       }
-      await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
+      await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
       id = await this.captureIdFromUrl();
       logger.info(`Captured ID: ${id}`);
       await this.goToQuotationsList();
@@ -1311,7 +1311,7 @@ export class QuotationsPage extends BasePage {
     await this.page.waitForTimeout(2000);
     await this.performSearch(data.summary);
     await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
-    await this.page.waitForURL(/\/quotations\/details\/\d+/, { timeout: 15000 });
+    await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
     const id = await this.captureIdFromUrl();
     await this.goToQuotationsList();
     logger.success(`Quotation created with owner: ${data.quotationNumber} (deal: ${dealName})`);

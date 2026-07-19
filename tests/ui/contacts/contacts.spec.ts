@@ -1,4 +1,5 @@
 import { test, expect } from '../../../src/fixtures/index';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
@@ -219,7 +220,7 @@ test.describe('Contacts', () => {
       `${config.appUrl}/sales/contacts/details/${contactId}`,
       { waitUntil: 'domcontentloaded' }
     );
-    await adminPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
+    await safeWaitForURL(adminPage, /contacts\/details\//, 20000);
     await contactsPage.assertOnContactDetailPage();
     logger.success('C12 passed');
   });
@@ -369,13 +370,13 @@ test.describe('Contacts', () => {
       dealEntry.click(),
     ]);
     await newTab.waitForLoadState('domcontentloaded');
-    await newTab.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await safeWaitForURL(newTab, /deals\/details\//, 20000);
     // WHY: Verify contact name appears on deal detail page
     await expect(newTab.locator('body')).toContainText(contactData.firstName, { timeout: 10000 });
     logger.success(`Deal detail verified — contact name "${contactData.firstName}" found on deal page`);
     // WHY: Close new tab and return to contact detail
     await newTab.close();
-    await adminPage.waitForURL(/contacts\/details\//, { timeout: 10000 });
+    await safeWaitForURL(adminPage, /contacts\/details\//, 10000);
     logger.success(`C15 passed — deal with pipeline, product and payment created and verified: ${dealId}`);
   });
 

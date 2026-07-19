@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import {
   generateDealData,
@@ -229,7 +230,7 @@ test.describe('Deals RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+    await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
     logger.info('On deal details page');
 
     // Step 4 — Verify Company Owner via modal
@@ -329,7 +330,7 @@ test.describe('Deals RBAC', () => {
     });
 
     try {
-      await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+      await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
       // Page loaded — verify edit button is NOT visible
       const editBtn = restrictedPage.locator('#edit-action-btn');
       const editBtnVisible = await editBtn.isVisible();

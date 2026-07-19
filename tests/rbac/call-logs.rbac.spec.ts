@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import {
@@ -297,9 +298,11 @@ test.describe('Call Logs — RBAC', () => {
       // click; bound the click so a vanished toast fails fast with a clear
       // error instead of hanging until the whole test's timeout.
       await toastLink.click({ timeout: 10000 });
-      await restrictedPage.waitForURL(new RegExp(`/sales/calls/list\\?id=${callLogId}`), {
-        timeout: config.timeouts.navigation,
-      });
+      await safeWaitForURL(
+        restrictedPage,
+        new RegExp(`/sales/calls/list\\?id=${callLogId}`),
+        config.timeouts.navigation
+      );
       const currentUrl = restrictedPage.url();
       expect(currentUrl).toContain(`?id=${callLogId}`);
       logger.info(`Restricted user navigated to: ${currentUrl}`);

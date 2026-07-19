@@ -422,9 +422,11 @@ export class LeadsPage extends BasePage {
   }
 
   async waitForLeadDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/leads\/details\//, {
-      timeout: 20000,
-    });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/leads\/details\//, 20000);
 
     await this.page.waitForLoadState('domcontentloaded');
 

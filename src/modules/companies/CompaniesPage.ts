@@ -241,7 +241,11 @@ export class CompaniesPage extends BasePage {
   }
 
   async waitForCompanyDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/companies\/details\//, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/companies\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for company GET API response — ensures React has companyId in state
     // Without this, share/edit fires before app resolves companyId → /companies/undefined/share

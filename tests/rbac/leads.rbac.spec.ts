@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import {
   generateLeadData,
@@ -81,7 +82,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.openEllipsisMenu();
     await restrictedLeadsPage.assertEllipsisOptionNotVisible('Delete');
@@ -110,7 +111,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Update permission — edit button visible
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
@@ -124,7 +125,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.openEllipsisMenu();
     await restrictedLeadsPage.assertEllipsisOptionNotVisible('Delete');
@@ -152,7 +153,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     // WHY: Wait for page to fully load and permissions to apply
     await restrictedPage.waitForTimeout(3000);
     // WHY: Verify page loaded correctly — check URL still on lead details
@@ -197,7 +198,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
@@ -242,7 +243,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Read only — productivity icons should NOT be visible
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Notes');
@@ -279,7 +280,7 @@ test.describe('Leads RBAC', () => {
     // app's own client-side route guard hadn't yet seen the propagated
     // permission. Use the same generous, polling window instead of a hardcoded
     // 20000ms + a wasted flat sleep.
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: config.timeouts.navigation });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, config.timeouts.navigation);
     // WHY: Update permission — edit button should be visible
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({
       timeout: config.timeouts.navigation,
@@ -317,7 +318,7 @@ test.describe('Leads RBAC', () => {
     // if this restricted-user session's route guard hadn't yet seen the
     // propagated share. Generous polling window, same as
     // assertRightPanelIconVisible()'s own established fix for this exact lag.
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: config.timeouts.navigation });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, config.timeouts.navigation);
     // WHY: Note permission — Notes icon should be visible in right panel
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.clickRightPanelIcon('Notes');
@@ -343,7 +344,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
@@ -369,7 +370,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Meetings');
     await restrictedLeadsPage.clickRightPanelIcon('Meetings');
@@ -411,7 +412,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedLeadsPage.clickRightPanelIcon('Call Logs');
@@ -473,7 +474,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
@@ -528,7 +529,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
 
     // WHY: Verify Call — click Call Logs icon first, then Log a call button
@@ -588,7 +589,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Verify edit button visible — restricted user is now owner
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
@@ -603,7 +604,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Delete lead — deleteLead() opens ellipsis and clicks Delete internally
     await restrictedLeadsPage.deleteLead();
@@ -780,7 +781,7 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(3000);
     // WHY: Click Notes icon to open notes panel
     await restrictedPage

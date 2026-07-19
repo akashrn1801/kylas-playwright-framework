@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
 import { isSignInUrl, tryRecoverSessionForPage } from '../auth/authManager';
+import { safeWaitForURL } from '../utils/navigation';
 
 export class BasePage {
   protected page: Page;
@@ -291,20 +292,18 @@ export class BasePage {
   }
 
   async waitForUrl(
-    urlPattern: string | RegExp,
+    urlPattern: string | RegExp | ((url: URL) => boolean),
     timeout = config.timeouts.navigation
   ): Promise<void> {
     logger.info(`Waiting for URL: ${urlPattern}`);
-    // WHY: Confirmed live (2026-07-07) — Playwright's waitForURL defaults to
-    // waitUntil: 'load' when not specified, which waits for EVERY resource on
-    // the page (images, third-party embeds/chat-widget iframes, analytics
-    // beacons) to finish, not just the URL changing. Under real-world load
-    // this occasionally exceeds even a 60s timeout despite the navigation
-    // having functionally succeeded already. Every other navigation-wait in
-    // this codebase (waitForXDetailsPage() etc.) already uses
-    // domcontentloaded for exactly this reason — bring this shared helper in
-    // line with that established, proven convention.
-    await this.page.waitForURL(urlPattern, { timeout, waitUntil: 'domcontentloaded' });
+    // WHY: delegates to the shared safeWaitForURL() utility (2026-07-19) —
+    // see src/utils/navigation.ts for the full history of why this exists and
+    // why nothing in this codebase should ever call page.waitForURL()
+    // directly. This was the FIRST place this bug class was fixed
+    // (2026-07-07); it's now the canonical entry point every BasePage
+    // subclass uses, and non-BasePage code (globalSetup.ts, authManager.ts,
+    // fixtures/index.ts) calls safeWaitForURL() directly for the same reason.
+    await safeWaitForURL(this.page, urlPattern, timeout);
   }
 
   // ─── Assertion Helpers ────────────────────────────────────

@@ -297,7 +297,11 @@ export class DealsPage extends BasePage {
   }
 
   async waitForDealDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/deals\/details\//, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/deals\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
 
     // WHY: Wait for deal GET API response — ensures React has dealId in state
@@ -1244,7 +1248,7 @@ export class DealsPage extends BasePage {
     // WHY: Wait for one of the two real terminal signals — redirected away or
     // an error toast shown — instead of a blind sleep before checking.
     await Promise.race([
-      this.page.waitForURL((url) => !detailUrlPattern.test(url.toString()), { timeout: 10000 }).catch(() => null),
+      this.waitForUrl((url) => !detailUrlPattern.test(url.toString()), 10000).catch(() => null),
       errorToast.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
     ]);
     const isRedirected = !detailUrlPattern.test(this.page.url());

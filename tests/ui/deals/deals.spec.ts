@@ -1,4 +1,5 @@
 import { test, expect } from '../../../src/fixtures/index';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateDealData,
@@ -122,7 +123,7 @@ test.describe('Deals', () => {
       await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
         waitUntil: 'domcontentloaded',
       });
-      await adminPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+      await safeWaitForURL(adminPage, /deals\/details\//, config.timeouts.navigation);
     } else {
       // WHY: dealId capture failed — use search to find and open the deal
       await dealsPage.searchAndOpenDeal(dealData.name);
@@ -248,7 +249,7 @@ test.describe('Deals', () => {
     await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await safeWaitForURL(adminPage, /deals\/details\//, 20000);
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');
   });

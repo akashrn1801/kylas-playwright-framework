@@ -1,6 +1,7 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config } from '../../config/config';
 import { logger } from '../utils/logger';
+import { safeWaitForURL } from '../utils/navigation';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -181,9 +182,18 @@ export class AuthManager {
       });
 
       try {
-        await page.waitForURL(/sales\//, {
-          timeout: 10000,
-        });
+        // WHY: migrated 2026-07-19 to safeWaitForURL() — this was a bare
+        // waitForURL() defaulting to 'load'. This method is called from
+        // getContextForRole() on every cache-miss (see that method's own
+        // call site) — CI evidence (2026-07-19, sandbox run 29673393047,
+        // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
+        // setting up 'adminPage'/'restrictedPage'" fixture failures with a
+        // clean signal (zero backend-connectivity noise in the same run),
+        // strongly implicating this exact call: a 'load' hang here can
+        // falsely report a valid session as invalid, forcing a full
+        // re-login under file-lock contention that can cascade past the
+        // 120s fixture-setup budget.
+        await safeWaitForURL(page, /sales\//, 10000);
       } catch {
         logger.warn('Did not redirect to sales page');
         return false;

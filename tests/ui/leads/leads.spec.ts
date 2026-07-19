@@ -1,4 +1,5 @@
 import { test, expect } from '../../../src/fixtures/index';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import {
   generateLeadData,
@@ -63,7 +64,7 @@ test.describe('Leads', () => {
     await adminPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await adminPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(adminPage, /leads\/details\//, 20000);
 
     // WHY: Verify pipeline stage is shown correctly on details page
     await leadsPage.assertPipelineStageOnDetails('Open');
@@ -103,7 +104,7 @@ test.describe('Leads', () => {
     await adminPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await adminPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(adminPage, /leads\/details\//, 20000);
     await leadsPage.assertPipelineStageOnDetails(newStage);
     logger.success('L5 passed');
   });
@@ -136,7 +137,7 @@ test.describe('Leads', () => {
     await adminPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await adminPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await safeWaitForURL(adminPage, /leads\/details\//, 20000);
     // WHY: Verify Communication tab fields
     await leadsPage.assertDetailTabContent('nav-tab0-tab', [leadData.email]);
     // WHY: Verify Location tab fields
