@@ -186,7 +186,18 @@ export class MeetingsPage extends BasePage {
   private async captureIdFromResponse(): Promise<number | null> {
     try {
       const response = await this.page.waitForResponse(
-        (res: Response) => res.url().includes('/v1/meetings') && res.request().method() === 'POST',
+        (res: Response) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class as
+          // LeadsPage/ContactsPage/DealsPage/CompaniesPage: bare
+          // `.includes('/v1/meetings')` with no `/reports/` exclusion — and
+          // this one was worse, with no status-code check at all, so it could
+          // have matched a failed (4xx/5xx) response too. Not independently
+          // live-reproduced for Meetings; fixed as defense-in-depth since it
+          // shares the identical vulnerable shape.
+          res.url().includes('/v1/meetings') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST' &&
+          (res.status() === 200 || res.status() === 201),
         { timeout: 15000 }
       );
       const body = await response.json();
