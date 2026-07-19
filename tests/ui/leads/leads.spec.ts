@@ -2,6 +2,7 @@ import { test, expect } from '../../../src/fixtures/index';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import {
   generateLeadData,
+  generateAdminLeadData,
   generateLeadCustomFieldData,
   generateLeadCustomFieldInvalidTextField,
   generateLeadCustomFieldInvalidParagraphText,
@@ -159,7 +160,6 @@ test.describe('Leads', () => {
     test.setTimeout(480000);
     const leadsPage = new LeadsPage(adminPage);
     // WHY: Use ADM prefix to guarantee uniqueness — only this test creates this lead
-    const { generateAdminLeadData } = await import('../../../src/data/factories/leadFactory');
     const leadData = generateAdminLeadData();
     await leadsPage.goToLeadsList();
     const leadId = await leadsPage.createLead(leadData);
@@ -322,7 +322,10 @@ test.describe('Leads', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
@@ -341,7 +344,10 @@ test.describe('Leads', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     const updatedData = generateLeadData();
@@ -350,7 +356,12 @@ test.describe('Leads', () => {
     // WHY: updateLead() leaves the browser on the same lead detail page
     // (edit is an in-place modal, not a route change) — no re-navigation needed.
     await leadsPage.assertLeadCustomFieldsOnDetail(updatedData);
-    await leadsPage.assertLeadStandardFieldsOnDetail(updatedData);
+    // WHY: assertCreateOnlyFields=false — Timezone/Country/Professional fields
+    // are filled only by fillLeadForm() (create), not fillEditForm() (update),
+    // so updatedData carries un-applied factory defaults for them on this path
+    // (see assertLeadStandardFieldsOnDetail's own comment). Salutation,
+    // Requirement, Products/Currency/Budget ARE updated and still asserted.
+    await leadsPage.assertLeadStandardFieldsOnDetail(updatedData, false);
     logger.success('L18 passed');
   });
 
@@ -414,6 +425,11 @@ test.describe('Leads', () => {
       logger.info(`Negative custom field case: ${testCase.description}`);
       await leadsPage.goToLeadsList();
       await leadsPage.clickAddLead();
+      // WHY: cheap, harmless no-op when fields are present (a handful of
+      // DOM count() queries) — checked every iteration rather than only the
+      // first for simplicity, since a skip on any iteration ends the test
+      // immediately anyway.
+      await leadsPage.skipIfCustomFieldsAbsent();
 
       const leadData = generateLeadData({
         customFields: generateLeadCustomFieldData(testCase.customFieldOverrides),

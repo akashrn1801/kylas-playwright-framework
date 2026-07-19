@@ -341,12 +341,11 @@ export class CallLogsPage extends BasePage {
     await this.page.waitForTimeout(500);
     const options = this.page.locator('.is-invalid__option');
     await options.first().waitFor({ state: 'visible', timeout: 5000 });
-    const count = await options.count();
-    const idx = Math.floor(Math.random() * count);
-    const selectedText = (await options.nth(idx).textContent()) ?? '';
-    await options.nth(idx).click({ force: true });
-    logger.success(`Selected random "${description}": ${selectedText.trim()}`);
-    return selectedText.trim();
+    // WHY: shared bounded+re-roll selector (2026-07-17), force click as before —
+    // was an unbounded textContent()+click() on a random option, same bug class.
+    return await this.selectRandomOptionWithRetry(options, `Selected random "${description}"`, {
+      force: true,
+    });
   }
 
   // WHY: Multi-select React Select — open, select one or two random options
@@ -534,8 +533,33 @@ export class CallLogsPage extends BasePage {
     // navigate toward the target relative to that.
     const targetMonthKey = date.getFullYear() * 12 + date.getMonth();
     while (!found && attempts < 24) {
-      const visibleMonthKeys: number[] = await this.page.evaluate(() =>
-        Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+      // WHY: confirmed live (2026-07-16 root-cause pass, same fix ported
+      // from BasePage.selectDateCustomField()) — react-dates keeps THREE
+      // months' worth of `td[aria-label]` cells in the DOM simultaneously
+      // (the visible month(s) plus a pre-rendered buffer month for smooth
+      // transitions), but only the ones inside the picker's own clipped,
+      // visible bounds are real. Querying ALL cells with no visibility
+      // filter made minVisibleMonth/maxVisibleMonth span a wider range than
+      // what was actually clickable, causing the direction decision below to
+      // be wrong often enough to exhaust all 24 attempts without
+      // converging. Filtering to cells whose bounding rect falls inside the
+      // picker container's rect fixes the root cause.
+      const visibleMonthKeys: number[] = await this.page.evaluate(() => {
+        const container = document.querySelector(
+          '[class*="SingleDatePicker_picker"]'
+        ) as HTMLElement | null;
+        const containerRect = container?.getBoundingClientRect() ?? null;
+        return Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+          .filter((cell) => {
+            if (!containerRect) return true;
+            const r = cell.getBoundingClientRect();
+            return (
+              r.width > 0 &&
+              r.height > 0 &&
+              r.left >= containerRect.left - 5 &&
+              r.right <= containerRect.right + 5
+            );
+          })
           .map((cell) => {
             // WHY: strip status prefixes like "Selected. "/"Not available. "
             // before parsing — otherwise those cells are silently dropped.
@@ -545,8 +569,8 @@ export class CallLogsPage extends BasePage {
               ? parsed.getFullYear() * 12 + parsed.getMonth()
               : null;
           })
-          .filter((v): v is number => v !== null)
-      );
+          .filter((v): v is number => v !== null);
+      });
       const backButton = this.page.getByLabel('Move backward to switch to the previous month.');
       const backVisible = await backButton.isVisible().catch(() => false);
       const forwardVisible = await this.calendarForwardButton().isVisible().catch(() => false);
@@ -831,8 +855,13 @@ export class CallLogsPage extends BasePage {
       await menu.waitFor({ state: 'visible', timeout: 8000 });
       const option = menu.locator('.is-invalid__option').first();
       await option.waitFor({ state: 'visible', timeout: 5000 });
-      const phoneText = await option.textContent();
-      await option.click();
+      // WHY: bound the read+click to 15000ms (2026-07-17) — this selects the
+      // FIRST phone option (not random, so no re-roll needed), but an unbounded
+      // textContent()/click() could still ride the 480s test timeout if the
+      // option detaches mid-action. Bounding keeps it failing fast, consistent
+      // with the shared selectRandomOptionWithRetry() helper.
+      const phoneText = await option.textContent({ timeout: 15000 });
+      await option.click({ timeout: 15000 });
       await this.page.waitForTimeout(300);
       logger.success(`Phone number selected: ${phoneText?.trim()}`);
     } else {

@@ -95,7 +95,22 @@ export class LeadsPage extends BasePage {
   private readonly addPhoneButton = (): Locator =>
     this.page.getByText('Add Phone', { exact: true }).first();
 
-  private readonly phoneInput = (): Locator => this.page.locator('input[id*="input_phone_0"]');
+  // WHY: exact `name` match, not a loose `id*="input_phone_0"` substring
+  // (2026-07-16 fix, root-caused live) — that substring pattern collided with
+  // a since-removed "Company Phones" field's first entry (`4_52_input_phone_0`),
+  // which shared the same "_input_phone_0" suffix. Once a lead had a saved
+  // Company Phones value, both inputs coexisted in the DOM simultaneously on
+  // any form that pre-fills existing data (Edit, Clone) — confirmed live via
+  // `input[id*="input_phone_0"]` throwing a real Playwright strict-mode
+  // violation ("resolved to 2 elements") the moment both fields had values,
+  // which broke `cloneLead()`'s phone-uniqueness-fix step (it silently never
+  // updated the real primary phone, so every clone failed against the CRM's
+  // duplicate-phone validation). Company Phones itself was removed rather
+  // than kept alongside this fix, but `name="phoneNumbers[0]"` — the actual
+  // bound form field for the primary phone — is kept regardless: it's
+  // strictly safer than the substring match at zero cost, and protects
+  // against the same class of collision from any future repeatable field.
+  private readonly phoneInput = (): Locator => this.page.locator('input[name="phoneNumbers[0]"]');
 
   private readonly addressInput = (): Locator => this.page.locator('input[name="address"]');
 
@@ -127,6 +142,53 @@ export class LeadsPage extends BasePage {
 
   private readonly companyZipcodeInput = (): Locator =>
     this.page.locator('input[name="companyZipcode"]');
+
+  // ── Timezone (Communication/Location boundary) / Country (Location) ─────
+  // WHY: confirmed live (2026-07-16) — both are single-select react-selects,
+  // located by their own confirmed input id, ancestor `__control` div clicked
+  // to open (same pattern as pipeline/campaign/source controls elsewhere in
+  // this file).
+  private readonly timezoneControl = (): Locator =>
+    this.page
+      .locator('[id="1_22_input_timezone"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly countryControl = (): Locator =>
+    this.page
+      .locator('[id="2_31_input_country"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  // ── Professional section — newly added fields (2026-07-16) ──────────────
+  // WHY: Company Industry/Business Type/Company Employees are react-selects
+  // (confirmed live, same interaction pattern as timezone/country above).
+  // Company Annual Revenue is a plain `type="number"` input — confirmed live
+  // to be the exact same pattern as the existing Requirement section's
+  // Budget field, not a react-select. Company Website is a plain text input
+  // (its `type` attribute is null, NOT a native type="url") but confirmed
+  // live to show the identical "Enter a valid URL" inline validation message
+  // as the custom UrlField on blur with a malformed value — so a real,
+  // well-formed URL string is all that's needed here, no special-cased fill
+  // logic required despite the different underlying input type.
+  private readonly companyIndustryControl = (): Locator =>
+    this.page
+      .locator('[id="4_31_input_companyIndustry"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly companyBusinessTypeControl = (): Locator =>
+    this.page
+      .locator('[id="4_32_input_companyBusinessType"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly companyEmployeesControl = (): Locator =>
+    this.page
+      .locator('[id="4_41_input_companyEmployees"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly companyAnnualRevenueInput = (): Locator =>
+    this.page.locator('[id="4_42_input_companyAnnualRevenue"]');
+
+  private readonly companyWebsiteInput = (): Locator =>
+    this.page.locator('[id="4_51_input_companyWebsite"]');
 
   // ── Campaign Information ────────────────────────────────────
   // WHY: confirmed live (2026-07-08) — Campaign and Source are react-select
@@ -165,6 +227,14 @@ export class LeadsPage extends BasePage {
   // default option list, and clearing existing chips reliably repopulates
   // the menu with whatever was just freed up — so the same generic
   // selectRandomFromMultiValueReactSelect() helper applies unmodified.
+  // WHY: confirmed live (2026-07-16) — a genuine, separate plain text field
+  // labeled "Requirement", distinct from the section's own h2 heading and
+  // from Products/Currency/Budget below. It's actually the FIRST field in
+  // the section (id `5_11_...`, vs Products' `5_21_...`), filled first to
+  // match DOM order.
+  private readonly requirementNameInput = (): Locator =>
+    this.page.locator('[id="5_11_input_requirementName"]');
+
   private readonly productsControl = (): Locator =>
     this.page
       .locator('[id="5_21_input_products"]')
@@ -519,6 +589,8 @@ export class LeadsPage extends BasePage {
   private async fillLeadRequirement(data: LeadData): Promise<void> {
     const req = data.requirement;
 
+    await this.fill(this.requirementNameInput(), req.requirementName, 'requirement');
+
     const products = await this.selectRandomFromMultiValueReactSelect(
       this.productsControl(),
       'Products or Services'
@@ -761,11 +833,46 @@ export class LeadsPage extends BasePage {
     await this.page.waitForTimeout(500);
     await this.fill(this.phoneInput(), data.phone, 'phone');
 
-    await this.fill(this.addressInput(), data.address, 'address');
+    // WHY: Timezone sits at the tail of the Communication section, right
+    // before Location begins (confirmed live 2026-07-16 DOM order) — filled
+    // here to match the form's own top-to-bottom order, same convention as
+    // every other field in this method. Mutated in place with whatever was
+    // actually selected, same reasoning as salutation/campaign/source.
+    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
+
+    // WHY: GPS-or-manual fill for Lead's OWN address (Location section) —
+    // scoped to the Location section container so this doesn't collide with
+    // Professional's separate Company Address GPS trigger (confirmed live
+    // Lead's form has two identically-labeled "Get GPS Address" triggers).
+    // Mutates data.address in place, same reasoning as Contact's identical
+    // call site.
+    data.address = await this.fillAddressViaGpsOrManual(
+      this.addressInput(),
+      data.address,
+      'address',
+      this.getFormSectionContainer('Location')
+    );
 
     await this.fill(this.cityInput(), data.city, 'city');
 
     await this.fill(this.stateInput(), data.state, 'state');
+
+    // WHY: Country must be filled AFTER address (GPS or manual) — confirmed
+    // live a successful GPS selection auto-populates Country for free, but
+    // the manual-fallback path does not, so an explicit random selection is
+    // still needed in that case. Detecting "already has a value" via the
+    // react-select's own `__single-value` class (vs. the `__placeholder`
+    // class shown before anything is selected) avoids overwriting a real
+    // GPS-derived country with an unrelated random one.
+    const countrySingleValue = this.countryControl().locator('[class*="__single-value"]');
+    const countryAlreadySet = await countrySingleValue.isVisible().catch(() => false);
+    if (countryAlreadySet) {
+      const gpsCountry = (await countrySingleValue.innerText()).trim();
+      data.country = gpsCountry;
+      logger.info(`Country already auto-populated by GPS address selection: ${gpsCountry}`);
+    } else {
+      data.country = await this.selectRandomFromSingleReactSelect(this.countryControl(), 'Country');
+    }
 
     await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
 
@@ -780,6 +887,33 @@ export class LeadsPage extends BasePage {
     await this.fill(this.departmentInput(), data.department, 'department');
 
     await this.fill(this.designationInput(), data.designation, 'designation');
+
+    // WHY: Company Industry/Business Type/Company Employees fill here, right
+    // after Designation and before Company Address — confirmed live DOM
+    // order (2026-07-16). Mutated in place, same reasoning as every other
+    // react-select in this method.
+    data.companyIndustry = await this.selectRandomFromSingleReactSelect(
+      this.companyIndustryControl(),
+      'Company Industry'
+    );
+
+    data.companyBusinessType = await this.selectRandomFromSingleReactSelect(
+      this.companyBusinessTypeControl(),
+      'Business Type'
+    );
+
+    data.companyEmployees = await this.selectRandomFromSingleReactSelect(
+      this.companyEmployeesControl(),
+      'Company Employees'
+    );
+
+    await this.fill(
+      this.companyAnnualRevenueInput(),
+      String(data.companyAnnualRevenue),
+      'company annual revenue'
+    );
+
+    await this.fill(this.companyWebsiteInput(), data.companyWebsite, 'company website');
 
     await this.fill(this.companyAddressInput(), data.companyAddress, 'company address');
 
@@ -960,9 +1094,40 @@ export class LeadsPage extends BasePage {
   async saveEditedLead(): Promise<void> {
     logger.info('Saving updated lead');
 
+    // WHY: confirmed live (2026-07-15) via a real root-cause investigation —
+    // this method previously had NO network wait at all, only a client-side
+    // "no error toast" check and a modal-hidden check, both satisfiable
+    // before the actual PUT /v1/leads/{id} request finishes persisting
+    // server-side. A caller's immediately-following search (assertLeadExistsInList
+    // → retryFindLead) could race the real database write and exhaust all
+    // configured search retries despite the update having genuinely
+    // succeeded moments later — reproduced live: "admin shares lead with
+    // Update permission and restricted user can edit lead" failed this way
+    // twice in one session. Live network capture confirmed the actual
+    // endpoint: PUT https://.../v1/leads/{id} -> 200. Capture and await it
+    // BEFORE declaring success, mirroring saveLead()'s
+    // captureLeadIdFromResponse() fail-fast pattern.
+    const updateResponsePromise = this.page
+      .waitForResponse(
+        (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'PUT',
+        { timeout: config.timeouts.navigation }
+      )
+      .catch(() => null);
+
     await this.click(this.saveButton(), 'save button');
 
     await this.assertNoFormErrors('lead edit form');
+
+    const updateResponse = await updateResponsePromise;
+
+    // WHY: same fail-fast convention as saveLead() — a failed/slow update
+    // that never persisted server-side must not be silently reported as
+    // success, letting callers proceed as if the edit took effect.
+    if (!updateResponse) {
+      throw new Error(
+        'Lead update (PUT /v1/leads/{id}) response not captured after save — cannot proceed (update likely failed silently or did not persist in time)'
+      );
+    }
 
     await expect(this.editModal()).toBeHidden({
       timeout: 15000,
@@ -1051,9 +1216,34 @@ export class LeadsPage extends BasePage {
     await this.assertLeadExistsInList(data.firstName);
   }
 
-  async assertLeadUpdated(data: LeadData): Promise<void> {
+  async assertLeadUpdated(data: LeadData, leadId?: number): Promise<void> {
+    // WHY: ID-first — mirrors ContactsPage.assertContactUpdated(). Confirmed
+    // live (2026-07-15, 3/3 consistent reproductions) that assertLeadExistsInList()'s
+    // list-search path can fail even after the underlying PUT /v1/leads/{id}
+    // update genuinely completed and returned 200 — the search/list index
+    // itself lags the write by more than the current 5-retry budget under
+    // this environment's accumulated data volume. Direct navigation to the
+    // known ID reads the record's own detail page, which is not subject to
+    // that lag. List search remains the fallback for callers with no ID.
+    //
+    // WHY body-text-contains, not an input-value check: confirmed live
+    // (2026-07-15) that input[name="firstName"] does NOT exist on the
+    // lead DETAIL page at all (count() === 0) — only on the create/edit
+    // FORM. assertLeadCreated()'s existing ID-first branch has this same
+    // latent bug (never triggered — both its current callers omit leadId),
+    // left as-is here since fixing unrelated dead code is out of scope for
+    // this fix; noted for whoever touches it next.
+    if (leadId) {
+      logger.info(`Validating updated lead via ID: ${leadId}`);
+      await this.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+      await this.waitForLeadDetailsPage();
+      await expect(this.page.locator('body')).toContainText(data.firstName, {
+        timeout: 15000,
+      });
+      logger.success(`Lead update verified via ID: ${data.firstName}`);
+      return;
+    }
     await this.goToLeadsList();
-
     await this.assertLeadExistsInList(data.firstName);
   }
 
@@ -1137,9 +1327,14 @@ export class LeadsPage extends BasePage {
   async cloneLead(): Promise<number | null> {
     logger.info('Cloning lead via ellipsis menu');
     await this.clickEllipsisOption('Clone');
-    // WHY: Clone opens create form pre-filled — update email and phone to avoid duplicate errors
+    // WHY: Clone opens create form pre-filled — update email and phone to avoid duplicate errors.
+    // WHY no extra wait after saveButton becomes visible (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1000)): confirmed live — the
+    // pre-filled email/phone values are already fully populated the instant
+    // the save button itself becomes visible (checked at 0ms/300ms/1000ms,
+    // identical every time), so saveButton().waitFor() is already the
+    // correct, sufficient condition. No settling period exists to wait out.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    await this.page.waitForTimeout(1000);
     // WHY: Change email to unique value — same email as original causes duplicate error
     const emailInput = this.emailInput();
     if (await emailInput.isVisible().catch(() => false)) {
@@ -1169,16 +1364,20 @@ export class LeadsPage extends BasePage {
         'Cloned lead ID not captured after save — cannot proceed (save likely failed silently)'
       );
     }
-    // WHY: After clone save, stay on same lead detail page — no redirect to list
-    await this.page.waitForTimeout(1500);
+    // WHY: After clone save, stay on same lead detail page — no redirect to
+    // list. No trailing wait needed here (2026-07-16 fix, removed a
+    // hardcoded waitForTimeout(1500)): assertNoFormErrors() and the ID
+    // capture above already confirm the save genuinely completed
+    // server-side, and every real caller's very next action is a fresh
+    // navigation to the CLONE's own detail page (assertClonedLeadLastName's
+    // ID-direct-nav), which has its own proper GET-response wait — whatever
+    // state the current (original) page is still settling into is
+    // irrelevant once that navigation fires.
     logger.success(`Lead cloned — new ID: ${clonedId}`);
     return clonedId;
   }
 
-  async assertClonedLeadLastName(originalLastName: string, clonedId: number): Promise<void> {
-    logger.info(
-      `Asserting cloned lead (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`
-    );
+  async assertClonedLeadLastName(originalLastName: string, clonedId?: number | null): Promise<void> {
     const clonedLastName = `${originalLastName} Copy`;
     // WHY: Confirmed live on both staging and QA — searching the leads list
     // for "<lastName> Copy" is unreliable. The list search does a loose,
@@ -1190,14 +1389,31 @@ export class LeadsPage extends BasePage {
     // is what caused the intermittent "fails once, passes on retry" flake,
     // not search-index lag. Navigate directly to the cloned lead by ID
     // instead and read its own detail page — deterministic, no list search.
-    await this.navigateTo(`${config.appUrl}/sales/leads/details/${clonedId}`);
-    await this.waitForLeadDetailsPage();
-    // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
-    // waitForLeadDetailsPage's GET-response wait resolves the instant the
-    // network response is observed, not once React has re-rendered the DOM
-    // with it. A one-shot body.innerText() read right after can race ahead
-    // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-    await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
+    //
+    // WHY clonedId is optional with a list-search fallback (2026-07-16):
+    // a caller whose ID capture genuinely failed (e.g. a slow/odd POST
+    // response) shouldn't hard-fail the whole test on that alone — fall
+    // back to the same retry-based list search every other "exists in
+    // list" assertion in this codebase already uses, accepting its
+    // documented unreliability as a last resort rather than a primary path.
+    if (clonedId) {
+      logger.info(
+        `Asserting cloned lead (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`
+      );
+      await this.navigateTo(`${config.appUrl}/sales/leads/details/${clonedId}`);
+      await this.waitForLeadDetailsPage();
+      // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+      // waitForLeadDetailsPage's GET-response wait resolves the instant the
+      // network response is observed, not once React has re-rendered the DOM
+      // with it. A one-shot body.innerText() read right after can race ahead
+      // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+      await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
+      logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      return;
+    }
+    logger.warn('Cloned lead ID not available — falling back to list search');
+    const found = await this.retryFindLead(clonedLastName);
+    expect(found, `Cloned lead "${clonedLastName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
   }
 
@@ -1377,13 +1593,8 @@ export class LeadsPage extends BasePage {
   // Share Lead
   // ──────────────────────────────────────────────────────────
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async shareLead(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing lead with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
@@ -1527,6 +1738,31 @@ export class LeadsPage extends BasePage {
   // Details" tab — only used by the 3 dedicated custom-field tests (per
   // scope: every other Lead test only needs the fill-if-present behavior to
   // run without erroring, not a full value-by-value assertion here).
+  // WHY: PART C — thin, module-owned wrapper around BasePage's generic
+  // dedicated-test skip mechanism, same pattern as fillLeadCustomFields()/
+  // assertLeadCustomFieldsOnDetail() above. Must be called AFTER the
+  // relevant create/edit form is open and ONLY from the dedicated
+  // custom-field tests — every other Lead test already tolerates absent
+  // fields via the generic fill methods' own presence checks.
+  //
+  // WHY disableRequiredFieldsToggle() is called here too: confirmed live
+  // (2026-07-15) — a custom field input does not exist in the DOM AT ALL
+  // (count() === 0, not merely hidden) until the "Show Required & Important
+  // Fields" toggle is switched off; count becomes 1 immediately after,
+  // with no "Other Details" tab click needed for mere presence (that click
+  // is a scroll-to convenience, confirmed live it doesn't hide/reveal
+  // anything — firstName stays visible throughout). Calling it here is
+  // safe and non-duplicative in effect: it's the same idempotent method
+  // fillLeadForm()/fillEditForm() call themselves right after, and a
+  // second call on an already-disabled toggle is a documented no-op.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.disableRequiredFieldsToggle();
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(LEAD_CUSTOM_FIELD_NAMES),
+      'Lead'
+    );
+  }
+
   async assertLeadCustomFieldsOnDetail(data: LeadData): Promise<void> {
     logger.info('Asserting all 9 custom field values on lead detail page');
     const tab = this.otherDetailsDetailPageTab();
@@ -1620,9 +1856,33 @@ export class LeadsPage extends BasePage {
   // any tab — same mechanism already established for Contact
   // (ContactsPage.ts's own "Salutation appears in page header/name area"
   // comment). Verify via body-text-contains instead of a tab/container id.
-  async assertLeadStandardFieldsOnDetail(data: LeadData): Promise<void> {
+  // WHY: `assertCreateOnlyFields` (added 2026-07-17) — Timezone, Country, and
+  // the 5 Professional-section fields are filled ONLY by fillLeadForm()
+  // (create), NOT by fillEditForm() (update). This is a deliberate,
+  // pre-existing scope decision in fillEditForm() (see its own comment: it
+  // fills firstName/lastName/Salutation/Requirement/custom-fields only, by
+  // design — Timezone/Country/Professional were never added there, unlike
+  // Contact's fillEditForm which DOES re-fill its Timezone/Company). So on
+  // the update path, `data` (a fresh generateLeadData()) carries un-applied
+  // factory-default values for these fields (e.g. country defaults to
+  // "India") while the lead still shows its create-time values — asserting
+  // them there would be comparing against values that were never written.
+  // The update caller passes `false`; every create caller uses the default.
+  // Salutation, Requirement, Products/Currency/Budget below ARE filled on
+  // both paths (fillLeadSalutation/fillLeadRequirement run in both), so they
+  // are always asserted regardless of this flag.
+  // NOTE (flagged as a real finding, not silently fixed): the Lead-vs-Contact
+  // edit-scope inconsistency above is worth a deliberate decision — either
+  // extend fillEditForm() to also update these fields (fuller coverage, but a
+  // riskier change to a heavily-used shared method), or accept them as
+  // create-only. Left as create-only here as the lower-risk choice.
+  async assertLeadStandardFieldsOnDetail(
+    data: LeadData,
+    assertCreateOnlyFields = true
+  ): Promise<void> {
     logger.info(
-      'Asserting Salutation, Products or Services, Currency, and Budget on lead detail page'
+      'Asserting Salutation, Products or Services, Currency, Budget, and Requirement on lead detail page' +
+        (assertCreateOnlyFields ? ', plus Timezone, Country, and Professional fields' : '')
     );
 
     if (data.salutation) {
@@ -1633,6 +1893,56 @@ export class LeadsPage extends BasePage {
       logger.success(`Salutation verified on detail page: "${data.salutation}"`);
     }
 
+    if (assertCreateOnlyFields) {
+      // WHY: confirmed live (2026-07-17) via direct DOM inspection of a fresh
+      // lead's detail page — Timezone renders in container id "timezone" on
+      // the Communication tab (nav-tab0-tab), Country in "country" on the
+      // Location tab (nav-tab1-tab). Container ids match the internal field
+      // names directly, same convention as requirementCurrency/requirementBudget
+      // below — not guessed, read straight off the live DOM.
+      await this.page.locator('#nav-tab0-tab').click();
+      await this.page.waitForTimeout(500);
+      await this.assertFieldOnDetailByContainerId('timezone', data.timezone, 'Timezone');
+
+      await this.page.locator('#nav-tab1-tab').click();
+      await this.page.waitForTimeout(500);
+      await this.assertFieldOnDetailByContainerId('country', data.country, 'Country');
+
+      // WHY: confirmed live (2026-07-17) — all 5 Professional-section fields
+      // render in the Professional tab (nav-tab3-tab), container ids matching
+      // their internal field names exactly. Company Annual Revenue renders as
+      // a plain number with no currency formatting (confirmed: "8475910", not
+      // "INR 84.7L" or similar) — String(data.companyAnnualRevenue) is correct
+      // as-is, no special formatting needed.
+      await this.page.locator('#nav-tab3-tab').click();
+      await this.page.waitForTimeout(500);
+      await this.assertFieldOnDetailByContainerId(
+        'companyIndustry',
+        data.companyIndustry,
+        'Company Industry'
+      );
+      await this.assertFieldOnDetailByContainerId(
+        'companyBusinessType',
+        data.companyBusinessType,
+        'Business Type'
+      );
+      await this.assertFieldOnDetailByContainerId(
+        'companyEmployees',
+        data.companyEmployees,
+        'Company Employees'
+      );
+      await this.assertFieldOnDetailByContainerId(
+        'companyAnnualRevenue',
+        String(data.companyAnnualRevenue),
+        'Company Annual Revenue'
+      );
+      await this.assertFieldOnDetailByContainerId(
+        'companyWebsite',
+        data.companyWebsite,
+        'Company Website'
+      );
+    }
+
     const tab = this.requirementDetailPageTab();
     await expect(
       tab,
@@ -1640,6 +1950,15 @@ export class LeadsPage extends BasePage {
     ).toBeVisible({ timeout: config.timeouts.navigation });
     await tab.click();
     await this.page.waitForTimeout(500);
+
+    // WHY: confirmed live (2026-07-17) — container id "requirementName"
+    // matches the field's internal name, same convention as the other
+    // Requirement-section fields below.
+    await this.assertFieldOnDetailByContainerId(
+      'requirementName',
+      data.requirement.requirementName,
+      'Requirement'
+    );
 
     const req = data.requirement;
     if (req.productsOrServices.length > 0) {
@@ -1653,7 +1972,7 @@ export class LeadsPage extends BasePage {
     await this.assertFieldOnDetailByContainerId('requirementBudget', String(req.budget), 'Budget');
 
     logger.success(
-      'Salutation, Products or Services, Currency, and Budget verified on lead detail page'
+      'Salutation, Timezone, Country, Professional fields, Products or Services, Currency, Budget, and Requirement verified on lead detail page'
     );
   }
 

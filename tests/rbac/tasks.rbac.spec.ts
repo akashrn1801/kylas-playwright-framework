@@ -297,4 +297,29 @@ test.describe('Tasks RBAC', () => {
     await restrictedTasks.assertNoteAdded(adminTaskNote);
     logger.success('TK21 passed');
   });
+
+  // ── Test: Restricted user clones their own task ─────────────────────────
+  // WHY: added 2026-07-16 — Tasks had no clone-and-verify RBAC coverage at
+  // all prior to this. Mirrors the UI clone test's own pattern
+  // (tests/ui/tasks/tasks.spec.ts "TK10"), run as the restricted user
+  // against a task they own.
+
+  test('@regression restricted user can clone their own task and verify cloned task exists', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const tasksPage = new TasksPage(restrictedPage);
+    const taskData = generateTaskData();
+
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData);
+    await tasksPage.assertTaskCreated(taskData, taskId);
+
+    await tasksPage.searchTaskById(taskId!);
+    const clonedId = await tasksPage.cloneTaskViaEllipsis(taskId!);
+    const clonedName = `${taskData.name} Copy`;
+    await tasksPage.assertTaskCreated({ ...taskData, name: clonedName }, clonedId);
+    logger.success('TK22 passed');
+  });
 });
