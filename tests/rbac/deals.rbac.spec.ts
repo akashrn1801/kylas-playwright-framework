@@ -196,8 +196,15 @@ test.describe('Deals RBAC', () => {
     // We intercept it to get the display name without any UI interaction.
     const getUserName = async (page: typeof restrictedPage): Promise<string> => {
       try {
+        // WHY: hardened 2026-07-19 — bare '/v1/users/me' substring had no
+        // /reports/ exclusion (lower collision risk than the deal/meeting
+        // sites — no known '/reports/users' analog exists — but fixed for
+        // consistency as part of the complete sweep; found via self-audit).
         const responsePromise = page.waitForResponse(
-          (res) => res.url().includes('/v1/users/me') && res.status() === 200,
+          (res) =>
+            res.url().includes('/v1/users/me') &&
+            !res.url().includes('/reports/') &&
+            res.status() === 200,
           { timeout: config.timeouts.navigation }
         );
         await page.goto(`${config.appUrl}/sales/deals/list`, { waitUntil: 'domcontentloaded' });

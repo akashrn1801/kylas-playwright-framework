@@ -268,8 +268,17 @@ test.describe('Contacts', () => {
       await estimatedValueInput.fill('50000');
       logger.debug('Estimated value filled: 50000');
     }
+    // WHY: hardened 2026-07-19 — bare '/deals'/'/deal' substring had no
+    // /reports/ exclusion, same ID-capture bug class already fixed at 10
+    // other call sites (found via self-audit; this one and the one below
+    // were missed because the original sweep only checked src/modules/,
+    // never tests/).
     const dealSavePromise = adminPage.waitForResponse(
-      (res) => (res.url().includes('/deals') || res.url().includes('/deal')) && res.request().method() === 'POST' && (res.status() === 200 || res.status() === 201),
+      (res) =>
+        (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
+        res.request().method() === 'POST' &&
+        (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
     ).catch(() => null);
     await adminPage.locator('#editEntityModal button.save-button').click();
@@ -337,9 +346,12 @@ test.describe('Contacts', () => {
     // WHY: Add 2 part payment installments
     await dealsPage.addPartPayments(2);
     // WHY: Set up response listener BEFORE clicking save — response may arrive immediately
+    // WHY: hardened 2026-07-19 — same ID-capture bug class as above, found
+    // via self-audit (original sweep never checked tests/).
     const dealIdPromise = adminPage.waitForResponse(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
