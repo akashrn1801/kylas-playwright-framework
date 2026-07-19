@@ -426,9 +426,17 @@ export class ContactsPage extends BasePage {
     try {
       const response = await this.page.waitForResponse(
         (res) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class already fixed
+          // in DealsPage/CompaniesPage/Deals' quotation-panel flow: a bare
+          // `.includes('/v1/contacts')` substring with no `/reports/`
+          // exclusion and no 201 acceptance. Found via a codebase-wide re-audit
+          // of every waitForResponse call after the same class turned up in
+          // LeadsPage — not independently live-reproduced for Contacts, but
+          // fixed as defense-in-depth since it shares the identical shape.
           res.url().includes('/v1/contacts') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
+          (res.status() === 200 || res.status() === 201),
         { timeout: 30000 }
       );
       const body = await response.json();
@@ -952,9 +960,14 @@ export class ContactsPage extends BasePage {
     await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
+    // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
+    // no /reports/ exclusion, same bug class as LeadsPage/ContactsPage's other
+    // capture methods; fixed as defense-in-depth (not independently
+    // live-reproduced for this specific flow).
     const quotationIdPromise = this.page.waitForResponse(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }

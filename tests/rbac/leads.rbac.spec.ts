@@ -271,10 +271,19 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    // WHY: fixed 2026-07-19 — this read is on the restricted user's separate
+    // session right after an admin-side share, so it can genuinely lag the
+    // share response under load (same class already fixed for
+    // assertRightPanelIconVisible() in LeadsPage — see its own comment). A
+    // short fixed waitForURL + a flat pre-sleep had no way to recover if the
+    // app's own client-side route guard hadn't yet seen the propagated
+    // permission. Use the same generous, polling window instead of a hardcoded
+    // 20000ms + a wasted flat sleep.
+    await restrictedPage.waitForURL(/leads\/details\//, { timeout: config.timeouts.navigation });
     // WHY: Update permission — edit button should be visible
-    await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
+    await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({
+      timeout: config.timeouts.navigation,
+    });
     // WHY: Edit the lead to verify update permission works
     await restrictedLeadsPage.clickEditIcon();
     const updatedData = generateLeadData();
@@ -303,8 +312,12 @@ test.describe('Leads RBAC', () => {
     await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
       waitUntil: 'domcontentloaded',
     });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    // WHY: fixed 2026-07-19 — same cross-role share-propagation-lag class as
+    // L15 above; a hardcoded 20000ms + flat pre-sleep had no room to recover
+    // if this restricted-user session's route guard hadn't yet seen the
+    // propagated share. Generous polling window, same as
+    // assertRightPanelIconVisible()'s own established fix for this exact lag.
+    await restrictedPage.waitForURL(/leads\/details\//, { timeout: config.timeouts.navigation });
     // WHY: Note permission — Notes icon should be visible in right panel
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.clickRightPanelIcon('Notes');

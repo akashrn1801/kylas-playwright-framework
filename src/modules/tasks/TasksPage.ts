@@ -167,9 +167,16 @@ export class TasksPage extends BasePage {
     try {
       const response = await this.page.waitForResponse(
         (res: Response) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class as the other
+          // page objects' capture methods, found on a deeper re-sweep after
+          // this one was initially missed (it has a toast-based fallback,
+          // which masked that the primary response-based path was still
+          // vulnerable to silently capturing a WRONG id from an unrelated
+          // /v1/tasks-containing POST, not just falling through to null).
           res.url().includes('/v1/tasks') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
+          (res.status() === 200 || res.status() === 201),
         { timeout: config.timeouts.navigation }
       );
       const body = await response.json();
