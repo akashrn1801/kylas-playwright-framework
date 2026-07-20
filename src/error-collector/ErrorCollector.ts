@@ -100,7 +100,7 @@ class ErrorCollectorSingleton {
       let expectedReason: MiscError['expectedReason'];
       if (isExpectedRbacError(error.message, (error as any).apiErrorMessage)) {
         expectedReason = 'rbac';
-      } else if (isExpectedBackgroundNoise(error.message, error.url)) {
+      } else if (isExpectedBackgroundNoise(error.message, error.url, error.responseBody)) {
         expectedReason = 'background-noise';
       }
 

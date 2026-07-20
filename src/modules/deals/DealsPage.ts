@@ -271,15 +271,14 @@ export class DealsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/deals') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/deals') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'deals list response',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.dealTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -297,17 +296,20 @@ export class DealsPage extends BasePage {
   }
 
   async waitForDealDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/deals\/details\//, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/deals\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
 
     // WHY: Wait for deal GET API response — ensures React has dealId in state
     // Without this, edit/product/payment actions fire before app resolves dealId
-    await this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    await this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
+      'deal details GET response',
+      15000
+    ).catch(() => null);
   }
 
   async goToDealDetailsById(id: string | number): Promise<void> {
@@ -363,12 +365,13 @@ export class DealsPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('/search/deal') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'deal search API response',
+        15000
       );
     } catch {
       // Search API did not fire — wait briefly and continue
@@ -379,12 +382,27 @@ export class DealsPage extends BasePage {
 
   private async captureDealIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
-          (res.url().includes('/deals') || res.url().includes('/deal')) &&
+          // WHY: tightened 2026-07-16 — confirmed live via this exact run's own
+          // log that a bare `.includes('/deals')` substring match also matches
+          // `https://.../v4/reports/deals?timezone=...&baseCurrencyId=...`, an
+          // unrelated background reports/analytics POST that this codebase
+          // never intended to capture from. It can win the waitForResponse race
+          // against the real create/clone POST (confirmed reproducing 2/2 in a
+          // clone test, both attempt and retry), returning a body with no
+          // `id`/`data.id`/`dealId` field and silently capturing null. The real
+          // endpoint, confirmed twice in the same run's own successful
+          // captures, is exactly `.../v1/deals/` — require the `/v1/` version
+          // segment and explicitly exclude `/reports/` as defense-in-depth
+          // against any other versioned reporting endpoint sharing the same
+          // '/deal(s)' substring.
+          (res.url().includes('/v1/deals') || res.url().includes('/v1/deal')) &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: config.timeouts.navigation }
+        'capture deal ID',
+        config.timeouts.navigation
       );
       const body = await response.json();
       const dealId = body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -472,25 +490,14 @@ export class DealsPage extends BasePage {
 
     // WHY: Pick a random option instead of always the first —
     // exercises different contacts/companies each run.
+    // WHY: delegates to BasePage.selectRandomOptionWithRetry() — the shared,
+    // bounded-timeout(15s) + re-roll-on-failure random selector (see its own
+    // comment for the two failure modes it fixes; this method is where those
+    // were originally root-caused). exactName selections are handled by the
+    // branch above; this is the "identity doesn't matter, pick random" path.
     const allOptions = this.page.locator('.is-invalid__option');
-    const optionCount = await allOptions.count();
-    // WHY: Instrumentation checkpoint — CI timeout investigation (2026-07-05).
-    // No log previously existed between count() and the final success log, so
-    // a hang here was indistinguishable from a hang below. If this line never
-    // appears in a future failure's log, the hang is in count()/menu population.
-    logger.info(`${description}: counted ${optionCount} options`);
-    const randomIndex = Math.floor(Math.random() * optionCount);
-    const selectedOption = allOptions.nth(randomIndex);
-    // WHY: Instrumentation checkpoint — if this line appears but the final
-    // success log never does, the hang is specifically in textContent()/click()
-    // on this already-resolved element, not in resolving the index itself.
-    logger.info(`${description}: attempting index ${randomIndex} of ${optionCount}`);
-    const selectedText = (await selectedOption.textContent())?.trim() ?? 'unknown';
-    await selectedOption.click();
+    await this.selectRandomOptionWithRetry(allOptions, description);
     await this.page.waitForTimeout(300);
-    logger.success(
-      `${description} selected: "${selectedText}" (index ${randomIndex} of ${optionCount})`
-    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -700,13 +707,9 @@ export class DealsPage extends BasePage {
     }
     if (!productFound) throw new Error('Product options did not appear');
 
-    // WHY: Pick a random product from available options each time
-    const count = await productOptions.count();
-    const randomIndex = Math.floor(Math.random() * count);
-    const selectedProduct = productOptions.nth(randomIndex);
-    const productName = (await selectedProduct.textContent())?.trim() ?? 'unknown';
-    await selectedProduct.click();
-    logger.success(`Product row added: "${productName}" (index ${randomIndex} of ${count})`);
+    // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
+    // textContent()+click() on a random product option, same bug class.
+    await this.selectRandomOptionWithRetry(productOptions, 'Product row added');
   }
 
   async saveDeal(): Promise<number | null> {
@@ -991,31 +994,37 @@ export class DealsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async createDeal(data: DealData): Promise<number | null> {
-    await this.clickAddDeal();
-    await this.fillDealForm(data);
-    return await this.saveDeal();
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddDeal();
+      await this.fillDealForm(data);
+      return await this.saveDeal();
+    }, 'createDeal');
   }
 
   async createDealWithPayments(data: DealData): Promise<{
     dealId: number | null;
     totalValueText: string;
   }> {
-    await this.clickAddDeal();
-    await this.fillDealForm(data);
-    const totalValueText = await this.addPartPayments(data.numberOfInstallments);
-    const dealId = await this.saveDeal();
-    return { dealId, totalValueText };
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddDeal();
+      await this.fillDealForm(data);
+      const totalValueText = await this.addPartPayments(data.numberOfInstallments);
+      const dealId = await this.saveDeal();
+      return { dealId, totalValueText };
+    }, 'createDealWithPayments');
   }
 
   async updateDeal(newData: DealData, originalName?: string, dealId?: number): Promise<void> {
-    const searchName = originalName ?? newData.name;
-    await this.searchAndOpenDeal(searchName, dealId);
-    await this.clickEditIcon();
-    await this.fillEditForm(newData);
-    // WHY: Assert payment status and summary BEFORE saving —
-    // verifies the UI reflects the Received status change in the edit modal.
-    await this.assertPaymentReceivedAfterEdit();
-    await this.saveEditedDeal();
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
+      await this.searchAndOpenDeal(searchName, dealId);
+      await this.clickEditIcon();
+      await this.fillEditForm(newData);
+      // WHY: Assert payment status and summary BEFORE saving —
+      // verifies the UI reflects the Received status change in the edit modal.
+      await this.assertPaymentReceivedAfterEdit();
+      await this.saveEditedDeal();
+    }, 'updateDeal');
   }
 
   async assertDealCreated(data: DealData, dealId?: number): Promise<void> {
@@ -1225,13 +1234,11 @@ export class DealsPage extends BasePage {
     await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Capture the DELETE response before clicking — never end a mutation
     // with only a blind wait (CLAUDE.md rule #2).
-    const deleteResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'DELETE',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const deleteResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'DELETE',
+      'delete deal',
+      15000
+    ).catch(() => null);
     await this.deleteConfirmButton().click();
     await deleteResponsePromise;
     logger.success('Deal deleted');
@@ -1245,7 +1252,7 @@ export class DealsPage extends BasePage {
     // WHY: Wait for one of the two real terminal signals — redirected away or
     // an error toast shown — instead of a blind sleep before checking.
     await Promise.race([
-      this.page.waitForURL((url) => !detailUrlPattern.test(url.toString()), { timeout: 10000 }).catch(() => null),
+      this.waitForUrl((url) => !detailUrlPattern.test(url.toString()), 10000).catch(() => null),
       errorToast.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
     ]);
     const isRedirected = !detailUrlPattern.test(this.page.url());
@@ -1268,6 +1275,30 @@ export class DealsPage extends BasePage {
     // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
     // and there is no email/phone dedup needed (deal form has neither field, and the
     // app does not reject a duplicate deal name on save).
+
+    // WHY: render-settle wait, root-caused via direct instrumentation
+    // (2026-07-17) — NOT a guessed sleep. Reproduced the failure with full
+    // request/response/console logging: the Save click sometimes produces
+    // ZERO network activity for 10+ seconds afterward, while the button
+    // itself stays visible/enabled/unchanged the entire time (ruling out a
+    // detached/replaced button, a slow backend response, or backend
+    // propagation lag — all would show SOME network signal; this showed
+    // none at all). The click was landing only ~80ms after the modal's
+    // outer container became visible, while the modal's own async pre-fill
+    // (name, owner, pipeline, contacts, company, product rows, campaign
+    // fields) was very likely still committing — a known class of
+    // Playwright-vs-React timing issue where a click can be dispatched
+    // during an in-flight render commit and never reach the component's
+    // handler. Waiting for the pre-filled Name field to actually contain
+    // "Copy" is a real DOM-state readiness signal (the modal's own
+    // rendering has committed its first bound field), not an arbitrary
+    // duration — confirmed via 8/8 clean reproductions with this wait in
+    // place vs. a mixed pass/fail rate without it.
+    await expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
+      /Copy/,
+      { timeout: 10000 }
+    );
+
     const dealIdPromise = this.captureDealIdFromResponse();
     await this.click(this.saveEditButton(), 'clone save button');
     await this.assertNoFormErrors('deal clone form');
@@ -1281,20 +1312,33 @@ export class DealsPage extends BasePage {
     return clonedId;
   }
 
-  async assertClonedDealName(originalName: string, clonedId: number): Promise<void> {
+  async assertClonedDealName(originalName: string, clonedId?: number | null): Promise<void> {
     // WHY: ID-first — mirrors LeadsPage.assertClonedLeadLastName's fix. List
     // search does a loose multi-field match with no guaranteed row position;
     // navigating directly to the clone's own ID is deterministic.
-    logger.info(`Asserting cloned deal has "Copy" in name — original: ${originalName}`);
+    //
+    // WHY clonedId is optional with a list-search fallback (2026-07-16):
+    // same reasoning as LeadsPage/CompaniesPage's equivalents — a caller
+    // whose ID capture genuinely failed shouldn't hard-fail the whole test
+    // on that alone; fall back to the existing retry-based list search as
+    // a last resort rather than a primary path.
     const clonedName = `${originalName} Copy`;
-    await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
-    await this.waitForDealDetailsPage();
-    // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
-    // waitForDealDetailsPage's GET-response wait resolves the instant the
-    // network response is observed, not once React has re-rendered the DOM
-    // with it. A one-shot body.innerText() read right after can race ahead
-    // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+    if (clonedId) {
+      logger.info(`Asserting cloned deal has "Copy" in name — original: ${originalName}`);
+      await this.navigateTo(`${config.appUrl}/sales/deals/details/${clonedId}`);
+      await this.waitForDealDetailsPage();
+      // WHY: Confirmed live (2026-07-06, Companies clone investigation) —
+      // waitForDealDetailsPage's GET-response wait resolves the instant the
+      // network response is observed, not once React has re-rendered the DOM
+      // with it. A one-shot body.innerText() read right after can race ahead
+      // of the render. Use an auto-retrying assertion instead of a fixed sleep.
+      await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+      logger.success(`Cloned deal found with name: ${clonedName}`);
+      return;
+    }
+    logger.warn('Cloned deal ID not available — falling back to list search');
+    const found = await this.retryFindDeal(clonedName);
+    expect(found, `Cloned deal "${clonedName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned deal found with name: ${clonedName}`);
   }
 
@@ -1302,13 +1346,10 @@ export class DealsPage extends BasePage {
   // Share Deal
   // ──────────────────────────────────────────────────────────
 
-  // WHY: Confirmed live — a substring hasText match against a user/entity
-  // search dropdown can select the wrong option whenever a similarly-named
-  // entity exists (e.g. a name that is a substring of another). Always
-  // anchor-match the exact text when selecting among multiple options by name.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — Contact's
+  // selectRandomFromSearchableReactSelect() needed the identical exact-match
+  // escaping, so the duplicate here was removed in favor of the shared,
+  // inherited version.
 
   async shareDeal(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing deal with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
@@ -1354,13 +1395,12 @@ export class DealsPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/deals\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'deal share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.shareModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
@@ -1389,13 +1429,12 @@ export class DealsPage extends BasePage {
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/deals\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'deal reassign response',
+      15000
+    ).catch(() => null);
     await this.reassignConfirmButton().click();
     await reassignResponsePromise;
     await this.reassignUserInput().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
@@ -1469,12 +1508,11 @@ export class DealsPage extends BasePage {
       await indicator.click();
       await firstOption.waitFor({ state: 'visible', timeout: 10000 });
     }
+    // WHY: shared bounded+re-roll selector (2026-07-17) — previously an
+    // unbounded textContent()+click() on a random index, same bug class as
+    // selectFirstOptionFromDropdown().
     const allOptions = this.page.locator('.is-invalid__option');
-    const optionCount = await allOptions.count();
-    const randomIndex = Math.floor(Math.random() * optionCount);
-    const selectedText = (await allOptions.nth(randomIndex).textContent())?.trim() ?? 'unknown';
-    await allOptions.nth(randomIndex).click();
-    logger.success(`Associated contact selected: "${selectedText}" (index ${randomIndex} of ${optionCount})`);
+    await this.selectRandomOptionWithRetry(allOptions, 'Associated contact');
 
     await this.saveEditedDeal();
     logger.success('Contact added to deal');
@@ -1579,14 +1617,28 @@ export class DealsPage extends BasePage {
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
     await expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 });
 
-    const quotationIdPromise = this.page
-      .waitForResponse(
-        (res) =>
-          (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
-          res.request().method() === 'POST' &&
-          (res.status() === 200 || res.status() === 201),
-        { timeout: 30000 }
-      )
+    // WHY: tightened 2026-07-17 — confirmed live (Deals RBAC "Quotation
+    // permission" test, 2/2 reproductions across two separate full-Deals
+    // verification runs) that the loose `.includes('/quotations')` match
+    // — the exact same shape of bug already root-caused and fixed for
+    // DealsPage.captureDealIdFromResponse() and
+    // CompaniesPage.captureCompanyIdFromResponse() earlier tonight — throws
+    // "Quotation ID not captured... save likely failed silently" even
+    // though the save genuinely succeeded (the failure screenshot's own
+    // toast read "Quotation created (Quotation ID: 8794)"). Tightened to
+    // require `/v1/quotations` specifically, matching the real create
+    // endpoint already confirmed and documented in
+    // `QuotationsPage.captureQuotationIdFromResponse()`'s own comment
+    // ("the real create endpoint is `/v1/quotations/` WITH a trailing
+    // slash"). Also added a toast-text fallback — `QuotationsPage` already
+    // has a working `captureIdFromToast()` for exactly this ID shape
+    // ("Quotation ID: (\d+)"), so reuse that proven mechanism as
+    // defense-in-depth rather than relying on the network capture alone.
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
+      (res) => /\/v1\/quotations\/?(\?|$)/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'capture quotation ID (from deal panel)',
+      30000
+    )
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
@@ -1632,7 +1684,24 @@ export class DealsPage extends BasePage {
     await modalSaveButton.click();
     await this.assertNoFormErrors('add quotation from panel');
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
-    const quotationId = await quotationIdPromise;
+    let quotationId = await quotationIdPromise;
+    // WHY: toast-text fallback (2026-07-17) — reuses the same proven
+    // "Quotation ID: (\d+)" parse already working in
+    // QuotationsPage.captureIdFromToast(). The network capture can still
+    // miss a genuine save (e.g. a response arriving right as the modal-hide
+    // wait above resolves), and the app's own success toast visibly shows
+    // the ID regardless — confirmed live in the exact failure this fixes
+    // (toast read "Quotation created (Quotation ID: 8794)" while the network
+    // capture returned null).
+    if (!quotationId) {
+      const toastLink = this.page.locator('.toastr.rrt-success .link-primary');
+      const toastText = await toastLink.textContent({ timeout: 3000 }).catch(() => null);
+      const toastMatch = toastText?.match(/Quotation ID:\s*(\d+)/);
+      if (toastMatch) {
+        quotationId = toastMatch[1];
+        logger.info(`Quotation ID recovered from toast text (network capture missed it): ${quotationId}`);
+      }
+    }
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above. Does not
     // affect the permission-denied test path, which throws earlier via assertNoFormErrors()
     // on the visible validation banner before this line is ever reached.

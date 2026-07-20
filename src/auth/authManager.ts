@@ -1,6 +1,7 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config } from '../../config/config';
 import { logger } from '../utils/logger';
+import { safeWaitForURL } from '../utils/navigation';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -181,9 +182,18 @@ export class AuthManager {
       });
 
       try {
-        await page.waitForURL(/sales\//, {
-          timeout: 10000,
-        });
+        // WHY: migrated 2026-07-19 to safeWaitForURL() — this was a bare
+        // waitForURL() defaulting to 'load'. This method is called from
+        // getContextForRole() on every cache-miss (see that method's own
+        // call site) — CI evidence (2026-07-19, sandbox run 29673393047,
+        // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
+        // setting up 'adminPage'/'restrictedPage'" fixture failures with a
+        // clean signal (zero backend-connectivity noise in the same run),
+        // strongly implicating this exact call: a 'load' hang here can
+        // falsely report a valid session as invalid, forcing a full
+        // re-login under file-lock contention that can cascade past the
+        // 120s fixture-setup budget.
+        await safeWaitForURL(page, /sales\//, 10000);
       } catch {
         logger.warn('Did not redirect to sales page');
         return false;
@@ -525,8 +535,122 @@ export function registerPageForRecovery(
   pageRecoveryRegistry.set(page, { authManager, role });
 }
 
+// WHY this exists (added 2026-07-20, found via deliberate stress-testing of
+// this recovery mechanism before extending it further — not a reported bug):
+// tryRecoverSessionForPage() throws if the page isn't registered, on the
+// assumption every caller's page always is. That's false for any test using
+// the plain @playwright/test `page` fixture instead of `adminPage`/
+// `restrictedPage` (e.g. login.spec.ts, which is never registered since it
+// never goes through createRolePage()). Those tests' own LoginPage actions
+// (goto/fill/click) legitimately land on or start from the signIn page as
+// their EXPECTED state, not a session-expiry symptom — there is no role to
+// recover, and there must not be one invented. Without this check, a plain
+// action failure that happens to occur while genuinely on signIn would throw
+// a confusing "Page was not registered for session recovery" instead of the
+// test's real, original error — a latent trap that had simply never been
+// triggered in practice (those specific actions rarely fail). Every call
+// site that attempts recovery (BasePage's click(), fill(), navigateTo())
+// must check this FIRST and skip straight to the original error when false,
+// preserving pre-mechanism behavior exactly for unregistered pages.
+export function isPageRegisteredForRecovery(page: Page): boolean {
+  return pageRecoveryRegistry.has(page);
+}
+
 export function isSignInUrl(url: string): boolean {
   return /\/(signIn|login)/.test(url);
+}
+
+// ── Session-expiry-aware waitForResponse (2026-07-20) ────────────────────────
+// WHY this exists: `click()`/`fill()`/`navigateTo()` all recover from a mid-
+// test session expiry, but a `page.waitForResponse()` armed to capture a
+// save's response ID has NO such coverage — confirmed live twice today
+// (leads.rbac.spec.ts:398, call-logs.spec.ts:305): when the session expires
+// while such a promise is pending, the real response never arrives in the
+// shape the predicate wants, and the caller waits out the FULL configured
+// timeout (often 30-60s) before giving up with a generic "ID not captured
+// after save" error — the passive detector (attachSessionExpiryListener in
+// fixtures/index.ts) already logs the expiry, but nothing SHORT-CIRCUITS the
+// wait itself. This is a genuinely different code path from click()/fill():
+// those retry a stable, still-present locator; a waitForResponse is racing
+// an already-in-flight network request whose triggering UI state (e.g. a
+// create-form modal) may already be gone by the time expiry is detected
+// (confirmed live — the app does a full-page redirect to /signIn, destroying
+// the modal). Blindly re-clicking a vanished button would be a WORSE failure
+// than today's slow-but-self-healing behavior, so this deliberately does
+// NOT attempt to resume the original in-flight request — see
+// armResponseWaitWithRecovery()'s own comment in BasePage.ts for the fuller
+// design rationale and the "fail fast, recover, let the caller's own retry
+// finish the job" tradeoff this represents.
+
+// WHY these exact two conditions, not new ones: reuses the identical
+// detection logic already trusted by attachSessionExpiryListener() in
+// fixtures/index.ts (401 on a backend API call, or a main-frame navigation
+// to /signIn) as a one-shot AWAITABLE signal, instead of that function's
+// passive fire-and-log behavior. Keeping both call sites in sync matters —
+// if fixtures/index.ts's detection conditions are ever tuned, this should be
+// tuned identically; that's why this lives in the same file as
+// isSignInUrl()/tryRecoverSessionForPage(), not duplicated in BasePage.ts.
+// WHY `hasFired()` exists alongside `promise` (added 2026-07-20, found via
+// deliberate reproduction of withSessionExpiryRetry() below — not a guess):
+// the first design only exposed the Promise, and had a SEPARATE WeakMap
+// flag that armResponseWaitWithRecovery() set only AFTER it had fully
+// awaited tryRecoverSessionForPage() (a real re-login, taking 10+ seconds).
+// That flag arrived too late for methods shaped like LeadsPage.saveLead():
+// `const idPromise = this.captureLeadIdFromResponse();` (armed but NOT
+// awaited yet) followed by OTHER code (`assertNoFormErrors()`) that reacts
+// to the SAME underlying failure much faster (a DOM toast-check, ~1.5s) —
+// reproduced live: assertNoFormErrors() threw and propagated out of the
+// whole workflow BEFORE the slow re-login had gotten far enough to set the
+// flag, so withSessionExpiryRetry() saw an unset flag and didn't retry, even
+// though this WAS a genuine, confirmed session expiry. `hasFired()` fixes
+// this by being a synchronous boolean toggled the INSTANT the underlying
+// browser event arrives (page.on('response')/'framenavigated' callbacks are
+// synchronous, immediate — no awaited chain in between) — this reliably
+// precedes any JS-level reaction to that same event (network event fires
+// before the app's JS can process the response and render a toast), so
+// checking `hasFired()` at catch-time is race-free regardless of how slow
+// any NESTED recovery attempt is. withSessionExpiryRetry() below arms its
+// OWN signal for this exact reason — not to duplicate detection work, but
+// so its own synchronous flag can never lag behind a sibling code path in
+// the same workflow.
+export function armSessionExpirySignal(page: Page): {
+  promise: Promise<void>;
+  cancel: () => void;
+  hasFired: () => boolean;
+} {
+  let fired = false;
+  let resolveFn: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    resolveFn = resolve;
+  });
+  const mark = (): void => {
+    fired = true;
+    resolveFn();
+  };
+
+  const onResponse = (response: import('@playwright/test').Response): void => {
+    if (response.status() === 401) {
+      const url = response.url();
+      if (url.includes('/v1/') || url.includes('/api/')) {
+        mark();
+      }
+    }
+  };
+  const onFrameNavigated = (frame: import('@playwright/test').Frame): void => {
+    if (frame === page.mainFrame() && isSignInUrl(frame.url())) {
+      mark();
+    }
+  };
+
+  page.on('response', onResponse);
+  page.on('framenavigated', onFrameNavigated);
+
+  const cancel = (): void => {
+    page.off('response', onResponse);
+    page.off('framenavigated', onFrameNavigated);
+  };
+
+  return { promise, cancel, hasFired: () => fired };
 }
 
 // WHY this exact phrasing: matches CallLogsPage.ts's own existing
@@ -557,7 +681,36 @@ export async function tryRecoverSessionForPage(page: Page, returnUrl: string): P
   const { authManager, role } = ctx;
 
   await authManager.reauthenticatePage(page, role);
-  await page.goto(returnUrl, { waitUntil: 'domcontentloaded' });
+
+  // WHY this retry exists (2026-07-20, found via deliberate reproduction of
+  // Gap 2's fix, not a guess): when expiry is detected mid-interaction
+  // (e.g. while a save's response is pending, not during a page-level
+  // navigation), the real app's own frontend can independently fire its own
+  // client-side redirect to /signIn in reaction to the same 401/400 — a
+  // genuine competing navigation on the SAME page/frame that this method's
+  // own goto() races against. Confirmed live: this goto failed with
+  // `net::ERR_ABORTED; maybe frame was detached?` navigating back to a
+  // leads-list URL, immediately after a deliberately-injected 401 on a
+  // lead-create POST — the app's own concurrent redirect won the race.
+  // `ERR_ABORTED` specifically (and only this) means "a different
+  // navigation pre-empted this one" — it is not a real network failure and
+  // not ambiguous with one, so retrying it once, after the competing
+  // navigation has had a moment to fully settle, is safe: by the second
+  // attempt there is nothing left racing this goto. Bounded to exactly one
+  // retry, matching every other recovery step in this codebase.
+  try {
+    await page.goto(returnUrl, { waitUntil: 'domcontentloaded' });
+  } catch (error) {
+    if (!/ERR_ABORTED/.test(String(error))) {
+      throw error;
+    }
+    logger.warn(
+      `Recovery navigation to ${returnUrl} for role ${role} was aborted by a competing ` +
+        `navigation (the app's own redirect reacting to the same expiry) — retrying once`
+    );
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.goto(returnUrl, { waitUntil: 'domcontentloaded' });
+  }
 
   if (isSignInUrl(page.url())) {
     throw new Error(

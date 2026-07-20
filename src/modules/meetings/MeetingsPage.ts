@@ -100,10 +100,6 @@ export class MeetingsPage extends BasePage {
       .locator('[class*="single-value"]');
   private readonly mediumInputValue = () => this.page.locator('input[name="medium"]');
   private readonly locationInput = () => this.page.locator('[id="1_81_input_location"]');
-  private readonly gpsButton = () => this.page.getByText('Get GPS Address');
-  private readonly gpsSearchInput = () =>
-    this.page.getByPlaceholder('Search for area, street name');
-  private readonly addressPrediction = () => this.page.locator('.autocomplete-prediction').first();
   private readonly calendarWarning = () => this.page.locator('.calendar-suggestion');
   private readonly descriptionEditor = () =>
     this.page.locator('div.ck-editor__editable[role="textbox"]');
@@ -189,9 +185,21 @@ export class MeetingsPage extends BasePage {
 
   private async captureIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
-        (res: Response) => res.url().includes('/v1/meetings') && res.request().method() === 'POST',
-        { timeout: 15000 }
+      const response = await this.armResponseWaitWithRecovery(
+        (res: Response) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class as
+          // LeadsPage/ContactsPage/DealsPage/CompaniesPage: bare
+          // `.includes('/v1/meetings')` with no `/reports/` exclusion — and
+          // this one was worse, with no status-code check at all, so it could
+          // have matched a failed (4xx/5xx) response too. Not independently
+          // live-reproduced for Meetings; fixed as defense-in-depth since it
+          // shares the identical vulnerable shape.
+          res.url().includes('/v1/meetings') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST' &&
+          (res.status() === 200 || res.status() === 201),
+        'captureIdFromResponse (meeting create)',
+        15000
       );
       const body = await response.json();
       const id = body?.id ?? null;
@@ -409,35 +417,12 @@ export class MeetingsPage extends BasePage {
 
   async fillLocation(manualAddress: string): Promise<void> {
     logger.info('Filling location field');
-    const gpsVisible = await this.gpsButton()
-      .isVisible()
-      .catch(() => false);
-    if (gpsVisible) {
-      await this.gpsButton().click();
-      await this.page.waitForTimeout(1500);
-      const addonDialog = await this.page
-        .locator('text=purchase')
-        .first()
-        .isVisible()
-        .catch(() => false);
-      if (!addonDialog) {
-        const citySearch = manualAddress.split(',')[0].trim().substring(0, 10);
-        await this.gpsSearchInput().fill(citySearch);
-        await this.page
-          .waitForSelector('.autocomplete-prediction', { timeout: 5000 })
-          .catch(() => null);
-        const predictionsVisible = await this.addressPrediction()
-          .isVisible()
-          .catch(() => false);
-        if (predictionsVisible) {
-          await this.addressPrediction().click();
-          logger.success('GPS address selected');
-          return;
-        }
-      }
-    }
-    await this.locationInput().fill(manualAddress);
-    logger.info(`Manual address entered: ${manualAddress}`);
+    // WHY: delegates to BasePage's generalized GPS-address helper (moved
+    // there 2026-07-15 so Contact/Lead/Company can reuse the identical
+    // logic) — this method's own signature/behavior is unchanged for its
+    // one existing caller (fillMeetingForm), which doesn't need the
+    // resolved-value return.
+    await this.fillAddressViaGpsOrManual(this.locationInput(), manualAddress, 'location');
   }
 
   async fillRelatedTo(_isRestrictedUser = false): Promise<void> {
@@ -489,13 +474,13 @@ export class MeetingsPage extends BasePage {
 
       // Step 5: Pick random option
       if (count > 0) {
-        const randomIdx = Math.floor(Math.random() * Math.min(count, 5));
-        const selectedOption = this.relationOptions().nth(randomIdx);
-        const optionText = await selectedOption.textContent();
-        await selectedOption.click();
+        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+        // before — was an unbounded textContent()+click() on a random option.
+        await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
+          maxOptions: 5,
+        });
         await this.page.waitForTimeout(300);
         await this.relatedToInput().press('Enter');
-        logger.success(`Selected ${entityType} (${randomIdx + 1}/${count}): ${optionText?.trim()}`);
       } else {
         logger.warn(`No ${entityType} records found - skipping`);
         await this.page.keyboard.press('Escape');
@@ -639,6 +624,72 @@ export class MeetingsPage extends BasePage {
       }
     }
     return id;
+  }
+
+  // WHY: confirmed live (2026-07-15, QA only — not reproduced on stage) via
+  // real network capture — creating a meeting from an entity's detail panel
+  // (e.g. a Lead) immediately after that entity was just shared with the
+  // current restricted user can race the backend's own permission
+  // propagation: POST /v1/meetings returns HTTP 422 with
+  // errorCode "01503001" ("Invalid lead summary response.") even though the
+  // request payload itself is well-formed (title/medium/timezone/relatedTo/
+  // participants all present and correct) — the backend fails to build the
+  // entity's own "summary" for the response body, not a client-side
+  // validation problem. This is the same class of transient-permission-
+  // propagation race already tolerated elsewhere in this codebase's RBAC
+  // tests (poll/retry on a transient permission error rather than failing
+  // immediately — see CLAUDE.md's RBAC testing philosophy) — NOT a blanket
+  // retry-as-band-aid: it only retries when the specific 422/01503001 is
+  // observed on the network, so a genuinely different validation error
+  // (any other error code, or no response at all) still fails immediately,
+  // unretried. Does not modify saveMeeting() itself — every one of the
+  // Meetings module's own 14 passing tests keeps using that method
+  // unchanged; this wrapper exists only for callers creating a meeting
+  // immediately after a fresh cross-role share.
+  //
+  // WHY renamed from saveMeetingRetryOnLeadSummaryLag (2026-07-16) —
+  // confirmed live this exact errorCode+propagation-lag mechanism ALSO
+  // occurs for Contact+Company (message reads "Invalid company summary
+  // response." instead of "Invalid lead summary response.", same errorCode
+  // 01503001): sharing a Contact's associated Company and then immediately
+  // creating a Meeting from that contact can hit the identical transient
+  // lag — confirmed via a real run where the company share had genuinely
+  // succeeded seconds earlier, then the meeting POST still 422'd once before
+  // succeeding on retry. The check below was already generic (matches on
+  // errorCode only, never the message text), so only the name needed
+  // updating to stop implying this is Lead-only.
+  async saveMeetingRetryOnEntitySummaryLag(maxAttempts = 3): Promise<number | null> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const lagResponsePromise = this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/meetings') &&
+          res.request().method() === 'POST' &&
+          res.status() === 422,
+        'saveMeetingRetryOnEntitySummaryLag (422 lag detection)',
+        10000
+      )
+        .then(async (res) => {
+          const body = await res.json().catch(() => ({}));
+          return body?.errorCode === '01503001';
+        })
+        .catch(() => false);
+
+      try {
+        return await this.saveMeeting();
+      } catch (error) {
+        const isKnownPropagationLag = await lagResponsePromise;
+        if (isKnownPropagationLag && attempt < maxAttempts) {
+          logger.warn(
+            `Meeting save hit the confirmed entity-summary permission-propagation lag ` +
+              `(attempt ${attempt}/${maxAttempts}) — waiting and retrying the same save`
+          );
+          await this.page.waitForTimeout(3000);
+          continue;
+        }
+        throw error;
+      }
+    }
+    return null;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -960,51 +1011,53 @@ export class MeetingsPage extends BasePage {
     addInvitee = true,
     skipRelatedTo = false
   ): Promise<number | null> {
-    logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
-    await this.click(this.addButton(), 'Add button');
-    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-    const { retries, wait } = this.retryConfig;
-    let formOpened = false;
-    for (let i = 0; i < retries; i++) {
-      try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-        formOpened = true;
-        break;
-      } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-        // makes sense on the standalone meetings list page — reloading an
-        // embedded panel (e.g. a lead's detail page) would close the panel
-        // and lose all context, since this method doesn't know how to reopen it.
-        if (/\/sales\/meetings\/list/.test(this.page.url())) {
-          await this.reloadPage();
-          await this.waitForListReady();
-        } else {
-          await this.page.waitForTimeout(1000);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
+      await this.click(this.addButton(), 'Add button');
+      // WHY: Route through config.meetingRetry (more retries, longer wait) instead
+      // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
+      const { retries, wait } = this.retryConfig;
+      let formOpened = false;
+      for (let i = 0; i < retries; i++) {
+        try {
+          await this.titleInput().waitFor({ state: 'visible', timeout: wait });
+          formOpened = true;
+          break;
+        } catch {
+          logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
+          // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
+          // makes sense on the standalone meetings list page — reloading an
+          // embedded panel (e.g. a lead's detail page) would close the panel
+          // and lose all context, since this method doesn't know how to reopen it.
+          if (/\/sales\/meetings\/list/.test(this.page.url())) {
+            await this.reloadPage();
+            await this.waitForListReady();
+          } else {
+            await this.page.waitForTimeout(1000);
+          }
+          await this.click(this.addButton(), 'Add button retry');
         }
-        await this.click(this.addButton(), 'Add button retry');
       }
-    }
-    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
-    await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
-    // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
-    // description can all trigger React re-renders that reset the title controlled
-    // input, not just to empty but potentially to a stale/default value. Checking
-    // for an exact match (not just non-empty) catches both failure modes, and this
-    // check is the last thing that runs before saveMeeting() is called below.
-    const titleBeforeSave = await this.titleInput().inputValue().catch(() => '');
-    if (titleBeforeSave.trim() !== data.title.trim()) {
-      logger.warn(
-        `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
-      );
-      await this.titleInput().click();
-      await this.titleInput().fill(data.title);
-      await this.page.waitForTimeout(300);
-    }
-    const meetingId = await this.saveMeeting();
-    logger.success(`Meeting "${data.title}" created`);
-    return meetingId;
+      if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+      await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
+      // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
+      // description can all trigger React re-renders that reset the title controlled
+      // input, not just to empty but potentially to a stale/default value. Checking
+      // for an exact match (not just non-empty) catches both failure modes, and this
+      // check is the last thing that runs before saveMeeting() is called below.
+      const titleBeforeSave = await this.titleInput().inputValue().catch(() => '');
+      if (titleBeforeSave.trim() !== data.title.trim()) {
+        logger.warn(
+          `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
+        );
+        await this.titleInput().click();
+        await this.titleInput().fill(data.title);
+        await this.page.waitForTimeout(300);
+      }
+      const meetingId = await this.saveMeeting();
+      logger.success(`Meeting "${data.title}" created`);
+      return meetingId;
+    }, 'createMeeting');
   }
 
   async updateMeeting(
@@ -1021,5 +1074,68 @@ export class MeetingsPage extends BasePage {
     await this.fillEditForm(newTitle, newStatus, newDescription);
     await this.saveEditedMeeting();
     logger.success(`Meeting updated to "${newTitle}"`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Clone
+  // ──────────────────────────────────────────────────────────
+
+  // WHY: confirmed live (2026-07-16) — Kylas's Meetings feature does
+  // genuinely support cloning (previously untested: the only existing
+  // Meetings RBAC coverage checked that the "Clone" menu item was VISIBLE,
+  // never actually clicked it). Live investigation confirmed: clicking
+  // "Clone" opens a real "Clone Meeting" modal, pre-fills the title as
+  // "<original> Copy" (same naming convention as every other module), and
+  // — unlike Leads/Contacts/Companies — needs NO field edits before saving:
+  // there's no unique-value constraint (no email/phone on a meeting), and
+  // the pre-filled title saves successfully unmodified. Verified via a
+  // direct network capture: POST /v1/meetings -> 201 with a new ID and no
+  // validation errors, immediately after clicking Save with zero changes.
+  async cloneMeeting(): Promise<number | null> {
+    logger.info('Cloning meeting via ellipsis menu');
+    await this.openEllipsisMenu();
+    const cloneOption = this.dropdownMenu().locator('a.dropdown-item', { hasText: 'Clone' });
+    await cloneOption.click();
+    await this.editModal().waitFor({ state: 'visible', timeout: 15000 });
+    const idPromise = this.captureIdFromResponse();
+    await this.click(this.addMeetingSaveButton(), 'save cloned meeting');
+    await this.assertNoFormErrors('meeting clone form');
+    const clonedId = await idPromise;
+    // WHY: same fail-fast guard as every other module's cloneX() — a
+    // failed save must not silently report success.
+    if (!clonedId) {
+      throw new Error(
+        'Cloned meeting ID not captured after save — cannot proceed (save likely failed silently)'
+      );
+    }
+    logger.success(`Meeting cloned — new ID: ${clonedId}`);
+    return clonedId;
+  }
+
+  async assertClonedMeetingTitle(originalTitle: string, clonedId?: number | null): Promise<void> {
+    const clonedTitle = `${originalTitle} Copy`;
+    // WHY: same primary-ID/fallback-search pattern as every other module's
+    // clone verification (Leads/Companies/Deals/Contacts/Tasks) — ID-direct
+    // lookup (via the same ?id= query-param pattern this file already uses
+    // elsewhere, since Meetings has no standalone detail page/route) is the
+    // deterministic primary path; falls back to retryFindMeetingInList()
+    // only if the ID lookup genuinely fails.
+    if (clonedId) {
+      try {
+        await this.searchMeetingById(clonedId);
+        await this.assertMeetingDetailTitle(clonedTitle);
+        logger.success(`Cloned meeting found with title: "${clonedTitle}"`);
+        return;
+      } catch (error) {
+        logger.warn(
+          `Cloned meeting ID ${clonedId} lookup failed (${String(error)}) — falling back to list search`
+        );
+      }
+    }
+    const found = await this.retryFindMeetingInList(clonedTitle);
+    if (!found) {
+      throw new Error(`Cloned meeting "${clonedTitle}" should exist in list but was not found`);
+    }
+    logger.success(`Cloned meeting found with title: "${clonedTitle}"`);
   }
 }

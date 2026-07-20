@@ -78,7 +78,15 @@ export class CompaniesPage extends BasePage {
   private readonly addPhoneButton = (): Locator =>
     this.page.locator('button').filter({ hasText: 'Add Phone' }).first();
 
-  private readonly phoneInput = (): Locator => this.page.locator('input[id*="input_phone_0"]');
+  // WHY: exact `name` match, not a loose `id*="input_phone_0"` substring
+  // (2026-07-16 fix) — that pattern is confirmed live to collide with any
+  // future repeatable field whose first entry also ends in "_input_phone_0"
+  // (confirmed via the identical bug in LeadsPage.ts, caused there by its
+  // new Company Phones field). Companies has no such field today, but
+  // `name="phoneNumbers[0]"` is the actual bound form field and is strictly
+  // safer at zero cost, so it's fixed here too rather than left as a latent
+  // risk for whenever this module grows a similar field.
+  private readonly phoneInput = (): Locator => this.page.locator('input[name="phoneNumbers[0]"]');
 
   private readonly addressInput = (): Locator => this.page.locator('input[name="address"]');
 
@@ -192,15 +200,14 @@ export class CompaniesPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/companies') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/companies') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'companies list response',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.companyTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -233,14 +240,19 @@ export class CompaniesPage extends BasePage {
   }
 
   async waitForCompanyDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/companies\/details\//, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/companies\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for company GET API response — ensures React has companyId in state
     // Without this, share/edit fires before app resolves companyId → /companies/undefined/share
     // Same fix applied to ContactsPage.waitForContactDetailsPage() — proven race condition
-    await this.page.waitForResponse(
+    await this.armResponseWaitWithRecovery(
       (res) => res.url().match(/\/v1\/companies\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 15000 }
+      'company details GET response',
+      15000
     ).catch(() => null);
   }
 
@@ -342,12 +354,13 @@ export class CompaniesPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('search') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'company search API response',
+        15000
       );
     } catch {
       return null;
@@ -356,19 +369,33 @@ export class CompaniesPage extends BasePage {
 
   private async captureCompanyIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
           res.url().includes('companies') &&
+          // WHY: defensive exclusion added 2026-07-16 — DealsPage's identical
+          // `.includes('/deals')` predicate was confirmed live (this same run)
+          // to also match an unrelated `/v4/reports/deals?...` background
+          // analytics POST, winning the response race against the real create/
+          // clone POST and silently capturing a null id (2/2 reproductions).
+          // This method's bare `.includes('companies')` is even less specific
+          // (no version-prefix requirement at all) and is the same shape of
+          // bug, just not yet observed failing here — excluding `/reports/`
+          // only, not adding a `/v1/` requirement, since (unlike Deals) the
+          // exact real company create/clone endpoint hasn't been directly
+          // confirmed in this run's own logs; narrower and lower-risk than
+          // guessing the full path.
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: 30000 }
+        'capture company ID',
+        30000
       );
 
       const body = await response.json();
 
       const companyId = body?.id ?? body?.data?.id ?? null;
 
-      logger.success(`Captured company ID: ${companyId}`);
+      logger.success(`Captured company ID: ${companyId} from ${response.url()}`);
 
       return companyId;
     } catch (_error) {
@@ -663,9 +690,14 @@ export class CompaniesPage extends BasePage {
   async cloneCompany(originalName: string): Promise<{ companyId: number | null; clonedName: string }> {
     logger.info('Cloning company via ellipsis menu');
     await this.clickEllipsisOption('Clone');
-    // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors
+    // WHY: Clone opens create form pre-filled — update email/phone to avoid duplicate errors.
+    // WHY no extra wait after saveButton becomes visible (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1000)): confirmed live on this same
+    // clone modal (LeadsPage.cloneLead()/ContactsPage.cloneContact()
+    // investigation, identical widget) — pre-filled values are already
+    // fully populated the instant the save button becomes visible, so
+    // saveButton().waitFor() is already the correct, sufficient condition.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    await this.page.waitForTimeout(1000);
     // WHY: Confirmed live (2026-07-06) — the clone form's name field arrives
     // PRE-FILLED by the app as "<name> Copy". Earlier code read that
     // already-suffixed value back off the DOM and labeled it "originalName"
@@ -705,19 +737,19 @@ export class CompaniesPage extends BasePage {
     if (!companyId) {
       throw new Error('Cloned company ID not captured after save — cannot proceed (save likely failed silently)');
     }
-    // WHY: After clone save, app stays on original company detail — no redirect to list
-    await this.page.waitForTimeout(1500);
+    // WHY: After clone save, app stays on original company detail — no
+    // redirect to list. No trailing wait needed here (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1500)): assertNoFormErrors() and
+    // the ID capture above already confirm the save genuinely completed
+    // server-side, and the caller's very next action is always a fresh
+    // navigation to the CLONE's own detail page (assertClonedCompanyName's
+    // ID-direct-nav), which has its own proper GET-response wait.
     logger.success(`Company cloned successfully: "${clonedName}"`);
     return { companyId, clonedName };
   }
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async shareCompany(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing company with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
@@ -765,13 +797,12 @@ export class CompaniesPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'company share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.page.waitForTimeout(300);
@@ -799,13 +830,12 @@ export class CompaniesPage extends BasePage {
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'company reassign response',
+      15000
+    ).catch(() => null);
     await reassignConfirmButton.click();
     await reassignResponsePromise;
     await this.page.waitForTimeout(300);
@@ -860,12 +890,17 @@ export class CompaniesPage extends BasePage {
     await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
-    const quotationIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
+    // no /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture quotation ID (company panel)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
@@ -1053,12 +1088,17 @@ export class CompaniesPage extends BasePage {
       await designationInput.fill(contactData.designation);
     }
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
-    const contactIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
+    // /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
+    const contactIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/contacts') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture contact ID (direct button)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? null;
@@ -1146,12 +1186,17 @@ export class CompaniesPage extends BasePage {
     if (await designationInputE.isVisible().catch(() => false)) {
       await designationInputE.fill(contactData.designation);
     }
-    const contactIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
+    // /reports/ exclusion, same bug class found across the codebase's other
+    // ID-capture methods; fixed as defense-in-depth.
+    const contactIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/contacts') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture contact ID (ellipsis)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? null;
@@ -1194,12 +1239,22 @@ export class CompaniesPage extends BasePage {
       }
     }
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
-    const dealIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — this exact `.includes('/deals')` substring is
+    // the SAME pattern already confirmed live (2026-07-16) to collide with an
+    // unrelated `/v4/reports/deals?...` background analytics POST when
+    // DealsPage's own captureDealIdFromResponse() had this shape — this inline
+    // copy was never updated when that one was fixed. Highest-risk of the
+    // ID-capture gaps found in this audit; not independently re-reproduced
+    // here, but the collision mechanism is already proven, just on a
+    // different call site with the identical predicate.
+    const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture deal ID (direct button)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -1238,12 +1293,16 @@ export class CompaniesPage extends BasePage {
         logger.debug('Estimated value filled: 50000');
       }
     }
-    const dealIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — same proven '/v4/reports/deals' collision
+    // pattern as the sibling dealIdPromise above; fixed identically.
+    const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture deal ID (ellipsis)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -1272,12 +1331,17 @@ export class CompaniesPage extends BasePage {
     await editor.click();
     await editor.fill(taskName);
     // WHY: Set up response listener BEFORE clicking save
-    const taskIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — bare '/v1/tasks' substring had no /reports/
+    // exclusion, same bug class found across the codebase's other ID-capture
+    // methods; fixed as defense-in-depth.
+    const taskIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/tasks') &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture task ID (pending activity)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? null;
@@ -1355,20 +1419,33 @@ export class CompaniesPage extends BasePage {
     logger.success(`Company ${companyId} confirmed deleted`);
   }
 
-  async assertClonedCompanyName(clonedName: string, clonedId: number): Promise<void> {
+  async assertClonedCompanyName(clonedName: string, clonedId?: number | null): Promise<void> {
     // WHY: ID-first — mirrors DealsPage.assertClonedDealName's fix. List/name
     // search is unreliable once the cloned name carries a unique suffix and
     // risks matching the wrong row; navigating directly to the clone's own
     // ID is deterministic.
-    logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
-    await this.goToCompanyDetailsById(clonedId);
-    // WHY: Confirmed live (2026-07-06) — waitForCompanyDetailsPage's GET-response
-    // wait resolves the instant the network response is observed, not once React
-    // has re-rendered the DOM with it. A one-shot body.innerText() read right
-    // after can race ahead of the render (reproduced: GET returned 200, but body
-    // was still just the app shell). Use an auto-retrying assertion instead of a
-    // fixed extra sleep — it polls until the real DOM condition is met.
-    await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+    //
+    // WHY clonedId is optional with a list-search fallback (2026-07-16):
+    // same reasoning as LeadsPage.assertClonedLeadLastName() — a caller
+    // whose ID capture genuinely failed shouldn't hard-fail the whole test
+    // on that alone; fall back to the existing retry-based list search as
+    // a last resort rather than a primary path.
+    if (clonedId) {
+      logger.info(`Asserting cloned company detail page shows name: ${clonedName}`);
+      await this.goToCompanyDetailsById(clonedId);
+      // WHY: Confirmed live (2026-07-06) — waitForCompanyDetailsPage's GET-response
+      // wait resolves the instant the network response is observed, not once React
+      // has re-rendered the DOM with it. A one-shot body.innerText() read right
+      // after can race ahead of the render (reproduced: GET returned 200, but body
+      // was still just the app shell). Use an auto-retrying assertion instead of a
+      // fixed extra sleep — it polls until the real DOM condition is met.
+      await expect(this.page.locator('body')).toContainText(clonedName, { timeout: 15000 });
+      logger.success(`Cloned company found with name: ${clonedName}`);
+      return;
+    }
+    logger.warn('Cloned company ID not available — falling back to list search');
+    const found = await this.retryFindCompany(clonedName);
+    expect(found, `Cloned company "${clonedName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned company found with name: ${clonedName}`);
   }
 
@@ -1437,11 +1514,13 @@ export class CompaniesPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async createCompany(data: CompanyData): Promise<number | null> {
-    await this.clickAddCompany();
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddCompany();
 
-    await this.fillCompanyForm(data);
+      await this.fillCompanyForm(data);
 
-    return await this.saveCompany();
+      return await this.saveCompany();
+    }, 'createCompany');
   }
 
   async updateCompany(
@@ -1449,15 +1528,17 @@ export class CompaniesPage extends BasePage {
     originalName?: string,
     companyId?: number
   ): Promise<void> {
-    const searchName = originalName ?? newData.name;
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
 
-    await this.searchAndOpenCompany(searchName, companyId);
+      await this.searchAndOpenCompany(searchName, companyId);
 
-    await this.clickEditIcon();
+      await this.clickEditIcon();
 
-    await this.fillEditForm(newData);
+      await this.fillEditForm(newData);
 
-    await this.saveEditedCompany();
+      await this.saveEditedCompany();
+    }, 'updateCompany');
   }
 
   async updateCompanyFull(
@@ -1465,15 +1546,17 @@ export class CompaniesPage extends BasePage {
     originalName?: string,
     companyId?: number
   ): Promise<void> {
-    const searchName = originalName ?? newData.name;
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
 
-    await this.searchAndOpenCompany(searchName, companyId);
+      await this.searchAndOpenCompany(searchName, companyId);
 
-    await this.clickEditIcon();
+      await this.clickEditIcon();
 
-    await this.fillFullEditForm(newData);
+      await this.fillFullEditForm(newData);
 
-    await this.saveEditedCompany();
+      await this.saveEditedCompany();
+    }, 'updateCompanyFull');
   }
 
   async assertCompanyCreated(data: CompanyData, companyId?: number): Promise<void> {

@@ -6,9 +6,23 @@ import * as path from 'path';
 
 const STORAGE_STATE_DIR = path.join(__dirname, 'storageStates', config.env);
 
+// WHY: added 2026-07-19 — playwright.config.ts's `trace: 'retain-on-failure'`
+// only applies to the standard per-test fixture lifecycle. globalSetup runs
+// its own browser/context/page entirely outside that mechanism, so a
+// globalSetup hang (like the Staging waitUntil:'load' hang this was added
+// alongside) produced zero trace/HAR artifact — nothing to inspect after the
+// fact. Mirrors the same outputDir convention playwright.config.ts already
+// uses (CI vs local split) so these land in a predictable, already-gitignored
+// location, not a new one-off path.
+const GLOBAL_SETUP_TRACE_DIR = path.join(
+  process.env.CI ? 'test-results' : `test-results/${config.env}`,
+  'global-setup-traces'
+);
+
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   ErrorCollector.attachNodeListeners();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
+  fs.mkdirSync(GLOBAL_SETUP_TRACE_DIR, { recursive: true });
 
   // WHY: Remove any stale advisory-lock directories left behind by a crashed
   // previous run — otherwise AuthManager.withFileLock() would make every
@@ -63,8 +77,14 @@ async function setupRole(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`[globalSetup] Logging in as: ${role} (attempt ${attempt}/${maxAttempts})`);
     const context = await browser.newContext();
+    // WHY: retain-on-failure, same convention as playwright.config.ts's own
+    // test-level tracing — start unconditionally (cheap), only save the
+    // trace to disk if this attempt actually fails, so a green CI run never
+    // accumulates trace zips for a login that worked fine.
+    await context.tracing.start({ screenshots: true, snapshots: true });
     const page = await context.newPage();
     let capturedUserName = '';
+    let succeeded = false;
 
     // Intercept /v1/users/me response to capture display name
     page.on('response', async (r) => {
@@ -85,7 +105,25 @@ async function setupRole(
       await page.locator('#input_email').fill(credentials.email);
       await page.locator('#input_password').fill(credentials.password);
       await page.locator('#loginBtn').click();
-      await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
+      // WHY: fixed 2026-07-19 — this bare waitForURL() had no explicit
+      // waitUntil, so it defaulted to Playwright's 'load', which waits for
+      // EVERY resource on the page (analytics, chat widgets, tracking
+      // pixels) to finish, not just the URL changing — the exact same
+      // mechanism BasePage.waitForUrl() was already hardened against
+      // (2026-07-07, see that method's own comment). Two consecutive
+      // stage.yml runs hung the full 120000ms here, 3/3 attempts each run,
+      // while a manual Staging login succeeds in ~2s — consistent with a
+      // headless/extension-free CI context never firing 'load' for some
+      // third-party resource the app waits on. This line pre-dates this
+      // fix by ~2 months (introduced 2026-05-22, briefly swapped to
+      // 'networkidle' and reverted the same day in early June) and was
+      // never brought in line with the domcontentloaded convention
+      // established elsewhere. Bringing it in line here, matching the one
+      // proven fix already in this codebase rather than guessing a new one.
+      await page.waitForURL(/sales\//, {
+        timeout: config.timeouts.navigation,
+        waitUntil: 'domcontentloaded',
+      });
 
       // WHY: validate we actually landed on the app not redirected back to login
       const currentUrl = page.url();
@@ -122,6 +160,7 @@ async function setupRole(
         console.warn(`[globalSetup] Could not capture display name for ${role}`);
       }
 
+      succeeded = true;
       return;
     } catch (error) {
       lastError = error;
@@ -133,6 +172,21 @@ async function setupRole(
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     } finally {
+      if (succeeded) {
+        // WHY: discard — nothing went wrong, no point keeping the trace
+        await context.tracing.stop().catch(() => null);
+      } else {
+        const tracePath = path.join(
+          GLOBAL_SETUP_TRACE_DIR,
+          `${role}-attempt${attempt}-${Date.now()}.zip`
+        );
+        await context.tracing
+          .stop({ path: tracePath })
+          .then(() => console.log(`[globalSetup] Trace saved: ${tracePath}`))
+          .catch((traceError) =>
+            console.warn(`[globalSetup] Could not save trace for ${role}: ${String(traceError)}`)
+          );
+      }
       await context.close();
     }
   }
