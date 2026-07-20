@@ -228,15 +228,14 @@ export class ContactsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/contacts') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/contacts') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'contact list ready',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.contactTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -271,9 +270,10 @@ export class ContactsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for contact GET API response — ensures React has contactId in state
     // Without this, share/edit fires before app resolves contactId → /contacts/undefined/share
-    await this.page.waitForResponse(
+    await this.armResponseWaitWithRecovery(
       (res) => res.url().match(/\/v1\/contacts\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 15000 }
+      'contact details page load',
+      15000
     ).catch(() => null);
   }
 
@@ -414,12 +414,13 @@ export class ContactsPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('search') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'contact search API',
+        15000
       );
     } catch {
       return null;
@@ -428,7 +429,7 @@ export class ContactsPage extends BasePage {
 
   private async captureContactIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
           // WHY: hardened 2026-07-19 — same ID-capture bug class already fixed
           // in DealsPage/CompaniesPage/Deals' quotation-panel flow: a bare
@@ -441,7 +442,8 @@ export class ContactsPage extends BasePage {
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: 30000 }
+        'capture contact ID',
+        30000
       );
       const body = await response.json();
       const contactId = body?.id ?? body?.data?.id ?? null;
@@ -882,13 +884,12 @@ export class ContactsPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'contact share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.page.waitForTimeout(300);
@@ -916,13 +917,12 @@ export class ContactsPage extends BasePage {
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'contact reassign response',
+      15000
+    ).catch(() => null);
     await reassignConfirmButton.click();
     await reassignResponsePromise;
     await this.page.waitForTimeout(300);
@@ -968,13 +968,14 @@ export class ContactsPage extends BasePage {
     // no /reports/ exclusion, same bug class as LeadsPage/ContactsPage's other
     // capture methods; fixed as defense-in-depth (not independently
     // live-reproduced for this specific flow).
-    const quotationIdPromise = this.page.waitForResponse(
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'contact panel quotation ID',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
@@ -1347,22 +1348,51 @@ export class ContactsPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
-  async createContact(data: ContactData): Promise<number | null> {
-    await this.clickAddContact();
-    await this.fillContactForm(data);
-    return await this.saveContact();
+  // WHY: shared by createContact()/updateContact() below — confirmed live
+  // that fillContactForm()/fillEditForm() mutate their parameter in place
+  // (timezone, address, company are reassigned directly on the object; the
+  // NESTED customFields.pickList/multiPickList are also conditionally
+  // reassigned) — a shallow `{...data}` alone would still share the same
+  // `customFields` object reference with the original, so a retry could
+  // still inherit attempt 1's mutated custom-field picks. This clones one
+  // level deeper, exactly as far as the confirmed mutations reach.
+  private cloneContactDataForRetry(data: ContactData): ContactData {
+    return { ...data, customFields: { ...data.customFields } };
   }
 
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): confirmed self-
+  // starting (clickAddContact() reopens the create form fresh each call) and
+  // confirmed safe to retry with the same input — a real session expiry
+  // always surfaces as a clean HTTP 400/401 rejection (nothing gets
+  // created), never a duplicate. `attemptData` is a fresh clone per attempt
+  // — see cloneContactDataForRetry()'s own comment for why a shallow clone
+  // alone isn't enough here.
+  async createContact(data: ContactData): Promise<number | null> {
+    return this.withSessionExpiryRetry(async () => {
+      const attemptData = this.cloneContactDataForRetry(data);
+      await this.clickAddContact();
+      await this.fillContactForm(attemptData);
+      return await this.saveContact();
+    }, 'createContact');
+  }
+
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): same reasoning as
+  // createContact() above — searchAndOpenContact() re-navigates from
+  // scratch each call (self-starting), and fillEditForm() shares the same
+  // in-place-mutation risk as fillContactForm().
   async updateContact(
     newData: ContactData,
     originalFirstName?: string,
     contactId?: number
   ): Promise<void> {
-    const searchName = originalFirstName ?? newData.firstName;
-    await this.searchAndOpenContact(searchName, contactId);
-    await this.clickEditIcon();
-    await this.fillEditForm(newData);
-    await this.saveEditedContact();
+    return this.withSessionExpiryRetry(async () => {
+      const attemptData = this.cloneContactDataForRetry(newData);
+      const searchName = originalFirstName ?? attemptData.firstName;
+      await this.searchAndOpenContact(searchName, contactId);
+      await this.clickEditIcon();
+      await this.fillEditForm(attemptData);
+      await this.saveEditedContact();
+    }, 'updateContact');
   }
 
   async assertContactUpdated(data: ContactData, contactId?: number): Promise<void> {

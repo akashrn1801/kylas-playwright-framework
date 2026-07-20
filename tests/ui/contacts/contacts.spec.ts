@@ -216,10 +216,7 @@ test.describe('Contacts', () => {
     const contactId = await contactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();
     // WHY: Navigate directly to detail URL — tests URL-based navigation works
-    await adminPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
+    await contactsPage.navigateTo(`${config.appUrl}/sales/contacts/details/${contactId}`);
     await safeWaitForURL(adminPage, /contacts\/details\//, 20000);
     await contactsPage.assertOnContactDetailPage();
     logger.success('C12 passed');

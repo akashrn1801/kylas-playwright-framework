@@ -271,15 +271,14 @@ export class DealsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/deals') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/deals') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'deals list response',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.dealTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -306,12 +305,11 @@ export class DealsPage extends BasePage {
 
     // WHY: Wait for deal GET API response — ensures React has dealId in state
     // Without this, edit/product/payment actions fire before app resolves dealId
-    await this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    await this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
+      'deal details GET response',
+      15000
+    ).catch(() => null);
   }
 
   async goToDealDetailsById(id: string | number): Promise<void> {
@@ -367,12 +365,13 @@ export class DealsPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('/search/deal') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'deal search API response',
+        15000
       );
     } catch {
       // Search API did not fire — wait briefly and continue
@@ -383,7 +382,7 @@ export class DealsPage extends BasePage {
 
   private async captureDealIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
           // WHY: tightened 2026-07-16 — confirmed live via this exact run's own
           // log that a bare `.includes('/deals')` substring match also matches
@@ -402,7 +401,8 @@ export class DealsPage extends BasePage {
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: config.timeouts.navigation }
+        'capture deal ID',
+        config.timeouts.navigation
       );
       const body = await response.json();
       const dealId = body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -994,31 +994,37 @@ export class DealsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async createDeal(data: DealData): Promise<number | null> {
-    await this.clickAddDeal();
-    await this.fillDealForm(data);
-    return await this.saveDeal();
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddDeal();
+      await this.fillDealForm(data);
+      return await this.saveDeal();
+    }, 'createDeal');
   }
 
   async createDealWithPayments(data: DealData): Promise<{
     dealId: number | null;
     totalValueText: string;
   }> {
-    await this.clickAddDeal();
-    await this.fillDealForm(data);
-    const totalValueText = await this.addPartPayments(data.numberOfInstallments);
-    const dealId = await this.saveDeal();
-    return { dealId, totalValueText };
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddDeal();
+      await this.fillDealForm(data);
+      const totalValueText = await this.addPartPayments(data.numberOfInstallments);
+      const dealId = await this.saveDeal();
+      return { dealId, totalValueText };
+    }, 'createDealWithPayments');
   }
 
   async updateDeal(newData: DealData, originalName?: string, dealId?: number): Promise<void> {
-    const searchName = originalName ?? newData.name;
-    await this.searchAndOpenDeal(searchName, dealId);
-    await this.clickEditIcon();
-    await this.fillEditForm(newData);
-    // WHY: Assert payment status and summary BEFORE saving —
-    // verifies the UI reflects the Received status change in the edit modal.
-    await this.assertPaymentReceivedAfterEdit();
-    await this.saveEditedDeal();
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
+      await this.searchAndOpenDeal(searchName, dealId);
+      await this.clickEditIcon();
+      await this.fillEditForm(newData);
+      // WHY: Assert payment status and summary BEFORE saving —
+      // verifies the UI reflects the Received status change in the edit modal.
+      await this.assertPaymentReceivedAfterEdit();
+      await this.saveEditedDeal();
+    }, 'updateDeal');
   }
 
   async assertDealCreated(data: DealData, dealId?: number): Promise<void> {
@@ -1228,13 +1234,11 @@ export class DealsPage extends BasePage {
     await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Capture the DELETE response before clicking — never end a mutation
     // with only a blind wait (CLAUDE.md rule #2).
-    const deleteResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'DELETE',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const deleteResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'DELETE',
+      'delete deal',
+      15000
+    ).catch(() => null);
     await this.deleteConfirmButton().click();
     await deleteResponsePromise;
     logger.success('Deal deleted');
@@ -1391,13 +1395,12 @@ export class DealsPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/deals\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'deal share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.shareModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
@@ -1426,13 +1429,12 @@ export class DealsPage extends BasePage {
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/deals\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/deals\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'deal reassign response',
+      15000
+    ).catch(() => null);
     await this.reassignConfirmButton().click();
     await reassignResponsePromise;
     await this.reassignUserInput().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
@@ -1632,11 +1634,11 @@ export class DealsPage extends BasePage {
     // has a working `captureIdFromToast()` for exactly this ID shape
     // ("Quotation ID: (\d+)"), so reuse that proven mechanism as
     // defense-in-depth rather than relying on the network capture alone.
-    const quotationIdPromise = this.page
-      .waitForResponse(
-        (res) => /\/v1\/quotations\/?(\?|$)/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
-        { timeout: 30000 }
-      )
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
+      (res) => /\/v1\/quotations\/?(\?|$)/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'capture quotation ID (from deal panel)',
+      30000
+    )
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;

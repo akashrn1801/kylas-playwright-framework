@@ -200,15 +200,14 @@ export class CompaniesPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/companies') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/companies') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'companies list response',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.companyTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -250,9 +249,10 @@ export class CompaniesPage extends BasePage {
     // WHY: Wait for company GET API response — ensures React has companyId in state
     // Without this, share/edit fires before app resolves companyId → /companies/undefined/share
     // Same fix applied to ContactsPage.waitForContactDetailsPage() — proven race condition
-    await this.page.waitForResponse(
+    await this.armResponseWaitWithRecovery(
       (res) => res.url().match(/\/v1\/companies\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 15000 }
+      'company details GET response',
+      15000
     ).catch(() => null);
   }
 
@@ -354,12 +354,13 @@ export class CompaniesPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('search') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'company search API response',
+        15000
       );
     } catch {
       return null;
@@ -368,7 +369,7 @@ export class CompaniesPage extends BasePage {
 
   private async captureCompanyIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
           res.url().includes('companies') &&
           // WHY: defensive exclusion added 2026-07-16 — DealsPage's identical
@@ -386,7 +387,8 @@ export class CompaniesPage extends BasePage {
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: 30000 }
+        'capture company ID',
+        30000
       );
 
       const body = await response.json();
@@ -795,13 +797,12 @@ export class CompaniesPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'company share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.page.waitForTimeout(300);
@@ -829,13 +830,12 @@ export class CompaniesPage extends BasePage {
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'company reassign response',
+      15000
+    ).catch(() => null);
     await reassignConfirmButton.click();
     await reassignResponsePromise;
     await this.page.waitForTimeout(300);
@@ -893,13 +893,14 @@ export class CompaniesPage extends BasePage {
     // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
     // no /reports/ exclusion, same bug class found across the codebase's other
     // ID-capture methods; fixed as defense-in-depth.
-    const quotationIdPromise = this.page.waitForResponse(
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture quotation ID (company panel)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
@@ -1090,13 +1091,14 @@ export class CompaniesPage extends BasePage {
     // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
     // /reports/ exclusion, same bug class found across the codebase's other
     // ID-capture methods; fixed as defense-in-depth.
-    const contactIdPromise = this.page.waitForResponse(
+    const contactIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/contacts') &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture contact ID (direct button)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? null;
@@ -1187,13 +1189,14 @@ export class CompaniesPage extends BasePage {
     // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
     // /reports/ exclusion, same bug class found across the codebase's other
     // ID-capture methods; fixed as defense-in-depth.
-    const contactIdPromise = this.page.waitForResponse(
+    const contactIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/contacts') &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture contact ID (ellipsis)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? null;
@@ -1244,13 +1247,14 @@ export class CompaniesPage extends BasePage {
     // ID-capture gaps found in this audit; not independently re-reproduced
     // here, but the collision mechanism is already proven, just on a
     // different call site with the identical predicate.
-    const dealIdPromise = this.page.waitForResponse(
+    const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture deal ID (direct button)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -1291,13 +1295,14 @@ export class CompaniesPage extends BasePage {
     }
     // WHY: hardened 2026-07-19 — same proven '/v4/reports/deals' collision
     // pattern as the sibling dealIdPromise above; fixed identically.
-    const dealIdPromise = this.page.waitForResponse(
+    const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture deal ID (ellipsis)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       return body?.id ?? body?.data?.id ?? body?.dealId ?? null;
@@ -1329,13 +1334,14 @@ export class CompaniesPage extends BasePage {
     // WHY: hardened 2026-07-19 — bare '/v1/tasks' substring had no /reports/
     // exclusion, same bug class found across the codebase's other ID-capture
     // methods; fixed as defense-in-depth.
-    const taskIdPromise = this.page.waitForResponse(
+    const taskIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().includes('/v1/tasks') &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'capture task ID (pending activity)',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? null;
@@ -1508,11 +1514,13 @@ export class CompaniesPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async createCompany(data: CompanyData): Promise<number | null> {
-    await this.clickAddCompany();
+    return this.withSessionExpiryRetry(async () => {
+      await this.clickAddCompany();
 
-    await this.fillCompanyForm(data);
+      await this.fillCompanyForm(data);
 
-    return await this.saveCompany();
+      return await this.saveCompany();
+    }, 'createCompany');
   }
 
   async updateCompany(
@@ -1520,15 +1528,17 @@ export class CompaniesPage extends BasePage {
     originalName?: string,
     companyId?: number
   ): Promise<void> {
-    const searchName = originalName ?? newData.name;
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
 
-    await this.searchAndOpenCompany(searchName, companyId);
+      await this.searchAndOpenCompany(searchName, companyId);
 
-    await this.clickEditIcon();
+      await this.clickEditIcon();
 
-    await this.fillEditForm(newData);
+      await this.fillEditForm(newData);
 
-    await this.saveEditedCompany();
+      await this.saveEditedCompany();
+    }, 'updateCompany');
   }
 
   async updateCompanyFull(
@@ -1536,15 +1546,17 @@ export class CompaniesPage extends BasePage {
     originalName?: string,
     companyId?: number
   ): Promise<void> {
-    const searchName = originalName ?? newData.name;
+    return this.withSessionExpiryRetry(async () => {
+      const searchName = originalName ?? newData.name;
 
-    await this.searchAndOpenCompany(searchName, companyId);
+      await this.searchAndOpenCompany(searchName, companyId);
 
-    await this.clickEditIcon();
+      await this.clickEditIcon();
 
-    await this.fillFullEditForm(newData);
+      await this.fillFullEditForm(newData);
 
-    await this.saveEditedCompany();
+      await this.saveEditedCompany();
+    }, 'updateCompanyFull');
   }
 
   async assertCompanyCreated(data: CompanyData, companyId?: number): Promise<void> {

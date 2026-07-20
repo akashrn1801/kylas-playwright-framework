@@ -1,9 +1,14 @@
 import { config } from '../../config/config';
-import { Page, Locator, expect, test } from '@playwright/test';
+import { Page, Locator, Response, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
-import { isSignInUrl, tryRecoverSessionForPage } from '../auth/authManager';
+import {
+  isSignInUrl,
+  tryRecoverSessionForPage,
+  isPageRegisteredForRecovery,
+  armSessionExpirySignal,
+} from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 
 export class BasePage {
@@ -15,9 +20,223 @@ export class BasePage {
 
   // ─── Navigation ───────────────────────────────────────────
 
+  // WHY mid-test session recovery lives here too (added 2026-07-20): this is
+  // the single most-used navigation primitive in the codebase (44+ call
+  // sites across every module) — click()/fill() already had this same
+  // recovery (2026-07-09), but a raw goto() landing on /signIn was never
+  // covered. Confirmed live: quotations.rbac.spec.ts's "restricted user
+  // should edit shared quotation when deal is accessible" failed exactly
+  // this way (session genuinely expired server-side ~24 minutes in, mid-
+  // test) — the test used a raw `restrictedPage.goto()` bypassing this
+  // method entirely, which is the actual reason click()/fill()'s existing
+  // recovery couldn't save it. Deliberately reuses tryRecoverSessionForPage()
+  // as-is — no new login logic, no new timeout values, no assumption about
+  // WHEN expiry happens (it reacts to the actual redirect, never a guessed
+  // duration) — because goto() doesn't throw on a redirect the way a failed
+  // click/fill does, the check has to happen AFTER the navigation resolves,
+  // not in a catch block. Gated on isPageRegisteredForRecovery() for the same
+  // reason click()/fill() now are (see that function's own comment) — a
+  // plain @playwright/test `page` (e.g. login.spec.ts) intentionally lands on
+  // signIn as its own tested condition and must never trigger this.
   async navigateTo(url: string): Promise<void> {
     logger.info(`Navigating to: ${url}`);
     await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+    if (isPageRegisteredForRecovery(this.page) && isSignInUrl(this.page.url())) {
+      logger.warn(
+        `Navigation to "${url}" landed on a signIn/login page — attempting one-time session recovery`
+      );
+      // WHY no retry loop here: tryRecoverSessionForPage() already navigates
+      // back to `url` internally after re-authenticating, and throws (never
+      // silently returns) if it's still on signIn or hits a permission-denied
+      // page afterward — that throw propagates straight out of this method,
+      // failing the test loudly instead of masking a genuine problem.
+      await tryRecoverSessionForPage(this.page, url);
+    }
+  }
+
+  // WHY this exists (2026-07-20, Gap 2 of today's session-expiry audit — see
+  // authManager.ts's own comment on armSessionExpirySignal() for the fuller
+  // background): a raw `page.waitForResponse(predicate, {timeout})` used to
+  // capture a save's response/ID is blind to mid-test session expiry —
+  // confirmed live twice (leads.rbac.spec.ts:398, call-logs.spec.ts:305)
+  // waiting out the FULL configured timeout before giving up. This is a
+  // deliberately MINIMAL, drop-in replacement for that one call, not a
+  // restructuring of the surrounding code: every existing call site keeps
+  // its own `.then(extractId).catch(() => null)` chain exactly as-is — only
+  // the innermost `this.page.waitForResponse(predicate, {timeout})` becomes
+  // `this.armResponseWaitWithRecovery(predicate, description, timeout)`.
+  // This matters for a subtle but real reason: some call sites (confirmed in
+  // TasksPage.saveDetailedTask()) arm TWO independent waitForResponse
+  // listeners racing the SAME single trigger click — wrapping the trigger
+  // action itself (rather than just the arming call) would risk a caller
+  // double-invoking that trigger. Keeping the trigger action exactly where
+  // it already lives in each caller sidesteps that risk entirely.
+  //
+  // WHY this deliberately does NOT try to resume the original request: by
+  // the time expiry is detected, the confirmed observed behavior is a
+  // full-page redirect to /signIn — any create-form/modal that triggered the
+  // request is already gone from the DOM. Blindly retrying would have
+  // nothing left to retry against. Instead: recover the session immediately
+  // (so whatever runs next — later steps in the same test, or Playwright's
+  // own outer retry — starts fresh) and fail FAST (typically ~1-2s once the
+  // expiry signal fires) instead of waiting out the full timeout. Both real
+  // occurrences today already self-healed via Playwright's own outer retry —
+  // this cuts the wasted time on the failing attempt from 30-60s to ~1-2s,
+  // without pretending to achieve same-attempt recovery it can't safely do
+  // here. For the subset of top-level workflow methods where same-attempt
+  // recovery IS safe (self-starting, no assumed prior UI state), see
+  // withSessionExpiryRetry() below instead — that's the mechanism that
+  // achieves genuine invisible-to-the-test recovery, layered on TOP of this
+  // one, not a replacement for it.
+  //
+  // WHY this method doesn't itself track "was expiry detected" for any
+  // outer caller: see withSessionExpiryRetry() below — it arms its OWN,
+  // independent armSessionExpirySignal() covering the whole workflow, rather
+  // than relying on a flag this method would set. Found via deliberate
+  // reproduction that a flag set only AFTER this method's own (slow, ~10s+)
+  // recovery completed could arrive too late relative to a DIFFERENT, faster
+  // code path elsewhere in the same workflow reacting to the same underlying
+  // failure (e.g. assertNoFormErrors() reading a toast within ~1.5s) — see
+  // armSessionExpirySignal()'s own updated comment in authManager.ts for the
+  // full race and its fix.
+  protected armResponseWaitWithRecovery(
+    predicate: (response: Response) => boolean,
+    description: string,
+    timeout = 30000
+  ): Promise<Response> {
+    const responsePromise = this.page.waitForResponse(predicate, { timeout });
+
+    // WHY: a page never registered for recovery (e.g. login.spec.ts's plain
+    // `page` fixture) gets the exact pre-existing behavior, unchanged — see
+    // isPageRegisteredForRecovery()'s own comment for why this check exists.
+    if (!isPageRegisteredForRecovery(this.page)) {
+      return responsePromise;
+    }
+
+    const urlBeforeAction = this.page.url();
+    const signal = armSessionExpirySignal(this.page);
+
+    return Promise.race([
+      responsePromise.then((response) => {
+        signal.cancel();
+        return response;
+      }),
+      signal.promise.then(async () => {
+        signal.cancel();
+        logger.warn(
+          `${description}: session expiry detected while waiting for a response — recovering ` +
+            `session and failing fast instead of waiting out the full ${timeout}ms timeout`
+        );
+        await tryRecoverSessionForPage(this.page, urlBeforeAction);
+        throw new Error(
+          `${description}: session expired while waiting for a response — session has been ` +
+            `recovered, but the original in-flight request cannot be resumed (its triggering ` +
+            `page state is gone). Retry the calling action.`
+        );
+      }),
+    ]).finally(() => {
+      // WHY both branches also cancel: whichever branch loses the race must
+      // still remove its listeners — an uncancelled response-side listener
+      // is harmless (GC'd with the promise), but an uncancelled signal
+      // listener would keep watching this page for the rest of the test,
+      // an unbounded resource leak for a per-call helper. `.finally()` here
+      // is a defensive backstop in case a future edit removes one of the
+      // inline `signal.cancel()` calls above.
+      signal.cancel();
+    });
+  }
+
+  // WHY this exists (2026-07-20, Gap 2's other half): a subset of top-level
+  // workflow methods (confirmed via a dedicated investigation across all 8
+  // page-object files before writing this) are genuinely SAFE to retry from
+  // scratch on a confirmed session expiry — they are "self-starting" (open
+  // their own form/navigate themselves, assume no prior UI state) and,
+  // critically, the call chain proved a real session expiry always
+  // surfaces as a clean HTTP 400/401-shaped rejection (auth middleware
+  // rejects before any business logic/DB write runs) — so re-invoking with
+  // the SAME input can never create a duplicate record. NOT applied
+  // blanket-wide: share/reassign/clone/add-from-panel methods assume the
+  // page is already on a specific entity's detail view (confirmed NOT
+  // self-starting across every module) and would fail worse if blindly
+  // retried after a recovery navigation — those rely on
+  // armResponseWaitWithRecovery() above instead, not this method.
+  //
+  // WHY it checks a synchronous, event-driven signal rather than retrying on
+  // any thrown error: a genuinely different failure (a real validation
+  // error, a real timeout) must never be blindly retried; only a CONFIRMED
+  // session-expiry event allows a second attempt. WHY this arms its OWN
+  // armSessionExpirySignal() (covering the whole workflowFn call) instead of
+  // relying on a flag set by a nested armResponseWaitWithRecovery() call:
+  // found via deliberate reproduction — an earlier version used a WeakMap
+  // flag that armResponseWaitWithRecovery() set only AFTER fully awaiting
+  // its own recovery (tryRecoverSessionForPage(), a real re-login, 10+
+  // seconds). That arrived too late for a workflow shaped like
+  // LeadsPage.saveLead(): it arms an ID-capture promise WITHOUT awaiting it
+  // yet, then runs OTHER code (assertNoFormErrors()) that reacts to the same
+  // underlying failure much faster (~1.5s, a DOM toast-check) — reproduced
+  // live, that faster code threw and propagated out of the whole workflow
+  // before the flag had been set, so the retry never fired despite this
+  // being a genuine, confirmed expiry. `hasFired()` is a synchronous boolean
+  // toggled the INSTANT the browser reports the underlying 401/redirect
+  // event — Playwright's `page.on(...)` callbacks fire immediately, with no
+  // awaited chain in between, which always precedes any JS-level reaction
+  // to that same event (the network event fires before the app's JS can
+  // process the response and render anything). Checking it here, armed for
+  // the ENTIRE workflowFn call, is race-free regardless of how slow any
+  // NESTED recovery attempt inside workflowFn is. Bounded to exactly one
+  // retry, matching every other recovery mechanism in this codebase
+  // (click/fill/navigateTo all retry at most once).
+  //
+  // WHY the caller must build its own clone of any mutable input INSIDE
+  // workflowFn, not this method: confirmed live that LeadsPage/ContactsPage
+  // helpers mutate their `data` parameter in place mid-fill (e.g.
+  // `data.timezone`, `data.address`) — if attempt 1 fails partway through,
+  // by the time this method's catch block runs, the caller's outer `data`
+  // reference may already be mutated. This method has no way to know the
+  // shape of any given caller's data or how to clone it correctly — the
+  // caller must construct a fresh, unmutated copy at the TOP of `workflowFn`
+  // itself (e.g. `const attemptData = { ...data };`) so attempt 2 always
+  // starts from the same clean input as attempt 1, never attempt 1's
+  // partially-mutated leftovers.
+  // WHY this explicitly calls tryRecoverSessionForPage() itself, rather than
+  // trusting the nested armResponseWaitWithRecovery() call's own (now
+  // abandoned) recovery to have finished: found via the same deliberate
+  // reproduction as above — the code path that threw first (e.g.
+  // assertNoFormErrors()) leaves the NESTED recovery's promise chain
+  // (inside the still-unawaited leadIdPromise) running in the background,
+  // unobserved. Retrying workflowFn() immediately, without this method's own
+  // explicit, AWAITED recovery, risks starting the retry before the session
+  // is actually fresh, or racing the abandoned chain's own later
+  // `page.goto()` mid-retry. Calling tryRecoverSessionForPage() here is not
+  // wasted duplicate work: authManager.ts's loginAndSaveState() already
+  // dedupes concurrent logins for the same role (an in-memory Map + cross-
+  // process file lock) — a second concurrent call simply awaits the first
+  // one's in-flight promise rather than logging in twice.
+  protected async withSessionExpiryRetry<T>(
+    workflowFn: () => Promise<T>,
+    description: string
+  ): Promise<T> {
+    if (!isPageRegisteredForRecovery(this.page)) {
+      return workflowFn();
+    }
+    const urlBeforeAttempt = this.page.url();
+    const signal = armSessionExpirySignal(this.page);
+    try {
+      const result = await workflowFn();
+      return result;
+    } catch (error) {
+      if (!signal.hasFired()) {
+        throw error;
+      }
+      logger.warn(
+        `${description}: session expiry was detected during this workflow — recovering session ` +
+          `and retrying the whole operation once`
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeAttempt);
+      return await workflowFn();
+    } finally {
+      signal.cancel();
+    }
   }
 
   async reloadPage(): Promise<void> {
@@ -63,7 +282,15 @@ export class BasePage {
       // here too. The retry below is the same, unwrapped Playwright call —
       // no second recovery attempt, no swallowing — so a failure on retry
       // (including a second redirect) propagates directly as a genuine error.
-      if (!isSignInUrl(this.page.url())) {
+      // WHY the registration check (added 2026-07-20, found via deliberate
+      // stress-testing, not a reported bug): without it, any test using a
+      // plain @playwright/test `page` (e.g. login.spec.ts, whose own flows
+      // legitimately start on/return to signIn) would get a confusing "Page
+      // was not registered for session recovery" instead of its real error,
+      // the moment a click ever failed while genuinely on that page's
+      // expected signIn state. See isPageRegisteredForRecovery()'s own
+      // comment for the full explanation.
+      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
         throw error;
       }
       logger.warn(
@@ -82,8 +309,46 @@ export class BasePage {
 
   // ─── Input Actions ────────────────────────────────────────
 
+  // WHY (2026-07-20, real credential leakage confirmed and fixed): `fill()`
+  // used to unconditionally log the literal value being typed, with no
+  // exception for sensitive fields — `LoginPage.enterPassword()` calls
+  // `this.fill(passwordInput, password, 'password field')` with the REAL
+  // `QA_ADMIN_PASSWORD`/`QA_RESTRICTED_PASSWORD` from `.env` (used by
+  // `login.spec.ts`'s two happy-path tests), so the actual plaintext
+  // password was being written to every log file from any run that includes
+  // that file — confirmed present in 5 historical log files. Grepped the
+  // entire codebase for every OTHER place a credential/token could leak the
+  // same way: `authManager.ts`'s own login flow (`globalSetup.ts` +
+  // `_doLogin()`) fills the password via a raw, un-logged locator call and
+  // was already safe; no token/cookie/session-id value is ever passed to a
+  // logger call anywhere else. This is the only real leak.
+  // Deliberately NOT masking email/username here — confirmed both
+  // `QA_ADMIN_EMAIL`/`QA_RESTRICTED_EMAIL` are `@mailinator.com` disposable
+  // test addresses (a public inbox service, not real PII), and this
+  // codebase already logs plenty of fake-but-real-looking generated emails
+  // for created test entities everywhere else — masking only the login
+  // email here would be inconsistent for near-zero security benefit and
+  // would cost real debuggability on login-flow failures.
+  private static readonly SENSITIVE_FIELD_PATTERN = /password|passwd|pwd|secret|token|api[_-]?key/i;
+
+  // WHY description-based, not a DOM `type="password"` query: the only
+  // known sensitive call site already passes an accurate description
+  // ('password field'), and this codebase's own convention is descriptive
+  // `description` strings at every fill() call site — checking the string
+  // is synchronous and adds zero latency to the many thousands of ordinary
+  // fill() calls in a full suite run. A DOM-attribute check would need an
+  // extra async round-trip on every single call to protect against a
+  // scenario (a password-type field with a misleading description) that a
+  // full grep of every locator in this codebase confirmed does not exist
+  // today (`#input_password` is the only password field anywhere, and its
+  // one call site already describes itself accurately).
+  private isSensitiveFieldDescription(description: string): boolean {
+    return BasePage.SENSITIVE_FIELD_PATTERN.test(description);
+  }
+
   async fill(locator: Locator, value: string, description = 'field'): Promise<void> {
-    logger.info(`Filling ${description} with: ${value}`);
+    const sensitive = this.isSensitiveFieldDescription(description);
+    logger.info(`Filling ${description} with: ${sensitive ? '[REDACTED]' : value}`);
     // WHY: see click()'s identical comment — must capture before the try.
     const urlBeforeAction = this.page.url();
     try {
@@ -93,8 +358,9 @@ export class BasePage {
     } catch (error) {
       // WHY: same mid-test session recovery as click() above — see that
       // method's comment for the full rationale. Kept as a single,
-      // non-recursive retry of the exact same calls.
-      if (!isSignInUrl(this.page.url())) {
+      // non-recursive retry of the exact same calls. Same registration
+      // check as click() too — see isPageRegisteredForRecovery()'s comment.
+      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
         throw error;
       }
       logger.warn(

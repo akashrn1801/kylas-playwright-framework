@@ -120,9 +120,7 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     if (dealId) {
-      await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-        waitUntil: 'domcontentloaded',
-      });
+      await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
       await safeWaitForURL(adminPage, /deals\/details\//, config.timeouts.navigation);
     } else {
       // WHY: dealId capture failed — use search to find and open the deal
@@ -159,9 +157,7 @@ test.describe('Deals', () => {
     await dealsPage.saveEditedDeal();
 
     // Verify stage changed on details page
-    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
     await dealsPage.assertPipelineStageOnDetails('Negotiation');
     logger.success('Pipeline stage changed to Negotiation and verified');
     logger.success('D6 passed');
@@ -246,9 +242,7 @@ test.describe('Deals', () => {
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
 
     // Navigate to deal details and verify part payments summary
-    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
     await safeWaitForURL(adminPage, /deals\/details\//, 20000);
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');

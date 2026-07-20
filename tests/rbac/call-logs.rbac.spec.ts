@@ -383,7 +383,8 @@ test.describe('Call Logs — RBAC', () => {
       await adminPage.waitForTimeout(3000);
       // WHY: Instrumentation checkpoint — CI timeout investigation (2026-07-05).
       logger.info(`CL31c: navigating restricted user to admin entity URL: ${absoluteUrl}`);
-      await restrictedPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded' });
+      const restrictedCallLogs = new CallLogsPage(restrictedPage);
+      await restrictedCallLogs.navigateTo(absoluteUrl);
       logger.info('CL31c: navigation complete');
       // WHY: Target the button, not the SVG inside it — the SVG is replaced during
       // React re-renders causing "element was detached from the DOM" on click.
@@ -537,10 +538,7 @@ test.describe('Call Logs — RBAC', () => {
       // The admin's write (create/share/assign) may not be immediately visible
       // to the restricted user's session without a brief propagation wait
       await adminPage.waitForTimeout(3000);
-      await restrictedPage.goto(
-        `${config.appUrl}/sales/calls/list?id=${callLogId}`,
-        { waitUntil: 'domcontentloaded' }
-      );
+      await restrictedCallLogs.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
       await restrictedPage.waitForTimeout(1000);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);

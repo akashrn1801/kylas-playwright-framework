@@ -283,9 +283,10 @@ export class QuotationsPage extends BasePage {
       // CallLogsPage.goToCallLogById(). This method has no current callers,
       // but fixing it anyway rather than leaving a latent trap for whoever
       // wires it up next.
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (r: Response) => /\/v1\/quotations\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
-        { timeout: 15000 }
+        'captureQuotationIdFromResponse: create POST',
+        15000
       );
       const body = await response.json().catch(() => null);
       const id = body?.id || body?.data?.id || null;
@@ -345,10 +346,11 @@ export class QuotationsPage extends BasePage {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY: Await the GET /v1/quotations/{id} API response — React depends on this to
     // populate the edit form. If it returns 404, fail fast instead of waiting for timeout.
-    const response = await this.page.waitForResponse(
+    const response = await this.armResponseWaitWithRecovery(
       (res) =>
         res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 15000 }
+      'waitForQuotationDetailPage: detail GET',
+      15000
     ).catch(() => null);
     if (response?.status() === 404) {
       throw new Error('Quotation detail page returned 404 — quotation does not exist');
@@ -426,12 +428,12 @@ export class QuotationsPage extends BasePage {
     await this.fill(this.searchInput(), value, 'search input');
 
     await Promise.all([
-      this.page
-        .waitForResponse(
-          (r) =>
-            r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
-          { timeout: 15000 }
-        )
+      this.armResponseWaitWithRecovery(
+        (r) =>
+          r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
+        'performSearch: search POST',
+        15000
+      )
         .catch(() => null),
       this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 }),
     ]);
@@ -551,9 +553,10 @@ export class QuotationsPage extends BasePage {
     // GET /v1/quotations/{id} may complete before waitForQuotationDetailPage registers
     // its own listener, causing it to miss the response and return null after 15s.
     // Registering here guarantees we capture the response regardless of timing.
-    const responsePromise = this.page.waitForResponse(
+    const responsePromise = this.armResponseWaitWithRecovery(
       (res) => res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 20000 }
+      'goToQuotationDetail: detail GET',
+      20000
     ).catch(() => null);
     await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
     await this.waitForUrl(/\/quotations\/details\//, 20000);
@@ -563,6 +566,25 @@ export class QuotationsPage extends BasePage {
       throw new Error('Quotation detail page returned 404 — quotation does not exist');
     }
     logger.info(`Navigated to quotation detail: ${id}`);
+  }
+
+  // WHY this exists (added 2026-07-20, found via a real re-run failure, not
+  // guessed): both goToQuotationDetail() and the sibling private
+  // waitForQuotationDetailPage() only wait for the URL, domcontentloaded, and
+  // the GET /v1/quotations/{id} API response — none of that confirms React
+  // has actually RENDERED the page body from that response. A caller that
+  // checks page content (e.g. a "not a blank/white screen" assertion)
+  // immediately after either of those can catch the page mid-render.
+  // Confirmed live: quotations.rbac.spec.ts's "restricted user should edit
+  // shared quotation when deal is accessible" failed exactly this way
+  // (body text only 38 chars, expected >50) right after a navigation fix
+  // that replaced an old, unrelated flat waitForTimeout(3000) — that sleep
+  // was accidentally also covering this gap. #edit-action-btn is a stable,
+  // already-proven signal that the detail page has rendered (clickEditButton()
+  // already waits on it) — reusing it here rather than reintroducing a blind
+  // sleep or inventing a new locator.
+  async waitForDetailPageRendered(): Promise<void> {
+    await this.editActionBtn().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
   }
 
   // ─── 6. Form actions ─────────────────────────────────────────────────────────
@@ -766,9 +788,43 @@ export class QuotationsPage extends BasePage {
   // this file — because this retry dance is only relevant to the narrow
   // deal-linked-entity RBAC scenario, not the common save path used by every
   // other caller of saveQuotation().
+  // WHY (2026-07-20, real confirmed failure — not a guess): the full-suite
+  // run's one genuine terminal failure (`quotations.spec.ts:247`) and one of
+  // its flaky tests (`quotations.spec.ts:131`) both hit an identical, narrow
+  // signature: `HTTP 400`, response body `{"code":"000000","message":
+  // "Connection has been closed BEFORE response, while sending request
+  // body", ...}`. This is a raw TCP/HTTP connection reset mid-request — the
+  // server never actually processed this attempt — genuinely distinct from
+  // every other error this method already classifies (029003 inaccessible-
+  // entity, or any other real validation/business-logic rejection). Scoped
+  // deliberately narrow, matching this exact confirmed message text, not a
+  // broad "any 400/500 is transient" net — a false-positive match here would
+  // silently retry a real, non-transient failure. `grep -c` across the full
+  // 4-hour, 272-test run log that surfaced this found exactly 3 occurrences,
+  // all inside one ~60-second window — not a recurring pattern elsewhere —
+  // so this is intentionally a small, bounded retry, not a systemic redesign.
+  private static readonly TRANSIENT_CONNECTION_RESET_PATTERN =
+    /Connection has been closed BEFORE response/i;
+
+  private isTransientConnectionResetError(body: any): boolean {
+    const message: string = body?.message || '';
+    return QuotationsPage.TRANSIENT_CONNECTION_RESET_PATTERN.test(message);
+  }
+
   async saveQuotationHandlingInaccessibleEntities(): Promise<InaccessibleEntityRetryResult> {
     const removedEntities: Array<'contact' | 'company'> = [];
     let lastErrorMessage = '';
+
+    // WHY a separate, bounded counter from the entity-removal `attempt` loop
+    // below: a connection reset is not an inaccessible-entity error and must
+    // never consume one of the 3 entity-removal attempts or trigger
+    // clearAssociatedContacts()/clearAssociatedCompany() — those are
+    // stateful, destructive DOM mutations that have nothing to do with a
+    // network-level blip. This budget is spent ONLY on this exact signature;
+    // any other failure (including a second, different error) falls through
+    // to the existing classification logic unchanged.
+    const maxConnectionResetRetries = 2;
+    let connectionResetRetries = 0;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       logger.info(`Saving quotation — attempt ${attempt}/3`);
@@ -780,13 +836,13 @@ export class QuotationsPage extends BasePage {
       // that the real create endpoint is `/v1/quotations/` WITH a trailing
       // slash — the pattern below tolerates one optionally before/after the
       // id segment, otherwise this silently never matches and times out.
-      const responsePromise = this.page
-        .waitForResponse(
-          (res) =>
-            /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
-            ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
-          { timeout: 20000 }
-        )
+      const responsePromise = this.armResponseWaitWithRecovery(
+        (res) =>
+          /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
+          ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
+        'saveQuotationHandlingInaccessibleEntities: save POST/PATCH/PUT',
+        20000
+      )
         .catch(() => null);
       await this.modalSaveButton().click();
       const response = await responsePromise;
@@ -822,6 +878,49 @@ export class QuotationsPage extends BasePage {
       }
 
       const body = await response.json().catch(() => ({}));
+
+      // WHY checked BEFORE isInaccessibleEntityError: a connection reset can
+      // in principle share HTTP 400 with a real validation error, so this
+      // must be resolved first, on its own distinct message text, never
+      // folded into the entity-removal classification below.
+      if (this.isTransientConnectionResetError(body)) {
+        lastErrorMessage = body?.message || '';
+        if (connectionResetRetries < maxConnectionResetRetries) {
+          connectionResetRetries++;
+          logger.warn(
+            `Save hit a transient connection reset ("${lastErrorMessage}") — retrying save ` +
+              `(connection-reset retry ${connectionResetRetries}/${maxConnectionResetRetries}, ` +
+              `does not consume an entity-removal attempt)`
+          );
+          // WHY no wait/backoff: the confirmed occurrences recovered on the
+          // very next attempt with no delay needed (Playwright's own outer
+          // test-retry, which has zero backoff either, already proved this)
+          // — a raw TCP reset is either gone by the next request or it
+          // isn't; waiting doesn't change that, so don't slow down the
+          // common, already-transient case for a hypothetical benefit.
+          // WHY this is safe under quotations.spec.ts's serial mode: this
+          // retry is entirely internal to one save() call, inside one
+          // test's single attempt — it happens strictly BEFORE Playwright's
+          // own test-level/serial-file-level retry would ever be considered,
+          // and only reduces the chance of reaching that point. It does not
+          // change, intercept, or duplicate Playwright's own retry
+          // mechanics in any way — if this bounded retry also fails, the
+          // method still throws exactly as before, and the existing
+          // serial-retry cascade behaves identically to today.
+          attempt--; // WHY: don't consume an entity-removal attempt slot
+          continue;
+        }
+        // WHY throw here, not fall through to isInaccessibleEntityError:
+        // never silently swallow — if the bounded retry budget is
+        // exhausted and it's STILL this exact signature, fail loudly and
+        // clearly rather than mis-attributing it to the unrelated
+        // inaccessible-entity path below.
+        throw new Error(
+          `Save failed after ${maxConnectionResetRetries} retries, still hitting a transient ` +
+            `connection reset: "${lastErrorMessage}"`
+        );
+      }
+
       const { isInaccessibleEntityError, entity, rawMessage } = this.classifyInaccessibleEntityError(
         response.status(),
         body
@@ -1232,69 +1331,71 @@ export class QuotationsPage extends BasePage {
   }
 
   async createQuotation(data: QuotationData): Promise<{ id: string | null; dealName: string }> {
-    logger.info(`Creating quotation: ${data.quotationNumber}`);
-    // WHY: Previous test may have left edit modal open — dismiss before navigating
-    await this.dismissModalIfOpen();
-    await this.goToQuotationsList();
-    await this.openCreateForm();
-    const selectedDeal = await this.fillQuotationForm(data);
-    // WHY: A randomly-selected deal (the common case here) can auto-populate
-    // an Associated Contact/Company the current user cannot access, causing
-    // a 422 (errorCode 029003) on save. This used to be "handled" by a dead
-    // try/catch — saveQuotation() was a bare click that never threw, so the
-    // catch never fired, and any such failure previously surfaced later as a
-    // confusing, unrelated-looking error further down this method instead of
-    // here. Now that saveQuotation() correctly detects and throws on a real
-    // save failure, route through the dedicated, already-verified handler
-    // (contact-then-company removal, with the dropdown-overlay dismissal
-    // step this old inline logic never had) instead of reintroducing an
-    // incomplete inline retry.
-    const saveResult = await this.saveQuotationHandlingInaccessibleEntities();
-    if (saveResult.removedEntities.length > 0) {
-      logger.warn(
-        `Removed inaccessible deal-linked entities to save: ${saveResult.removedEntities.join(', ')}`
-      );
-    }
-    // WHY: Capture ID from toast BEFORE navigating away — avoids search index lag
-    // on prod where quotation may not appear in list for 30-40s after creation
-    const toastId = await this.captureIdFromToast();
-    await this.assertSuccessToast();
-    await this.assertOnListPage();
-    let id: string | null = toastId;
-    if (id) {
-      // WHY: ID-first navigation — go directly to detail URL, no search needed
-      logger.info(`ID-first navigation to quotation: ${id}`);
-      await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
-      await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
-      const urlId = await this.captureIdFromUrl();
-      if (urlId) id = urlId;
-      logger.success(`Navigated to quotation detail: ${id}`);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating quotation: ${data.quotationNumber}`);
+      // WHY: Previous test may have left edit modal open — dismiss before navigating
+      await this.dismissModalIfOpen();
       await this.goToQuotationsList();
-    } else {
-      // WHY: Fallback — use retryFindInList which searches fulltext by summary
-      // List rows show system QUO-XXXXX numbers not our custom prefix
-      // retryFindInList searches API fulltext and checks for ANY non-empty row
-      logger.warn('Toast ID not captured — falling back to retryFindInList by summary');
-      const rowFound = await this.retryFindInList(data.summary);
-      if (!rowFound) throw new Error(`Quotation row not found after retries: ${data.summary}`);
-      // WHY: Click first non-empty row — retryFindInList leaves page on search results.
-      // Find the index via one batched allTextContents() call (same fix/evidence
-      // as retryFindInList()/assertQuotationNotInList() above — 33.8x measured
-      // speedup over N individual innerText() calls), then click only that one
-      // row — the click itself is still a single, necessary UI action.
-      const allRows = this.page.locator('.rt-tr-group');
-      const rowTexts = await allRows.allTextContents().catch(() => []);
-      const firstNonEmptyIndex = rowTexts.findIndex((t) => t.trim().length > 0);
-      if (firstNonEmptyIndex !== -1) {
-        await allRows.nth(firstNonEmptyIndex).click();
+      await this.openCreateForm();
+      const selectedDeal = await this.fillQuotationForm(data);
+      // WHY: A randomly-selected deal (the common case here) can auto-populate
+      // an Associated Contact/Company the current user cannot access, causing
+      // a 422 (errorCode 029003) on save. This used to be "handled" by a dead
+      // try/catch — saveQuotation() was a bare click that never threw, so the
+      // catch never fired, and any such failure previously surfaced later as a
+      // confusing, unrelated-looking error further down this method instead of
+      // here. Now that saveQuotation() correctly detects and throws on a real
+      // save failure, route through the dedicated, already-verified handler
+      // (contact-then-company removal, with the dropdown-overlay dismissal
+      // step this old inline logic never had) instead of reintroducing an
+      // incomplete inline retry.
+      const saveResult = await this.saveQuotationHandlingInaccessibleEntities();
+      if (saveResult.removedEntities.length > 0) {
+        logger.warn(
+          `Removed inaccessible deal-linked entities to save: ${saveResult.removedEntities.join(', ')}`
+        );
       }
-      await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
-      id = await this.captureIdFromUrl();
-      logger.info(`Captured ID: ${id}`);
-      await this.goToQuotationsList();
-    }
-    logger.success(`Quotation created: ${data.quotationNumber} (id: ${id})`);
-    return { id, dealName: selectedDeal };
+      // WHY: Capture ID from toast BEFORE navigating away — avoids search index lag
+      // on prod where quotation may not appear in list for 30-40s after creation
+      const toastId = await this.captureIdFromToast();
+      await this.assertSuccessToast();
+      await this.assertOnListPage();
+      let id: string | null = toastId;
+      if (id) {
+        // WHY: ID-first navigation — go directly to detail URL, no search needed
+        logger.info(`ID-first navigation to quotation: ${id}`);
+        await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
+        await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
+        const urlId = await this.captureIdFromUrl();
+        if (urlId) id = urlId;
+        logger.success(`Navigated to quotation detail: ${id}`);
+        await this.goToQuotationsList();
+      } else {
+        // WHY: Fallback — use retryFindInList which searches fulltext by summary
+        // List rows show system QUO-XXXXX numbers not our custom prefix
+        // retryFindInList searches API fulltext and checks for ANY non-empty row
+        logger.warn('Toast ID not captured — falling back to retryFindInList by summary');
+        const rowFound = await this.retryFindInList(data.summary);
+        if (!rowFound) throw new Error(`Quotation row not found after retries: ${data.summary}`);
+        // WHY: Click first non-empty row — retryFindInList leaves page on search results.
+        // Find the index via one batched allTextContents() call (same fix/evidence
+        // as retryFindInList()/assertQuotationNotInList() above — 33.8x measured
+        // speedup over N individual innerText() calls), then click only that one
+        // row — the click itself is still a single, necessary UI action.
+        const allRows = this.page.locator('.rt-tr-group');
+        const rowTexts = await allRows.allTextContents().catch(() => []);
+        const firstNonEmptyIndex = rowTexts.findIndex((t) => t.trim().length > 0);
+        if (firstNonEmptyIndex !== -1) {
+          await allRows.nth(firstNonEmptyIndex).click();
+        }
+        await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
+        id = await this.captureIdFromUrl();
+        logger.info(`Captured ID: ${id}`);
+        await this.goToQuotationsList();
+      }
+      logger.success(`Quotation created: ${data.quotationNumber} (id: ${id})`);
+      return { id, dealName: selectedDeal };
+    }, 'createQuotation');
   }
   async createQuotationWithOwner(
     data: QuotationData,
@@ -1323,45 +1424,47 @@ export class QuotationsPage extends BasePage {
     changes: Partial<QuotationData>,
     id?: string
   ): Promise<void> {
-    logger.info(`Updating quotation: ${quotationNumber}`);
-    // WHY: Wrap in try-catch so a navigation failure throws immediately with a clear message
-    // rather than waiting out the full 480s timeout — which kills the worker in serial mode
-    // and skips all subsequent tests in the describe block.
-    try {
-      // WHY: After createQuotation the page lands on the list — navigate directly to detail
-      // page by ID when available. goToQuotationDetail now waits for the API response so
-      // clickEditButton always finds a fully-loaded page.
-      if (id) {
-        await this.goToQuotationDetail(id);
-      } else {
-        await this.searchAndOpenQuotation(quotationNumber);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Updating quotation: ${quotationNumber}`);
+      // WHY: Wrap in try-catch so a navigation failure throws immediately with a clear message
+      // rather than waiting out the full 480s timeout — which kills the worker in serial mode
+      // and skips all subsequent tests in the describe block.
+      try {
+        // WHY: After createQuotation the page lands on the list — navigate directly to detail
+        // page by ID when available. goToQuotationDetail now waits for the API response so
+        // clickEditButton always finds a fully-loaded page.
+        if (id) {
+          await this.goToQuotationDetail(id);
+        } else {
+          await this.searchAndOpenQuotation(quotationNumber);
+        }
+        await this.clickEditButton();
+        await this.fillEditForm(changes);
+        // WHY: Plain saveQuotation() has no resilience against the same
+        // inaccessible-entity (029004 "Invalid company"/"Invalid contact") error
+        // createQuotation() already retries around — a randomly-selected
+        // Company/Contact in the edit form can be just as inaccessible as one
+        // selected during create. saveQuotationHandlingInaccessibleEntities()
+        // already matches PATCH/PUT as well as POST and already confirms success
+        // via toast/URL fallback, so this covers the edit modal without any
+        // changes to that method itself. See T13 (quotations.spec.ts:161) flake.
+        const result = await this.saveQuotationHandlingInaccessibleEntities();
+        if (result.removedEntities.length) {
+          logger.warn(
+            `updateQuotation removed inaccessible entities to save: ${result.removedEntities.join(', ')}`
+          );
+        }
+        // Navigate back to detail page after save
+        if (id) {
+          await this.goToQuotationDetail(id);
+        }
+        logger.success(`Quotation updated: ${quotationNumber}`);
+      } catch (error) {
+        // WHY: Re-throw with context so the failure message names the quotation —
+        // makes CI logs actionable without tracing back through stack frames
+        throw new Error(`updateQuotation failed for "${quotationNumber}": ${String(error)}`);
       }
-     await this.clickEditButton();
-await this.fillEditForm(changes);
-// WHY: Plain saveQuotation() has no resilience against the same
-// inaccessible-entity (029004 "Invalid company"/"Invalid contact") error
-// createQuotation() already retries around — a randomly-selected
-// Company/Contact in the edit form can be just as inaccessible as one
-// selected during create. saveQuotationHandlingInaccessibleEntities()
-// already matches PATCH/PUT as well as POST and already confirms success
-// via toast/URL fallback, so this covers the edit modal without any
-// changes to that method itself. See T13 (quotations.spec.ts:161) flake.
-const result = await this.saveQuotationHandlingInaccessibleEntities();
-if (result.removedEntities.length) {
-  logger.warn(
-    `updateQuotation removed inaccessible entities to save: ${result.removedEntities.join(', ')}`
-  );
-}
-      // Navigate back to detail page after save
-      if (id) {
-        await this.goToQuotationDetail(id);
-      }
-      logger.success(`Quotation updated: ${quotationNumber}`);
-    } catch (error) {
-      // WHY: Re-throw with context so the failure message names the quotation —
-      // makes CI logs actionable without tracing back through stack frames
-      throw new Error(`updateQuotation failed for "${quotationNumber}": ${String(error)}`);
-    }
+    }, 'updateQuotation');
   }
 
   async attemptCreateWithInaccessibleEntities(
