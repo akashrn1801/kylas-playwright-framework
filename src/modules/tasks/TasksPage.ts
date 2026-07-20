@@ -128,14 +128,17 @@ export class TasksPage extends BasePage {
   // over /sales/tasks/list?id={id}. This is the canonical wait for that URL
   // shape, mirroring waitForXDetailsPage() in the other modules.
   async waitForTaskDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/tasks\/list\?.*id=/, { timeout: 20000 });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/tasks\/list\?.*id=/, 20000);
     await this.page.waitForLoadState('domcontentloaded');
-    await this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    await this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+      'waitForTaskDetailsPage (task GET)',
+      15000
+    ).catch(() => null);
   }
 
   async goToTaskDetailsById(id: string | number): Promise<void> {
@@ -147,15 +150,14 @@ export class TasksPage extends BasePage {
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/tasks') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/tasks') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'waitForListReady (tasks list GET)',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.taskList()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -165,12 +167,20 @@ export class TasksPage extends BasePage {
 
   private async captureIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res: Response) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class as the other
+          // page objects' capture methods, found on a deeper re-sweep after
+          // this one was initially missed (it has a toast-based fallback,
+          // which masked that the primary response-based path was still
+          // vulnerable to silently capturing a WRONG id from an unrelated
+          // /v1/tasks-containing POST, not just falling through to null).
           res.url().includes('/v1/tasks') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
-        { timeout: config.timeouts.navigation }
+          (res.status() === 200 || res.status() === 201),
+        'captureIdFromResponse (task create)',
+        config.timeouts.navigation
       );
       const body = await response.json();
       const id = body?.id ?? body?.data?.id ?? null;
@@ -234,12 +244,11 @@ export class TasksPage extends BasePage {
         // WHY: Press Enter to trigger search — the input does not auto-search on type
         await this.taskSearchInput().press('Enter');
         // WHY: Wait for the API response after search is triggered
-        await this.page
-          .waitForResponse(
-            (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-            { timeout: 10000 }
-          )
-          .catch(() => null);
+        await this.armResponseWaitWithRecovery(
+          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+          'retryFindTask (search GET)',
+          10000
+        ).catch(() => null);
         await this.page.waitForTimeout(500);
       }
 
@@ -368,11 +377,9 @@ export class TasksPage extends BasePage {
     try {
       const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
       await assignedToOptions.first().waitFor({ state: 'visible', timeout: 5000 });
-      const count = await assignedToOptions.count();
-      const idx = Math.floor(Math.random() * count);
-      const selectedUser = await assignedToOptions.nth(idx).textContent();
-      await assignedToOptions.nth(idx).click();
-      logger.success(`Assigned To set: ${selectedUser?.trim()}`);
+      // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
+      // textContent()+click() on a random option, same bug class.
+      await this.selectRandomOptionWithRetry(assignedToOptions, 'Assigned To set');
     } catch {
       logger.warn('Assigned To options not found — skipping');
       await this.page.keyboard.press('Escape');
@@ -565,13 +572,8 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form filled');
   }
 
-  // WHY: A substring `hasText` match against the user-selection dropdown can
-  // select the wrong entry whenever one user's display name is a substring
-  // of another's — confirmed live root cause of a similar bug in
-  // ContactsPage/DealsPage share/reassign. Match exact text via anchored regex.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
   async fillAssignedTo(userName: string): Promise<void> {
     logger.info(`Assigning task to: ${userName}`);
@@ -660,11 +662,12 @@ export class TasksPage extends BasePage {
       // Step 4: Pick a random option
       const count = await options.count().catch(() => 0);
       if (count > 0) {
-        const idx = Math.floor(Math.random() * Math.min(count, 5));
-        const optionText = await options.nth(idx).textContent();
-        await options.nth(idx).click();
+        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+        // before — was an unbounded textContent()+click() on a random option.
+        await this.selectRandomOptionWithRetry(options, `Selected ${entityType} relation`, {
+          maxOptions: 5,
+        });
         await this.page.waitForTimeout(300);
-        logger.success(`Selected ${entityType} relation: ${optionText?.trim()}`);
       } else {
         logger.warn(`No ${entityType} records found — skipping`);
         await this.page.keyboard.press('Escape');
@@ -688,12 +691,11 @@ export class TasksPage extends BasePage {
   async saveDetailedTask(): Promise<number | null> {
     logger.info('Saving Detailed Task');
     const idPromise = this.captureIdFromResponse();
-    const responsePromise = this.page
-      .waitForResponse(
-        (res) => /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
-        { timeout: 20000 }
-      )
-      .catch(() => null);
+    const responsePromise = this.armResponseWaitWithRecovery(
+      (res) => /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'saveDetailedTask (task create POST)',
+      20000
+    ).catch(() => null);
     await this.click(this.detailedTaskSaveButton(), 'save button');
     const response = await responsePromise;
 
@@ -741,24 +743,22 @@ export class TasksPage extends BasePage {
       const visible = await itemById.isVisible().catch(() => false);
       if (visible) {
         await itemById.click();
-        await this.page
-          .waitForResponse(
-            (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-            { timeout: 10000 }
-          )
-          .catch(() => null);
+        await this.armResponseWaitWithRecovery(
+          (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+          'openTaskInDetailPanel (by id GET)',
+          10000
+        ).catch(() => null);
         logger.success(`Task ${taskId} opened via ID`);
         return;
       }
     }
     // Fallback to name
     await this.taskListItemByName(name).click();
-    await this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-        { timeout: 10000 }
-      )
-      .catch(() => null);
+    await this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+      'openTaskInDetailPanel (by name GET)',
+      10000
+    ).catch(() => null);
     logger.success(`Task "${name}" opened`);
   }
 
@@ -860,7 +860,7 @@ export class TasksPage extends BasePage {
   // Filter by Task ID (same pattern as MeetingsPage.searchMeetingById)
   // ──────────────────────────────────────────────────────────
 
-  async searchTaskById(taskId: number): Promise<void> {
+  async searchTaskById(taskId: number): Promise<boolean> {
     // WHY: Navigate directly to ?id=<taskId> — same native URL pattern as meetings.
     // Filter panel approach was unreliable: detail panel intercepts filter button clicks.
     logger.info(`Navigating to task by ID: ${taskId}`);
@@ -868,17 +868,22 @@ export class TasksPage extends BasePage {
     await this.waitForListReady();
     // WHY: Use try/catch instead of bare waitFor — if the item is not visible within
     // the timeout (e.g. search index lag), we want assertTaskInList to fall through
-    // to the retryFindTask name-search fallback rather than throwing here.
+    // to the retryFindTask name-search fallback rather than throwing here. Returns
+    // the outcome (2026-07-16 fix) so assertTaskInList can rely on this method's own
+    // already-robust, auto-retrying wait instead of redundantly re-checking with a
+    // weaker one-shot isVisible() snapshot that had no retry of its own.
     try {
       await this.taskListItemById(taskId).waitFor({
         state: 'visible',
         timeout: config.timeouts.navigation,
       });
       logger.success(`Task ID ${taskId} confirmed via direct URL navigation`);
+      return true;
     } catch {
       logger.warn(
         `Task ID ${taskId} not visible via direct URL — assertTaskInList will fall back to name search`
       );
+      return false;
     }
   }
 
@@ -897,18 +902,29 @@ export class TasksPage extends BasePage {
       logger.info(`Verifying task via ID filter: ${taskId}`);
       // WHY: Use ID filter to bypass smartlist (My Tasks / My Open Tasks etc)
       // Smartlists filter by owner/due date and hide newly created tasks
-      // ID filter always finds the task regardless of smartlist state
-      await this.searchTaskById(taskId);
-      const itemById = this.taskListItemById(taskId);
-      const visibleById = await itemById.isVisible().catch(() => false);
-      if (visibleById) {
+      // ID filter always finds the task regardless of smartlist state.
+      //
+      // WHY relying on searchTaskById()'s own return value (2026-07-16 fix):
+      // this used to ignore that method's result and re-check with its own
+      // one-shot isVisible().catch(() => false) — a single, non-retrying
+      // snapshot layered UNDER an already-robust, auto-retrying waitFor()
+      // inside searchTaskById() itself. That made the real wait pointless:
+      // by the time the immediate re-check ran, a still-loading row would
+      // read as "not visible" and fall back to name-search even though the
+      // primary ID path would have found it moments later. Using the
+      // already-correct boolean directly is the same "primary ID / fallback
+      // search" structure as Leads/Companies/Deals/Contacts' ID-direct-nav,
+      // just with a query-param list view instead of a standalone detail
+      // page since Tasks has no such page.
+      const foundById = await this.searchTaskById(taskId);
+      if (foundById) {
         logger.success(`Task ID ${taskId} confirmed in list`);
         return;
       }
       logger.warn(`Task ID ${taskId} not visible via filter — falling back to name search`);
     }
     const found = await this.retryFindTask(name);
-    expect(found).toBeTruthy();
+    expect(found, `Task "${name}" should exist in list`).toBeTruthy();
     logger.success(`Task "${name}" confirmed in list`);
   }
 
@@ -924,12 +940,11 @@ export class TasksPage extends BasePage {
       await this.taskSearchInput().fill(`"${name}"`);
       // WHY: Press Enter to trigger search
       await this.taskSearchInput().press('Enter');
-      await this.page
-        .waitForResponse(
-          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-          { timeout: 10000 }
-        )
-        .catch(() => null);
+      await this.armResponseWaitWithRecovery(
+        (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
+        'assertTaskNotInList (search GET)',
+        10000
+      ).catch(() => null);
       await this.page.waitForTimeout(500);
     }
     await expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 });
@@ -1114,10 +1129,12 @@ export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   async createQuickTask(data: TaskData): Promise<number | null> {
-    logger.info(`Creating quick task: "${data.name}"`);
-    await this.openQuickTaskForm();
-    await this.fillQuickTaskForm(data);
-    return await this.saveQuickTask();
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating quick task: "${data.name}"`);
+      await this.openQuickTaskForm();
+      await this.fillQuickTaskForm(data);
+      return await this.saveQuickTask();
+    }, 'createQuickTask');
   }
 
  async createDetailedTask(
@@ -1125,47 +1142,53 @@ export class TasksPage extends BasePage {
     assignedToName?: string,
     skipRelation = false
   ): Promise<number | null> {
-    logger.info(`Creating detailed task: "${data.name}"`);
-    await this.openDetailedTaskForm();
-    await this.fillDetailedTaskForm(data, assignedToName, skipRelation);
-    try {
-      return await this.saveDetailedTask();
-    } catch (error) {
-      if (!(error instanceof InaccessibleRelationError) || skipRelation) {
-        throw error;
-      }
-      // WHY: a randomly-selected Relation entity (Lead/Deal/Contact/Company)
-      // was inaccessible to this user — same root cause as quotations'
-      // "Invalid company" flake, different API error shape (007043
-      // "<entity>.not.found"). No confirmed per-chip removal for the
-      // Relation field, so retry the whole form once with relation skipped
-      // entirely rather than guessing at DOM chip-removal.
-      logger.warn(
-        `Save failed due to inaccessible relation entity ("${error.message}") — ` +
-          `retrying without relation`
-      );
-      await this.detailedTaskModal()
-        .waitFor({ state: 'hidden', timeout: 5000 })
-        .catch(() => {});
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating detailed task: "${data.name}"`);
       await this.openDetailedTaskForm();
-      await this.fillDetailedTaskForm(data, assignedToName, true);
-      return await this.saveDetailedTask();
-    }
+      await this.fillDetailedTaskForm(data, assignedToName, skipRelation);
+      try {
+        return await this.saveDetailedTask();
+      } catch (error) {
+        if (!(error instanceof InaccessibleRelationError) || skipRelation) {
+          throw error;
+        }
+        // WHY: a randomly-selected Relation entity (Lead/Deal/Contact/Company)
+        // was inaccessible to this user — same root cause as quotations'
+        // "Invalid company" flake, different API error shape (007043
+        // "<entity>.not.found"). No confirmed per-chip removal for the
+        // Relation field, so retry the whole form once with relation skipped
+        // entirely rather than guessing at DOM chip-removal.
+        logger.warn(
+          `Save failed due to inaccessible relation entity ("${error.message}") — ` +
+            `retrying without relation`
+        );
+        await this.detailedTaskModal()
+          .waitFor({ state: 'hidden', timeout: 5000 })
+          .catch(() => {});
+        await this.openDetailedTaskForm();
+        await this.fillDetailedTaskForm(data, assignedToName, true);
+        return await this.saveDetailedTask();
+      }
+    }, 'createDetailedTask');
   }
   async createQuickTaskThenSwitchToDetailed(data: TaskData): Promise<number | null> {
-    logger.info(`Creating task via Quick → Detailed toggle: "${data.name}"`);
-    await this.openQuickTaskForm();
-    await this.switchQuickFormToDetailed();
-    await this.fillDetailedTaskForm(data);
-    return await this.saveDetailedTask();
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating task via Quick → Detailed toggle: "${data.name}"`);
+      await this.openQuickTaskForm();
+      await this.switchQuickFormToDetailed();
+      await this.fillDetailedTaskForm(data);
+      return await this.saveDetailedTask();
+    }, 'createQuickTaskThenSwitchToDetailed');
   }
 
   async updateTask(newData: TaskData, originalName: string, taskId?: number | null): Promise<void> {
-    logger.info(`Updating task "${originalName}" → "${newData.name}"`);
-    await this.openTaskInDetailPanel(originalName, taskId);
-    await this.clickEditButtonInDetailPanel();
-    await this.fillEditForm(newData);
-    await this.saveEditedTask();
-    logger.success(`Task updated to "${newData.name}"`);
+    await this.withSessionExpiryRetry(async () => {
+      logger.info(`Updating task "${originalName}" → "${newData.name}"`);
+      await this.openTaskInDetailPanel(originalName, taskId);
+      await this.clickEditButtonInDetailPanel();
+      await this.fillEditForm(newData);
+      await this.saveEditedTask();
+      logger.success(`Task updated to "${newData.name}"`);
+    }, 'updateTask');
   }
 }

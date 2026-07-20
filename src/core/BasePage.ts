@@ -1,9 +1,15 @@
 import { config } from '../../config/config';
-import { Page, Locator, expect } from '@playwright/test';
+import { Page, Locator, Response, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
-import { isSignInUrl, tryRecoverSessionForPage } from '../auth/authManager';
+import {
+  isSignInUrl,
+  tryRecoverSessionForPage,
+  isPageRegisteredForRecovery,
+  armSessionExpirySignal,
+} from '../auth/authManager';
+import { safeWaitForURL } from '../utils/navigation';
 
 export class BasePage {
   protected page: Page;
@@ -14,9 +20,223 @@ export class BasePage {
 
   // ─── Navigation ───────────────────────────────────────────
 
+  // WHY mid-test session recovery lives here too (added 2026-07-20): this is
+  // the single most-used navigation primitive in the codebase (44+ call
+  // sites across every module) — click()/fill() already had this same
+  // recovery (2026-07-09), but a raw goto() landing on /signIn was never
+  // covered. Confirmed live: quotations.rbac.spec.ts's "restricted user
+  // should edit shared quotation when deal is accessible" failed exactly
+  // this way (session genuinely expired server-side ~24 minutes in, mid-
+  // test) — the test used a raw `restrictedPage.goto()` bypassing this
+  // method entirely, which is the actual reason click()/fill()'s existing
+  // recovery couldn't save it. Deliberately reuses tryRecoverSessionForPage()
+  // as-is — no new login logic, no new timeout values, no assumption about
+  // WHEN expiry happens (it reacts to the actual redirect, never a guessed
+  // duration) — because goto() doesn't throw on a redirect the way a failed
+  // click/fill does, the check has to happen AFTER the navigation resolves,
+  // not in a catch block. Gated on isPageRegisteredForRecovery() for the same
+  // reason click()/fill() now are (see that function's own comment) — a
+  // plain @playwright/test `page` (e.g. login.spec.ts) intentionally lands on
+  // signIn as its own tested condition and must never trigger this.
   async navigateTo(url: string): Promise<void> {
     logger.info(`Navigating to: ${url}`);
     await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+    if (isPageRegisteredForRecovery(this.page) && isSignInUrl(this.page.url())) {
+      logger.warn(
+        `Navigation to "${url}" landed on a signIn/login page — attempting one-time session recovery`
+      );
+      // WHY no retry loop here: tryRecoverSessionForPage() already navigates
+      // back to `url` internally after re-authenticating, and throws (never
+      // silently returns) if it's still on signIn or hits a permission-denied
+      // page afterward — that throw propagates straight out of this method,
+      // failing the test loudly instead of masking a genuine problem.
+      await tryRecoverSessionForPage(this.page, url);
+    }
+  }
+
+  // WHY this exists (2026-07-20, Gap 2 of today's session-expiry audit — see
+  // authManager.ts's own comment on armSessionExpirySignal() for the fuller
+  // background): a raw `page.waitForResponse(predicate, {timeout})` used to
+  // capture a save's response/ID is blind to mid-test session expiry —
+  // confirmed live twice (leads.rbac.spec.ts:398, call-logs.spec.ts:305)
+  // waiting out the FULL configured timeout before giving up. This is a
+  // deliberately MINIMAL, drop-in replacement for that one call, not a
+  // restructuring of the surrounding code: every existing call site keeps
+  // its own `.then(extractId).catch(() => null)` chain exactly as-is — only
+  // the innermost `this.page.waitForResponse(predicate, {timeout})` becomes
+  // `this.armResponseWaitWithRecovery(predicate, description, timeout)`.
+  // This matters for a subtle but real reason: some call sites (confirmed in
+  // TasksPage.saveDetailedTask()) arm TWO independent waitForResponse
+  // listeners racing the SAME single trigger click — wrapping the trigger
+  // action itself (rather than just the arming call) would risk a caller
+  // double-invoking that trigger. Keeping the trigger action exactly where
+  // it already lives in each caller sidesteps that risk entirely.
+  //
+  // WHY this deliberately does NOT try to resume the original request: by
+  // the time expiry is detected, the confirmed observed behavior is a
+  // full-page redirect to /signIn — any create-form/modal that triggered the
+  // request is already gone from the DOM. Blindly retrying would have
+  // nothing left to retry against. Instead: recover the session immediately
+  // (so whatever runs next — later steps in the same test, or Playwright's
+  // own outer retry — starts fresh) and fail FAST (typically ~1-2s once the
+  // expiry signal fires) instead of waiting out the full timeout. Both real
+  // occurrences today already self-healed via Playwright's own outer retry —
+  // this cuts the wasted time on the failing attempt from 30-60s to ~1-2s,
+  // without pretending to achieve same-attempt recovery it can't safely do
+  // here. For the subset of top-level workflow methods where same-attempt
+  // recovery IS safe (self-starting, no assumed prior UI state), see
+  // withSessionExpiryRetry() below instead — that's the mechanism that
+  // achieves genuine invisible-to-the-test recovery, layered on TOP of this
+  // one, not a replacement for it.
+  //
+  // WHY this method doesn't itself track "was expiry detected" for any
+  // outer caller: see withSessionExpiryRetry() below — it arms its OWN,
+  // independent armSessionExpirySignal() covering the whole workflow, rather
+  // than relying on a flag this method would set. Found via deliberate
+  // reproduction that a flag set only AFTER this method's own (slow, ~10s+)
+  // recovery completed could arrive too late relative to a DIFFERENT, faster
+  // code path elsewhere in the same workflow reacting to the same underlying
+  // failure (e.g. assertNoFormErrors() reading a toast within ~1.5s) — see
+  // armSessionExpirySignal()'s own updated comment in authManager.ts for the
+  // full race and its fix.
+  protected armResponseWaitWithRecovery(
+    predicate: (response: Response) => boolean,
+    description: string,
+    timeout = 30000
+  ): Promise<Response> {
+    const responsePromise = this.page.waitForResponse(predicate, { timeout });
+
+    // WHY: a page never registered for recovery (e.g. login.spec.ts's plain
+    // `page` fixture) gets the exact pre-existing behavior, unchanged — see
+    // isPageRegisteredForRecovery()'s own comment for why this check exists.
+    if (!isPageRegisteredForRecovery(this.page)) {
+      return responsePromise;
+    }
+
+    const urlBeforeAction = this.page.url();
+    const signal = armSessionExpirySignal(this.page);
+
+    return Promise.race([
+      responsePromise.then((response) => {
+        signal.cancel();
+        return response;
+      }),
+      signal.promise.then(async () => {
+        signal.cancel();
+        logger.warn(
+          `${description}: session expiry detected while waiting for a response — recovering ` +
+            `session and failing fast instead of waiting out the full ${timeout}ms timeout`
+        );
+        await tryRecoverSessionForPage(this.page, urlBeforeAction);
+        throw new Error(
+          `${description}: session expired while waiting for a response — session has been ` +
+            `recovered, but the original in-flight request cannot be resumed (its triggering ` +
+            `page state is gone). Retry the calling action.`
+        );
+      }),
+    ]).finally(() => {
+      // WHY both branches also cancel: whichever branch loses the race must
+      // still remove its listeners — an uncancelled response-side listener
+      // is harmless (GC'd with the promise), but an uncancelled signal
+      // listener would keep watching this page for the rest of the test,
+      // an unbounded resource leak for a per-call helper. `.finally()` here
+      // is a defensive backstop in case a future edit removes one of the
+      // inline `signal.cancel()` calls above.
+      signal.cancel();
+    });
+  }
+
+  // WHY this exists (2026-07-20, Gap 2's other half): a subset of top-level
+  // workflow methods (confirmed via a dedicated investigation across all 8
+  // page-object files before writing this) are genuinely SAFE to retry from
+  // scratch on a confirmed session expiry — they are "self-starting" (open
+  // their own form/navigate themselves, assume no prior UI state) and,
+  // critically, the call chain proved a real session expiry always
+  // surfaces as a clean HTTP 400/401-shaped rejection (auth middleware
+  // rejects before any business logic/DB write runs) — so re-invoking with
+  // the SAME input can never create a duplicate record. NOT applied
+  // blanket-wide: share/reassign/clone/add-from-panel methods assume the
+  // page is already on a specific entity's detail view (confirmed NOT
+  // self-starting across every module) and would fail worse if blindly
+  // retried after a recovery navigation — those rely on
+  // armResponseWaitWithRecovery() above instead, not this method.
+  //
+  // WHY it checks a synchronous, event-driven signal rather than retrying on
+  // any thrown error: a genuinely different failure (a real validation
+  // error, a real timeout) must never be blindly retried; only a CONFIRMED
+  // session-expiry event allows a second attempt. WHY this arms its OWN
+  // armSessionExpirySignal() (covering the whole workflowFn call) instead of
+  // relying on a flag set by a nested armResponseWaitWithRecovery() call:
+  // found via deliberate reproduction — an earlier version used a WeakMap
+  // flag that armResponseWaitWithRecovery() set only AFTER fully awaiting
+  // its own recovery (tryRecoverSessionForPage(), a real re-login, 10+
+  // seconds). That arrived too late for a workflow shaped like
+  // LeadsPage.saveLead(): it arms an ID-capture promise WITHOUT awaiting it
+  // yet, then runs OTHER code (assertNoFormErrors()) that reacts to the same
+  // underlying failure much faster (~1.5s, a DOM toast-check) — reproduced
+  // live, that faster code threw and propagated out of the whole workflow
+  // before the flag had been set, so the retry never fired despite this
+  // being a genuine, confirmed expiry. `hasFired()` is a synchronous boolean
+  // toggled the INSTANT the browser reports the underlying 401/redirect
+  // event — Playwright's `page.on(...)` callbacks fire immediately, with no
+  // awaited chain in between, which always precedes any JS-level reaction
+  // to that same event (the network event fires before the app's JS can
+  // process the response and render anything). Checking it here, armed for
+  // the ENTIRE workflowFn call, is race-free regardless of how slow any
+  // NESTED recovery attempt inside workflowFn is. Bounded to exactly one
+  // retry, matching every other recovery mechanism in this codebase
+  // (click/fill/navigateTo all retry at most once).
+  //
+  // WHY the caller must build its own clone of any mutable input INSIDE
+  // workflowFn, not this method: confirmed live that LeadsPage/ContactsPage
+  // helpers mutate their `data` parameter in place mid-fill (e.g.
+  // `data.timezone`, `data.address`) — if attempt 1 fails partway through,
+  // by the time this method's catch block runs, the caller's outer `data`
+  // reference may already be mutated. This method has no way to know the
+  // shape of any given caller's data or how to clone it correctly — the
+  // caller must construct a fresh, unmutated copy at the TOP of `workflowFn`
+  // itself (e.g. `const attemptData = { ...data };`) so attempt 2 always
+  // starts from the same clean input as attempt 1, never attempt 1's
+  // partially-mutated leftovers.
+  // WHY this explicitly calls tryRecoverSessionForPage() itself, rather than
+  // trusting the nested armResponseWaitWithRecovery() call's own (now
+  // abandoned) recovery to have finished: found via the same deliberate
+  // reproduction as above — the code path that threw first (e.g.
+  // assertNoFormErrors()) leaves the NESTED recovery's promise chain
+  // (inside the still-unawaited leadIdPromise) running in the background,
+  // unobserved. Retrying workflowFn() immediately, without this method's own
+  // explicit, AWAITED recovery, risks starting the retry before the session
+  // is actually fresh, or racing the abandoned chain's own later
+  // `page.goto()` mid-retry. Calling tryRecoverSessionForPage() here is not
+  // wasted duplicate work: authManager.ts's loginAndSaveState() already
+  // dedupes concurrent logins for the same role (an in-memory Map + cross-
+  // process file lock) — a second concurrent call simply awaits the first
+  // one's in-flight promise rather than logging in twice.
+  protected async withSessionExpiryRetry<T>(
+    workflowFn: () => Promise<T>,
+    description: string
+  ): Promise<T> {
+    if (!isPageRegisteredForRecovery(this.page)) {
+      return workflowFn();
+    }
+    const urlBeforeAttempt = this.page.url();
+    const signal = armSessionExpirySignal(this.page);
+    try {
+      const result = await workflowFn();
+      return result;
+    } catch (error) {
+      if (!signal.hasFired()) {
+        throw error;
+      }
+      logger.warn(
+        `${description}: session expiry was detected during this workflow — recovering session ` +
+          `and retrying the whole operation once`
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeAttempt);
+      return await workflowFn();
+    } finally {
+      signal.cancel();
+    }
   }
 
   async reloadPage(): Promise<void> {
@@ -62,7 +282,15 @@ export class BasePage {
       // here too. The retry below is the same, unwrapped Playwright call —
       // no second recovery attempt, no swallowing — so a failure on retry
       // (including a second redirect) propagates directly as a genuine error.
-      if (!isSignInUrl(this.page.url())) {
+      // WHY the registration check (added 2026-07-20, found via deliberate
+      // stress-testing, not a reported bug): without it, any test using a
+      // plain @playwright/test `page` (e.g. login.spec.ts, whose own flows
+      // legitimately start on/return to signIn) would get a confusing "Page
+      // was not registered for session recovery" instead of its real error,
+      // the moment a click ever failed while genuinely on that page's
+      // expected signIn state. See isPageRegisteredForRecovery()'s own
+      // comment for the full explanation.
+      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
         throw error;
       }
       logger.warn(
@@ -81,8 +309,46 @@ export class BasePage {
 
   // ─── Input Actions ────────────────────────────────────────
 
+  // WHY (2026-07-20, real credential leakage confirmed and fixed): `fill()`
+  // used to unconditionally log the literal value being typed, with no
+  // exception for sensitive fields — `LoginPage.enterPassword()` calls
+  // `this.fill(passwordInput, password, 'password field')` with the REAL
+  // `QA_ADMIN_PASSWORD`/`QA_RESTRICTED_PASSWORD` from `.env` (used by
+  // `login.spec.ts`'s two happy-path tests), so the actual plaintext
+  // password was being written to every log file from any run that includes
+  // that file — confirmed present in 5 historical log files. Grepped the
+  // entire codebase for every OTHER place a credential/token could leak the
+  // same way: `authManager.ts`'s own login flow (`globalSetup.ts` +
+  // `_doLogin()`) fills the password via a raw, un-logged locator call and
+  // was already safe; no token/cookie/session-id value is ever passed to a
+  // logger call anywhere else. This is the only real leak.
+  // Deliberately NOT masking email/username here — confirmed both
+  // `QA_ADMIN_EMAIL`/`QA_RESTRICTED_EMAIL` are `@mailinator.com` disposable
+  // test addresses (a public inbox service, not real PII), and this
+  // codebase already logs plenty of fake-but-real-looking generated emails
+  // for created test entities everywhere else — masking only the login
+  // email here would be inconsistent for near-zero security benefit and
+  // would cost real debuggability on login-flow failures.
+  private static readonly SENSITIVE_FIELD_PATTERN = /password|passwd|pwd|secret|token|api[_-]?key/i;
+
+  // WHY description-based, not a DOM `type="password"` query: the only
+  // known sensitive call site already passes an accurate description
+  // ('password field'), and this codebase's own convention is descriptive
+  // `description` strings at every fill() call site — checking the string
+  // is synchronous and adds zero latency to the many thousands of ordinary
+  // fill() calls in a full suite run. A DOM-attribute check would need an
+  // extra async round-trip on every single call to protect against a
+  // scenario (a password-type field with a misleading description) that a
+  // full grep of every locator in this codebase confirmed does not exist
+  // today (`#input_password` is the only password field anywhere, and its
+  // one call site already describes itself accurately).
+  private isSensitiveFieldDescription(description: string): boolean {
+    return BasePage.SENSITIVE_FIELD_PATTERN.test(description);
+  }
+
   async fill(locator: Locator, value: string, description = 'field'): Promise<void> {
-    logger.info(`Filling ${description} with: ${value}`);
+    const sensitive = this.isSensitiveFieldDescription(description);
+    logger.info(`Filling ${description} with: ${sensitive ? '[REDACTED]' : value}`);
     // WHY: see click()'s identical comment — must capture before the try.
     const urlBeforeAction = this.page.url();
     try {
@@ -92,8 +358,9 @@ export class BasePage {
     } catch (error) {
       // WHY: same mid-test session recovery as click() above — see that
       // method's comment for the full rationale. Kept as a single,
-      // non-recursive retry of the exact same calls.
-      if (!isSignInUrl(this.page.url())) {
+      // non-recursive retry of the exact same calls. Same registration
+      // check as click() too — see isPageRegisteredForRecovery()'s comment.
+      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
         throw error;
       }
       logger.warn(
@@ -112,6 +379,174 @@ export class BasePage {
     await locator.selectOption(value);
   }
 
+  // WHY (2026-07-17): shared, robust random-option selector — kills a bug class
+  // found in 7 places across 5 modules (Deals/Tasks/Meetings/Call-logs), each of
+  // which picked a random option from an open react-select menu then did an
+  // UNBOUNDED `textContent()` + `.click()`. Two live-confirmed failure modes:
+  //  (1) a churning/detaching option list makes the unbounded read or click
+  //      auto-wait for a stable node and ride the FULL 480s test timeout — an
+  //      ~8-min hard hang instead of failing fast (no `actionTimeout` is set in
+  //      playwright.config.ts); and
+  //  (2) one specific option index can be persistently non-actionable while
+  //      other indices in the SAME list work — so retrying the same index is
+  //      futile and only the outer test-level retry saves it.
+  // This bounds BOTH the read and the click to 15000ms (the exact value
+  // DealsPage's earlier `.click()` fix already used — mirrored, not invented)
+  // and RE-ROLLS to a fresh random index each attempt, so a transient bad option
+  // is replaced rather than re-hit — recovering within the test's first attempt.
+  // Caller must ensure the options are already visible. `maxOptions` caps the
+  // random range (for the existing `Math.min(count, 5)` call sites); `force`
+  // passes through to the click. Returns the selected option's trimmed text.
+  protected async selectRandomOptionWithRetry(
+    options: Locator,
+    description: string,
+    opts: { maxOptions?: number; force?: boolean } = {}
+  ): Promise<string> {
+    const total = await options.count();
+    if (total === 0) {
+      throw new Error(`${description}: no options available to select`);
+    }
+    const range = opts.maxOptions ? Math.min(total, opts.maxOptions) : total;
+    let selectedText = 'unknown';
+    let selectedIndex = -1;
+    let done = false;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+      const idx = Math.floor(Math.random() * range);
+      const option = options.nth(idx);
+      logger.info(`${description}: attempting index ${idx} of ${total} (attempt ${attempt}/3)`);
+      try {
+        selectedText = (await option.textContent({ timeout: 15000 }))?.trim() ?? 'unknown';
+        await option.click({ timeout: 15000, force: opts.force ?? false });
+        selectedIndex = idx;
+        done = true;
+      } catch (error) {
+        lastError = error;
+        logger.info(
+          `${description}: read/click on index ${idx} failed (attempt ${attempt}/3), retrying with a fresh index: ${String(error)}`
+        );
+      }
+    }
+    if (!done) {
+      throw new Error(
+        `${description}: failed to select any of ${total} options after 3 attempts — ${String(lastError)}`
+      );
+    }
+    logger.success(`${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`);
+    return selectedText;
+  }
+
+  // WHY (Fix 2, 2026-07-17): a deliberately NARROW list of network-layer error
+  // signatures that mean "the request never reached/completed against the
+  // server" — i.e. genuinely transient and safe to retry for an idempotent GET
+  // search. Confirmed live: ERR_NAME_NOT_RESOLVED (a DNS blip failed a
+  // /v1/companies/lookup search and cost a full test attempt). The rest are the
+  // same connection-level class (interface changed, connection dropped/refused/
+  // timed out, host unreachable) — all "no server response was produced", never
+  // a decision the server made. Deliberately EXCLUDES anything indicating a real
+  // response (HTTP 4xx/5xx — the server DID answer) and ERR_ABORTED (a
+  // navigation cancel, not a failure). Do not widen this without evidence a new
+  // signature is genuinely transient — a false inclusion would silently retry a
+  // real, non-transient problem.
+  private static readonly TRANSIENT_NETWORK_ERROR_PATTERNS: RegExp[] = [
+    /ERR_NAME_NOT_RESOLVED/i,
+    /ERR_INTERNET_DISCONNECTED/i,
+    /ERR_NETWORK_CHANGED/i,
+    /ERR_CONNECTION_RESET/i,
+    /ERR_CONNECTION_REFUSED/i,
+    /ERR_CONNECTION_TIMED_OUT/i,
+    /ERR_ADDRESS_UNREACHABLE/i,
+  ];
+
+  private isTransientNetworkError(errorText: string): boolean {
+    return BasePage.TRANSIENT_NETWORK_ERROR_PATTERNS.some((re) => re.test(errorText));
+  }
+
+  // WHY (Fix 2, 2026-07-17): fills a react-select's live-search input to trigger
+  // a backend lookup, waits for options to appear, and — if the lookup's backend
+  // request fails with a TRANSIENT network error (the list above) and the options
+  // therefore never load — waits a short beat and RE-TRIGGERS the search, up to a
+  // bounded number of attempts. This targets the specific, confirmed failure mode
+  // from the overnight run (a brief DNS blip failed the company-search request and
+  // cost a whole first-attempt test failure that only Playwright's outer retry
+  // recovered). It is NOT a blind timeout bump: each attempt keeps the same
+  // bounded wait; we only re-search when a transient network error was actually
+  // observed on an API request during that attempt. A brief 1-3s blip thus becomes
+  // invisible (the test passes within its FIRST attempt); a genuine extended
+  // outage still fails, and fails reasonably fast (bounded attempts — worst case
+  // ~3 × wait, no infinite retry). A non-transient failure (zero real results, or
+  // an HTTP 4xx/5xx where the server responded) is NOT retried — it falls straight
+  // through to a loud throw.
+  protected async fillSearchAndWaitForOptions(
+    searchInput: Locator,
+    options: Locator,
+    searchTerm: string,
+    description: string
+  ): Promise<void> {
+    const maxAttempts = 3;
+    // WHY 1500ms: sized to the observed blip duration, not a guess — the run's
+    // DNS errors resolved within a couple of seconds; 1.5s lets a brief blip
+    // clear before re-searching without materially slowing the genuine-outage
+    // give-up path. Only ever paid when a transient error was actually seen.
+    const transientRetryWaitMs = 1500;
+    let lastTransient: string | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Scoped listener armed BEFORE triggering the search so the failure event
+      // can't be missed; records the transient error text synchronously, then is
+      // removed in `finally`. Matches only backend API requests (/v1.. /v9..) so
+      // a transient failure on an unrelated static asset doesn't trigger a retry.
+      let transientErr: string | null = null;
+      const onRequestFailed = (req: import('@playwright/test').Request): void => {
+        const err = req.failure()?.errorText ?? '';
+        if (/\/v[1-9]\//.test(req.url()) && this.isTransientNetworkError(err)) {
+          transientErr = err;
+        }
+      };
+      this.page.on('requestfailed', onRequestFailed);
+
+      let optionsAppeared = false;
+      try {
+        if (attempt > 1) {
+          await searchInput.fill('');
+          await this.page.waitForTimeout(200);
+        }
+        await searchInput.fill(searchTerm);
+        optionsAppeared = await options
+          .first()
+          .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+          .then(() => true)
+          .catch(() => false);
+      } finally {
+        this.page.off('requestfailed', onRequestFailed);
+      }
+
+      if (optionsAppeared) {
+        return;
+      }
+
+      lastTransient = transientErr;
+      if (lastTransient && attempt < maxAttempts) {
+        logger.warn(
+          `${description}: live search hit a transient network error (${lastTransient}) and options never loaded — waiting ${transientRetryWaitMs}ms and re-triggering search (attempt ${attempt}/${maxAttempts})`
+        );
+        await this.page.waitForTimeout(transientRetryWaitMs);
+        continue;
+      }
+
+      // No transient error seen (a real, non-transient failure — genuinely zero
+      // results, or a server 4xx/5xx), or retries exhausted on a persistent
+      // outage. Stop and fail loudly + fast, never hang chasing an unreachable
+      // network.
+      break;
+    }
+
+    throw new Error(
+      `${description}: live search for "${searchTerm}" returned no options after ${maxAttempts} attempt(s)` +
+        (lastTransient ? ` — last transient network error: ${lastTransient}` : '')
+    );
+  }
+
   // ─── Wait Helpers ─────────────────────────────────────────
 
   async waitForVisible(locator: Locator, timeout = 30000): Promise<void> {
@@ -123,20 +558,18 @@ export class BasePage {
   }
 
   async waitForUrl(
-    urlPattern: string | RegExp,
+    urlPattern: string | RegExp | ((url: URL) => boolean),
     timeout = config.timeouts.navigation
   ): Promise<void> {
     logger.info(`Waiting for URL: ${urlPattern}`);
-    // WHY: Confirmed live (2026-07-07) — Playwright's waitForURL defaults to
-    // waitUntil: 'load' when not specified, which waits for EVERY resource on
-    // the page (images, third-party embeds/chat-widget iframes, analytics
-    // beacons) to finish, not just the URL changing. Under real-world load
-    // this occasionally exceeds even a 60s timeout despite the navigation
-    // having functionally succeeded already. Every other navigation-wait in
-    // this codebase (waitForXDetailsPage() etc.) already uses
-    // domcontentloaded for exactly this reason — bring this shared helper in
-    // line with that established, proven convention.
-    await this.page.waitForURL(urlPattern, { timeout, waitUntil: 'domcontentloaded' });
+    // WHY: delegates to the shared safeWaitForURL() utility (2026-07-19) —
+    // see src/utils/navigation.ts for the full history of why this exists and
+    // why nothing in this codebase should ever call page.waitForURL()
+    // directly. This was the FIRST place this bug class was fixed
+    // (2026-07-07); it's now the canonical entry point every BasePage
+    // subclass uses, and non-BasePage code (globalSetup.ts, authManager.ts,
+    // fixtures/index.ts) calls safeWaitForURL() directly for the same reason.
+    await safeWaitForURL(this.page, urlPattern, timeout);
   }
 
   // ─── Assertion Helpers ────────────────────────────────────
@@ -270,6 +703,35 @@ export class BasePage {
     return (await this.customFieldInputLocator(fieldName).count()) > 0;
   }
 
+  // WHY: PART C (2026-07-15) — a DEDICATED-TEST-level skip mechanism, built
+  // for the first time here (not a retrofit of an existing thing — only the
+  // per-field, silently-graceful isCustomFieldPresent() above existed
+  // before, already reused automatically by every generic fill method).
+  // A dedicated custom-field test's own detail-page assertion
+  // (assertLeadCustomFieldsOnDetail()/assertContactCustomFieldsOnDetail())
+  // intentionally THROWS rather than skips when a field is missing — a
+  // silent skip there would hide the fact that verification never ran, for
+  // methods whose only callers are the handful of dedicated tests that
+  // always expect these fields to exist. This method is the counterpart at
+  // the OUTER, whole-test level: called once, right after the relevant
+  // create/edit form is open (custom-field inputs don't exist in the DOM
+  // before then), it checks whether ANY of the module's fields are present
+  // at all, and skips the entire test with a clear reason if none are —
+  // rather than letting the test proceed only to fail loudly and
+  // confusingly at the assertion step on an environment (e.g. Stage/Prod
+  // today) that simply doesn't have these fields yet.
+  protected async skipDedicatedCustomFieldTestIfAbsent(
+    fieldNames: string[],
+    moduleName: string
+  ): Promise<void> {
+    const presence = await Promise.all(fieldNames.map((name) => this.isCustomFieldPresent(name)));
+    const anyPresent = presence.some(Boolean);
+    test.skip(
+      !anyPresent,
+      `No ${moduleName} custom fields present in this environment — skipping dedicated custom-field test`
+    );
+  }
+
   private logCustomFieldSkipped(description: string, fieldName: string, action: string): void {
     logger.info(
       `Custom field "${description}" (cf${fieldName}) not found in this environment — skipping ${action}. ` +
@@ -329,6 +791,98 @@ export class BasePage {
     if (optionTexts.length === 0) {
       throw new Error(
         `${description}: react-select opened but has zero live options — cannot select a value`
+      );
+    }
+    const randomIndex = Math.floor(Math.random() * optionTexts.length);
+    const selectedValue = optionTexts[randomIndex];
+    await options.nth(randomIndex).click();
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* menu may already be gone */
+      });
+    logger.success(`${description} set to: ${selectedValue}`);
+    return selectedValue;
+  }
+
+  // WHY: for async-search react-select lookups where options are NOT
+  // available immediately on click but only after typing against a live
+  // backend search — confirmed live (2026-07-16) Contact's Company field
+  // requires 3+ typed characters before returning real results ("Type
+  // atleast 3 characters..." shown below that threshold). Selects a
+  // genuinely random option from whatever the CURRENT session's live search
+  // actually returns, same "never hardcode which option exists" reasoning as
+  // selectRandomFromSingleReactSelect above — this is also what makes
+  // admin-vs-restricted-user selection correctly role-scoped with no
+  // explicit role branching: each role's own live search naturally returns
+  // only what that role can see, confirmed live to genuinely differ between
+  // roles for the identical search term.
+  // WHY: exact-match anchor for selecting among live-search/lookup options by
+  // name — shared with DealsPage's own selectFirstOptionFromDropdown(),
+  // which had a private, duplicated copy of this exact same regex-escape
+  // logic before this method also needed it. Moved here rather than left
+  // duplicated, per "no duplicated logic" — DealsPage now delegates to this.
+  protected escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // WHY: for async-search react-select lookups where options are NOT
+  // available immediately on click but only after typing against a live
+  // backend search — confirmed live (2026-07-16) Contact's Company field
+  // requires 3+ typed characters before returning real results ("Type
+  // atleast 3 characters..." shown below that threshold). Selects a
+  // genuinely random option from whatever the CURRENT session's live search
+  // actually returns, same "never hardcode which option exists" reasoning as
+  // selectRandomFromSingleReactSelect above — this is also what makes
+  // admin-vs-restricted-user selection correctly role-scoped with no
+  // explicit role branching: each role's own live search naturally returns
+  // only what that role can see, confirmed live to genuinely differ between
+  // roles for the identical search term.
+  //
+  // WHY the optional exactValue param (2026-07-16) — mirrors DealsPage's
+  // selectFirstOptionFromDropdown()'s own exactName pattern: for tests where
+  // the selected entity's specific identity matters (e.g. a Contact's
+  // associated Company must be a freshly-created, KNOWN company so it can
+  // also be independently shared/verified), picking randomly from whatever
+  // exists live is unsafe — its ownership/share-state is uncontrolled.
+  // Passing neither preserves the original random-pick behavior unchanged.
+  protected async selectRandomFromSearchableReactSelect(
+    control: Locator,
+    searchInput: Locator,
+    searchTerm: string,
+    description: string,
+    exactValue?: string
+  ): Promise<string> {
+    await this.click(control, `react-select control: ${description}`);
+    const options = this.page.locator('.is-invalid__menu .is-invalid__option');
+    // WHY (Fix 2, 2026-07-17): trigger the live backend search with a targeted
+    // retry on transient DNS/connection errors — see fillSearchAndWaitForOptions.
+    // Previously this was a bare `searchInput.fill()` + a single bounded
+    // `waitFor`, so a brief DNS blip that failed the lookup request cost the whole
+    // first test attempt (only Playwright's outer retry recovered it — see #59).
+    await this.fillSearchAndWaitForOptions(searchInput, options, exactValue ?? searchTerm, description);
+
+    if (exactValue) {
+      const exactOption = options
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactValue)}\\s*$`) })
+        .first();
+      await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await exactOption.click();
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+        .catch(() => {
+          /* menu may already be gone */
+        });
+      logger.success(`${description} selected: "${exactValue}" (exact match)`);
+      return exactValue;
+    }
+
+    const optionTexts = (await options.allInnerTexts()).map((t) => t.trim());
+    if (optionTexts.length === 0) {
+      throw new Error(
+        `${description}: search for "${searchTerm}" returned zero live options — cannot select a value`
       );
     }
     const randomIndex = Math.floor(Math.random() * optionTexts.length);
@@ -637,8 +1191,39 @@ export class BasePage {
     const targetMonthKey = date.getFullYear() * 12 + date.getMonth();
     let attempts = 0;
     while (!found && attempts < 24) {
-      const visibleMonthKeys: number[] = await this.page.evaluate(() =>
-        Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+      // WHY: confirmed live (2026-07-16 root-cause pass) — react-dates keeps
+      // THREE months' worth of `td[aria-label]` cells in the DOM
+      // simultaneously (the visible month(s) plus a pre-rendered buffer
+      // month for smooth forward/backward transitions), but only the ones
+      // actually within the picker's own clipped, visible bounds are real —
+      // the buffer month's cells are still real DOM nodes with a valid
+      // aria-label, just off-screen. The previous version queried ALL cells
+      // with no visibility filtering at all, so minVisibleMonth/
+      // maxVisibleMonth were computed from a range up to a full month wider
+      // than what was actually clickable — causing the direction decision
+      // below to be wrong (or a false "already in range" conclusion) exactly
+      // often enough to exhaust all 24 attempts without ever converging,
+      // reproduced live as a consistent, slow fallback-to-typing on nearly
+      // every custom-field date fill. Filtering to cells whose own bounding
+      // rect falls inside the picker container's rect (confirmed live this
+      // correctly excludes the buffer month while keeping the genuinely
+      // visible one(s)) fixes the root cause instead of retrying around it.
+      const visibleMonthKeys: number[] = await this.page.evaluate(() => {
+        const container = document.querySelector(
+          '[class*="SingleDatePicker_picker"]'
+        ) as HTMLElement | null;
+        const containerRect = container?.getBoundingClientRect() ?? null;
+        return Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+          .filter((cell) => {
+            if (!containerRect) return true;
+            const r = cell.getBoundingClientRect();
+            return (
+              r.width > 0 &&
+              r.height > 0 &&
+              r.left >= containerRect.left - 5 &&
+              r.right <= containerRect.right + 5
+            );
+          })
           .map((cell) => {
             // WHY: strip status prefixes like "Selected. "/"Not available. "
             // before parsing — otherwise those cells are silently dropped.
@@ -649,8 +1234,8 @@ export class BasePage {
               ? parsed.getFullYear() * 12 + parsed.getMonth()
               : null;
           })
-          .filter((v): v is number => v !== null)
-      );
+          .filter((v): v is number => v !== null);
+      });
       const backVisible = await backwardButton.isVisible().catch(() => false);
       const forwardVisible = await forwardButton.isVisible().catch(() => false);
       const minVisibleMonth = visibleMonthKeys.length ? Math.min(...visibleMonthKeys) : null;
@@ -906,6 +1491,126 @@ export class BasePage {
     logger.success(
       `Custom field "${description}" validation error confirmed: "${expectedMessage}"`
     );
+  }
+
+  // ─── Form Section Helpers (generic — reusable across entities/modules) ────
+  // WHY: confirmed live (2026-07-16) — Lead's and Contact's shared
+  // #editEntityModal create/edit form renders each labeled section (Location,
+  // Professional, Communication, ...) as its own <div class="data-container">
+  // wrapping BOTH that section's own <h2> heading AND all of that section's
+  // fields as descendants. The data-container's own `id` is a random,
+  // per-render numeric value (NOT stable across page loads — never match on
+  // it directly), but the section is reliably re-locatable by filtering for
+  // the container that has a descendant heading with the section's exact,
+  // stable text. This is the real mechanism the app uses to visually group
+  // fields — confirmed by walking the DOM from known fields (Address,
+  // Company Industry) up to their shared ancestor, not assumed from the nav
+  // sidebar's scrollspy links (which only scroll to a section, they don't
+  // encode which container belongs to which section).
+  protected getFormSectionContainer(sectionHeading: string): Locator {
+    return this.page
+      .locator('#editEntityModal div.data-container')
+      .filter({ has: this.page.getByRole('heading', { name: sectionHeading, exact: true }) });
+  }
+
+  // ─── GPS Address Helpers (generic — reusable across entities/modules) ─────
+  // WHY: generalized out of MeetingsPage.ts (2026-07-15), which had this
+  // logic private to itself. Confirmed live that Contact's address field
+  // exposes the identical "Get GPS Address" trigger — a Google-Places-style
+  // autocomplete search, not browser geolocation — so this is parameterized
+  // by the actual address input to fill (never coupled to Meeting's own
+  // "location" field) for Contact today and Lead/Company later.
+  //
+  // WHY section-scoped, not a bare page-wide text match (2026-07-16 Lead
+  // hardening): confirmed live that Lead's form has TWO "Get GPS Address"
+  // triggers with identical visible text — one for its own Address (Location
+  // section) and one for Professional's Company Address — so an unscoped
+  // `page.getByText(...)` throws a Playwright strict-mode violation the
+  // moment Lead's form is in play. Scoping by the field's own SECTION
+  // CONTAINER (via getFormSectionContainer above), not just a CSS class
+  // difference between the two triggers, keeps this correct even if some
+  // future section adds a third similarly-built trigger — a class-based fix
+  // would only patch today's two known triggers, not the general case.
+  protected getGpsAddressTrigger(sectionContainer: Locator): Locator {
+    return sectionContainer.getByText('Get GPS Address', { exact: true });
+  }
+
+  private readonly gpsAddressSearchInput = (): Locator =>
+    this.page.getByPlaceholder('Search for area, street name');
+
+  private readonly gpsAddressPrediction = (): Locator =>
+    this.page.locator('.autocomplete-prediction').first();
+
+  // WHY: returns the value actually entered (GPS-selected prediction text OR
+  // the manual fallback) — never hardcode/assume the GPS service's result,
+  // since it's a live third-party lookup. Callers need this to verify the
+  // saved entity's detail page against whatever genuinely ended up in the
+  // field, not a guessed string.
+  //
+  // WHY sectionContainer defaults to the whole modal (2026-07-16 hardening):
+  // callers with only one GPS trigger on their form (Contact, Meeting) can
+  // still pass their own section container for defense-in-depth, but a
+  // caller that omits it isn't left fully unscoped either — defaulting to
+  // `#editEntityModal` (rather than the previous bare page-wide text lookup)
+  // means even an unscoped caller fails loudly below if a second trigger
+  // ever appears on their form, instead of a silent, ambiguous match.
+  protected async fillAddressViaGpsOrManual(
+    addressInput: Locator,
+    manualAddress: string,
+    description = 'address',
+    sectionContainer: Locator = this.page.locator('#editEntityModal')
+  ): Promise<string> {
+    logger.info(`Filling ${description} via GPS lookup if available`);
+    const gpsButton = this.getGpsAddressTrigger(sectionContainer);
+    // WHY: fail loud, not silent (2026-07-16 hardening) — if this ever
+    // resolves to more than one element, scoping has regressed (a new
+    // trigger was added inside the same section, or the wrong/too-broad
+    // container was passed in). Silently clicking `.first()` would risk
+    // acting on the wrong field's trigger with no visible symptom.
+    const gpsCount = await gpsButton.count();
+    if (gpsCount > 1) {
+      throw new Error(
+        `${description}: expected at most one "Get GPS Address" trigger within the given section container, found ${gpsCount} — scope sectionContainer more tightly`
+      );
+    }
+    const gpsVisible = gpsCount === 1 && (await gpsButton.isVisible().catch(() => false));
+    if (gpsVisible) {
+      await this.click(gpsButton, `Get GPS Address button (${description})`);
+      await this.page.waitForTimeout(1500);
+      // WHY: Kylas gates this feature behind a paid "Field Sales" addon on
+      // some accounts/environments — confirmed live (Meetings module) this
+      // shows a purchase-upsell dialog instead of the search box. Detect it
+      // and fall through to manual entry rather than hanging on a search
+      // input that will never appear.
+      const addonDialog = await this.page
+        .locator('text=purchase')
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (!addonDialog) {
+        // WHY: the search API needs a real place-name fragment, not the
+        // full manual address string — first comma-segment, capped short,
+        // mirrors MeetingsPage's proven approach.
+        const citySearch = manualAddress.split(',')[0].trim().substring(0, 10);
+        await this.gpsAddressSearchInput().fill(citySearch);
+        await this.page
+          .waitForSelector('.autocomplete-prediction', { timeout: 5000 })
+          .catch(() => null);
+        const predictionsVisible = await this.gpsAddressPrediction()
+          .isVisible()
+          .catch(() => false);
+        if (predictionsVisible) {
+          await this.gpsAddressPrediction().click();
+          await this.page.waitForTimeout(500);
+          const gpsValue = await addressInput.inputValue().catch(() => '');
+          logger.success(`GPS ${description} selected: ${gpsValue}`);
+          return gpsValue;
+        }
+      }
+    }
+    await this.fill(addressInput, manualAddress, description);
+    logger.info(`Manual ${description} entered: ${manualAddress}`);
+    return manualAddress;
   }
 
   async getLoggedInUserName(role: 'admin' | 'restricted' = 'restricted'): Promise<string> {

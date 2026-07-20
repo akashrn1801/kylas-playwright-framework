@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import {
   generateLeadData,
@@ -78,10 +79,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, []);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.openEllipsisMenu();
     await restrictedLeadsPage.assertEllipsisOptionNotVisible('Delete');
@@ -107,10 +106,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['update']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Update permission — edit button visible
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
@@ -119,12 +116,10 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     // WHY: Navigate back to verify ellipsis shows only Clone
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.openEllipsisMenu();
     await restrictedLeadsPage.assertEllipsisOptionNotVisible('Delete');
@@ -149,10 +144,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['note']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     // WHY: Wait for page to fully load and permissions to apply
     await restrictedPage.waitForTimeout(3000);
     // WHY: Verify page loaded correctly — check URL still on lead details
@@ -194,10 +187,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['task']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
@@ -239,10 +230,8 @@ test.describe('Leads RBAC', () => {
     // WHY: Share with Read only — no extra permissions
     await adminLeadsPage.shareLead(restrictedUserName, []);
     // WHY: Restricted user navigates to shared lead via ID
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Read only — productivity icons should NOT be visible
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Notes');
@@ -268,19 +257,26 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['update']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    // WHY: fixed 2026-07-19 — this read is on the restricted user's separate
+    // session right after an admin-side share, so it can genuinely lag the
+    // share response under load (same class already fixed for
+    // assertRightPanelIconVisible() in LeadsPage — see its own comment). A
+    // short fixed waitForURL + a flat pre-sleep had no way to recover if the
+    // app's own client-side route guard hadn't yet seen the propagated
+    // permission. Use the same generous, polling window instead of a hardcoded
+    // 20000ms + a wasted flat sleep.
+    await safeWaitForURL(restrictedPage, /leads\/details\//, config.timeouts.navigation);
     // WHY: Update permission — edit button should be visible
-    await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
+    await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({
+      timeout: config.timeouts.navigation,
+    });
     // WHY: Edit the lead to verify update permission works
     await restrictedLeadsPage.clickEditIcon();
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('L15 passed');
   });
 
@@ -300,11 +296,13 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['note']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    // WHY: fixed 2026-07-19 — same cross-role share-propagation-lag class as
+    // L15 above; a hardcoded 20000ms + flat pre-sleep had no room to recover
+    // if this restricted-user session's route guard hadn't yet seen the
+    // propagated share. Generous polling window, same as
+    // assertRightPanelIconVisible()'s own established fix for this exact lag.
+    await safeWaitForURL(restrictedPage, /leads\/details\//, config.timeouts.navigation);
     // WHY: Note permission — Notes icon should be visible in right panel
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.clickRightPanelIcon('Notes');
@@ -327,10 +325,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['task']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
@@ -353,10 +349,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['meeting']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Meetings');
     await restrictedLeadsPage.clickRightPanelIcon('Meetings');
@@ -365,7 +359,10 @@ test.describe('Leads RBAC', () => {
     const meetingTitle = `Meeting-${Date.now()}`;
     await meetingsPage.openAddForm();
     await meetingsPage.fillTitleOnly(meetingTitle);
-    const meetingId = await meetingsPage.saveMeeting();
+    // WHY: retries specifically on the confirmed lead-summary permission-
+    // propagation race (backend 422/01503001) — see MeetingsPage's own
+    // comment for the live evidence this is based on.
+    const meetingId = await meetingsPage.saveMeetingRetryOnEntitySummaryLag();
     // WHY: meetingId can be null on CI when POST response is slow
     // Meeting was created (popup clicked) — ID capture is best-effort only
     if (meetingId) {
@@ -392,10 +389,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['call']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedLeadsPage.clickRightPanelIcon('Call Logs');
@@ -454,10 +449,8 @@ test.describe('Leads RBAC', () => {
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     // WHY: Share with all 4 permissions at once
     await adminLeadsPage.shareLead(restrictedUserName, ['note', 'task', 'meeting', 'call']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
@@ -498,7 +491,10 @@ test.describe('Leads RBAC', () => {
     const meetingTitle2 = `Meeting-${Date.now()}`;
     await meetingsPage2.openAddForm();
     await meetingsPage2.fillTitleOnly(meetingTitle2);
-    const meetingId2 = await meetingsPage2.saveMeeting();
+    // WHY: same lead-summary permission-propagation race as the Meeting
+    // permission test above — see MeetingsPage.saveMeetingRetryOnEntitySummaryLag()'s
+    // own comment for the live evidence.
+    const meetingId2 = await meetingsPage2.saveMeetingRetryOnEntitySummaryLag();
     // WHY: meetingId can be null on CI — log warning but continue
     if (meetingId2) {
       logger.success(`Meeting created: ${meetingId2}`);
@@ -506,10 +502,8 @@ test.describe('Leads RBAC', () => {
       logger.warn('Meeting ID not captured — meeting still created successfully');
     }
     // WHY: Navigate back to lead detail page after meeting creation
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
 
     // WHY: Verify Call — click Call Logs icon first, then Log a call button
@@ -566,10 +560,8 @@ test.describe('Leads RBAC', () => {
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.reassignLead(restrictedUserName);
     // WHY: Restricted user now owns the lead — can edit and delete
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Verify edit button visible — restricted user is now owner
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
@@ -578,13 +570,11 @@ test.describe('Leads RBAC', () => {
     const updatedData = generateLeadData();
     await restrictedLeadsPage.fillEditForm(updatedData);
     await restrictedLeadsPage.saveEditedLead();
-    await restrictedLeadsPage.assertLeadExistsInList(updatedData.firstName);
+    await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('Restricted user edited reassigned lead successfully');
     // WHY: Navigate back to lead detail to verify delete option
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(2000);
     // WHY: Delete lead — deleteLead() opens ellipsis and clicks Delete internally
     await restrictedLeadsPage.deleteLead();
@@ -751,6 +741,7 @@ test.describe('Leads RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminLeadsPage = new LeadsPage(adminPage);
+    const restrictedLeadsPage = new LeadsPage(restrictedPage);
     const leadData = generateSharedLeadData();
     await adminLeadsPage.goToLeadsList();
     const leadId = await adminLeadsPage.createLead(leadData);
@@ -758,10 +749,8 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['note']);
-    await restrictedPage.goto(`${config.appUrl}/sales/leads/details/${leadId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/leads\/details\//, { timeout: 20000 });
+    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
+    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(3000);
     // WHY: Click Notes icon to open notes panel
     await restrictedPage
@@ -871,7 +860,10 @@ test.describe('Leads RBAC', () => {
     const leadData = generateLeadData();
 
     await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
+    await leadsPage.clickAddLead();
+    await leadsPage.skipIfCustomFieldsAbsent();
+    await leadsPage.fillLeadForm(leadData);
+    const leadId = await leadsPage.saveLead();
     expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
 
     // WHY: reuses LeadsPage.assertLeadCustomFieldsOnDetail() unchanged — the
