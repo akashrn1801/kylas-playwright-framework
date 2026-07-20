@@ -1,4 +1,5 @@
 import { test, expect } from '../../../src/fixtures/index';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
@@ -215,11 +216,8 @@ test.describe('Contacts', () => {
     const contactId = await contactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();
     // WHY: Navigate directly to detail URL — tests URL-based navigation works
-    await adminPage.goto(
-      `${config.appUrl}/sales/contacts/details/${contactId}`,
-      { waitUntil: 'domcontentloaded' }
-    );
-    await adminPage.waitForURL(/contacts\/details\//, { timeout: 20000 });
+    await contactsPage.navigateTo(`${config.appUrl}/sales/contacts/details/${contactId}`);
+    await safeWaitForURL(adminPage, /contacts\/details\//, 20000);
     await contactsPage.assertOnContactDetailPage();
     logger.success('C12 passed');
   });
@@ -267,8 +265,17 @@ test.describe('Contacts', () => {
       await estimatedValueInput.fill('50000');
       logger.debug('Estimated value filled: 50000');
     }
+    // WHY: hardened 2026-07-19 — bare '/deals'/'/deal' substring had no
+    // /reports/ exclusion, same ID-capture bug class already fixed at 10
+    // other call sites (found via self-audit; this one and the one below
+    // were missed because the original sweep only checked src/modules/,
+    // never tests/).
     const dealSavePromise = adminPage.waitForResponse(
-      (res) => (res.url().includes('/deals') || res.url().includes('/deal')) && res.request().method() === 'POST' && (res.status() === 200 || res.status() === 201),
+      (res) =>
+        (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
+        res.request().method() === 'POST' &&
+        (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
     ).catch(() => null);
     await adminPage.locator('#editEntityModal button.save-button').click();
@@ -336,9 +343,12 @@ test.describe('Contacts', () => {
     // WHY: Add 2 part payment installments
     await dealsPage.addPartPayments(2);
     // WHY: Set up response listener BEFORE clicking save — response may arrive immediately
+    // WHY: hardened 2026-07-19 — same ID-capture bug class as above, found
+    // via self-audit (original sweep never checked tests/).
     const dealIdPromise = adminPage.waitForResponse(
       (res) =>
         (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
       { timeout: 30000 }
@@ -369,13 +379,13 @@ test.describe('Contacts', () => {
       dealEntry.click(),
     ]);
     await newTab.waitForLoadState('domcontentloaded');
-    await newTab.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await safeWaitForURL(newTab, /deals\/details\//, 20000);
     // WHY: Verify contact name appears on deal detail page
     await expect(newTab.locator('body')).toContainText(contactData.firstName, { timeout: 10000 });
     logger.success(`Deal detail verified — contact name "${contactData.firstName}" found on deal page`);
     // WHY: Close new tab and return to contact detail
     await newTab.close();
-    await adminPage.waitForURL(/contacts\/details\//, { timeout: 10000 });
+    await safeWaitForURL(adminPage, /contacts\/details\//, 10000);
     logger.success(`C15 passed — deal with pipeline, product and payment created and verified: ${dealId}`);
   });
 

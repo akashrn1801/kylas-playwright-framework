@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import {
   generateDealData,
@@ -195,11 +196,28 @@ test.describe('Deals RBAC', () => {
     // We intercept it to get the display name without any UI interaction.
     const getUserName = async (page: typeof restrictedPage): Promise<string> => {
       try {
+        // WHY: hardened 2026-07-19 — bare '/v1/users/me' substring had no
+        // /reports/ exclusion (lower collision risk than the deal/meeting
+        // sites — no known '/reports/users' analog exists — but fixed for
+        // consistency as part of the complete sweep; found via self-audit).
         const responsePromise = page.waitForResponse(
-          (res) => res.url().includes('/v1/users/me') && res.status() === 200,
+          (res) =>
+            res.url().includes('/v1/users/me') &&
+            !res.url().includes('/reports/') &&
+            res.status() === 200,
           { timeout: config.timeouts.navigation }
         );
-        await page.goto(`${config.appUrl}/sales/deals/list`, { waitUntil: 'domcontentloaded' });
+        // WHY: session-recovery-aware navigation (2026-07-20) — this local
+        // helper used to call the raw `page.goto()` directly, bypassing
+        // BasePage.navigateTo()'s mid-test session-expiry recovery entirely
+        // (found via an exhaustive re-grep after the main goto-migration
+        // sweep — this one wasn't caught by matching `restrictedPage.goto(`/
+        // `adminPage.goto(` literally, since `page` here is a local function
+        // parameter, not one of those fixture names directly). DealsPage's
+        // constructor just wraps whatever Page it's given, so a throwaway
+        // instance here is enough to reuse the existing recovery path with
+        // no other change to this helper's shape.
+        await new DealsPage(page).navigateTo(`${config.appUrl}/sales/deals/list`);
         const response = await responsePromise;
         const body = await response.json();
         const name = (body?.name ?? '').trim();
@@ -226,10 +244,8 @@ test.describe('Deals RBAC', () => {
     if (!dealId) throw new Error('Deal ID not captured — cannot verify ownership');
 
     // Step 3 — Navigate to deal details
-    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+    await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
     logger.info('On deal details page');
 
     // Step 4 — Verify Company Owner via modal
@@ -318,18 +334,17 @@ test.describe('Deals RBAC', () => {
     test.setTimeout(480000);
 
     const adminDealsPage = new DealsPage(adminPage);
+    const restrictedDealsPage = new DealsPage(restrictedPage);
     const adminDealData = generateAdminDealData();
     await adminDealsPage.goToDealsList();
     const dealId = await adminDealsPage.createDeal(adminDealData);
     if (!dealId) throw new Error('Admin deal ID not captured');
 
     // Restricted user navigates directly to admin deal via URL
-    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
+    await restrictedDealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
 
     try {
-      await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+      await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
       // Page loaded — verify edit button is NOT visible
       const editBtn = restrictedPage.locator('#edit-action-btn');
       const editBtnVisible = await editBtn.isVisible();

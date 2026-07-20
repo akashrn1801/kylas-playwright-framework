@@ -381,15 +381,14 @@ export class LeadsPage extends BasePage {
     // WHY: Wait for list API response before checking DOM — faster and more reliable
     // than polling .rt-table which renders async after the API call completes
     await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/leads') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
+      this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/leads') &&
+          res.request().method() === 'GET' &&
+          res.status() === 200,
+        'lead list ready',
+        config.timeouts.navigation
+      ).catch(() => null),
       this.leadTable()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
@@ -422,20 +421,21 @@ export class LeadsPage extends BasePage {
   }
 
   async waitForLeadDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/leads\/details\//, {
-      timeout: 20000,
-    });
+    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
+    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
+    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
+    // src/utils/navigation.ts for the full explanation.
+    await this.waitForUrl(/sales\/leads\/details\//, 20000);
 
     await this.page.waitForLoadState('domcontentloaded');
 
     // WHY: Wait for lead GET API response — ensures React has leadId in state
     // Without this, share/edit fires before app resolves leadId → /leads/undefined/share
-    await this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    await this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'GET',
+      'lead details page load',
+      15000
+    ).catch(() => null);
   }
 
   async goToLeadDetailsById(id: string | number): Promise<void> {
@@ -668,14 +668,13 @@ export class LeadsPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('search') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        {
-          timeout: 15000,
-        }
+        'lead search API',
+        15000
       );
     } catch {
       return null;
@@ -684,14 +683,25 @@ export class LeadsPage extends BasePage {
 
   private async captureLeadIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class already fixed
+          // in DealsPage/CompaniesPage/Deals' quotation-panel flow: a bare
+          // `.includes('/v1/leads')` substring with no `/reports/` exclusion
+          // and no 201 acceptance. 7 live reproductions (fresh page load,
+          // tight timing matching this test's own flow) found NO endpoint
+          // that actually collides with this substring for Leads — unlike the
+          // confirmed Deals/Companies cases, no live race was reproduced here.
+          // Hardening applied anyway as defense-in-depth (zero downside, same
+          // established shape) since the reported CI flake's true mechanism
+          // remains unconfirmed — do not read this comment as claiming a
+          // confirmed collision the way the Deals/Companies ones are.
           res.url().includes('/v1/leads') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
-        {
-          timeout: config.timeouts.navigation,
-        }
+          (res.status() === 200 || res.status() === 201),
+        'capture lead ID',
+        config.timeouts.navigation
       );
 
       const body = await response.json();
@@ -1107,12 +1117,11 @@ export class LeadsPage extends BasePage {
     // endpoint: PUT https://.../v1/leads/{id} -> 200. Capture and await it
     // BEFORE declaring success, mirroring saveLead()'s
     // captureLeadIdFromResponse() fail-fast pattern.
-    const updateResponsePromise = this.page
-      .waitForResponse(
-        (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'PUT',
-        { timeout: config.timeouts.navigation }
-      )
-      .catch(() => null);
+    const updateResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'PUT',
+      'lead update response',
+      config.timeouts.navigation
+    ).catch(() => null);
 
     await this.click(this.saveButton(), 'save button');
 
@@ -1176,24 +1185,42 @@ export class LeadsPage extends BasePage {
   // Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): confirmed self-
+  // starting (clickAddLead() reopens the create form fresh each call — no
+  // assumed prior state beyond already being on the leads list, which the
+  // caller navigates to separately and which a recovery-triggered
+  // re-navigation restores) and confirmed safe to retry with the same input
+  // — a real session expiry always surfaces as a clean HTTP 400/401
+  // rejection (nothing gets created), never a duplicate. WHY `attemptData`
+  // is cloned INSIDE the closure, not passed straight through: confirmed
+  // live that fillLeadForm() mutates its parameter in place (salutation,
+  // timezone, address, country, companyIndustry, companyBusinessType,
+  // companyEmployees are all reassigned on the object it's given) — cloning
+  // here ensures a retry always starts from the caller's original, still-
+  // clean `data`, never attempt 1's partially-mutated leftovers.
   async createLead(data: LeadData): Promise<number | null> {
-    await this.clickAddLead();
-
-    await this.fillLeadForm(data);
-
-    return await this.saveLead();
+    return this.withSessionExpiryRetry(async () => {
+      const attemptData = { ...data };
+      await this.clickAddLead();
+      await this.fillLeadForm(attemptData);
+      return await this.saveLead();
+    }, 'createLead');
   }
 
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): same reasoning as
+  // createLead() above — searchAndOpenLead() re-navigates from scratch each
+  // call (self-starting), and fillEditForm() shares the same in-place-
+  // mutation risk as fillLeadForm(), so `attemptData` is cloned per attempt
+  // here too.
   async updateLead(newData: LeadData, originalFirstName?: string, leadId?: number): Promise<void> {
-    const searchName = originalFirstName ?? newData.firstName;
-
-    await this.searchAndOpenLead(searchName, leadId);
-
-    await this.clickEditIcon();
-
-    await this.fillEditForm(newData);
-
-    await this.saveEditedLead();
+    return this.withSessionExpiryRetry(async () => {
+      const attemptData = { ...newData };
+      const searchName = originalFirstName ?? attemptData.firstName;
+      await this.searchAndOpenLead(searchName, leadId);
+      await this.clickEditIcon();
+      await this.fillEditForm(attemptData);
+      await this.saveEditedLead();
+    }, 'updateLead');
   }
 
   async assertLeadCreated(data: LeadData, leadId?: number): Promise<void> {
@@ -1647,13 +1674,12 @@ export class LeadsPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/leads\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/leads\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'lead share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.page.waitForTimeout(300);
@@ -1685,13 +1711,12 @@ export class LeadsPage extends BasePage {
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/leads\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/leads\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'lead reassign response',
+      15000
+    ).catch(() => null);
     await this.reassignConfirmButton().click();
     await reassignResponsePromise;
     await this.page.waitForTimeout(300);
