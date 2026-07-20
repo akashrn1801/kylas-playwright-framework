@@ -705,14 +705,14 @@ export class CallLogsPage extends BasePage {
     await input.waitFor({ state: 'visible', timeout: 10000 });
     await input.fill(searchText);
     await input.press('Enter');
-    await this.page
-      .waitForResponse(
-        (res: Response) =>
-          res.url().includes('/v1/call-logs') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        { timeout: 15000 }
-      )
+    await this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.url().includes('/v1/call-logs') &&
+        res.request().method() === 'GET' &&
+        res.status() === 200,
+      'performSearch: call-logs GET',
+      15000
+    )
       .catch(() => null);
     await this.page.waitForTimeout(500);
     logger.success(`Search triggered for: "${searchText}"`);
@@ -753,11 +753,11 @@ export class CallLogsPage extends BasePage {
     // regex was anchored with `$` right after the digits, which never matches
     // because of that query string, so this wait always silently timed out.
     const detailResponsePattern = new RegExp(`/v1/call-logs/${callLogId}(?:\\?.*)?$`);
-    await this.page
-      .waitForResponse(
-        (res) => detailResponsePattern.test(res.url()) && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
+    await this.armResponseWaitWithRecovery(
+      (res) => detailResponsePattern.test(res.url()) && res.request().method() === 'GET',
+      'goToCallLogById: detail GET',
+      15000
+    )
       .catch(() => null);
     await this.detailEntityHeading().waitFor({
       state: 'visible',
@@ -1587,11 +1587,13 @@ export class CallLogsPage extends BasePage {
   }
 
   async updateCallLog(callLogId: number, newData: CallLogData): Promise<void> {
-    logger.info(`Updating call log ID: ${callLogId}`);
-    await this.goToCallLogById(callLogId);
-    await this.clickEditButton();
-    await this.fillEditForm(newData);
-    await this.saveEditedCallLog();
-    logger.success(`Call log ID ${callLogId} updated`);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Updating call log ID: ${callLogId}`);
+      await this.goToCallLogById(callLogId);
+      await this.clickEditButton();
+      await this.fillEditForm(newData);
+      await this.saveEditedCallLog();
+      logger.success(`Call log ID ${callLogId} updated`);
+    }, 'updateCallLog');
   }
 }

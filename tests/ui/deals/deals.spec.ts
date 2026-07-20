@@ -1,4 +1,5 @@
 import { test, expect } from '../../../src/fixtures/index';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateDealData,
@@ -119,10 +120,8 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     if (dealId) {
-      await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-        waitUntil: 'domcontentloaded',
-      });
-      await adminPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+      await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+      await safeWaitForURL(adminPage, /deals\/details\//, config.timeouts.navigation);
     } else {
       // WHY: dealId capture failed — use search to find and open the deal
       await dealsPage.searchAndOpenDeal(dealData.name);
@@ -158,9 +157,7 @@ test.describe('Deals', () => {
     await dealsPage.saveEditedDeal();
 
     // Verify stage changed on details page
-    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
     await dealsPage.assertPipelineStageOnDetails('Negotiation');
     logger.success('Pipeline stage changed to Negotiation and verified');
     logger.success('D6 passed');
@@ -245,10 +242,8 @@ test.describe('Deals', () => {
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
 
     // Navigate to deal details and verify part payments summary
-    await adminPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await adminPage.waitForURL(/deals\/details\//, { timeout: 20000 });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+    await safeWaitForURL(adminPage, /deals\/details\//, 20000);
     await dealsPage.assertPartPaymentsSummaryOnDetails();
     logger.success('D9 passed');
   });

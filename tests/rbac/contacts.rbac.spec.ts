@@ -256,9 +256,16 @@ test.describe('Contacts RBAC', () => {
     // — distinguishes "correctly denied for the expected reason" from any
     // other unrelated failure (per CLAUDE.md's audit rule on negative/RBAC
     // assertions never conflating "correctly absent" with "failed to load").
+    // WHY: hardened 2026-07-19 — bare '/v1/meetings' substring had no
+    // /reports/ exclusion, same ID-capture-shaped bug class fixed at 10
+    // other call sites (found via self-audit; missed originally because
+    // that sweep never checked tests/).
     const meetingPostPromise = restrictedPage
       .waitForResponse(
-        (res) => res.url().includes('/v1/meetings') && res.request().method() === 'POST',
+        (res) =>
+          res.url().includes('/v1/meetings') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST',
         { timeout: 15000 }
       )
       .then(async (res) => ({ status: res.status(), body: await res.json().catch(() => ({})) }))

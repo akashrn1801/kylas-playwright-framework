@@ -390,9 +390,7 @@ test.describe('Quotations — RBAC', () => {
     const { id } = await adminQP.createQuotationWithOwner(adminData, restrictedUserName);
 
     if (id) {
-      await restrictedPage.goto(`${config.appUrl}/sales/quotations/details/${id}`, {
-        waitUntil: 'domcontentloaded',
-      });
+      await restrictedQP.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
       await restrictedPage
         .locator('.related-entity-container')
         .first()
@@ -445,9 +443,22 @@ test.describe('Quotations — RBAC', () => {
     logger.info(`Admin created quotation ID: ${id}`);
 
     // Step 4 — restricted user opens detail page
-    const detailUrl = `${config.appUrl}/sales/quotations/details/${id}`;
-    await restrictedPage.goto(detailUrl, { waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(3000);
+    // WHY: fixed 2026-07-20 — this used to be a raw restrictedPage.goto(),
+    // bypassing BasePage.navigateTo() (and its mid-test session-recovery)
+    // entirely. That gap is exactly why this test failed live (2026-07-19,
+    // sandbox CI): the restricted user's session genuinely expired
+    // server-side ~24 minutes in, mid-test, landing on /signIn — a raw goto
+    // has no recovery path at all. goToQuotationDetail() already exists and
+    // is already used later in this same test (see below) — using it here
+    // too means this navigation now benefits from the same recovery
+    // mechanism, automatically, with no test-specific logic added.
+    await restrictedQP.goToQuotationDetail(id!);
+    // WHY: fixed 2026-07-20 — found via a real re-run failure after the fix
+    // above: goToQuotationDetail() only waits for the URL + API response, not
+    // for React to actually render the page. The old raw goto's flat
+    // waitForTimeout(3000) was accidentally covering this gap too; removing
+    // it exposed it. See waitForDetailPageRendered()'s own comment.
+    await restrictedQP.waitForDetailPageRendered();
 
     const currentUrl = restrictedPage.url();
     logger.info(`Restricted user current URL: ${currentUrl}`);
