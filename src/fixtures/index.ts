@@ -19,6 +19,7 @@ import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { AuthManager, registerPageForRecovery } from '../auth/authManager';
 import { logger } from '../utils/logger';
+import { safeWaitForURL } from '../utils/navigation';
 
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
@@ -162,13 +163,17 @@ async function navigateAndConfirmLoggedIn(
     }
   }
 
+  // WHY: migrated 2026-07-19 to safeWaitForURL() — both branches were bare
+  // waitForURL() calls defaulting to 'load'. This function runs on EVERY
+  // test's fixture setup — CI evidence (2026-07-19, sandbox run 29673393047,
+  // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
+  // setting up 'adminPage'/'restrictedPage'" failures, several tracing
+  // through this exact code path (createRolePage → getContextForRole).
   return Promise.race([
-    page
-      .waitForURL(/sales\//, { timeout: config.timeouts.navigation })
+    safeWaitForURL(page, /sales\//, config.timeouts.navigation)
       .then((): NavOutcome => 'sales')
       .catch((): NavOutcome => 'timeout'),
-    page
-      .waitForURL(/\/(signIn|login)/, { timeout: config.timeouts.navigation })
+    safeWaitForURL(page, /\/(signIn|login)/, config.timeouts.navigation)
       .then((): NavOutcome => 'signIn')
       .catch((): NavOutcome => 'timeout'),
   ]);

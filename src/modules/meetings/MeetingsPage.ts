@@ -185,7 +185,7 @@ export class MeetingsPage extends BasePage {
 
   private async captureIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res: Response) =>
           // WHY: hardened 2026-07-19 — same ID-capture bug class as
           // LeadsPage/ContactsPage/DealsPage/CompaniesPage: bare
@@ -198,7 +198,8 @@ export class MeetingsPage extends BasePage {
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
-        { timeout: 15000 }
+        'captureIdFromResponse (meeting create)',
+        15000
       );
       const body = await response.json();
       const id = body?.id ?? null;
@@ -659,14 +660,14 @@ export class MeetingsPage extends BasePage {
   // updating to stop implying this is Lead-only.
   async saveMeetingRetryOnEntitySummaryLag(maxAttempts = 3): Promise<number | null> {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const lagResponsePromise = this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/meetings') &&
-            res.request().method() === 'POST' &&
-            res.status() === 422,
-          { timeout: 10000 }
-        )
+      const lagResponsePromise = this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/meetings') &&
+          res.request().method() === 'POST' &&
+          res.status() === 422,
+        'saveMeetingRetryOnEntitySummaryLag (422 lag detection)',
+        10000
+      )
         .then(async (res) => {
           const body = await res.json().catch(() => ({}));
           return body?.errorCode === '01503001';
@@ -1010,51 +1011,53 @@ export class MeetingsPage extends BasePage {
     addInvitee = true,
     skipRelatedTo = false
   ): Promise<number | null> {
-    logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
-    await this.click(this.addButton(), 'Add button');
-    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-    const { retries, wait } = this.retryConfig;
-    let formOpened = false;
-    for (let i = 0; i < retries; i++) {
-      try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-        formOpened = true;
-        break;
-      } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-        // makes sense on the standalone meetings list page — reloading an
-        // embedded panel (e.g. a lead's detail page) would close the panel
-        // and lose all context, since this method doesn't know how to reopen it.
-        if (/\/sales\/meetings\/list/.test(this.page.url())) {
-          await this.reloadPage();
-          await this.waitForListReady();
-        } else {
-          await this.page.waitForTimeout(1000);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
+      await this.click(this.addButton(), 'Add button');
+      // WHY: Route through config.meetingRetry (more retries, longer wait) instead
+      // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
+      const { retries, wait } = this.retryConfig;
+      let formOpened = false;
+      for (let i = 0; i < retries; i++) {
+        try {
+          await this.titleInput().waitFor({ state: 'visible', timeout: wait });
+          formOpened = true;
+          break;
+        } catch {
+          logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
+          // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
+          // makes sense on the standalone meetings list page — reloading an
+          // embedded panel (e.g. a lead's detail page) would close the panel
+          // and lose all context, since this method doesn't know how to reopen it.
+          if (/\/sales\/meetings\/list/.test(this.page.url())) {
+            await this.reloadPage();
+            await this.waitForListReady();
+          } else {
+            await this.page.waitForTimeout(1000);
+          }
+          await this.click(this.addButton(), 'Add button retry');
         }
-        await this.click(this.addButton(), 'Add button retry');
       }
-    }
-    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
-    await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
-    // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
-    // description can all trigger React re-renders that reset the title controlled
-    // input, not just to empty but potentially to a stale/default value. Checking
-    // for an exact match (not just non-empty) catches both failure modes, and this
-    // check is the last thing that runs before saveMeeting() is called below.
-    const titleBeforeSave = await this.titleInput().inputValue().catch(() => '');
-    if (titleBeforeSave.trim() !== data.title.trim()) {
-      logger.warn(
-        `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
-      );
-      await this.titleInput().click();
-      await this.titleInput().fill(data.title);
-      await this.page.waitForTimeout(300);
-    }
-    const meetingId = await this.saveMeeting();
-    logger.success(`Meeting "${data.title}" created`);
-    return meetingId;
+      if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+      await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
+      // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
+      // description can all trigger React re-renders that reset the title controlled
+      // input, not just to empty but potentially to a stale/default value. Checking
+      // for an exact match (not just non-empty) catches both failure modes, and this
+      // check is the last thing that runs before saveMeeting() is called below.
+      const titleBeforeSave = await this.titleInput().inputValue().catch(() => '');
+      if (titleBeforeSave.trim() !== data.title.trim()) {
+        logger.warn(
+          `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
+        );
+        await this.titleInput().click();
+        await this.titleInput().fill(data.title);
+        await this.page.waitForTimeout(300);
+      }
+      const meetingId = await this.saveMeeting();
+      logger.success(`Meeting "${data.title}" created`);
+      return meetingId;
+    }, 'createMeeting');
   }
 
   async updateMeeting(
