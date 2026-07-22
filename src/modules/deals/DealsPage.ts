@@ -488,16 +488,65 @@ export class DealsPage extends BasePage {
       return;
     }
 
-    // WHY: Pick a random option instead of always the first —
-    // exercises different contacts/companies each run.
-    // WHY: delegates to BasePage.selectRandomOptionWithRetry() — the shared,
-    // bounded-timeout(15s) + re-roll-on-failure random selector (see its own
-    // comment for the two failure modes it fixes; this method is where those
-    // were originally root-caused). exactName selections are handled by the
-    // branch above; this is the "identity doesn't matter, pick random" path.
-    const allOptions = this.page.locator('.is-invalid__option');
-    await this.selectRandomOptionWithRetry(allOptions, description);
-    await this.page.waitForTimeout(300);
+    // WHY the search-then-select rewrite (root-caused 2026-07-21, applied
+    // 2026-07-22 after the same failure signature was confirmed live ON
+    // STAGE — previously scoped "qa/prod only, stage's list is too small to
+    // trigger it" — stage's associated-company list has since grown to the
+    // same 25-option scale, so the environmental boundary has shifted and
+    // this is no longer a qa/prod-only issue): `selectRandomOptionWithRetry`
+    // picking a random index from the UNFILTERED, page-wide `.is-invalid__
+    // option` locator (up to 25+ options) intermittently timed out reading/
+    // clicking `.nth(idx)` for ANY index under real load/render-churn — all
+    // 3 bounded attempts (each re-rolling a fresh index) failed identically
+    // in the confirmed live failure. Rather than raising the 15s bound (a
+    // guess that doesn't address list SIZE), this mirrors the exactName
+    // path immediately above: batch-read every option's text in ONE
+    // round-trip (`allTextContents()` — same "batch instead of N individual
+    // reads" fix already proven elsewhere in this codebase, e.g.
+    // QuotationsPage's retryFindInList), pick one at random, type it into
+    // the search input to filter the list down to (ideally) a single match,
+    // then click that exact match — identical mechanics to the exactName
+    // branch, which has never flaked. Bounded 3-attempt retry (re-picking a
+    // fresh random option each attempt) for the same defense-in-depth as the
+    // original, but now targeting a FILTERED, small list instead of the
+    // full unfiltered one.
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const allTexts = (await this.page.locator('.is-invalid__option').allTextContents())
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0);
+        if (allTexts.length === 0) {
+          throw new Error('no non-empty options found');
+        }
+        const pick = allTexts[Math.floor(Math.random() * allTexts.length)];
+        const words = pick.split(' ');
+        const validWord = words.find((w) => w.length >= 3) ?? pick.substring(0, 3);
+        await inputLocator.fill(validWord);
+        await this.page.waitForTimeout(800);
+        const filteredOption = this.page
+          .locator('.is-invalid__option')
+          .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(pick)}\\s*$`) })
+          .first();
+        await filteredOption.waitFor({ state: 'visible', timeout: 10000 });
+        await filteredOption.click({ timeout: config.timeouts.expect });
+        logger.success(`${description} selected: "${pick}" (search-filtered random pick)`);
+        await this.page.waitForTimeout(300);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `${description}: search-filtered random pick attempt ${attempt}/${maxAttempts} failed: ` +
+            `${String(error)} — clearing search and retrying`
+        );
+        await inputLocator.fill('').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `${description}: failed to select a random option after ${maxAttempts} attempts — ${String(lastError)}`
+    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1351,6 +1400,43 @@ export class DealsPage extends BasePage {
   // escaping, so the duplicate here was removed in favor of the shared,
   // inherited version.
 
+  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
+  // stalled a full-suite regression run across many share-based RBAC tests):
+  // see LeadsPage.openUserShareTypeSearch() for the full explanation. This
+  // method already had a bounded `waitFor` before the fill (unlike the other
+  // 3 modules' shareXxx methods, which went straight to an unbounded fill),
+  // so on its own it failed at 5s rather than hanging for minutes — but it
+  // never RETRIED, so a single missed click still failed the whole test.
+  // Fixed identically to the other 3 modules for consistency: bound every
+  // click to config.timeouts.expect and retry the whole open-type-dropdown
+  // -> select-User -> wait-for-search-input sequence up to 3 times.
+  private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await shareTypeControl.click({ timeout: config.timeouts.expect });
+        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await userOption.click({ timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
+  }
+
   async shareDeal(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing deal with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -1359,22 +1445,18 @@ export class DealsPage extends BasePage {
     // WHY: Open the Share To type dropdown, select "User"
     const shareTypeControl = this.shareModal().locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
-    await shareTypeControl.click();
-    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-    await userOption.waitFor({ state: 'visible', timeout: 5000 });
-    await userOption.click();
+    await this.openUserShareTypeSearch(shareTypeControl);
 
     // WHY: Search requires >= 3 chars — find first eligible word, fallback to first 3 chars
-    await this.shareToUserInput().waitFor({ state: 'visible', timeout: 5000 });
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
-    await this.shareToUserInput().fill(validWord);
+    await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
     const userItem = this.page
       .locator('.is-invalid__option')
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 10000 });
-    await userItem.click();
+    await userItem.click({ timeout: config.timeouts.expect });
 
     // WHY: Enable specific permissions — JS click on label sibling of input,
     // then verify the toggle actually reflects checked state before moving on.

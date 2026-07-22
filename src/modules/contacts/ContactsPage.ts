@@ -5,6 +5,16 @@ import { ContactData, CONTACT_CUSTOM_FIELD_NAMES } from '../../data/factories/co
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
+// WHY: ported 2026-07-22 from CompaniesPage.TransientCompanySaveError /
+// LeadsPage.TransientLeadSaveError — same transient-vs-genuine classification
+// for the contact-create POST. See captureContactCreateOutcome()/createContact().
+class TransientContactSaveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientContactSaveError';
+  }
+}
+
 export class ContactsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
   // 1. Retry Config
@@ -459,6 +469,22 @@ export class ContactsPage extends BasePage {
   // the control container. Scoping options to the visible .is-invalid__menu (the portal
   // root) prevents accidentally clicking stale options from a simultaneously-open dropdown.
   // Steps mirror selectFromIsInvalidControl in QuotationsPage but add the menu-visible gate.
+  // WHY the bounded whole-sequence retry (root-caused 2026-07-22 from a real
+  // PROD failure): every click in this method used to be a raw, UNBOUNDED
+  // Playwright `.click()` — no `timeout` option, and no `actionTimeout` set
+  // anywhere in the config (confirmed via grep), so Playwright's default of
+  // NO timeout applies. Reproduced live: on prod, `option.click()` (the final
+  // click, selecting Campaign/Source) hung with ZERO further log activity
+  // for the rest of the test's 480s budget, only surfacing as a generic
+  // "Test timeout exceeded" + "Target page ... closed" once the outer test
+  // timeout force-killed the browser. This is the same "click lands but
+  // nothing happens" React click-handler race already root-caused and fixed
+  // elsewhere in this codebase (CompaniesPage.clickAddCompany,
+  // DealsPage.cloneDeal) — the fix here is the same shape: bound every click
+  // to config.timeouts.expect so a stuck click fails FAST instead of eating
+  // the whole test budget, and retry the entire open->filter->select
+  // sequence (not just the click) since a half-opened/half-filtered menu
+  // from a failed attempt isn't a valid state to resume from.
   private async selectFromContactDropdown(inputId: string, optionText: string): Promise<void> {
     const input = this.page.locator(`[id="${inputId}"]`);
     await input.scrollIntoViewIfNeeded();
@@ -467,35 +493,56 @@ export class ContactsPage extends BasePage {
     // does not reliably trigger the React Select open handler on portalled dropdowns
     const control = input.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
     const menu = this.page.locator('.is-invalid__menu');
-    await control.click();
-    // WHY: Confirmed live — a control click can occasionally fail to register (e.g.
-    // scroll/animation still settling right after a modal opens), which previously
-    // just burned the full menu-visible timeout for a click that never landed. Check
-    // for the menu portal being ATTACHED (React mounts it immediately on open, well
-    // before any visible-state CSS transition finishes) as a fast, safe signal the
-    // click worked. Only re-click if it's genuinely not attached — re-clicking an
-    // already-open dropdown would just toggle it closed.
-    const opened = await menu
-      .waitFor({ state: 'attached', timeout: 3000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!opened) {
-      logger.warn(`Dropdown did not open on first click for ${inputId} — retrying click`);
-      await control.click();
+
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await control.click({ timeout: config.timeouts.expect });
+        // WHY: Confirmed live — a control click can occasionally fail to register (e.g.
+        // scroll/animation still settling right after a modal opens), which previously
+        // just burned the full menu-visible timeout for a click that never landed. Check
+        // for the menu portal being ATTACHED (React mounts it immediately on open, well
+        // before any visible-state CSS transition finishes) as a fast, safe signal the
+        // click worked. Only re-click if it's genuinely not attached — re-clicking an
+        // already-open dropdown would just toggle it closed.
+        const opened = await menu
+          .waitFor({ state: 'attached', timeout: 3000 })
+          .then(() => true)
+          .catch(() => false);
+        if (!opened) {
+          logger.warn(`Dropdown did not open on first click for ${inputId} — retrying click`);
+          await control.click({ timeout: config.timeouts.expect });
+        }
+        // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
+        await input.fill(optionText);
+        // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
+        // options are rendered in the portal. Prevents racing against another open dropdown.
+        await menu.waitFor({ state: 'visible', timeout: 10000 });
+        // WHY: Scope the option click to the visible menu container — avoids clicking options
+        // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
+        const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
+        await option.waitFor({ state: 'visible', timeout: 5000 });
+        await option.click({ timeout: config.timeouts.expect });
+        // WHY: Wait for menu to collapse — confirms React Select registered the selection
+        await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+        logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `selectFromContactDropdown(${inputId}) attempt ${attempt}/${maxAttempts} failed: ` +
+            `${String(error)} — closing any stuck menu and retrying`
+        );
+        // Best-effort: close a possibly stuck-open menu before the next attempt
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
     }
-    // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
-    await input.fill(optionText);
-    // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
-    // options are rendered in the portal. Prevents racing against another open dropdown.
-    await menu.waitFor({ state: 'visible', timeout: 10000 });
-    // WHY: Scope the option click to the visible menu container — avoids clicking options
-    // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
-    const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
-    await option.waitFor({ state: 'visible', timeout: 5000 });
-    await option.click();
-    // WHY: Wait for menu to collapse — confirms React Select registered the selection
-    await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-    logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
+    throw new Error(
+      `selectFromContactDropdown: failed to select "${optionText}" for ${inputId} after ` +
+        `${maxAttempts} attempts — ${String(lastError)}`
+    );
   }
 
   private async retryFindContact(firstName: string): Promise<boolean> {
@@ -618,22 +665,81 @@ export class ContactsPage extends BasePage {
     logger.success('Contact form filled');
   }
 
+  // WHY: ported 2026-07-22 from CompaniesPage.captureCompanyCreateOutcome —
+  // captureContactIdFromResponse() only matches 200/201, so a transient
+  // backend rejection just times out into a null id. Matches the create POST
+  // at ANY status, classifies 2xx->id, non-2xx generic message/5xx->transient,
+  // populated fieldErrors->genuine. Same /reports/ exclusion as the existing
+  // captureContactIdFromResponse hardening.
+  private async captureContactCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+    try {
+      const response = await this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/contacts') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST',
+        'capture contact create response',
+        30000
+      );
+      const status = response.status();
+      const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+      if (status === 200 || status === 201) {
+        const id = ((body?.id as number | undefined) ?? (body?.data as { id?: number } | undefined)?.id ?? null) as
+          | number
+          | null;
+        logger.success(`Captured contact ID: ${id} from ${response.url()}`);
+        return { id, transient: false };
+      }
+      const message = String((body as { message?: unknown })?.message ?? '');
+      const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
+      const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
+      const transient =
+        !hasFieldErrors &&
+        (status >= 500 ||
+          /unexpected error occurred|internal server error|something didn't work as expected/i.test(message));
+      logger.warn(
+        `Contact create returned HTTP ${status} (message: "${message}", ` +
+          `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
+          `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
+      );
+      return { id: null, transient };
+    } catch (error) {
+      logger.debug(`Contact create response not captured (${String(error)}) — treating as non-transient`);
+      return { id: null, transient: false };
+    }
+  }
+
   async saveContact(): Promise<number | null> {
     logger.info('Saving contact');
-    const contactIdPromise = this.captureContactIdFromResponse();
+    const outcomePromise = this.captureContactCreateOutcome();
     await this.click(this.saveButton(), 'save button');
-    await this.assertNoFormErrors('contact create form');
-    const contactId = await contactIdPromise;
+    // WHY capture the form-error instead of throwing immediately — same
+    // proven ordering fix as CompaniesPage.saveCompany/LeadsPage.saveLead.
+    let formError: unknown = null;
+    try {
+      await this.assertNoFormErrors('contact create form');
+    } catch (error) {
+      formError = error;
+    }
+    const outcome = await outcomePromise;
+    if (outcome.id) {
+      await this.waitForContactListPage();
+      logger.success('Contact saved successfully');
+      return outcome.id;
+    }
+    if (outcome.transient) {
+      throw new TransientContactSaveError(
+        'Contact create hit a transient backend error (no field-level validation) — retryable'
+      );
+    }
+    if (formError) {
+      throw formError;
+    }
     // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
     // logged "Contact saved successfully" and returned null, letting callers proceed on a
     // contact that doesn't exist. Fail fast instead, matching the "Fresh company ID not
     // captured" convention already used elsewhere in this codebase.
-    if (!contactId) {
-      throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
-    }
-    await this.waitForContactListPage();
-    logger.success('Contact saved successfully');
-    return contactId;
+    throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
   }
 
   // ──────────────────────────────────────────────────────────
@@ -837,6 +943,41 @@ export class ContactsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
+  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
+  // stalled a full-suite regression run across many share-based RBAC tests):
+  // see LeadsPage.openUserShareTypeSearch() for the full explanation — same
+  // "click registers, handler race" class already fixed elsewhere in this
+  // module (selectFromContactDropdown), applied here to the Share modal's
+  // type-dropdown selection. If userOption.click() (User) didn't register,
+  // shareToUserInput() never mounts and the following raw `.fill()` hangs
+  // until the outer test timeout. Fixed identically here.
+  private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await shareTypeControl.click({ timeout: config.timeouts.expect });
+        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await userOption.click({ timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
+  }
+
   async shareContact(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing contact with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -844,19 +985,14 @@ export class ContactsPage extends BasePage {
     // WHY: Click the Share To type dropdown control — opens User/Team options
     const shareTypeControl = this.page.locator('.modal.show').locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
-    await shareTypeControl.click();
-    await this.page.waitForTimeout(500);
-    // WHY: Select "User" option
-    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-    await userOption.waitFor({ state: 'visible', timeout: 5000 });
-    await userOption.click();
+    await this.openUserShareTypeSearch(shareTypeControl);
     await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
-    await this.shareToUserInput().fill(validWord);
+    await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
     await this.page.waitForTimeout(800);
     // WHY: Select matching user from dropdown — exact match, not substring
     // (a substring match can select the wrong, similarly-named entity)
@@ -865,7 +1001,7 @@ export class ContactsPage extends BasePage {
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    await userItem.click({ timeout: config.timeouts.expect });
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
@@ -1369,10 +1505,34 @@ export class ContactsPage extends BasePage {
   // alone isn't enough here.
   async createContact(data: ContactData): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
-      const attemptData = this.cloneContactDataForRetry(data);
-      await this.clickAddContact();
-      await this.fillContactForm(attemptData);
-      return await this.saveContact();
+      // WHY the bounded transient-retry (ported 2026-07-22, same pattern as
+      // CompaniesPage.createCompany/LeadsPage.createLead): saveContact() now
+      // classifies a generic-error create rejection as
+      // TransientContactSaveError; retry the ENTIRE create here.
+      // Duplicate-safe — a transient rejection is blocked before any DB
+      // write. A GENUINE validation rejection is a different error and is
+      // NOT caught here, so it still fails loudly.
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const attemptData = this.cloneContactDataForRetry(data);
+        try {
+          await this.clickAddContact();
+          await this.fillContactForm(attemptData);
+          return await this.saveContact();
+        } catch (error) {
+          if (error instanceof TransientContactSaveError && attempt < maxAttempts) {
+            logger.warn(
+              `Contact create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
+                're-navigating and retrying the whole create'
+            );
+            await this.navigateTo(`${config.appUrl}/sales/contacts/list`);
+            await this.waitForContactListPage();
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw new Error('createContact: exhausted transient retries without a definitive outcome');
     }, 'createContact');
   }
 

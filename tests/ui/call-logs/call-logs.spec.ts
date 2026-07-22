@@ -94,11 +94,12 @@ test.describe('Call Logs', () => {
       includeAssociatedDeal: true,
     });
     await callLogsPage.goToCallLogsList();
-    const { callLogId, entityName } = await callLogsPage.createCallLog(data);
+    const { callLogId, entityName, associatedDealName } = await callLogsPage.createCallLog(data);
     expect(callLogId).not.toBeNull();
     await callLogsPage.assertCallLogInList(callLogId!);
     await callLogsPage.assertDetailEntityHeadingContains(entityName);
     await callLogsPage.assertOutcomeOnDetail('No Answer');
+    await callLogsPage.assertAssociatedDealOnDetail(associatedDealName);
     logger.success('CL4 passed');
   });
 

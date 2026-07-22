@@ -1,8 +1,26 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import { LeadData, LEAD_CUSTOM_FIELD_NAMES } from '../../data/factories/leadFactory';
+import {
+  LeadData,
+  LeadCustomFieldData,
+  LEAD_CUSTOM_FIELD_NAMES,
+} from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
+
+// WHY: same rationale as CompaniesPage's TransientCompanySaveError (2026-07-21
+// fix) — a distinct, catchable error for a TRANSIENT backend rejection of the
+// lead-create POST (generic "Unexpected error occurred"/"Internal server
+// error" with no field-level validation), as opposed to a genuine validation
+// rejection (surfaces via assertNoFormErrors) or a real silent-fail. Ported
+// 2026-07-22 after leads.rbac.spec.ts:38 hit the identical class live (see
+// captureLeadCreateOutcome()/createLead() for the classify+retry).
+class TransientLeadSaveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientLeadSaveError';
+  }
+}
 
 export class LeadsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
@@ -512,7 +530,10 @@ export class LeadsPage extends BasePage {
   // renders once disableRequiredFieldsToggle() has run — shared by both the
   // create form (fillLeadForm) and the edit form (fillEditForm) so custom
   // fields are reachable from either path.
-  private async openOtherDetailsFormSection(): Promise<void> {
+  // WHY public: RBAC lookup tests (e.g. L30) need to reveal the create form's
+  // "Other Details" section — where the lookup fields live — to search them,
+  // without going through the full fillLeadForm() flow.
+  async openOtherDetailsFormSection(): Promise<void> {
     const nav = this.otherDetailsFormSectionNav();
     if (!(await nav.isVisible({ timeout: 5000 }).catch(() => false))) {
       logger.debug(
@@ -656,6 +677,127 @@ export class LeadsPage extends BasePage {
     if (pickedValues.length > 0) cf.multiPickList = pickedValues;
   }
 
+  // WHY: thin Lead-flavored wrapper over BasePage.selectLookupCustomField().
+  // Kept separate from fillLeadCustomFields() (and NOT wired into
+  // fillLeadForm()/fillEditForm()) because these two lookup fields need a
+  // caller-supplied TARGET entity name — there is no safe random default (see
+  // LeadCustomFieldData.companyLookupTarget). Only attempts a field when its
+  // target was supplied; the per-field absence skip is handled by
+  // selectLookupCustomField() itself (same isCustomFieldPresent idiom as every
+  // other custom-field helper — no parallel skip mechanism).
+  //
+  // WHY the search token is the first whitespace word of the target: the
+  // server search matches a single token while the option renders as the full
+  // name (e.g. type "Marlon", select "Marlon Schmidt"; type "Kulas", select
+  // "Kulas Group-<ts>"). The unique full name is used for the exact-match
+  // selection.
+  //
+  // WHY it opens "Other Details" first: both lookups live in that section; the
+  // call is idempotent and graceful if absent. The required-fields toggle has
+  // already been disabled by the preceding fillLeadForm() call, so no toggle
+  // handling is needed here.
+  //
+  // Returns the value selected for each field, or null when that field was
+  // absent (skipped) or no target was supplied — so a caller can gate the
+  // lookup-specific detail-page assertions on presence without a parallel
+  // presence check.
+  async fillLeadLookupCustomFields(data: LeadCustomFieldData): Promise<{
+    companyLookup: string | null;
+    contactLookup: string | null;
+  }> {
+    await this.openOtherDetailsFormSection();
+    const searchToken = (name: string): string => name.trim().split(/\s+/)[0];
+    let companyLookup: string | null = null;
+    let contactLookup: string | null = null;
+    if (data.companyLookupTarget) {
+      companyLookup = await this.selectLookupCustomField(
+        LEAD_CUSTOM_FIELD_NAMES.companyLookup,
+        searchToken(data.companyLookupTarget),
+        data.companyLookupTarget,
+        'Company Lookup'
+      );
+    }
+    if (data.contactLookupTarget) {
+      contactLookup = await this.selectLookupCustomField(
+        LEAD_CUSTOM_FIELD_NAMES.contactLookup,
+        searchToken(data.contactLookupTarget),
+        data.contactLookupTarget,
+        'Contact Lookup'
+      );
+    }
+    return { companyLookup, contactLookup };
+  }
+
+  // WHY: thin Lead-flavored pass-through to the shared BasePage assertion —
+  // Lead-local naming only, no logic of its own (the create-on-the-fly-option
+  // reasoning and the settle/anchoring logic all live in BasePage).
+  async assertLeadLookupSelectableAbsent(
+    fieldName: string,
+    searchTerm: string,
+    entityName: string
+  ): Promise<void> {
+    await this.assertLookupCustomFieldOptionAbsent(fieldName, searchTerm, entityName);
+  }
+
+  // WHY: verifies a lookup custom field's saved value on the lead DETAIL page.
+  // The detail-page custom-field containers (e.g. [id="cfCompanyLookup"]) only
+  // render once the "Other Details" detail tab is ACTIVE (confirmed live
+  // 2026-07-21 — the tab header is always present but its panel renders on
+  // demand; standard fields sit on the default view and need no tab click).
+  // Then it reuses the shared single-value detail assertion
+  // assertCustomFieldOnDetail(): the value renders inside [id="cf<Name>"] .title
+  // (verified live), the same read-only-info markup every other custom field
+  // uses. Only call when the field was actually present/filled — see
+  // fillLeadLookupCustomFields()'s non-null return.
+  //
+  // WHY the WHOLE activate→verify is retried as a unit (root-caused 2026-07-21
+  // via a real, repeated flake — RESTRICTED user only): shortly after the
+  // detail page loads it re-renders and RESETS the active tab back to its
+  // first tab ("Communication"). Confirmed from two failure DOMs where the
+  // Communication panel was active at assertion time even though "Other
+  // Details" had been clicked. A one-shot click — or even clicking until the
+  // container merely ATTACHES — is not enough: the reset can happen AFTER the
+  // attach check but BEFORE the value assertion, so the container vanishes
+  // mid-assertion. Admin never hits this (~26 clean admin detail verifications)
+  // — it is specific to the restricted user's detail page, most likely a late
+  // permission/share refetch. Re-doing the entire "activate tab → reveal
+  // carousel slide → assert value" as one unit lets a mid-sequence reset
+  // self-correct: once the page has settled (after its late re-render), a
+  // re-activation sticks and the assertion passes. Bounded, so a genuinely
+  // missing value still fails loudly with the underlying error.
+  async assertLeadLookupOnDetail(
+    fieldName: string,
+    expectedValue: string,
+    description: string
+  ): Promise<void> {
+    const tab = this.otherDetailsDetailPageTab();
+    const valueLocator = this.page.locator(`[id="cf${fieldName}"] .title`);
+    const maxAttempts = 4;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (await tab.isVisible({ timeout: config.timeouts.navigation }).catch(() => false)) {
+          await tab.click();
+        }
+        await this.revealDetailCarouselSlideFor(`cf${fieldName}`);
+        await expect(
+          valueLocator,
+          `Lookup "${description}": expected "${expectedValue}" on the detail page`
+        ).toContainText(expectedValue, { timeout: config.timeouts.expect });
+        logger.success(`Lookup "${description}" verified on detail page: "${expectedValue}"`);
+        return;
+      } catch (error) {
+        lastError = error;
+        // Let the late post-load re-render (which resets the active tab)
+        // settle, then re-activate and re-verify on the next iteration.
+        await this.page.waitForTimeout(1500);
+      }
+    }
+    throw new Error(
+      `Lookup "${description}": value "${expectedValue}" was not verified on the detail page after ${maxAttempts} attempts — ${String(lastError)}`
+    );
+  }
+
   private async performSearch(searchText: string): Promise<void> {
     logger.info(`Searching lead: ${searchText}`);
 
@@ -715,6 +857,55 @@ export class LeadsPage extends BasePage {
       logger.warn(`Unable to capture lead ID: ${String(error)}`);
 
       return null;
+    }
+  }
+
+  // WHY (ported 2026-07-22 from CompaniesPage.captureCompanyCreateOutcome,
+  // the proven pattern): captureLeadIdFromResponse() only matches 200/201, so
+  // a transient backend rejection (leads.rbac.spec.ts:38 — generic "Uhoh!
+  // Something didn't work as expected" toast, HTTP 400/5xx, no field
+  // validation) just times out into a null id, indistinguishable from a
+  // genuine silent failure. This matches the create POST at ANY status, then
+  // classifies: 2xx -> id; non-2xx generic message + no fieldErrors, or any
+  // 5xx -> transient (safe to retry — rejected before any DB write);
+  // populated fieldErrors -> genuine (NOT transient, already surfaced via
+  // assertNoFormErrors). Scoped to POST /v1/leads/ excluding /reports/, same
+  // as captureLeadIdFromResponse's existing hardening.
+  private async captureLeadCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+    try {
+      const response = await this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/leads') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST',
+        'capture lead create response',
+        config.timeouts.navigation
+      );
+      const status = response.status();
+      const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+      if (status === 200 || status === 201) {
+        const id = ((body?.id as number | undefined) ?? (body?.data as { id?: number } | undefined)?.id ?? null) as
+          | number
+          | null;
+        logger.success(`Captured lead ID: ${id} from ${response.url()}`);
+        return { id, transient: false };
+      }
+      const message = String((body as { message?: unknown })?.message ?? '');
+      const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
+      const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
+      const transient =
+        !hasFieldErrors &&
+        (status >= 500 ||
+          /unexpected error occurred|internal server error|something didn't work as expected/i.test(message));
+      logger.warn(
+        `Lead create returned HTTP ${status} (message: "${message}", ` +
+          `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
+          `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
+      );
+      return { id: null, transient };
+    } catch (error) {
+      logger.debug(`Lead create response not captured (${String(error)}) — treating as non-transient`);
+      return { id: null, transient: false };
     }
   }
 
@@ -1005,28 +1196,55 @@ export class LeadsPage extends BasePage {
   async saveLead(): Promise<number | null> {
     logger.info('Saving lead');
 
-    const leadIdPromise = this.captureLeadIdFromResponse();
+    const outcomePromise = this.captureLeadCreateOutcome();
 
     await this.click(this.saveButton(), 'save button');
-    await this.assertNoFormErrors('lead create form');
 
-    const leadId = await leadIdPromise;
+    // WHY capture the form-error instead of throwing immediately (ported
+    // 2026-07-22 from CompaniesPage.saveCompany — same proven ordering fix):
+    // a TRANSIENT backend error can also surface as a generic form-error
+    // toast that assertNoFormErrors() throws on. If that throw pre-empted
+    // the classification below, a transient blip would fail the test
+    // instead of being retried. The response BODY (status + fieldErrors) is
+    // the source of truth for transient-vs-genuine.
+    let formError: unknown = null;
+    try {
+      await this.assertNoFormErrors('lead create form');
+    } catch (error) {
+      formError = error;
+    }
+
+    const outcome = await outcomePromise;
+
+    if (outcome.id) {
+      await this.waitForLeadListPage();
+      logger.success('Lead saved successfully');
+      return outcome.id;
+    }
+
+    // Transient backend rejection → distinct, catchable error so createLead()
+    // retries the whole create (duplicate-safe — a transient rejection
+    // blocked any DB write). Takes priority over the form-error toast, which
+    // for a transient is itself just a generic message.
+    if (outcome.transient) {
+      throw new TransientLeadSaveError(
+        'Lead create hit a transient backend error (no field-level validation) — retryable'
+      );
+    }
+
+    // Genuine, user-facing validation error → surface it unchanged so it
+    // fails loudly and is never retried into a false pass.
+    if (formError) {
+      throw formError;
+    }
 
     // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
     // logged "Lead saved successfully" and returned null, letting callers proceed on a lead
     // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
     // convention already used elsewhere in this codebase.
-    if (!leadId) {
-      throw new Error(
-        'Lead ID not captured after save — cannot proceed (save likely failed silently)'
-      );
-    }
-
-    await this.waitForLeadListPage();
-
-    logger.success('Lead saved successfully');
-
-    return leadId;
+    throw new Error(
+      'Lead ID not captured after save — cannot proceed (save likely failed silently)'
+    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1200,10 +1418,37 @@ export class LeadsPage extends BasePage {
   // clean `data`, never attempt 1's partially-mutated leftovers.
   async createLead(data: LeadData): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
-      const attemptData = { ...data };
-      await this.clickAddLead();
-      await this.fillLeadForm(attemptData);
-      return await this.saveLead();
+      // WHY the bounded transient-retry (ported 2026-07-22 from
+      // CompaniesPage.createCompany after leads.rbac.spec.ts:38 hit the
+      // identical transient-backend class live): saveLead() now classifies a
+      // generic-error create rejection as TransientLeadSaveError; retry the
+      // ENTIRE create here. Duplicate-safe — a transient rejection is
+      // blocked before any DB write. A GENUINE validation rejection is a
+      // different error and is NOT caught here, so it still fails loudly.
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const attemptData = { ...data };
+        try {
+          await this.clickAddLead();
+          await this.fillLeadForm(attemptData);
+          return await this.saveLead();
+        } catch (error) {
+          if (error instanceof TransientLeadSaveError && attempt < maxAttempts) {
+            logger.warn(
+              `Lead create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
+                're-navigating and retrying the whole create'
+            );
+            // Hard navigation, NOT click-to-close — same reasoning as
+            // CompaniesPage.createCompany: a transient-error modal state can
+            // leave the cancel button non-actionable, hanging a click-close.
+            await this.navigateTo(`${config.appUrl}/sales/leads/list`);
+            await this.waitForLeadListPage();
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw new Error('createLead: exhausted transient retries without a definitive outcome');
     }, 'createLead');
   }
 
@@ -1450,9 +1695,34 @@ export class LeadsPage extends BasePage {
 
   async markLeadAsStage(stage: 'Won' | 'Closed Lost' | 'Closed Unqualified'): Promise<string> {
     logger.info(`Marking lead as: ${stage}`);
-    // WHY: Close Lead dropdown toggle opens the stage list
-    await this.closeLeadToggleButton().waitFor({ state: 'visible', timeout: 10000 });
-    await this.closeLeadToggleButton().click();
+    // WHY the bounded reload-and-retry (root-caused 2026-07-22 from a real,
+    // single full-suite flake — leads.spec.ts's Close Lead tests hit
+    // "Timeout 10000ms exceeded waiting for ... dropdown-toggle-split to be
+    // visible"). Measured the REAL baseline via live instrumentation (5
+    // samples): the toggle normally becomes visible 0.8-2.6s after the lead
+    // detail page's own navigation resolves — the existing 10s bound already
+    // has 4-12x headroom under normal conditions, so this is NOT a case of
+    // an arbitrarily tight timeout to blindly widen (that would just be a
+    // guess dressed up as a fix). The one observed failure landed deep into
+    // a multi-hour full-suite run, consistent with this codebase's already-
+    // documented "QA/staging environment degrades over a long run" pattern —
+    // a rare, transient render delay, not a missing structural dependency.
+    // Retrying the wait once via a fresh reload targets exactly that
+    // scenario without masking a genuinely broken button (which would still
+    // fail after the retry) — same bounded-retry discipline as every other
+    // fix this session, not a timeout bump.
+    const closeLeadToggle = this.closeLeadToggleButton();
+    try {
+      await closeLeadToggle.waitFor({ state: 'visible', timeout: 10000 });
+    } catch (error) {
+      logger.warn(
+        `Close Lead toggle not visible within 10s — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForLeadDetailsPage();
+      await closeLeadToggle.waitFor({ state: 'visible', timeout: 10000 });
+    }
+    await closeLeadToggle.click();
     await this.page.waitForTimeout(500);
     // WHY: Click the stage option from the dropdown
     const stageItem = this.closeLeadDropdownItem(stage);
@@ -1623,6 +1893,47 @@ export class LeadsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
+  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
+  // stalled a full-suite regression run across many share-based RBAC tests):
+  // `shareTypeControl.click()` / `userOption.click()` (selecting "User") were
+  // raw, UNBOUNDED clicks — same "click registers, handler race" class as
+  // clickAddCompany/selectFromContactDropdown/selectFromIsInvalidControl. If
+  // userOption.click() didn't register, shareToUserInput()
+  // (`[id="undefined_undefinedundefined_input_toId"]`) never mounts, and the
+  // immediately-following `.fill()` (also unbounded) hangs until the outer
+  // test timeout — matching the observed pattern exactly ("Share search
+  // term" logged, then a multi-minute gap, then failure). Fixed with the
+  // same shape as the other 3 fixes: bound every click to
+  // config.timeouts.expect and retry the whole open-type-dropdown ->
+  // select-User -> wait-for-search-input sequence up to 3 times. Same fix
+  // applied identically to shareCompany/shareContact/shareDeal.
+  private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await shareTypeControl.click({ timeout: config.timeouts.expect });
+        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await userOption.click({ timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
+  }
+
   async shareLead(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing lead with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -1633,12 +1944,7 @@ export class LeadsPage extends BasePage {
       .locator('.is-invalid__control')
       .first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
-    await shareTypeControl.click();
-    await this.page.waitForTimeout(500);
-    // WHY: Select "User" option
-    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-    await userOption.waitFor({ state: 'visible', timeout: 5000 });
-    await userOption.click();
+    await this.openUserShareTypeSearch(shareTypeControl);
     await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
@@ -1646,7 +1952,7 @@ export class LeadsPage extends BasePage {
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     const searchTerm = validWord;
     logger.debug(`Share search term: "${searchTerm}" (from: "${restrictedUserName}")`);
-    await this.shareToUserInput().fill(searchTerm);
+    await this.shareToUserInput().fill(searchTerm, { timeout: config.timeouts.expect });
     await this.page.waitForTimeout(800);
     // WHY: Select matching user from dropdown
     const userItem = this.page
@@ -1654,7 +1960,7 @@ export class LeadsPage extends BasePage {
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    await userItem.click({ timeout: config.timeouts.expect });
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {

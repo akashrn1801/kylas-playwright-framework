@@ -248,19 +248,51 @@ export class QuotationsPage extends BasePage {
     logger.success(`Date selected: ${date.toDateString()}`);
   }
 
+  // WHY the bounded whole-sequence retry (2026-07-22): identical bug class to
+  // CompaniesPage.clickAddCompany / DealsPage.cloneDeal /
+  // ContactsPage.selectFromContactDropdown (which this method was originally
+  // copied from, per its own prior comment) — every click here was a raw,
+  // UNBOUNDED Playwright `.click()` (no `timeout`, no global `actionTimeout`
+  // configured anywhere), so a "click registers, handler not yet attached"
+  // React race could hang until the outer test timeout. Fixed with the exact
+  // same proven shape: bound every click to config.timeouts.expect and retry
+  // the whole open->fill->select sequence (not just the click) up to 3
+  // times, since a half-opened/half-filtered menu from a failed attempt
+  // isn't a valid state to resume from. Flat across all environments —
+  // client-side rendering race, not a server/data-volume-dependent
+  // operation, same reasoning as the sibling fixes (no per-env branching).
   private async selectFromIsInvalidControl(
     control: Locator,
     input: Locator,
     value: string
   ): Promise<void> {
-    await control.click();
-    await input.fill(value);
-    await this.page.locator('.is-invalid__option').filter({ hasText: value }).first().click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    logger.debug(`Selected "${value}" from is-invalid control`);
+    const menu = this.page.locator('.is-invalid__menu');
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await control.click({ timeout: config.timeouts.expect });
+        await input.fill(value);
+        const option = menu.locator('.is-invalid__option').filter({ hasText: value }).first();
+        await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await option.click({ timeout: config.timeouts.expect });
+        await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+        logger.debug(`Selected "${value}" from is-invalid control`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `selectFromIsInvalidControl("${value}") attempt ${attempt}/${maxAttempts} failed: ` +
+            `${String(error)} — closing any stuck menu and retrying`
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `selectFromIsInvalidControl: failed to select "${value}" after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
   }
 
   private async clearIsInvalidField(control: Locator): Promise<void> {

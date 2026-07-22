@@ -932,7 +932,7 @@ export class CallLogsPage extends BasePage {
     // existing searchAndSelectEntity() random-pick behavior — kept optional so
     // callers that don't need this (e.g. admin-only UI tests) are unaffected.
     selectedSecondaryEntityName?: string
-  ): Promise<{ entityName: string; selectedPhone: string }> {
+  ): Promise<{ entityName: string; selectedPhone: string; associatedDealName: string | null }> {
     logger.info(`Filling create form — entity: ${data.entityType}, outcome: ${data.outcome}`);
 
     // Step 1: Entity Type
@@ -978,13 +978,18 @@ export class CallLogsPage extends BasePage {
     }
 
     // Step 4b: Contact flow — optional Associated Deal (after phone, per discovery doc)
+    // WHY track the result (added 2026-07-22, alongside the ensureOwnedDealExists
+    // contact-linkage fix): callers need to know whether a deal was actually
+    // associated or genuinely skipped, so assertAssociatedDealOnDetail() can
+    // verify the right thing instead of assuming a deal is always present.
+    let associatedDealName: string | null = null;
     if (data.entityType === 'Contact' && data.includeAssociatedDeal) {
       logger.info('Contact flow — filling optional Associated Deal');
       const dealInput = this.page.locator('[id="associatedEntity"]');
       // WHY: Deal association is optional — contact may not have deals linked
       // Try to select a deal, skip silently if none available
       try {
-        await this.searchAndSelectEntity(
+        associatedDealName = await this.searchAndSelectEntity(
           dealInput,
           'Associated Deal (Contact flow)',
           selectedSecondaryEntityName
@@ -1043,7 +1048,7 @@ export class CallLogsPage extends BasePage {
     }
 
     logger.success('Create form filled');
-    return { entityName, selectedPhone };
+    return { entityName, selectedPhone, associatedDealName };
   }
 
   async saveCallLog(): Promise<number | null> {
@@ -1314,6 +1319,33 @@ export class CallLogsPage extends BasePage {
     logger.success(`Detail heading confirmed: "${text}"`);
   }
 
+  // WHY (added 2026-07-22, closing a real test-coverage gap found in CL4/CL22 —
+  // both claimed to "verify both entity associations on detail panel" but never
+  // actually asserted the deal): confirmed live via DOM investigation (temp spec,
+  // deleted after use) that a successfully-associated deal renders as
+  // `<div class="link-primary">{dealName}</div>` on the call log detail panel.
+  // Takes the associatedDealName returned by createCallLog()/fillCreateForm() —
+  // null there means the association was genuinely skipped (no linked deal
+  // found, e.g. a contact truly has no deals), NOT a failure. This method must
+  // never turn that legitimate case into a false assertion failure — if
+  // expectedDealName is null, it logs and returns without asserting presence.
+  async assertAssociatedDealOnDetail(expectedDealName: string | null): Promise<void> {
+    if (!expectedDealName) {
+      logger.info(
+        'No associated deal was selected during create (genuinely unavailable) — skipping ' +
+          'associated-deal detail assertion'
+      );
+      return;
+    }
+    logger.info(`Asserting associated deal on detail: "${expectedDealName}"`);
+    const dealLink = this.page.locator('div.link-primary').filter({ hasText: expectedDealName }).first();
+    await expect(
+      dealLink,
+      `Expected associated deal "${expectedDealName}" to be visible on the call log detail panel`
+    ).toBeVisible({ timeout: 15000 });
+    logger.success(`Associated deal confirmed on detail: "${expectedDealName}"`);
+  }
+
   async assertOutcomeOnDetail(expectedOutcome: string): Promise<void> {
     logger.info(`Asserting outcome on detail: ${expectedOutcome}`);
     await this.detailOutcomeLabel().waitFor({ state: 'visible', timeout: 10000 });
@@ -1524,10 +1556,27 @@ export class CallLogsPage extends BasePage {
   // call logs against deals they don't own, causing HTTP 403 on save.
   // Public so CL23 (which uses the manual form-fill path) can pre-create a deal
   // and pass its name as selectedEntityName to fillCreateForm.
-  async ensureOwnedDealExists(): Promise<string> {
+  // WHY the optional associatedContactName (root-caused 2026-07-22, NOT a
+  // timing/indexing-lag issue despite what CL4/CL22's "Associated Deal"
+  // search retry warnings suggested): confirmed live via a deliberate
+  // investigation (temp spec, deleted after use) that even a 15s wait + 5
+  // search retries still found ZERO options in the Contact-flow's Associated
+  // Deal dropdown — including the UNFILTERED base list, before typing
+  // anything. Root cause: this deal was created with NO associatedContactName,
+  // so DealsPage.fillDealForm() picks a RANDOM pre-existing contact (already
+  // documented codebase behavior, see DealsPage's own comment on
+  // selectFirstOptionFromDropdown) — the deal is never actually linked to the
+  // specific contact the call log flow just created. The "Associated Deal"
+  // field filters by genuine contact-relationship, so it correctly showed
+  // nothing; no retry count or wait duration could ever fix data that isn't
+  // related. Passing the real contact name here (when the caller has one)
+  // makes the deal genuinely linked, which is the actual fix — not a longer
+  // timeout. Left optional so the entityType==='Deal' call site (which needs
+  // a standalone deal, no contact-linkage requirement) is unaffected.
+  async ensureOwnedDealExists(associatedContactName?: string): Promise<string> {
     logger.info('Creating owned deal for call log entity selection');
     const dealsPage = new DealsPage(this.page);
-    const dealData = generateDealData();
+    const dealData = generateDealData(associatedContactName ? { associatedContactName } : {});
     await dealsPage.goToDealsList();
     await dealsPage.createDeal(dealData);
     logger.success(`Created owned deal: ${dealData.name}`);
@@ -1540,7 +1589,12 @@ export class CallLogsPage extends BasePage {
       includeNoteDuringCreate?: boolean;
       selectedEntityName?: string;
     } = {}
-  ): Promise<{ callLogId: number | null; entityName: string; selectedPhone: string }> {
+  ): Promise<{
+    callLogId: number | null;
+    entityName: string;
+    selectedPhone: string;
+    associatedDealName: string | null;
+  }> {
     logger.info(`Creating call log — entity: ${data.entityType}, outcome: ${data.outcome}`);
     // WHY: Auto-create an owned entity when no specific entity is requested.
     // The entity dropdown may show only SHR/ADM-prefixed items from other test runs.
@@ -1570,11 +1624,15 @@ export class CallLogsPage extends BasePage {
       resolvedSecondaryEntityName = await this.ensureOwnedContactExists();
       await this.goToCallLogsList();
     } else if (data.entityType === 'Contact' && data.includeAssociatedDeal) {
-      resolvedSecondaryEntityName = await this.ensureOwnedDealExists();
+      // WHY pass resolvedEntityName here: see ensureOwnedDealExists()'s own
+      // comment — without this, the created deal has no real relationship to
+      // this specific contact and the Associated Deal field correctly (but
+      // confusingly) shows zero options no matter how long you wait/retry.
+      resolvedSecondaryEntityName = await this.ensureOwnedDealExists(resolvedEntityName);
       await this.goToCallLogsList();
     }
     await this.openLogACallForm();
-    const { entityName, selectedPhone } = await this.fillCreateForm(
+    const { entityName, selectedPhone, associatedDealName } = await this.fillCreateForm(
       data,
       resolvedEntityName,
       options.includeNoteDuringCreate ?? false,
@@ -1583,7 +1641,7 @@ export class CallLogsPage extends BasePage {
     const callLogId = await this.saveCallLog();
 
     logger.success(`Call log created — ID: ${callLogId}, entity: ${entityName}`);
-    return { callLogId, entityName, selectedPhone };
+    return { callLogId, entityName, selectedPhone, associatedDealName };
   }
 
   async updateCallLog(callLogId: number, newData: CallLogData): Promise<void> {

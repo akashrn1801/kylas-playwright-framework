@@ -1,6 +1,10 @@
 import { test, expect } from '../../../src/fixtures/index';
 import { safeWaitForURL } from '../../../src/utils/navigation';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
+import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
+import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
+import { generateContactData } from '../../../src/data/factories/contactFactory';
+import { generateCompanyData } from '../../../src/data/factories/companyFactory';
 import {
   generateLeadData,
   generateAdminLeadData,
@@ -443,5 +447,158 @@ test.describe('Leads', () => {
     }
 
     logger.success('L19 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Lookup Custom Fields ("Company Lookup" / "Contact Lookup")
+  // ──────────────────────────────────────────────────────────
+  // WHY: two custom entity-LOOKUP fields in "Other Details" (confirmed live
+  // 2026-07-21 — present on QA, absent on Stage/Prod for now, where the
+  // presence-guard skips ONLY the lookup-specific steps/assertions, not the
+  // whole test). Unlike the 9 text/picklist custom fields these are live,
+  // server-side, RBAC-scoped searches.
+
+  // ── L20 ──────────────────────────────────────────────────
+
+  test('@regression admin creates a lead selecting Company Lookup and Contact Lookup and verifies both on the detail page', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const contactsPage = new ContactsPage(adminPage);
+    const companiesPage = new CompaniesPage(adminPage);
+
+    // WHY: admin-owned Contact + Company created first, so the lead's lookups
+    // point at known, specific entities — their exact names drive both the
+    // exact-match selection and the detail-page verification.
+    const contactData = generateContactData();
+    const companyData = generateCompanyData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId, 'Contact should be created').not.toBeNull();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId, 'Company should be created').not.toBeNull();
+
+    const contactName = `${contactData.firstName} ${contactData.lastName}`;
+    const companyName = companyData.name;
+
+    // WHY: set the lookup TARGETS on the lead's custom-field data (left
+    // undefined by the factory — see LeadCustomFieldData). fillLeadForm() fills
+    // standard + the 9 text/picklist custom fields; fillLeadLookupCustomFields()
+    // is called explicitly for the two lookups (deliberately not wired into the
+    // shared fill flow).
+    const leadData = generateLeadData();
+    leadData.customFields.companyLookupTarget = companyName;
+    leadData.customFields.contactLookupTarget = contactName;
+
+    await leadsPage.goToLeadsList();
+    await leadsPage.clickAddLead();
+    await leadsPage.fillLeadForm(leadData);
+    const lookups = await leadsPage.fillLeadLookupCustomFields(leadData.customFields);
+    const leadId = await leadsPage.saveLead();
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    // Standard fields are always verified — unaffected by lookup-field presence.
+    await leadsPage.assertLeadStandardFieldsOnDetail(leadData);
+
+    // WHY gate on the returned value: where a lookup field is absent,
+    // fillLeadLookupCustomFields() returns null for it (and logCustomFieldSkipped()
+    // already logged why) — we then skip ONLY that field's detail assertion
+    // rather than failing the whole test.
+    if (lookups.companyLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.companyLookup,
+        companyName,
+        'Company Lookup'
+      );
+    } else {
+      logger.info(
+        'Company Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+    if (lookups.contactLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.contactLookup,
+        contactName,
+        'Contact Lookup'
+      );
+    } else {
+      logger.info(
+        'Contact Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+
+    logger.success('L20 passed');
+  });
+
+  // ── L21 ──────────────────────────────────────────────────
+
+  test('@regression admin edits a lead to add Company Lookup and Contact Lookup and verifies both on the detail page', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const contactsPage = new ContactsPage(adminPage);
+    const companiesPage = new CompaniesPage(adminPage);
+
+    // Admin-owned Contact + Company to point the lookups at (their exact names
+    // drive the exact-match selection and detail-page verification).
+    const contactData = generateContactData();
+    const companyData = generateCompanyData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId, 'Contact should be created').not.toBeNull();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId, 'Company should be created').not.toBeNull();
+    const contactName = `${contactData.firstName} ${contactData.lastName}`;
+    const companyName = companyData.name;
+
+    // Create a lead WITHOUT the lookups (generateLeadData leaves the lookup
+    // targets undefined), then EDIT it to add them.
+    const leadData = generateLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+
+    // Edit: set the lookup targets, run the standard edit-form fill, then add
+    // the lookups explicitly (deliberately not wired into the shared fill flow).
+    const editData = generateLeadData();
+    editData.customFields.companyLookupTarget = companyName;
+    editData.customFields.contactLookupTarget = contactName;
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    await leadsPage.clickEditIcon();
+    await leadsPage.fillEditForm(editData);
+    const lookups = await leadsPage.fillLeadLookupCustomFields(editData.customFields);
+    await leadsPage.saveEditedLead();
+
+    // Re-open the lead by ID for a clean detail-page read, then verify.
+    await leadsPage.searchAndOpenLead(editData.firstName, leadId ?? undefined);
+    if (lookups.companyLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.companyLookup,
+        companyName,
+        'Company Lookup'
+      );
+    } else {
+      logger.info(
+        'Company Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+    if (lookups.contactLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.contactLookup,
+        contactName,
+        'Contact Lookup'
+      );
+    } else {
+      logger.info(
+        'Contact Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+
+    logger.success('L21 passed');
   });
 });

@@ -917,6 +917,193 @@ export class BasePage {
     return this.selectRandomFromSingleReactSelect(control, `Custom field "${description}"`);
   }
 
+  /**
+   * Search-and-select a value in a custom LOOKUP field (an entity-select
+   * react-select backed by a live server search, e.g. Lead's "Company
+   * Lookup" / "Contact Lookup").
+   *
+   * Lives in BasePage — not a module page object — so ANY module that gains a
+   * lookup-type custom field later (Contacts, Companies, Deals, …) reuses this
+   * unchanged, exactly as `fillTextLikeCustomField` / `selectPicklistCustomField`
+   * are already shared. It is parameterized by the raw Kylas field name, never
+   * typed to one entity.
+   *
+   * Behaviour mirrors the other per-field helpers: if the field is absent on
+   * this environment it logs a clear skip line and returns `null` (never
+   * throws), so a caller can tell "skipped" apart from "selected".
+   *
+   * WHY this does token-search-then-exact-select itself rather than delegating
+   * to {@link selectRandomFromSearchableReactSelect}: that helper types the
+   * `exactValue` as the search term, which only works when the string typed to
+   * search equals the option's display text (true for a company, whose `name`
+   * is a single field). For an entity lookup that is generally FALSE — e.g. a
+   * contact's option renders as "First Last" but the server search matches a
+   * single name token, so typing the full "First Last" returns nothing
+   * (confirmed live 2026-07-21). This method therefore types the caller's
+   * `searchTerm` (a token) and selects by `exactValue` separately. It still
+   * reuses the SAME lower-level primitives — the menu-scoped
+   * `.is-invalid__menu .is-invalid__option` locator (never the page-wide
+   * `.is-invalid__option` Issue-1 flake pattern), `fillSearchAndWaitForOptions`
+   * (transient-network retry + `config.timeouts.expect`), and the anchored
+   * exact-match regex via `escapeRegExp` — and deliberately does NOT touch
+   * `selectRandomFromSearchableReactSelect` or its ContactsPage consumer.
+   *
+   * @param fieldName   Internal Kylas field name (e.g. "CompanyLookup").
+   * @param searchTerm  Token typed to trigger the live server search. May
+   *                    differ from the option's display text (e.g. a name
+   *                    fragment for a contact whose option is "First Last").
+   * @param exactValue  Exact option text to select from the results. Provide
+   *                    for deterministic selection of a KNOWN entity (required
+   *                    for RBAC tests); omit to pick a random result.
+   * @param description Human-readable label for logs (defaults to fieldName).
+   * @returns The selected value, or `null` if the field is absent (skipped).
+   */
+  async selectLookupCustomField(
+    fieldName: string,
+    searchTerm: string,
+    exactValue?: string,
+    description = fieldName
+  ): Promise<string | null> {
+    if (!(await this.isCustomFieldPresent(fieldName))) {
+      this.logCustomFieldSkipped(description, fieldName, 'lookup selection');
+      return null;
+    }
+    const label = `Custom field "${description}"`;
+    const input = this.customFieldInputLocator(fieldName);
+    const control = input.locator('xpath=ancestor::div[contains(@class,"__control")]');
+    // Open by clicking the control div (NOT the input): the "Search ..."
+    // placeholder overlays the input and intercepts pointer events on first
+    // open (confirmed live 2026-07-21).
+    await this.click(control, `lookup control: ${description}`);
+    // Menu-scoped options locator — never the page-wide `.is-invalid__option`
+    // (the documented Issue-1 flake source).
+    const options = this.page.locator('.is-invalid__menu .is-invalid__option');
+    // Type the search TOKEN (may differ from the option display text) and wait
+    // for results, reusing the transient-network retry + config timeouts.
+    await this.fillSearchAndWaitForOptions(input, options, searchTerm, label);
+
+    if (exactValue) {
+      // WHY log count + presence: on a data-heavy environment the token search
+      // could in principle return more matches than one truncated page shows —
+      // if the intended entity is truncated out, this surfaces it in the output
+      // rather than only as an opaque "option not visible" timeout below.
+      const optionTexts = (await options.allInnerTexts()).map((t) => t.trim());
+      const present = optionTexts.some((t) => t === exactValue.trim());
+      logger.info(
+        `${label}: token "${searchTerm}" returned ${optionTexts.length} option(s); ` +
+          `exact target "${exactValue}" present in returned list: ${present}`
+      );
+      const exactOption = options
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactValue)}\\s*$`) })
+        .first();
+      await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await exactOption.click();
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+        .catch(() => {
+          /* menu may already be gone */
+        });
+      logger.success(`${label} selected: "${exactValue}" (exact match)`);
+      return exactValue;
+    }
+
+    const optionTexts = (await options.allInnerTexts()).map((t) => t.trim());
+    if (optionTexts.length === 0) {
+      throw new Error(
+        `${label}: token "${searchTerm}" returned zero live options — cannot select a value`
+      );
+    }
+    const randomIndex = Math.floor(Math.random() * optionTexts.length);
+    const selectedValue = optionTexts[randomIndex];
+    await options.nth(randomIndex).click();
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* menu may already be gone */
+      });
+    logger.success(`${label} set to: ${selectedValue}`);
+    return selectedValue;
+  }
+
+  /**
+   * Assert that a specific entity is NOT selectable in a custom lookup field —
+   * the core RBAC check (a restricted user must not be able to see/select an
+   * admin-owned, non-shared entity; visibility is enforced server-side by the
+   * lookup endpoint).
+   *
+   * Lives in BasePage for the same reuse reason as {@link selectLookupCustomField}.
+   *
+   * WHY this asserts a SPECIFIC option's absence rather than an empty menu:
+   * these lookups always render an ever-present "Add to <field> Lookup"
+   * create-on-the-fly entry after any search, so the menu is never truly empty
+   * even when zero real entities match (confirmed live 2026-07-21). Asserting
+   * "the menu is empty" would therefore be wrong; the robust check is "no
+   * option whose exact text equals `entityName` is present", anchored so a
+   * superstring can't slip through.
+   *
+   * WHY it first awaits the live lookup response: without it, the option could
+   * be absent simply because the async search has not returned yet — a false
+   * pass. We arm the response wait AFTER opening the control (so the empty
+   * on-open lookup can't satisfy it) but BEFORE typing, and await it before
+   * the absence assertion. `config.timeouts.expect` throughout, consistent with
+   * the reused helper's timeout philosophy (no hardcoded values).
+   *
+   * @param fieldName   Internal Kylas field name (e.g. "CompanyLookup").
+   * @param searchTerm  Text typed to trigger the live search for `entityName`.
+   * @param entityName  Exact entity name that must NOT appear as an option.
+   * @param description Human-readable label for logs (defaults to fieldName).
+   */
+  async assertLookupCustomFieldOptionAbsent(
+    fieldName: string,
+    searchTerm: string,
+    entityName: string,
+    description = fieldName
+  ): Promise<void> {
+    const input = this.customFieldInputLocator(fieldName);
+    const control = input.locator('xpath=ancestor::div[contains(@class,"__control")]');
+    // WHY click the control div, not the input: the "Search ..." placeholder
+    // overlays the input and intercepts pointer events on first open — same
+    // reason selectRandomFromSearchableReactSelect clicks the control.
+    await this.click(control, `lookup control: ${description}`);
+    // Arm BEFORE typing so we can be sure the server search returned before we
+    // assert absence. Non-fatal (.catch) — the exact-option assertion below is
+    // the real check; this only removes the "asserted too early" race.
+    const searchReturned = this.page
+      .waitForResponse(
+        (res) => /\/lookup(\?|$)/i.test(res.url()) && res.request().method() === 'GET',
+        { timeout: config.timeouts.expect }
+      )
+      .catch(() => null);
+    await input.fill(searchTerm);
+    await searchReturned;
+    const namedOption = this.page
+      .locator('.is-invalid__menu .is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(entityName)}\\s*$`) });
+    await expect(
+      namedOption,
+      `Lookup "${description}": entity "${entityName}" should NOT be selectable for this user (RBAC)`
+    ).toBeHidden({ timeout: config.timeouts.expect });
+    // WHY close the menu (confirmed live 2026-07-21): unlike the select path,
+    // this assertion never picks an option, so the react-select menu stays
+    // OPEN — and an open menu overlaps and intercepts pointer events on the
+    // NEXT lookup control on the same form (e.g. asserting Company Lookup then
+    // Contact Lookup). Escape collapses it; the hidden-wait keeps the next
+    // interaction from racing the close animation.
+    await input.press('Escape');
+    await this.page
+      .locator('.is-invalid__menu')
+      .first()
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* menu may already be gone */
+      });
+    logger.success(
+      `Lookup "${description}": entity "${entityName}" correctly not selectable (RBAC-scoped)`
+    );
+  }
+
   // WHY: shared by any multi-select react-select control, custom field or
   // standard field alike — mirrors selectRandomFromSingleReactSelect's
   // reuse pattern above. selectMultiPicklistCustomField() below is a thin,
@@ -1366,6 +1553,11 @@ export class BasePage {
     expectedValue: string,
     description: string
   ): Promise<void> {
+    // Reveal the field's carousel slide if it's on a paged detail section
+    // (no-op otherwise). Not strictly required for toContainText — which reads
+    // textContent even on a display:none slide — but kept for consistency and
+    // so the value is genuinely visible when this passes.
+    await this.revealDetailCarouselSlideFor(containerId);
     const valueLocator = this.page.locator(`[id="${containerId}"] .title`);
     await expect(
       valueLocator,
@@ -1383,6 +1575,88 @@ export class BasePage {
       `cf${fieldName}`,
       expectedValue,
       `Custom field "${description}"`
+    );
+  }
+
+  /**
+   * Ensure the detail-page field identified by `containerId` is on the ACTIVE
+   * carousel slide before it is asserted.
+   *
+   * WHY this is needed: some detail-page sections (e.g. Lead's "Other Details")
+   * render as a Bootstrap carousel — when there are more custom fields than fit
+   * one slide, the extras are paged onto further slides. Confirmed live
+   * (2026-07-21) that inactive slides stay ATTACHED in the DOM but `display:none`.
+   * That means:
+   *   - `toContainText` assertions read `textContent` and still match a field on
+   *     an inactive slide (so they never strictly needed this), BUT
+   *   - `toBeVisible`-based assertions (the multi-value field check) FAIL when
+   *     their field is paged onto an inactive slide.
+   * Calling this before either kind of assertion makes the field genuinely
+   * visible first — a no-op when the field is already active, and a no-op when
+   * the section is not a carousel at all (single-page modules like Contacts
+   * today), so it is safe to call defensively everywhere.
+   *
+   * Navigation is direction-aware: this carousel does NOT cycle (confirmed live
+   * 2026-07-21 — "next" on the last slide is inert), so it clicks "next" or
+   * "prev" toward the target slide's index. Bounded by the actual slide count;
+   * a carousel whose target slide never activates fails fast with a clear error
+   * rather than looping forever.
+   *
+   * @param containerId id of the field's detail container (e.g. "cfCompanyLookup").
+   */
+  protected async revealDetailCarouselSlideFor(containerId: string): Promise<void> {
+    const container = this.page.locator(`[id="${containerId}"]`);
+    const slide = container.locator(
+      'xpath=ancestor::div[contains(@class,"carousel-item")][1]'
+    );
+    // Not inside a carousel (single-page section) → nothing to navigate.
+    if ((await slide.count()) === 0) return;
+    const slideIsActive = async (): Promise<boolean> =>
+      /\bactive\b/.test((await slide.getAttribute('class')) ?? '');
+    if (await slideIsActive()) return;
+
+    // WHY the token-boundary match (not contains(@class,"carousel")): the
+    // slide itself is a `.carousel-item`, whose class STRING contains the
+    // substring "carousel" — a plain contains() would wrongly select the slide
+    // as the "carousel" and find zero inner slides. Matching the standalone
+    // class token " carousel " selects the real outer carousel container
+    // ("… active carousel slide") and never a "carousel-item".
+    const carousel = container.locator(
+      'xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " carousel ")][1]'
+    );
+    const items = carousel.locator('.carousel-item');
+    const slideCount = await items.count();
+    // Index of the slide that actually contains our field.
+    const targetIndex = await items.evaluateAll(
+      (nodes, id) => nodes.findIndex((n) => n.querySelector(`[id="${id}"]`) !== null),
+      containerId
+    );
+    if (targetIndex < 0) return; // defensive — slide.count() > 0 means it's present
+    const nextChevron = carousel.locator('a.chevron[data-slide="next"]').first();
+    const prevChevron = carousel.locator('a.chevron[data-slide="prev"]').first();
+    // WHY direction-aware (confirmed live 2026-07-21 that this carousel does NOT
+    // cycle — "next" on the last slide is inert): move toward the target slide's
+    // index using the correct chevron. Recomputed each iteration so a miss self-
+    // corrects; bounded by the real slide count.
+    for (let i = 0; i < slideCount; i++) {
+      if (await slideIsActive()) return;
+      const activeIndex = await items.evaluateAll((nodes) =>
+        nodes.findIndex((n) => n.classList.contains('active'))
+      );
+      const chevron = targetIndex > activeIndex ? nextChevron : prevChevron;
+      await chevron.click({ timeout: config.timeouts.expect });
+      // Wait on the target slide's own `active` class rather than a fixed sleep:
+      // the transition is animated and its duration isn't ours to assume. A miss
+      // (target not reached yet) times out and the next iteration re-navigates.
+      await expect(slide)
+        .toHaveClass(/\bactive\b/, { timeout: config.timeouts.expect })
+        .catch(() => {
+          /* not on the target slide yet — recompute and advance next iteration */
+        });
+    }
+    if (await slideIsActive()) return;
+    throw new Error(
+      `revealDetailCarouselSlideFor: field container "${containerId}" was never brought onto the active carousel slide after ${slideCount} navigation attempt(s) — the carousel may be broken`
     );
   }
 
@@ -1409,6 +1683,10 @@ export class BasePage {
     expectedValues: string[],
     description: string
   ): Promise<void> {
+    // Reveal the field's carousel slide if it's on a paged detail section
+    // (no-op otherwise). REQUIRED here: this method's toBeVisible check below
+    // fails if the field is paged onto an inactive (display:none) slide.
+    await this.revealDetailCarouselSlideFor(containerId);
     const container = this.page.locator(`[id="${containerId}"] .with-details-multi-value`);
     const items = container.locator('li');
     await expect(
