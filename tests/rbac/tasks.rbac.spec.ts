@@ -19,7 +19,7 @@ import { generateTaskData, generateAdminTaskData } from '../../src/data/factorie
 test.describe('Tasks RBAC', () => {
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
-  test('@smoke @regression restricted user can navigate to tasks list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to tasks list', async ({
     restrictedPage,
   }) => {
     const tasksPage = new TasksPage(restrictedPage);

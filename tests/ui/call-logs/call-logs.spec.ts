@@ -38,7 +38,7 @@ test.describe('Call Logs', () => {
 
   // ── CL1 ───────────────────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to call logs list page and verify list is visible', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to call logs list page and verify list is visible', async ({ adminPage }) => {
     test.setTimeout(180000);
     const callLogsPage = new CallLogsPage(adminPage);
     await callLogsPage.goToCallLogsList();
@@ -94,11 +94,12 @@ test.describe('Call Logs', () => {
       includeAssociatedDeal: true,
     });
     await callLogsPage.goToCallLogsList();
-    const { callLogId, entityName } = await callLogsPage.createCallLog(data);
+    const { callLogId, entityName, associatedDealName } = await callLogsPage.createCallLog(data);
     expect(callLogId).not.toBeNull();
     await callLogsPage.assertCallLogInList(callLogId!);
     await callLogsPage.assertDetailEntityHeadingContains(entityName);
     await callLogsPage.assertOutcomeOnDetail('No Answer');
+    await callLogsPage.assertAssociatedDealOnDetail(associatedDealName);
     logger.success('CL4 passed');
   });
 
