@@ -14,7 +14,7 @@ test.describe('Companies', () => {
 
   // ── CO1 ───────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to companies list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to companies list page', async ({ adminPage }) => {
     const companiesPage = new CompaniesPage(adminPage);
 
     await companiesPage.goToCompaniesList();

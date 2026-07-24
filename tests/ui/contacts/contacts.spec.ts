@@ -19,7 +19,7 @@ test.describe('Contacts', () => {
 
   // ── C1 ────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to contacts list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to contacts list page', async ({ adminPage }) => {
     const contactsPage = new ContactsPage(adminPage);
     await contactsPage.goToContactsList();
     await contactsPage.assertOnContactsListPage();

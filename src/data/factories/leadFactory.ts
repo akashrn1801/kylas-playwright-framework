@@ -102,6 +102,14 @@ export const LEAD_CUSTOM_FIELD_NAMES = {
   date: 'Date',
   dateTimePicker: 'DateTimePicker',
   urlField: 'UrlField',
+  // WHY: two custom LOOKUP fields (entity-select). Values are the internal
+  // Kylas field names (BasePage.customFieldInputLocator prepends "cf", giving
+  // cfCompanyLookup / cfContactLookup — confirmed live 2026-07-21). Rendered
+  // labels are "Company Lookup" / "Contact Lookup". Unlike the 8 fields above
+  // they are live server-side searches (GET /v1/companies/lookup,
+  // /v1/search/contact/lookup) whose results are RBAC-scoped per role.
+  companyLookup: 'CompanyLookup',
+  contactLookup: 'ContactLookup',
 } as const;
 
 export type LeadCustomFieldKey = keyof typeof LEAD_CUSTOM_FIELD_NAMES;
@@ -121,6 +129,14 @@ export interface LeadCustomFieldData {
   date: Date;
   dateTimePicker: Date;
   urlField: string;
+  // WHY: these are TARGET entity names to search-and-select in the two lookup
+  // fields, NOT free-form generated data. They are optional and deliberately
+  // left undefined by generateLeadCustomFieldData() — for RBAC correctness the
+  // caller MUST pass a specific, known entity name (e.g. an admin-owned
+  // company the restricted user should NOT see, or a self-owned one they
+  // should) rather than a random value whose ownership/visibility is unknown.
+  companyLookupTarget?: string;
+  contactLookupTarget?: string;
 }
 
 export function generateLeadCustomFieldData(

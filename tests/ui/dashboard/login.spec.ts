@@ -13,7 +13,7 @@ test.describe('Login', () => {
     logger.success('LG1 passed');
   });
 
-  test('@smoke @regression admin credentials should log in successfully', async ({ page }) => {
+  test('@smoke @regression @prodSafe admin credentials should log in successfully', async ({ page }) => {
     const loginPage = new LoginPage(page);
     await loginPage.navigateTo('/');
     await loginPage.loginWithCredentials(config.users.admin.email, config.users.admin.password);
