@@ -26,7 +26,7 @@ test.describe('Call Logs — RBAC', () => {
   // ── CL19 ──────────────────────────────────────────────────────────────────
 
   test(
-    '@smoke @regression Restricted user should navigate to Call Logs list page and verify list is visible',
+    '@smoke @regression @prodSafe Restricted user should navigate to Call Logs list page and verify list is visible',
     async ({ restrictedPage }) => {
       test.setTimeout(180000);
       const callLogsPage = new CallLogsPage(restrictedPage);
@@ -100,11 +100,12 @@ test.describe('Call Logs — RBAC', () => {
         includeAssociatedDeal: true,
       });
       await callLogsPage.goToCallLogsList();
-      const { callLogId, entityName } = await callLogsPage.createCallLog(data);
+      const { callLogId, entityName, associatedDealName } = await callLogsPage.createCallLog(data);
       expect(callLogId).not.toBeNull();
       await callLogsPage.assertCallLogInList(callLogId!);
       await callLogsPage.assertDetailEntityHeadingContains(entityName);
       await callLogsPage.assertOutcomeOnDetail('No Answer');
+      await callLogsPage.assertAssociatedDealOnDetail(associatedDealName);
       logger.success('CL22 passed');
     }
   );

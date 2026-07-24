@@ -14,13 +14,13 @@ import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
-import { generateSharedCompanyData } from '../../src/data/factories/companyFactory';
+import { generateCompanyData, generateSharedCompanyData } from '../../src/data/factories/companyFactory';
 
 test.describe('Contacts RBAC', () => {
 
   // ── CR1 ───────────────────────────────────────────────────
 
-  test('@smoke @regression restricted user can navigate to contacts list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to contacts list', async ({
     restrictedPage,
   }) => {
     const contactsPage = new ContactsPage(restrictedPage);
@@ -232,7 +232,26 @@ test.describe('Contacts RBAC', () => {
     test.setTimeout(480000);
     const adminContactsPage = new ContactsPage(adminPage);
     const restrictedContactsPage = new ContactsPage(restrictedPage);
-    const contactData = generateSharedContactData();
+    const adminCompaniesPage = new CompaniesPage(adminPage);
+
+    // WHY: fixed 2026-07-24 — was calling generateSharedContactData() with
+    // no company, which left fillContactForm() to pick a RANDOM existing
+    // company via selectRandomFromSearchableReactSelect(). On staging that
+    // random pick can land on a company already shared with the restricted
+    // user from a prior run, silently defeating this test's "company NOT
+    // shared" precondition (false pass/fail). Fix mirrors CR9b below:
+    // create a fresh, guaranteed-unshared company and pass its exact name
+    // through generateSharedContactData's company override.
+    // WHY: uses plain generateCompanyData(), NOT generateSharedCompanyData()
+    // — this company is deliberately never shared, so it shouldn't carry
+    // the "SHR" prefix that implies it is (unlike CR9b below, which
+    // genuinely shares its company and correctly keeps that prefix).
+    const companyData = generateCompanyData();
+    await adminCompaniesPage.goToCompaniesList();
+    const companyId = await adminCompaniesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+
+    const contactData = generateSharedContactData({ company: companyData.name });
     await adminContactsPage.goToContactsList();
     const contactId = await adminContactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();

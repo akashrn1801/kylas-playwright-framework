@@ -13,7 +13,7 @@ test.describe('Quotations — UI', () => {
   test.describe.configure({ mode: 'serial' });
 
   // ─── T1 ───────────────────────────────────────────────────────────────────
-  test('@smoke @regression admin should navigate to quotations list', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
 
     await quotationsPage.goToQuotationsList();

@@ -477,45 +477,165 @@ export class AuthManager {
     logger.info('All storage states cleared');
   }
 
-  // WHY: mid-test session recovery (2026-07-09 investigation) — a real,
-  // reproducible Kylas QA backend hiccup ("001002 we are not able to
-  // recognize you") can occasionally hit a request mid-test and cause the
-  // app's own frontend to redirect to /signIn, unrelated to the token's
-  // actual ~12h lifetime (confirmed by decoding the stored JWT — expiresIn
-  // is 43199s). loginAndSaveState() already knows how to re-login safely
-  // (cross-process file lock, reused as-is) — this method additionally
-  // pushes the freshly-written storage state's cookies/localStorage into
-  // the CALLER'S already-open page/context, since the test's page object
-  // holds references into that specific page and can't simply be handed a
-  // brand-new browser context.
+  // WHY headless, not the UI-driven _doLogin() (2026-07-23 architecture
+  // overhaul — see attachSessionExpiryInterceptor() in fixtures/index.ts for
+  // the full history of why mid-test recovery was rebuilt around this):
+  // confirmed live, via real network capture against the actual Kylas app,
+  // that login is a plain `PUT /v1/users/login` with JSON
+  // `{email, password, rememberMe}`, returning `{token: <JWT>}` — no CSRF
+  // token, no cookie, no UI dependency of any kind. Measured ~300ms per
+  // call. _doLogin()'s UI-driven flow (navigate to /signIn, wait for DOM,
+  // fill inputs, click, wait for redirect) takes several seconds and depends
+  // on the login FORM rendering correctly — an acceptable cost for the
+  // suite's ONE initial per-role login (still used there, untouched), but
+  // needlessly slow and fragile for MID-TEST recovery, which can happen
+  // many times per run and, for the new network-level interceptor below,
+  // must complete fast enough to hold a single in-flight request open.
+  // Deliberately calls the real endpoint directly rather than adding a
+  // fake/mocked login — this IS the same request the browser's own login
+  // form issues; we're just skipping the DOM round-trip to get there.
+  private async loginHeadless(role: UserRole, page: Page): Promise<string> {
+    const credentials = this.getCredentials(role);
+    if (!credentials.email || !credentials.password) {
+      throw new Error(
+        `Credentials missing for role: ${role}, ENV: ${config.env}. ` +
+          `Check ${config.env.toUpperCase()}_${role.toUpperCase()}_EMAIL and PASSWORD in .env`
+      );
+    }
+    // WHY page.request (not a fresh APIRequestContext): reuses the page's
+    // own browser context — no extra process/context to spin up and tear
+    // down, and keeps this call attributable to the same context the
+    // caller is already operating on.
+    // WHY no extra "/v1" segment here: confirmed via a live 404 caught during
+    // deliberate reproduction (2026-07-23) that config.apiBaseUrl ALREADY
+    // includes the /v1 suffix for every environment (e.g.
+    // https://api-qa.sling-dev.com/v1) — appending another /v1/ built a
+    // double-/v1/v1/ URL that 404'd. The real endpoint is exactly
+    // `${config.apiBaseUrl}/users/login`, matching the real PUT captured
+    // via live network inspection earlier in this same investigation.
+    const response = await page.request.put(`${config.apiBaseUrl}/users/login`, {
+      data: { email: credentials.email, password: credentials.password, rememberMe: false },
+    });
+    if (!response.ok()) {
+      throw new Error(
+        `Headless login failed for role ${role}: HTTP ${response.status()} from /v1/users/login`
+      );
+    }
+    const body = (await response.json()) as { token?: string };
+    if (!body.token) {
+      throw new Error(`Headless login for role ${role} returned no token in the response body`);
+    }
+    return body.token;
+  }
+
+  // WHY mid-test session recovery lives here (2026-07-09 investigation,
+  // rebuilt headless 2026-07-23) — a real, reproducible Kylas backend
+  // hiccup ("001002 we are not able to recognize you") can occasionally hit
+  // a request mid-test and cause the app's own frontend to redirect to
+  // /signIn, unrelated to the token's actual ~10h lifetime (confirmed by
+  // decoding the stored JWT — expiresIn is ~37569s). This method re-
+  // authenticates the CALLER's already-open page in place (a test's page
+  // object holds references into that specific page and can't simply be
+  // handed a brand-new browser context) by writing the fresh JWT directly
+  // into its localStorage — no cookies involved, confirmed live (2026-07-23)
+  // that clearing localStorage ALONE (cookies untouched) immediately
+  // redirects to /signIn, i.e. Kylas's own session lives entirely in this
+  // one localStorage value, never a cookie. Also persists the fresh state to
+  // the shared per-role file (same atomic temp-then-rename as _doLogin(),
+  // and under the SAME cross-process file lock, since this writes the exact
+  // same file _doLogin() does and is just as exposed to the same concurrent-
+  // worker race) so the NEXT test's fixture setup doesn't redundantly
+  // re-login for a session that's already fresh.
   async reauthenticatePage(page: Page, role: UserRole): Promise<void> {
-    logger.warn(`Mid-test session redirect detected for role ${role} — re-authenticating in place`);
+    logger.warn(`Mid-test session expiry for role ${role} — re-authenticating headlessly (no UI navigation)`);
 
-    await this.loginAndSaveState(role);
+    const token = await this.loginHeadless(role, page);
+    await page.evaluate((t) => window.localStorage.setItem('token', t), token);
 
-    const stateFile = this.getStorageStateFile(role);
-    const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8')) as {
-      cookies?: Parameters<BrowserContext['addCookies']>[0];
-      origins?: Array<{ origin: string; localStorage?: Array<{ name: string; value: string }> }>;
-    };
+    await this.withFileLock(role, async () => {
+      const stateFile = this.getStorageStateFile(role);
+      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
+      await page.context().storageState({ path: tmpStateFile });
+      fs.renameSync(tmpStateFile, stateFile);
+    });
+    AuthManager.lastValidated.set(role, Date.now());
 
-    if (state.cookies?.length) {
-      await page.context().addCookies(state.cookies);
+    logger.info(`Headless re-authentication complete for role: ${role}`);
+  }
+
+  // WHY this exists (2026-07-23, Option 6 — a PROACTIVE layer, complementary
+  // to withSessionExpiryRecovery()'s REACTIVE one): that mechanism only ever
+  // helps after something has already failed because the session expired.
+  // This checks the token's own remaining lifetime BEFORE a test starts and
+  // refreshes ahead of time if it's running low — preventing the failure
+  // from ever happening in the common case, rather than cleaning up after
+  // it. Uses the exact same fast headless login as the reactive path (no
+  // new mechanism, no route interception/replay — the thing that got the
+  // network interceptor rejected by the real backend never enters into
+  // this at all, since this never touches in-flight traffic).
+  async ensureFreshSession(page: Page, role: UserRole): Promise<void> {
+    const rawToken = await page
+      .evaluate(() => window.localStorage.getItem('token'))
+      .catch(() => null);
+    if (!rawToken) {
+      // Nothing to check yet (e.g. called before the very first page load) —
+      // the existing pre-flight session validation in getContextForRole()
+      // already covers this case.
+      return;
     }
-
-    const origin =
-      state.origins?.find((o) => o.origin === config.appUrl) ?? state.origins?.[0];
-    if (origin?.localStorage?.length) {
-      await page.evaluate((items) => {
-        for (const item of items) {
-          window.localStorage.setItem(item.name, item.value);
-        }
-      }, origin.localStorage);
+    const remainingMs = getTokenRemainingMs(rawToken);
+    if (remainingMs === null) {
+      logger.debug(
+        `ensureFreshSession: could not decode token expiry for role ${role} — skipping proactive check`
+      );
+      return;
     }
-
-    logger.info(`Re-authentication complete for role: ${role}`);
+    if (remainingMs > PROACTIVE_REFRESH_BUFFER_MS) {
+      logger.debug(
+        `ensureFreshSession: token for role ${role} has ${Math.round(remainingMs / 1000)}s remaining — no proactive refresh needed`
+      );
+      return;
+    }
+    logger.info(
+      `ensureFreshSession: token for role ${role} has only ${Math.round(remainingMs / 1000)}s remaining — proactively refreshing before the test starts`
+    );
+    await this.reauthenticatePage(page, role);
   }
 }
+
+// WHY this exists (2026-07-23, for AuthManager.ensureFreshSession() above):
+// confirmed live via real network capture that the JWT stored in
+// localStorage.token embeds its own absolute expiry as a ms-epoch timestamp
+// at payload.data.expiry (decoded from a real token: expiresIn 37569s
+// [~10.4h], expiry a concrete ms-epoch value) — reading it costs nothing (no
+// network call), which is what makes a cheap, unconditional proactive check
+// at the start of every test practical.
+export function getTokenRemainingMs(rawToken: string): number | null {
+  try {
+    const payloadSegment = rawToken.split('.')[1];
+    if (!payloadSegment) return null;
+    const payload = JSON.parse(Buffer.from(payloadSegment, 'base64').toString('utf-8')) as {
+      data?: { expiry?: number };
+    };
+    const expiry = payload.data?.expiry;
+    if (typeof expiry !== 'number') return null;
+    return expiry - Date.now();
+  } catch {
+    return null;
+  }
+}
+
+// WHY 10 minutes, not an arbitrary small number: this session's own full-
+// suite heartbeat/timing data (both the live stage run and historical logs
+// inspected while building the heartbeat tooling) shows individual test
+// durations up to ~2.1 minutes for the heaviest NORMAL (non-failure) flows
+// — failure-inflated durations (a test waiting out a session-expiry timeout)
+// don't count, since those are exactly what this mechanism prevents. 10
+// minutes gives comfortable (~5x) margin over the heaviest observed normal
+// test, while remaining a tiny fraction (~1.6%) of the token's own ~10.4h
+// lifetime — refreshing early costs one extra ~300ms-1s headless login
+// call, negligible next to the cost of a mid-test expiry.
+const PROACTIVE_REFRESH_BUFFER_MS = 10 * 60 * 1000;
 
 // ── Mid-test session recovery ────────────────────────────────────────────────
 // WHY a module-level registry, not a constructor param on BasePage: every
@@ -558,6 +678,41 @@ export function isPageRegisteredForRecovery(page: Page): boolean {
 
 export function isSignInUrl(url: string): boolean {
   return /\/(signIn|login)/.test(url);
+}
+
+// WHY this exists (2026-07-23, found via deliberate reproduction while
+// verifying withSessionExpiryRecovery() — not assumed): every recovery gate
+// check in this codebase (click()/fill()/navigateTo()/assertUrl()/
+// withSessionExpiryRecovery()) only ever checked isSignInUrl(). Reproduced
+// live: a full page reload while the session token is invalid does NOT
+// always redirect to /signIn — it can instead render a distinct client-side
+// "Forbidden" page (confirmed via screenshot: heading "Forbidden" + a "Home"
+// button) while the URL stays completely unchanged (confirmed via trace
+// inspection — still exactly the pre-reload URL, e.g. /sales/leads/list).
+// A mid-session expiry while the app is already running and reacting to a
+// live API 401 consistently redirects to /signIn instead (confirmed
+// repeatedly this same session) — this "Forbidden" page appears to be a
+// DIFFERENT code path specific to the app's own bootstrap-time auth check
+// on a fresh load/reload, not the runtime API-error-handler path. Both are
+// real, both mean the same underlying thing (no valid session), so both
+// must trigger recovery — a URL-only check silently misses the second one.
+// Grepped this entire codebase for any existing test that relies on this
+// exact "Forbidden" page as an expected, correct RBAC-denial outcome —
+// zero hits — so recognizing it here cannot mask any current test's
+// genuine permission-boundary assertion.
+// WHY async (a real signature change from the old sync isSignInUrl-only
+// checks): recognizing "Forbidden" requires reading the page's own body
+// text, which is unavoidably an async operation — every call site updated
+// to use this needed `await` added, a small, mechanical, one-line-per-site
+// change.
+const FORBIDDEN_PAGE_PATTERN = /^\s*Forbidden\s*$/m;
+
+export async function isSessionExpiryPage(page: Page): Promise<boolean> {
+  if (isSignInUrl(page.url())) {
+    return true;
+  }
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  return FORBIDDEN_PAGE_PATTERN.test(bodyText);
 }
 
 // ── Session-expiry-aware waitForResponse (2026-07-20) ────────────────────────

@@ -220,9 +220,28 @@ export class TasksPage extends BasePage {
     await control.waitFor({ state: 'visible', timeout: 10000 });
     await control.click();
     await this.page.waitForTimeout(300);
-    const option = this.page.locator('.is-invalid__option', { hasText: optionText }).first();
+    const menu = this.page.locator('.is-invalid__menu');
+    const option = menu.locator('.is-invalid__option', { hasText: optionText }).first();
     await option.waitFor({ state: 'visible', timeout: 5000 });
     await option.click();
+    // WHY defensive hardening, NOT a confirmed root-cause fix (2026-07-23):
+    // tasks.rbac.spec.ts:69 hung once in CI — saveEditedTask()'s save click
+    // registered (assertNoFormErrors found zero errors) yet the modal never
+    // closed. 0/5 local reproductions, so the exact mechanism for that one
+    // occurrence is NOT confirmed. Code review of this method found a real,
+    // concrete gap regardless: it used to return immediately after the
+    // option click with no confirmation the selection actually committed —
+    // this is the LAST action fillEditForm() runs before saveEditedTask()
+    // clicks Save (for the 'reminder' field), so a still-settling react-
+    // select state here is the most plausible candidate to bleed into that
+    // very next click — the same *shape* of race already root-caused for
+    // DealsPage.cloneDeal() (a click landing during an async React commit
+    // produces zero effect). Waiting for the menu to actually close is a
+    // real readiness signal (react-select's own state transition), not a
+    // guessed delay — matching the "wait for a real signal" discipline used
+    // for that same DealsPage fix. Non-fatal: if the menu is already gone or
+    // never matches, this must not turn a working selection into a failure.
+    await menu.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
     logger.success(`Selected "${optionText}" for ${inputId}`);
   }
 
@@ -893,7 +912,9 @@ export class TasksPage extends BasePage {
 
   async assertOnTasksListPage(): Promise<void> {
     await this.assertUrl(/\/sales\/tasks\/list/);
-    await expect(this.taskList()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskList()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     logger.success('Confirmed on Tasks List page');
   }
 
@@ -947,7 +968,9 @@ export class TasksPage extends BasePage {
       ).catch(() => null);
       await this.page.waitForTimeout(500);
     }
-    await expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 })
+    );
     logger.success(`Task absent confirmed: "${name}"`);
   }
 
@@ -967,7 +990,9 @@ export class TasksPage extends BasePage {
 
   async assertEditOptionNotVisible(): Promise<void> {
     // WHY: Verifies restricted user cannot edit a task not assigned to them
-    await expect(this.detailPanelEditButton()).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailPanelEditButton()).toBeHidden({ timeout: 5000 })
+    );
     logger.success('Edit button correctly absent');
   }
 
