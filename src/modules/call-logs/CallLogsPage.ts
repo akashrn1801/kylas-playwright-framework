@@ -1287,7 +1287,9 @@ export class CallLogsPage extends BasePage {
     // it just times out after 60s with a useless "element not found" error.
     // logACallButton() is part of the page header/toolbar and is always present
     // regardless of list content, making it a reliable "page loaded" signal.
-    await expect(this.logACallButton()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.logACallButton()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     logger.success('Confirmed on Call Logs list page');
   }
 
@@ -1368,13 +1370,17 @@ export class CallLogsPage extends BasePage {
 
   async assertEditButtonVisible(): Promise<void> {
     logger.info('Asserting Edit button visible');
-    await expect(this.detailEditButton()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailEditButton()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Edit button confirmed visible');
   }
 
   async assertEditButtonNotVisible(): Promise<void> {
     logger.info('Asserting Edit button NOT visible');
-    await expect(this.detailEditButton()).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailEditButton()).toBeHidden({ timeout: 5000 })
+    );
     logger.success('Edit button correctly absent');
   }
 
@@ -1437,7 +1443,9 @@ export class CallLogsPage extends BasePage {
 
   async assertSearchResultContains(phoneOrName: string): Promise<void> {
     logger.info(`Asserting search result contains: "${phoneOrName}"`);
-    await expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 })
+    );
     const count = await this.callLogListItem().count();
     logger.success(`Search returned ${count} results for: "${phoneOrName}"`);
   }

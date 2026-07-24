@@ -226,7 +226,9 @@ export class CompaniesPage extends BasePage {
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
     ]);
-    await expect(this.companyTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.companyTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -243,9 +245,11 @@ export class CompaniesPage extends BasePage {
 
   private async waitForSearchResults(name: string): Promise<boolean> {
     try {
-      await expect(this.companyRowNameCell(name)).toBeVisible({
-        timeout: 5000,
-      });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.companyRowNameCell(name)).toBeVisible({
+          timeout: 5000,
+        })
+      );
 
       return true;
     } catch {
@@ -309,7 +313,9 @@ export class CompaniesPage extends BasePage {
 
         await toggle.click();
 
-        await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.nameInput()).toBeVisible({ timeout: 10000 })
+        );
 
         logger.success('Toggle disabled');
       }
@@ -497,7 +503,9 @@ export class CompaniesPage extends BasePage {
     }
 
     // Never opened after all attempts — surface the original loud, actionable failure.
-    await expect(this.nameInput()).toBeVisible({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameInput()).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success('Company form opened');
   }
 
@@ -530,13 +538,13 @@ export class CompaniesPage extends BasePage {
 
     await this.click(this.addEmailButton(), 'add email button');
 
-    await expect(this.emailInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
 
     await this.fill(this.emailInput(), data.email, 'email');
 
     await this.click(this.addPhoneButton(), 'add phone button');
 
-    await expect(this.phoneInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
 
     await this.fill(this.phoneInput(), data.phone, 'phone');
 
@@ -752,11 +760,13 @@ export class CompaniesPage extends BasePage {
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
     logger.info(`Asserting ellipsis option NOT visible: ${optionText}`);
     const item = this.ellipsisMenuItem(optionText);
-    await expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
-      // WHY: Option may not exist at all — check count as fallback
-      const count = await item.count();
-      expect(count).toBe(0);
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
+        // WHY: Option may not exist at all — check count as fallback
+        const count = await item.count();
+        expect(count).toBe(0);
+      })
+    );
     logger.success(`Ellipsis option not visible confirmed: ${optionText}`);
   }
 
@@ -768,7 +778,9 @@ export class CompaniesPage extends BasePage {
     logger.info('Opening edit modal');
 
     await this.click(this.editIconButton(), 'edit icon');
-    await expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     // WHY: Wait for name input to be ready — modal animation on GHA is slow
     await this.page
       .locator('[id="0_11_input_name"]')
@@ -804,7 +816,9 @@ export class CompaniesPage extends BasePage {
 
     await this.assertNoFormErrors('company edit form');
 
-    await expect(this.editModal()).toBeHidden({ timeout: 30000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeHidden({ timeout: 30000 })
+    );
 
     logger.success('Company updated');
   }
@@ -1013,15 +1027,35 @@ export class CompaniesPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    // WHY: Wait for icon to be attached first — SVG icons load after React renders
-    await this.rightPanelIcon(title).waitFor({ state: 'attached', timeout: 15000 });
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 15000 });
+    const icon = this.rightPanelIcon(title);
+    try {
+      // WHY: Wait for icon to be attached first — SVG icons load after React renders
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    } catch (error) {
+      // WHY the reload-and-retry — same confirmed gap as LeadsPage's own
+      // assertRightPanelIconVisible (CI flake 2026-07-22, right after an
+      // admin share): the right panel's icon set reads a permissions
+      // snapshot taken once at page mount, so a plain wait cannot recover if
+      // that snapshot predates the share's propagation. A reload forces a
+      // fresh mount/fetch. Applied here defensively (not from a live repro of
+      // THIS module specifically) since the mechanism is structural.
+      logger.warn(
+        `Right panel icon "${title}" not visible — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForCompanyDetailsPage();
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
@@ -1041,13 +1075,17 @@ export class CompaniesPage extends BasePage {
     // its "wait for stable position" check. An auto-retrying expect()
     // re-queries the locator on every poll; click() below auto-scrolls its
     // own target, so no manual scroll is needed.
-    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 })
+    );
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
     // WHY: Wait for modal to open with "Add Quotation" title
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 })
+    );
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
     // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
@@ -1176,7 +1214,9 @@ export class CompaniesPage extends BasePage {
     await this.addContactDirectButton().waitFor({ state: 'visible', timeout: 10000 });
     await this.addContactDirectButton().click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
+    );
     // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
     const requiredToggle = this.page.locator('#editEntityModal').locator('.custom-control-label')
       .filter({ hasText: 'Show Required & Important Fields' }).first();
@@ -1278,7 +1318,9 @@ export class CompaniesPage extends BasePage {
     logger.info(`Adding contact from ellipsis: ${contactData.firstName} ${contactData.lastName}`);
     await this.clickEllipsisOption('Add Contact');
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
+    );
     // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
     const requiredToggleEllipsis = this.page.locator('#editEntityModal').locator('.custom-control-label')
       .filter({ hasText: 'Show Required & Important Fields' }).first();
@@ -1377,7 +1419,9 @@ export class CompaniesPage extends BasePage {
     await this.addDealDirectButton().waitFor({ state: 'visible', timeout: 10000 });
     await this.addDealDirectButton().click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 })
+    );
     await this.page.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('[id="0_11_input_name"]').fill(dealData.name);
     // WHY: Select pipeline — same locator pattern proven in contacts C15 test
@@ -1434,7 +1478,9 @@ export class CompaniesPage extends BasePage {
     logger.info(`Adding deal from ellipsis: ${dealData.name}`);
     await this.clickEllipsisOption('Add Deal');
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 })
+    );
     await this.page.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('[id="0_11_input_name"]').fill(dealData.name);
     const pipelineControl = this.page.locator('div').filter({ hasText: /^Search pipeline$/ }).nth(2);
@@ -1550,9 +1596,11 @@ export class CompaniesPage extends BasePage {
 
     await this.performSearch(name);
 
-    await expect(this.companyRowNameCell(name)).toBeHidden({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.companyRowNameCell(name)).toBeHidden({
+        timeout: 10000,
+      })
+    );
 
     logger.success(`Company absent confirmed: ${name}`);
   }

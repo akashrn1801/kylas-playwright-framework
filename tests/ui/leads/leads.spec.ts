@@ -20,7 +20,7 @@ import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Leads', () => {
-  test('@smoke @regression admin should navigate to leads list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to leads list page', async ({ adminPage }) => {
     const leadsPage = new LeadsPage(adminPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();

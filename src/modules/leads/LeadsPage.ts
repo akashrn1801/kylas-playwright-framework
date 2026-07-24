@@ -411,7 +411,9 @@ export class LeadsPage extends BasePage {
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
     ]);
-    await expect(this.leadTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.leadTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -428,9 +430,11 @@ export class LeadsPage extends BasePage {
 
   private async waitForSearchResults(firstName: string): Promise<boolean> {
     try {
-      await expect(this.leadRowNameCell(firstName)).toBeVisible({
-        timeout: 5000,
-      });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.leadRowNameCell(firstName)).toBeVisible({
+          timeout: 5000,
+        })
+      );
 
       return true;
     } catch {
@@ -515,9 +519,11 @@ export class LeadsPage extends BasePage {
 
         await toggle.click();
 
-        await expect(this.firstNameInput()).toBeVisible({
-          timeout: 10000,
-        });
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.firstNameInput()).toBeVisible({
+            timeout: 10000,
+          })
+        );
 
         logger.success('Toggle disabled');
       }
@@ -956,9 +962,11 @@ export class LeadsPage extends BasePage {
 
     await this.click(this.addButton(), 'add lead button');
 
-    await expect(this.firstNameInput()).toBeVisible({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.firstNameInput()).toBeVisible({
+        timeout: 10000,
+      })
+    );
 
     logger.success('Lead form opened');
   }
@@ -1023,13 +1031,13 @@ export class LeadsPage extends BasePage {
       true // force: CSS overlay intercepts pointer events on GHA
     );
 
-    await expect(this.emailInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
 
     await this.fill(this.emailInput(), data.email, 'email');
 
     await this.click(this.addPhoneButton(), 'add phone button');
 
-    await expect(this.phoneInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
     // WHY: Phone input briefly detaches after React re-render on GHA — wait for stability
     await this.page.waitForTimeout(500);
     await this.fill(this.phoneInput(), data.phone, 'phone');
@@ -1284,9 +1292,11 @@ export class LeadsPage extends BasePage {
 
     await this.click(this.editIconButton(), 'edit icon');
 
-    await expect(this.editModal()).toBeVisible({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({
+        timeout: 10000,
+      })
+    );
 
     logger.success('Edit modal opened');
   }
@@ -1356,9 +1366,11 @@ export class LeadsPage extends BasePage {
       );
     }
 
-    await expect(this.editModal()).toBeHidden({
-      timeout: 15000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeHidden({
+        timeout: 15000,
+      })
+    );
 
     logger.success('Lead updated');
   }
@@ -1392,9 +1404,11 @@ export class LeadsPage extends BasePage {
 
     await this.performSearch(firstName);
 
-    await expect(this.leadRowNameCell(firstName)).toBeHidden({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.leadRowNameCell(firstName)).toBeHidden({
+        timeout: 10000,
+      })
+    );
 
     logger.success(`Lead absent confirmed: ${firstName}`);
   }
@@ -2332,13 +2346,41 @@ export class LeadsPage extends BasePage {
     // CallLogsPage.openCallLogsProductivitySection) instead of a short one —
     // Playwright's expect() already polls internally, so this only costs time
     // when the icon is genuinely slow to appear, not on the common fast path.
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: config.timeouts.navigation });
+    const icon = this.rightPanelIcon(title);
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(icon).toBeVisible({ timeout: config.timeouts.navigation })
+      );
+    } catch (error) {
+      // WHY the reload-and-retry (confirmed CI flake 2026-07-22 —
+      // leads.rbac.spec.ts:389/:448 both timed out here at 120000ms even
+      // with the generous window above): the right panel's icon set reads
+      // from a permissions snapshot fetched once when the page/component
+      // mounts — a plain wait, however long, cannot help if that snapshot
+      // was taken before the share propagated, since nothing re-fetches it
+      // on its own. A reload forces a fresh mount and a fresh permissions
+      // fetch, same bounded-retry discipline as LeadsPage.markLeadAsStage's
+      // own reload-and-retry. Not blindly extending the timeout — the first
+      // wait above already used the same generous window that timed out in
+      // CI, so a longer wait alone would not have helped.
+      logger.warn(
+        `Right panel icon "${title}" not visible within ${config.timeouts.navigation}ms — ` +
+          `reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForLeadDetailsPage();
+      await this.withSessionExpiryRecovery(() =>
+        expect(icon).toBeVisible({ timeout: config.timeouts.navigation })
+      );
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 }

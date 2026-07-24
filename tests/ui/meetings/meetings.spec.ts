@@ -12,7 +12,7 @@ import {
 test.describe('Meetings', () => {
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to meetings list', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to meetings list', async ({ adminPage }) => {
     const meetingsPage = new MeetingsPage(adminPage);
 
     await meetingsPage.goToMeetingsList();

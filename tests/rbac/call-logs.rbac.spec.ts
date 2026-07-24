@@ -26,7 +26,7 @@ test.describe('Call Logs — RBAC', () => {
   // ── CL19 ──────────────────────────────────────────────────────────────────
 
   test(
-    '@smoke @regression Restricted user should navigate to Call Logs list page and verify list is visible',
+    '@smoke @regression @prodSafe Restricted user should navigate to Call Logs list page and verify list is visible',
     async ({ restrictedPage }) => {
       test.setTimeout(180000);
       const callLogsPage = new CallLogsPage(restrictedPage);

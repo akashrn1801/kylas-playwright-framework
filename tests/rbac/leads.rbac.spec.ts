@@ -26,7 +26,7 @@ import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 
 test.describe('Leads RBAC', () => {
-  test('@smoke @regression restricted user can navigate to leads list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to leads list', async ({
     restrictedPage,
   }) => {
     const leadsPage = new LeadsPage(restrictedPage);

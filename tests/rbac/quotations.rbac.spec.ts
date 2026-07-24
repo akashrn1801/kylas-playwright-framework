@@ -12,10 +12,21 @@ import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
 
 test.describe('Quotations — RBAC', () => {
-  test.describe.configure({ mode: 'serial' });
+  // WHY: serial mode removed (2026-07-24) — this file used to force
+  // mode: 'serial', serializing all 14 tests onto 1 worker regardless of
+  // the --workers flag or fullyParallel:true in playwright.config.ts.
+  // Reviewed the file first: no module-level/shared state between tests —
+  // each test creates and owns its own quotation/deal/contact data, so
+  // there was no structural dependency on execution order. Verified live:
+  // ran with mode: 'serial' removed and --workers=4 — all 14 tests passed
+  // clean, 9.8m -> 4.9m (2x faster). Not a full 4x, likely partial QA
+  // backend contention under concurrent load, but a real, safe win with
+  // zero failures. If this ever needs to go back to serial, that would
+  // point to genuine session/auth contention between concurrent
+  // restrictedPage instances — investigate before just reverting blindly.
 
   // ─── T5 ───────────────────────────────────────────────────────────────────
-  test('@smoke @regression restricted user should navigate to quotations list', async ({
+  test('@smoke @regression @prodSafe restricted user should navigate to quotations list', async ({
     restrictedPage,
   }) => {
     const qp = new QuotationsPage(restrictedPage);

@@ -250,7 +250,9 @@ export class ContactsPage extends BasePage {
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
     ]);
-    await expect(this.contactTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.contactTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -264,7 +266,9 @@ export class ContactsPage extends BasePage {
 
   private async waitForSearchResults(firstName: string): Promise<boolean> {
     try {
-      await expect(this.contactRowNameCell(firstName)).toBeVisible({ timeout: 5000 });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.contactRowNameCell(firstName)).toBeVisible({ timeout: 5000 })
+      );
       return true;
     } catch {
       return false;
@@ -337,7 +341,9 @@ export class ContactsPage extends BasePage {
         }
         logger.info('Disabling Show Required & Important Fields');
         await toggle.click();
-        await expect(this.firstNameInput()).toBeVisible({ timeout: 20000 });
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.firstNameInput()).toBeVisible({ timeout: 20000 })
+        );
         logger.success('Toggle disabled');
       }
     } catch (error) {
@@ -578,7 +584,9 @@ export class ContactsPage extends BasePage {
   async clickAddContact(): Promise<void> {
     logger.info('Clicking Add Contact');
     await this.click(this.addButton(), 'add contact button');
-    await expect(this.firstNameInput()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.firstNameInput()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Contact form opened');
   }
 
@@ -595,10 +603,10 @@ export class ContactsPage extends BasePage {
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
     await this.click(this.addEmailButton(), 'add email button');
-    await expect(this.emailInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
     await this.fill(this.emailInput(), data.email, 'email');
     await this.click(this.addPhoneButton(), 'add phone button');
-    await expect(this.phoneInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
     await this.fill(this.phoneInput(), data.phone, 'phone');
     // WHY: Timezone sits at the same Communication/Location DOM boundary as
     // Lead's, filled here to match top-to-bottom form order. Mutated in
@@ -781,11 +789,13 @@ export class ContactsPage extends BasePage {
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
     logger.info(`Asserting ellipsis option NOT visible: ${optionText}`);
     const item = this.ellipsisMenuItem(optionText);
-    await expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
-      // WHY: Option may not exist at all — check count as fallback
-      const count = await item.count();
-      expect(count).toBe(0);
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
+        // WHY: Option may not exist at all — check count as fallback
+        const count = await item.count();
+        expect(count).toBe(0);
+      })
+    );
     logger.success(`Ellipsis option not visible confirmed: ${optionText}`);
   }
 
@@ -796,7 +806,9 @@ export class ContactsPage extends BasePage {
   async clickEditIcon(): Promise<void> {
     logger.info('Opening edit modal');
     await this.click(this.editIconButton(), 'edit icon');
-    await expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     // WHY: Wait for firstName input — modal animation on GHA is slow
     await this.firstNameInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     logger.success('Edit modal opened');
@@ -874,7 +886,9 @@ export class ContactsPage extends BasePage {
     logger.info('Saving updated contact');
     await this.click(this.saveButton(), 'save button');
     await this.assertNoFormErrors('contact edit form');
-    await expect(this.editModal()).toBeHidden({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeHidden({ timeout: 15000 })
+    );
     logger.success('Contact updated');
   }
 
@@ -1091,13 +1105,17 @@ export class ContactsPage extends BasePage {
     // its "wait for stable position" check. An auto-retrying expect()
     // re-queries the locator on every poll; click() below auto-scrolls its
     // own target, so no manual scroll is needed.
-    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 })
+    );
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
     // WHY: Wait for modal to open with "Add Quotation" title
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 })
+    );
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
     // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
@@ -1196,7 +1214,9 @@ export class ContactsPage extends BasePage {
     logger.info(`Validating contact absent: ${firstName}`);
     await this.goToContactsList();
     await this.performSearch(firstName);
-    await expect(this.contactRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.contactRowNameCell(firstName)).toBeHidden({ timeout: 10000 })
+    );
     logger.success(`Contact absent confirmed: ${firstName}`);
   }
 
@@ -1441,7 +1461,7 @@ export class ContactsPage extends BasePage {
       .locator('.card-header')
       .filter({ has: this.page.locator('h2').filter({ hasText: iconTitle }) })
       .first();
-    await expect(cardHeader).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() => expect(cardHeader).toBeVisible({ timeout: 10000 }));
     logger.success(`Detail tab content visible: ${iconTitle}`);
   }
 
@@ -1452,21 +1472,41 @@ export class ContactsPage extends BasePage {
       .locator('.invalid-feedback, .error-message, .toastr.rrt-error, [class*="error"]')
       .filter({ hasText: message })
       .first();
-    await expect(errorLocator).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() => expect(errorLocator).toBeVisible({ timeout: 10000 }));
     logger.success(`Validation error confirmed: ${message}`);
   }
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    // WHY: Wait for icon to be attached first — SVG icons load after React renders
-    await this.rightPanelIcon(title).waitFor({ state: 'attached', timeout: 15000 });
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 15000 });
+    const icon = this.rightPanelIcon(title);
+    try {
+      // WHY: Wait for icon to be attached first — SVG icons load after React renders
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    } catch (error) {
+      // WHY the reload-and-retry — same confirmed gap as LeadsPage's own
+      // assertRightPanelIconVisible (CI flake 2026-07-22, right after an
+      // admin share): the right panel's icon set reads a permissions
+      // snapshot taken once at page mount, so a plain wait cannot recover if
+      // that snapshot predates the share's propagation. A reload forces a
+      // fresh mount/fetch. Applied here defensively (not from a live repro of
+      // THIS module specifically) since the mechanism is structural.
+      logger.warn(
+        `Right panel icon "${title}" not visible — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForContactDetailsPage();
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
@@ -1474,9 +1514,11 @@ export class ContactsPage extends BasePage {
     logger.info(`Asserting quotation in panel: ${quotationNumber}`);
     await this.clickRightPanelIcon('Quotations');
     await this.page.waitForTimeout(1000);
-    await expect(this.page.locator('.quotation').filter({ hasText: quotationNumber })).toBeVisible({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.quotation').filter({ hasText: quotationNumber })).toBeVisible({
+        timeout: 10000,
+      })
+    );
     logger.success(`Quotation visible in panel: ${quotationNumber}`);
   }
 

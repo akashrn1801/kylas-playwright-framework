@@ -776,7 +776,7 @@ export class QuotationsPage extends BasePage {
     // actually closes — a save that server-side rejected leaves the modal
     // open, which this directly observes rather than inferring from the URL.
     await this.assertNoFormErrors('quotation save form');
-    await expect(this.modal()).toBeHidden({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() => expect(this.modal()).toBeHidden({ timeout: 15000 }));
   }
 
   async saveQuotationExpectingError(): Promise<void> {

@@ -276,6 +276,17 @@ async function createRolePage(
 
   await dismissStartupPopup(page);
 
+  // WHY here, after landing/popup-dismiss but before the test body runs
+  // (2026-07-23, Option 6 — proactive layer): this is the natural "test is
+  // about to start" point for every adminPage/restrictedPage fixture,
+  // mirroring exactly how registerPageForRecovery()/attachErrorListeners()
+  // above are already wired in once per page with zero action needed from
+  // any test or page object. See AuthManager.ensureFreshSession()'s own
+  // comment for the full mechanism — this is complementary to, not a
+  // replacement for, the reactive withSessionExpiryRecovery() a test can
+  // still fall back on if it runs long enough to cross the buffer mid-test.
+  await authManager.ensureFreshSession(page, role);
+
   await use(page);
 
   ErrorCollector.clearCurrentTest();

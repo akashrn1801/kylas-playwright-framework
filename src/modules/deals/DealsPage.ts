@@ -283,7 +283,9 @@ export class DealsPage extends BasePage {
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
     ]);
-    await expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -338,7 +340,9 @@ export class DealsPage extends BasePage {
 
   private async waitForSearchResults(name: string): Promise<boolean> {
     try {
-      await expect(this.dealRowByName(name)).toBeVisible({ timeout: 5000 });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.dealRowByName(name)).toBeVisible({ timeout: 5000 })
+      );
       return true;
     } catch {
       return false;
@@ -606,7 +610,9 @@ export class DealsPage extends BasePage {
   async clickAddDeal(): Promise<void> {
     logger.info('Clicking Add Deal');
     await this.click(this.addButton(), 'add deal button');
-    await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameInput()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Deal form opened');
   }
 
@@ -786,7 +792,9 @@ export class DealsPage extends BasePage {
   async addPartPayments(numberOfInstallments: number): Promise<string> {
     logger.info(`Adding ${numberOfInstallments} installment(s)`);
     await this.click(this.addPaymentButton(), 'add payment button');
-    await expect(this.installmentsModal()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.installmentsModal()).toBeVisible({ timeout: 10000 })
+    );
 
     const totalValueEl = this.installmentsModal().locator('.installments-total-value');
     const totalValueText = (await totalValueEl.textContent()) ?? '';
@@ -795,7 +803,9 @@ export class DealsPage extends BasePage {
     await this.installmentsNumberInput().click();
     await this.installmentsNumberInput().fill(String(numberOfInstallments));
     await this.click(this.installmentsConfirmButton(), 'confirm installments button');
-    await expect(this.installmentsModal()).toBeHidden({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.installmentsModal()).toBeHidden({ timeout: 10000 })
+    );
 
     logger.success(`Installments confirmed: ${numberOfInstallments}`);
     return totalValueText.trim();
@@ -809,15 +819,21 @@ export class DealsPage extends BasePage {
 
     for (let i = 0; i < numberOfInstallments; i++) {
       const nameInput = this.partPaymentNameInput(i);
-      await expect(nameInput).toBeVisible({ timeout: 10000 });
+      await this.withSessionExpiryRecovery(() => expect(nameInput).toBeVisible({ timeout: 10000 }));
       const defaultName = await nameInput.inputValue();
       expect(defaultName).toBe(`Installment ${i + 1}`);
       logger.success(`Installment ${i + 1} row present`);
     }
 
-    await expect(this.partPaymentSummaryActualTotal()).toBeVisible();
-    await expect(this.partPaymentSummaryAmountReceived()).toBeVisible();
-    await expect(this.partPaymentSummaryRemainingBalance()).toBeVisible();
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.partPaymentSummaryActualTotal()).toBeVisible()
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.partPaymentSummaryAmountReceived()).toBeVisible()
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.partPaymentSummaryRemainingBalance()).toBeVisible()
+    );
 
     const actualTotal = await this.partPaymentSummaryActualTotal().textContent();
     const amountReceived = await this.partPaymentSummaryAmountReceived().textContent();
@@ -862,7 +878,9 @@ export class DealsPage extends BasePage {
   async clickEditIcon(): Promise<void> {
     logger.info('Opening edit modal');
     await this.click(this.editIconButton(), 'edit icon');
-    await expect(this.editModal()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Edit modal opened');
   }
 
@@ -937,12 +955,88 @@ export class DealsPage extends BasePage {
     logger.success(`First payment status verified: ${statusText}`);
   }
 
+  // WHY: mirrors CompaniesPage.captureCompanyCreateOutcome()'s classification
+  // (status/fieldErrors → transient vs genuine), adapted for the deal EDIT
+  // save: PUT to /v1/deals/<id>, not POST to /v1/deals. Excludes known
+  // sub-resource PUTs (e.g. /owner) so this never matches an unrelated update.
+  private async captureDealUpdateOutcome(): Promise<{ success: boolean; transient: boolean }> {
+    try {
+      const response = await this.armResponseWaitWithRecovery(
+        (res) =>
+          /\/v1\/deals\/\d+$/.test(res.url()) &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'PUT',
+        'capture deal update response',
+        15000
+      );
+      const status = response.status();
+      if (status === 200 || status === 201) {
+        return { success: true, transient: false };
+      }
+      const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+      const message = String((body as { message?: unknown })?.message ?? '');
+      const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
+      const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
+      const transient =
+        !hasFieldErrors &&
+        (status >= 500 || /unexpected error occurred|internal server error|something went wrong/i.test(message));
+      logger.warn(
+        `Deal update returned HTTP ${status} (message: "${message}", ` +
+          `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
+          `${transient ? 'TRANSIENT (will retry save)' : 'non-transient'}`
+      );
+      return { success: false, transient };
+    } catch (error) {
+      logger.debug(`Deal update response not captured (${String(error)}) — treating as non-transient`);
+      return { success: false, transient: false };
+    }
+  }
+
   async saveEditedDeal(): Promise<void> {
     logger.info('Saving updated deal');
-    await this.click(this.saveEditButton(), 'save button');
-    await this.assertNoFormErrors('deal edit form');
-    await expect(this.editModal()).toBeHidden({ timeout: 15000 });
-    logger.success('Deal updated');
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const outcomePromise = this.captureDealUpdateOutcome();
+      await this.click(this.saveEditButton(), 'save button');
+
+      // WHY: capture the form-error instead of throwing immediately — same
+      // reasoning as CompaniesPage.saveCompany(): a transient backend error
+      // can also surface as a generic toast that assertNoFormErrors() would
+      // otherwise throw on before the classification below ever runs.
+      let formError: unknown = null;
+      try {
+        await this.assertNoFormErrors('deal edit form');
+      } catch (error) {
+        formError = error;
+      }
+
+      const outcome = await outcomePromise;
+
+      if (outcome.success) {
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.editModal()).toBeHidden({ timeout: 15000 })
+        );
+        logger.success('Deal updated');
+        return;
+      }
+
+      if (outcome.transient && attempt < maxAttempts) {
+        logger.warn(
+          `Deal edit save hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
+            're-clicking save on the same, still-filled edit form'
+        );
+        await this.page.waitForTimeout(1000);
+        continue;
+      }
+
+      if (formError) {
+        throw formError;
+      }
+
+      throw new Error(
+        'Deal update did not complete after save — no confirmed success response (save likely failed silently)'
+      );
+    }
   }
 
   async assertPaymentReceivedAfterEdit(): Promise<void> {
@@ -1034,7 +1128,9 @@ export class DealsPage extends BasePage {
     logger.info(`Validating deal absent: ${name}`);
     await this.goToDealsList();
     await this.performSearch(name);
-    await expect(this.dealRowByName(name)).toBeHidden({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.dealRowByName(name)).toBeHidden({ timeout: 10000 })
+    );
     logger.success(`Deal absent confirmed: ${name}`);
   }
 
@@ -1562,7 +1658,9 @@ export class DealsPage extends BasePage {
     logger.info('Adding existing contact to deal via ellipsis menu');
     await this.clickEllipsisOption('Add Contact');
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.editModal().locator('.modal-title')).toHaveText('Edit Deal', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal().locator('.modal-title')).toHaveText('Edit Deal', { timeout: 5000 })
+    );
 
     // WHY: Confirmed live via elementFromPoint + control-class polling — unlike
     // the create-deal flow, when associatedContacts is empty this field's
@@ -1614,17 +1712,43 @@ export class DealsPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    await expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be visible`).toBeVisible({
-      timeout: config.timeouts.navigation,
-    });
+    const icon = this.rightPanelIcon(title);
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(icon, `Right panel icon "${title}" should be visible`).toBeVisible({
+          timeout: config.timeouts.navigation,
+        })
+      );
+    } catch (error) {
+      // WHY the reload-and-retry — same confirmed gap as LeadsPage's own
+      // assertRightPanelIconVisible (CI flake 2026-07-22): the right panel's
+      // icon set reads a permissions snapshot taken once at page mount, so a
+      // plain wait — however long — cannot recover if that snapshot predates
+      // the share's propagation. A reload forces a fresh mount/fetch. Applied
+      // here defensively (not from a live repro of THIS module specifically)
+      // since the mechanism is structural, not Leads-specific.
+      logger.warn(
+        `Right panel icon "${title}" not visible within ${config.timeouts.navigation}ms — ` +
+          `reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForDealDetailsPage();
+      await this.withSessionExpiryRecovery(() =>
+        expect(icon, `Right panel icon "${title}" should be visible after reload`).toBeVisible({
+          timeout: config.timeouts.navigation,
+        })
+      );
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be hidden`).toBeHidden({
-      timeout: 5000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be hidden`).toBeHidden({
+        timeout: 5000,
+      })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
@@ -1697,7 +1821,9 @@ export class DealsPage extends BasePage {
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 })
+    );
 
     // WHY: tightened 2026-07-17 — confirmed live (Deals RBAC "Quotation
     // permission" test, 2/2 reproductions across two separate full-Deals
@@ -1800,9 +1926,11 @@ export class DealsPage extends BasePage {
 
   async assertOwnerOnDetail(expectedOwner: string): Promise<void> {
     logger.info(`Asserting owner on detail: ${expectedOwner}`);
-    await expect(this.ownerFieldValue(), `Owner field should show "${expectedOwner}"`).toContainText(
-      expectedOwner,
-      { timeout: 10000 }
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.ownerFieldValue(), `Owner field should show "${expectedOwner}"`).toContainText(
+        expectedOwner,
+        { timeout: 10000 }
+      )
     );
     logger.success(`Owner confirmed: ${expectedOwner}`);
   }
@@ -1810,16 +1938,26 @@ export class DealsPage extends BasePage {
   async assertDealDetailFields(data: DealData): Promise<void> {
     logger.info('Asserting deal detail header fields and tabs');
     await this.assertOnDealDetailPage();
-    await expect(this.ownerFieldValue()).toBeVisible({ timeout: 10000 });
-    await expect(this.companyFieldValue()).toBeVisible({ timeout: 10000 });
-    await expect(this.productsFieldValue()).toBeVisible({ timeout: 10000 });
-    await expect(this.estimatedValueFieldValue()).toContainText('INR', { timeout: 10000 });
-    await expect(this.actualValueFieldValue()).toContainText('INR', { timeout: 10000 });
-    await expect(this.estimatedClosureFieldValue()).toBeVisible({ timeout: 10000 });
-    await expect(this.actualClosureFieldValue()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() => expect(this.ownerFieldValue()).toBeVisible({ timeout: 10000 }));
+    await this.withSessionExpiryRecovery(() => expect(this.companyFieldValue()).toBeVisible({ timeout: 10000 }));
+    await this.withSessionExpiryRecovery(() => expect(this.productsFieldValue()).toBeVisible({ timeout: 10000 }));
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.estimatedValueFieldValue()).toContainText('INR', { timeout: 10000 })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.actualValueFieldValue()).toContainText('INR', { timeout: 10000 })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.estimatedClosureFieldValue()).toBeVisible({ timeout: 10000 })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.actualClosureFieldValue()).toBeVisible({ timeout: 10000 })
+    );
     // WHY: Converted From always reads "-" for deals not created via lead
     // conversion (out of scope here) — presence check only, not value match.
-    await expect(this.convertedFromFieldValue()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.convertedFromFieldValue()).toBeVisible({ timeout: 10000 })
+    );
 
     const tabPane = this.page.locator('.tab-pane.active.show');
 

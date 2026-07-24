@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
-  isSignInUrl,
+  isSessionExpiryPage,
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
@@ -41,9 +41,9 @@ export class BasePage {
   async navigateTo(url: string): Promise<void> {
     logger.info(`Navigating to: ${url}`);
     await this.page.goto(url, { waitUntil: 'domcontentloaded' });
-    if (isPageRegisteredForRecovery(this.page) && isSignInUrl(this.page.url())) {
+    if (isPageRegisteredForRecovery(this.page) && (await isSessionExpiryPage(this.page))) {
       logger.warn(
-        `Navigation to "${url}" landed on a signIn/login page — attempting one-time session recovery`
+        `Navigation to "${url}" landed on a signIn/login or Forbidden page — attempting one-time session recovery`
       );
       // WHY no retry loop here: tryRecoverSessionForPage() already navigates
       // back to `url` internally after re-authenticating, and throws (never
@@ -239,6 +239,54 @@ export class BasePage {
     }
   }
 
+  // WHY this exists (2026-07-23 session-expiry architecture overhaul): a
+  // full-codebase grep found 80 RAW `expect(...).toBeVisible/toHaveText/
+  // toHaveURL` calls written directly in module page objects (Contacts 18,
+  // Companies 19, Deals 23, Leads 12, CallLogs 4, Tasks 3, Quotations 1),
+  // every one silently unprotected by the mid-test session-expiry recovery
+  // that click()/fill()/navigateTo()/assertUrl() each hand-roll their own
+  // copy of. A CENTRALIZED, zero-call-site-action fix was attempted first
+  // (a page.route() network interceptor that would heal a 401 before the
+  // page's own JS ever saw it) — confirmed via decisive live A/B testing
+  // that route.fetch(), which that approach requires to inspect a
+  // response's status before deciding whether to fulfill it, gets a
+  // meaningful fraction of ordinary, non-401 Kylas API requests rejected
+  // with a generic 400 by the real backend (isolated precisely: the exact
+  // same test passes clean with the route handler removed AND with it
+  // registered-but-forced-to-continue()-only, and only fails once
+  // route.fetch() is actually used) — so that approach is not viable for
+  // this backend and was abandoned, not shipped.
+  //
+  // This is the fallback design: not a return to copy-pasting the same
+  // 10-line block at all 80 sites, but ONE shared, DRY implementation of
+  // the exact same catch-recover-retry shape click() already uses,
+  // wrapping a single caller-supplied Playwright call. Every call site
+  // becomes a one-line change (`this.withSessionExpiryRecovery(() => ...)`),
+  // which is the mechanical, low-risk part of the retrofit — the LOGIC
+  // itself still lives in exactly one place, so a future fix to the
+  // recovery mechanism (like click()'s own two historical bug fixes) only
+  // needs to change this method, not 80+ call sites individually.
+  protected async withSessionExpiryRecovery<T>(fn: () => Promise<T>): Promise<T> {
+    // WHY captured BEFORE fn() runs, not inside the catch block — same
+    // reasoning as click()'s identical comment: by the time an exception is
+    // caught here, the page may already be on /signIn (that's the trigger
+    // condition itself), so deriving "where to go back to" at that point
+    // would just point back at signIn.
+    const urlBeforeCall = this.page.url();
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
+        throw error;
+      }
+      logger.warn(
+        'A wrapped call failed while on a signIn/login or Forbidden page — attempting one-time session recovery'
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeCall);
+      return await fn();
+    }
+  }
+
   async reloadPage(): Promise<void> {
     logger.info('Reloading page');
     await this.page.reload({ waitUntil: 'domcontentloaded' });
@@ -290,11 +338,11 @@ export class BasePage {
       // the moment a click ever failed while genuinely on that page's
       // expected signIn state. See isPageRegisteredForRecovery()'s own
       // comment for the full explanation.
-      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
+      if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
         throw error;
       }
       logger.warn(
-        `"${description}" failed while on a signIn/login page — attempting one-time session recovery`
+        `"${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
       );
       await tryRecoverSessionForPage(this.page, urlBeforeAction);
       await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
@@ -360,11 +408,11 @@ export class BasePage {
       // method's comment for the full rationale. Kept as a single,
       // non-recursive retry of the exact same calls. Same registration
       // check as click() too — see isPageRegisteredForRecovery()'s comment.
-      if (!isPageRegisteredForRecovery(this.page) || !isSignInUrl(this.page.url())) {
+      if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
         throw error;
       }
       logger.warn(
-        `Filling "${description}" failed while on a signIn/login page — attempting one-time session recovery`
+        `Filling "${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
       );
       await tryRecoverSessionForPage(this.page, urlBeforeAction);
       await locator.waitFor({ state: 'visible' });
@@ -549,12 +597,18 @@ export class BasePage {
 
   // ─── Wait Helpers ─────────────────────────────────────────
 
+  // WHY these route through withSessionExpiryRecovery() (2026-07-23): these
+  // generic wait/assert helpers are used broadly across module page objects
+  // — exactly the shape of call that was found completely unprotected from
+  // mid-test session expiry (see withSessionExpiryRecovery()'s own comment
+  // for the fuller history). One-line change, same combinator every other
+  // retrofitted call site uses.
   async waitForVisible(locator: Locator, timeout = 30000): Promise<void> {
-    await locator.waitFor({ state: 'visible', timeout });
+    await this.withSessionExpiryRecovery(() => locator.waitFor({ state: 'visible', timeout }));
   }
 
   async waitForHidden(locator: Locator, timeout = 30000): Promise<void> {
-    await locator.waitFor({ state: 'hidden', timeout });
+    await this.withSessionExpiryRecovery(() => locator.waitFor({ state: 'hidden', timeout }));
   }
 
   async waitForUrl(
@@ -569,24 +623,48 @@ export class BasePage {
     // (2026-07-07); it's now the canonical entry point every BasePage
     // subclass uses, and non-BasePage code (globalSetup.ts, authManager.ts,
     // fixtures/index.ts) calls safeWaitForURL() directly for the same reason.
-    await safeWaitForURL(this.page, urlPattern, timeout);
+    await this.withSessionExpiryRecovery(() => safeWaitForURL(this.page, urlPattern, timeout));
   }
 
   // ─── Assertion Helpers ────────────────────────────────────
 
   async assertVisible(locator: Locator, description = 'element', timeout = 30000): Promise<void> {
     logger.info(`Asserting visible: ${description}`);
-    await expect(locator).toBeVisible({ timeout });
+    await this.withSessionExpiryRecovery(() => expect(locator).toBeVisible({ timeout }));
   }
 
   async assertText(locator: Locator, expectedText: string): Promise<void> {
     logger.info(`Asserting text: ${expectedText}`);
-    await expect(locator).toHaveText(expectedText);
+    await this.withSessionExpiryRecovery(() => expect(locator).toHaveText(expectedText));
   }
 
   async assertUrl(expectedUrl: string | RegExp): Promise<void> {
     logger.info(`Asserting URL: ${expectedUrl}`);
-    await expect(this.page).toHaveURL(expectedUrl);
+    const urlBeforeAssertion = this.page.url();
+    try {
+      await expect(this.page).toHaveURL(expectedUrl);
+    } catch (error) {
+      // WHY: mid-test session recovery — same gap class as click()'s own
+      // recovery (2026-07-09), found live in a full-suite stage run
+      // (2026-07-23): call-logs.rbac.spec.ts:337 hit a session expiry,
+      // recovered once via navigateTo()'s own recovery, successfully
+      // reloaded the target list page (confirmed by the page object's own
+      // readiness checks passing) — then expired AGAIN within THIS
+      // assertion's 10s poll window. assertUrl() is a bare `expect()` with
+      // no recovery wiring at all, unlike click()/fill()/navigateTo(), so a
+      // second, later expiry here had nothing to catch it. Same guard as
+      // click(): gated strictly on actually being on signIn right now (never
+      // "any failure"), so a genuine URL-assertion failure (wrong page,
+      // wrong entity) still fails immediately, unretried.
+      if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
+        throw error;
+      }
+      logger.warn(
+        `assertUrl(${expectedUrl}) failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
+      );
+      await tryRecoverSessionForPage(this.page, urlBeforeAssertion);
+      await expect(this.page).toHaveURL(expectedUrl);
+    }
   }
 
   // ─── Utility ──────────────────────────────────────────────
@@ -659,10 +737,12 @@ export class BasePage {
     const toast = this.page
       .locator('.toastr.rrt-error .rrt-middle-container, .rrt-middle-container')
       .filter({ hasText: expectedMessageSubstring });
-    await expect(
-      toast.first(),
-      `Expected an error toast containing "${expectedMessageSubstring}" in ${context}, but it never appeared`
-    ).toBeVisible({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        toast.first(),
+        `Expected an error toast containing "${expectedMessageSubstring}" in ${context}, but it never appeared`
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success(`Error toast confirmed in ${context}: "${expectedMessageSubstring}"`);
   }
 
