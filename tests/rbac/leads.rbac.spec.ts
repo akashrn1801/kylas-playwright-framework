@@ -1,10 +1,21 @@
 import { test, expect } from '../../src/fixtures/index';
 import { safeWaitForURL } from '../../src/utils/navigation';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
+import { ContactsPage } from '../../src/modules/contacts/ContactsPage';
+import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
+import {
+  generateContactData,
+  generateAdminContactData,
+} from '../../src/data/factories/contactFactory';
+import {
+  generateCompanyData,
+  generateAdminCompanyData,
+} from '../../src/data/factories/companyFactory';
 import {
   generateLeadData,
   generateAdminLeadData,
   generateSharedLeadData,
+  LEAD_CUSTOM_FIELD_NAMES,
 } from '../../src/data/factories/leadFactory';
 import { config } from '../../config/config';
 import { logger } from '../../src/utils/logger';
@@ -15,7 +26,7 @@ import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 
 test.describe('Leads RBAC', () => {
-  test('@smoke @regression restricted user can navigate to leads list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to leads list', async ({
     restrictedPage,
   }) => {
     const leadsPage = new LeadsPage(restrictedPage);
@@ -873,5 +884,126 @@ test.describe('Leads RBAC', () => {
     await leadsPage.assertLeadCustomFieldsOnDetail(leadData);
     await leadsPage.assertLeadStandardFieldsOnDetail(leadData);
     logger.success('L29 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Lookup Custom Fields — RBAC ("Company Lookup" / "Contact Lookup")
+  // ──────────────────────────────────────────────────────────
+  // WHY: these two lookup fields are live, SERVER-SIDE, RBAC-scoped searches
+  // (confirmed live 2026-07-21). L30 proves a restricted user cannot see an
+  // admin-owned, non-shared entity in them; L31 proves the restricted user CAN
+  // find and select entities they own.
+
+  // ── L30 ───────────────────────────────────────────────────
+
+  test('@regression restricted user cannot see admin-owned company or contact in Lead lookup custom fields', async ({
+    adminPage,
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+
+    // Admin creates an admin-owned (ADM-prefixed, deliberately NOT shared)
+    // Company + Contact — the ADM<timestamp> prefix guarantees a unique name
+    // the restricted user can never coincidentally match.
+    const adminCompany = generateAdminCompanyData();
+    const adminContact = generateAdminContactData();
+    const adminCompaniesPage = new CompaniesPage(adminPage);
+    const adminContactsPage = new ContactsPage(adminPage);
+    await adminCompaniesPage.goToCompaniesList();
+    const companyId = await adminCompaniesPage.createCompany(adminCompany);
+    expect(companyId, 'Admin company should be created').not.toBeNull();
+    await adminContactsPage.goToContactsList();
+    const contactId = await adminContactsPage.createContact(adminContact);
+    expect(contactId, 'Admin contact should be created').not.toBeNull();
+
+    // Search token = the unique ADM<timestamp> first word of each name — it
+    // WOULD return the entity if the restricted user were allowed to see it.
+    const companyToken = adminCompany.name.trim().split(/\s+/)[0];
+    const contactName = `${adminContact.firstName} ${adminContact.lastName}`;
+    const contactToken = adminContact.firstName.trim().split(/\s+/)[0];
+
+    // Restricted user opens a Lead create form and reveals "Other Details".
+    const restrictedLeadsPage = new LeadsPage(restrictedPage);
+    await restrictedLeadsPage.goToLeadsList();
+    await restrictedLeadsPage.clickAddLead();
+    // Env-gate: skip the whole test only if NO Lead custom fields exist here.
+    await restrictedLeadsPage.skipIfCustomFieldsAbsent();
+    await restrictedLeadsPage.openOtherDetailsFormSection();
+
+    // Neither admin-owned entity may be selectable in the restricted user's
+    // lookups (server-side RBAC scoping) — assert the specific named option is
+    // absent (not that the menu is empty; the "Add to …" create option is
+    // always present).
+    await restrictedLeadsPage.assertLeadLookupSelectableAbsent(
+      LEAD_CUSTOM_FIELD_NAMES.companyLookup,
+      companyToken,
+      adminCompany.name
+    );
+    await restrictedLeadsPage.assertLeadLookupSelectableAbsent(
+      LEAD_CUSTOM_FIELD_NAMES.contactLookup,
+      contactToken,
+      contactName
+    );
+    logger.success('L30 passed');
+  });
+
+  // ── L31 ───────────────────────────────────────────────────
+
+  test('@regression restricted user creates own company and contact and can select them in Lead lookup custom fields', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const leadsPage = new LeadsPage(restrictedPage);
+
+    // Restricted user creates its OWN Company + Contact (plain generators →
+    // restricted-owned entities the user can genuinely access).
+    const contactData = generateContactData();
+    const companyData = generateCompanyData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId, 'Contact should be created').not.toBeNull();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId, 'Company should be created').not.toBeNull();
+    const contactName = `${contactData.firstName} ${contactData.lastName}`;
+    const companyName = companyData.name;
+
+    // Restricted user creates a Lead selecting its own entities in the lookups.
+    const leadData = generateLeadData();
+    leadData.customFields.companyLookupTarget = companyName;
+    leadData.customFields.contactLookupTarget = contactName;
+    await leadsPage.goToLeadsList();
+    await leadsPage.clickAddLead();
+    await leadsPage.fillLeadForm(leadData);
+    const lookups = await leadsPage.fillLeadLookupCustomFields(leadData.customFields);
+    const leadId = await leadsPage.saveLead();
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    if (lookups.companyLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.companyLookup,
+        companyName,
+        'Company Lookup'
+      );
+    } else {
+      logger.info(
+        'Company Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+    if (lookups.contactLookup !== null) {
+      await leadsPage.assertLeadLookupOnDetail(
+        LEAD_CUSTOM_FIELD_NAMES.contactLookup,
+        contactName,
+        'Contact Lookup'
+      );
+    } else {
+      logger.info(
+        'Contact Lookup field absent on this environment — skipping its detail-page assertion'
+      );
+    }
+    logger.success('L31 passed');
   });
 });

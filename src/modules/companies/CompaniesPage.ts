@@ -11,6 +11,20 @@ import { generateTaskData } from '../../data/factories/taskFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
+// WHY: a distinct, catchable error for a TRANSIENT backend rejection of the
+// company-create POST (generic "Unexpected error occurred"/"Internal server
+// error" with no field-level validation), as opposed to a genuine validation
+// rejection (which surfaces earlier via assertNoFormErrors) or a real "save
+// silently failed". createCompany() catches ONLY this to retry the whole
+// create — see saveCompany()/captureCompanyCreateOutcome() for how it's
+// classified, and createCompany() for the bounded, duplicate-safe retry.
+class TransientCompanySaveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientCompanySaveError';
+  }
+}
+
 export class CompaniesPage extends BasePage {
   // ──────────────────────────────────────────────────────────
   // 1. Retry Config
@@ -212,7 +226,9 @@ export class CompaniesPage extends BasePage {
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
     ]);
-    await expect(this.companyTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.companyTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -229,9 +245,11 @@ export class CompaniesPage extends BasePage {
 
   private async waitForSearchResults(name: string): Promise<boolean> {
     try {
-      await expect(this.companyRowNameCell(name)).toBeVisible({
-        timeout: 5000,
-      });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.companyRowNameCell(name)).toBeVisible({
+          timeout: 5000,
+        })
+      );
 
       return true;
     } catch {
@@ -295,7 +313,9 @@ export class CompaniesPage extends BasePage {
 
         await toggle.click();
 
-        await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.nameInput()).toBeVisible({ timeout: 10000 })
+        );
 
         logger.success('Toggle disabled');
       }
@@ -450,10 +470,42 @@ export class CompaniesPage extends BasePage {
   async clickAddCompany(): Promise<void> {
     logger.info('Clicking Add Company');
 
-    await this.click(this.addButton(), 'add company button');
+    // WHY the bounded re-click retry (root-caused 2026-07-21 from a real
+    // failure): a single click on the page's "Add" button intermittently does
+    // NOT open the modal. Confirmed via the failure DOM — the companies LIST
+    // was still on screen (no modal) after the click completed with no error,
+    // and exactly one "Add" button matched (no strict-mode violation), ruling
+    // out a wrong-target click. This is the same "click lands but nothing
+    // happens" React click-handler race already documented in this codebase
+    // (DealsPage.cloneDeal, the Meetings Add button). There was no recovery —
+    // a single click + single visibility check. Re-clicking until the name
+    // input actually appears is BACKWARD-COMPATIBLE: when the modal opens on
+    // the first click (the norm for every existing caller — L20/L21/Companies/
+    // RBAC suites), the loop exits after one attempt with identical behavior.
+    // The modal-open guard ensures a re-attempt can never click the list's Add
+    // button through an already-open modal's backdrop.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!(await this.editModal().isVisible().catch(() => false))) {
+        await this.click(this.addButton(), 'add company button');
+      }
+      const opened = await this.nameInput()
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .then(() => true)
+        .catch(() => false);
+      if (opened) {
+        logger.success('Company form opened');
+        return;
+      }
+      logger.info(
+        `"Add Company" modal did not open (attempt ${attempt}/${maxAttempts}) — re-clicking`
+      );
+    }
 
-    await expect(this.nameInput()).toBeVisible({ timeout: 10000 });
-
+    // Never opened after all attempts — surface the original loud, actionable failure.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameInput()).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success('Company form opened');
   }
 
@@ -486,13 +538,13 @@ export class CompaniesPage extends BasePage {
 
     await this.click(this.addEmailButton(), 'add email button');
 
-    await expect(this.emailInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
 
     await this.fill(this.emailInput(), data.email, 'email');
 
     await this.click(this.addPhoneButton(), 'add phone button');
 
-    await expect(this.phoneInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
 
     await this.fill(this.phoneInput(), data.phone, 'phone');
 
@@ -513,31 +565,118 @@ export class CompaniesPage extends BasePage {
     logger.success('Company form filled');
   }
 
+  // WHY (2026-07-21): captures the create POST's actual status + body so a
+  // TRANSIENT backend rejection can be told apart from a real one. The existing
+  // captureCompanyIdFromResponse() only matches 200/201, so on a 400 it just
+  // times out into a null id — indistinguishable from a genuine silent failure.
+  // This matches the create POST at ANY status, then classifies: 2xx -> id;
+  // non-2xx with a generic message ("Unexpected error occurred"/"Internal
+  // server error") and NO fieldErrors, or any 5xx -> transient (safe to retry:
+  // the POST was rejected before any DB write); populated fieldErrors -> a
+  // genuine rejection (NOT transient — and already surfaced to the user, so
+  // assertNoFormErrors catches it first). Scoped to POST /v1/companies/ —
+  // excludes the has-duplicates GETs and /reports/ analytics that also contain
+  // the "companies" substring (the same false-match class already documented
+  // for captureXxxIdFromResponse elsewhere).
+  private async captureCompanyCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+    try {
+      const response = await this.armResponseWaitWithRecovery(
+        (res) =>
+          /\/v1\/companies\/?(?:\?|$)/.test(res.url()) &&
+          !res.url().includes('/reports/') &&
+          !res.url().includes('has-duplicates') &&
+          res.request().method() === 'POST',
+        'capture company create response',
+        30000
+      );
+      const status = response.status();
+      const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+      if (status === 200 || status === 201) {
+        const data = body?.data as { id?: number } | undefined;
+        const id = ((body?.id as number | undefined) ?? data?.id ?? null) as number | null;
+        logger.success(`Captured company ID: ${id} from ${response.url()}`);
+        return { id, transient: false };
+      }
+      const message = String((body as { message?: unknown })?.message ?? '');
+      const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
+      const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
+      const transient =
+        !hasFieldErrors &&
+        (status >= 500 || /unexpected error occurred|internal server error/i.test(message));
+      logger.warn(
+        `Company create returned HTTP ${status} (message: "${message}", ` +
+          `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
+          `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
+      );
+      return { id: null, transient };
+    } catch (error) {
+      // No matching create response (genuinely fast server, or a timeout) —
+      // ambiguous; deliberately NOT classified transient so we never blindly
+      // recreate a company that may actually have been created. Logging the
+      // actual error (added 2026-07-22, same diagnostic gap found while
+      // porting this pattern to Leads/Contacts) — a bare "not captured"
+      // debug line gave no way to tell a real 30s timeout apart from some
+      // other rejection when this path fires.
+      logger.debug(`Company create response not captured (${String(error)}) — treating as non-transient`);
+      return { id: null, transient: false };
+    }
+  }
+
   async saveCompany(): Promise<number | null> {
     logger.info('Saving company');
 
-    const companyIdPromise = this.captureCompanyIdFromResponse();
+    const outcomePromise = this.captureCompanyCreateOutcome();
 
     await this.saveButton().scrollIntoViewIfNeeded();
     await this.click(this.saveButton(), 'save button');
 
-    await this.assertNoFormErrors('company create form');
-
-    const companyId = await companyIdPromise;
-
-    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
-    // logged "Company saved successfully" and returned null, letting callers proceed on a
-    // company that doesn't exist. Fail fast instead, matching the "Fresh company ID not
-    // captured" convention already used elsewhere in this codebase.
-    if (!companyId) {
-      throw new Error('Company ID not captured after save — cannot proceed (save likely failed silently)');
+    // WHY capture the form-error instead of throwing immediately (confirmed via
+    // deliberate reproduction 2026-07-21): a TRANSIENT backend error can also
+    // surface as a generic form-error toast ("Unexpected error occurred"/
+    // "Internal server error"/"Invalid access token") that assertNoFormErrors()
+    // throws on. If that throw pre-empted the classification below, a transient
+    // blip would fail the test instead of being retried. The response BODY
+    // (status + fieldErrors), captured in the outcome, is the source of truth
+    // for transient-vs-genuine; the form-error toast is only used to surface a
+    // GENUINE validation error when the body was NOT classified transient.
+    let formError: unknown = null;
+    try {
+      await this.assertNoFormErrors('company create form');
+    } catch (error) {
+      formError = error;
     }
 
-    await this.waitForCompanyListPage();
+    const outcome = await outcomePromise;
 
-    logger.success('Company saved successfully');
+    if (outcome.id) {
+      await this.waitForCompanyListPage();
+      logger.success('Company saved successfully');
+      return outcome.id;
+    }
 
-    return companyId;
+    // Transient backend rejection (generic error, no field-level validation) →
+    // distinct, catchable error so createCompany() retries the whole create
+    // (duplicate-safe — a transient rejection blocked any DB write). Takes
+    // priority over the form-error toast, which for a transient is itself just
+    // a generic message.
+    if (outcome.transient) {
+      throw new TransientCompanySaveError(
+        'Company create hit a transient backend error (no field-level validation) — retryable'
+      );
+    }
+
+    // Genuine, user-facing validation error (e.g. duplicate name) → surface it
+    // unchanged so it fails loudly and is never retried into a false pass.
+    if (formError) {
+      throw formError;
+    }
+
+    // WHY: a failed save with no captured id and no classified cause must still
+    // fail fast, not proceed on a company that doesn't exist (confirmed live
+    // 2026-07-07).
+    throw new Error(
+      'Company ID not captured after save — cannot proceed (save likely failed silently)'
+    );
   }
 
   async fillFullEditForm(data: CompanyData): Promise<void> {
@@ -621,11 +760,13 @@ export class CompaniesPage extends BasePage {
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
     logger.info(`Asserting ellipsis option NOT visible: ${optionText}`);
     const item = this.ellipsisMenuItem(optionText);
-    await expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
-      // WHY: Option may not exist at all — check count as fallback
-      const count = await item.count();
-      expect(count).toBe(0);
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
+        // WHY: Option may not exist at all — check count as fallback
+        const count = await item.count();
+        expect(count).toBe(0);
+      })
+    );
     logger.success(`Ellipsis option not visible confirmed: ${optionText}`);
   }
 
@@ -637,7 +778,9 @@ export class CompaniesPage extends BasePage {
     logger.info('Opening edit modal');
 
     await this.click(this.editIconButton(), 'edit icon');
-    await expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     // WHY: Wait for name input to be ready — modal animation on GHA is slow
     await this.page
       .locator('[id="0_11_input_name"]')
@@ -673,7 +816,9 @@ export class CompaniesPage extends BasePage {
 
     await this.assertNoFormErrors('company edit form');
 
-    await expect(this.editModal()).toBeHidden({ timeout: 30000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeHidden({ timeout: 30000 })
+    );
 
     logger.success('Company updated');
   }
@@ -751,6 +896,40 @@ export class CompaniesPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
+  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
+  // stalled a full-suite regression run across many share-based RBAC tests):
+  // see LeadsPage.openUserShareTypeSearch() for the full explanation — same
+  // "click registers, handler race" class as clickAddCompany itself, applied
+  // to the Share modal's type-dropdown selection. If userOption.click() (User)
+  // didn't register, shareToUserInput() never mounts and the following raw
+  // `.fill()` hangs until the outer test timeout. Fixed identically here.
+  private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await shareTypeControl.click({ timeout: config.timeouts.expect });
+        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await userOption.click({ timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
+  }
+
   async shareCompany(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing company with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
@@ -758,19 +937,14 @@ export class CompaniesPage extends BasePage {
     // WHY: Click the Share To type dropdown control — opens User/Team options
     const shareTypeControl = this.page.locator('.modal.show').locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
-    await shareTypeControl.click();
-    await this.page.waitForTimeout(500);
-    // WHY: Select "User" option
-    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-    await userOption.waitFor({ state: 'visible', timeout: 5000 });
-    await userOption.click();
+    await this.openUserShareTypeSearch(shareTypeControl);
     await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
-    await this.shareToUserInput().fill(validWord);
+    await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
     await this.page.waitForTimeout(800);
     // WHY: Select matching user from dropdown
     const userItem = this.page
@@ -778,7 +952,7 @@ export class CompaniesPage extends BasePage {
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    await userItem.click({ timeout: config.timeouts.expect });
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
@@ -853,15 +1027,35 @@ export class CompaniesPage extends BasePage {
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    // WHY: Wait for icon to be attached first — SVG icons load after React renders
-    await this.rightPanelIcon(title).waitFor({ state: 'attached', timeout: 15000 });
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 15000 });
+    const icon = this.rightPanelIcon(title);
+    try {
+      // WHY: Wait for icon to be attached first — SVG icons load after React renders
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    } catch (error) {
+      // WHY the reload-and-retry — same confirmed gap as LeadsPage's own
+      // assertRightPanelIconVisible (CI flake 2026-07-22, right after an
+      // admin share): the right panel's icon set reads a permissions
+      // snapshot taken once at page mount, so a plain wait cannot recover if
+      // that snapshot predates the share's propagation. A reload forces a
+      // fresh mount/fetch. Applied here defensively (not from a live repro of
+      // THIS module specifically) since the mechanism is structural.
+      logger.warn(
+        `Right panel icon "${title}" not visible — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForCompanyDetailsPage();
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
@@ -881,13 +1075,17 @@ export class CompaniesPage extends BasePage {
     // its "wait for stable position" check. An auto-retrying expect()
     // re-queries the locator on every poll; click() below auto-scrolls its
     // own target, so no manual scroll is needed.
-    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 })
+    );
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
     // WHY: Wait for modal to open with "Add Quotation" title
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 })
+    );
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
     // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
@@ -1016,7 +1214,9 @@ export class CompaniesPage extends BasePage {
     await this.addContactDirectButton().waitFor({ state: 'visible', timeout: 10000 });
     await this.addContactDirectButton().click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
+    );
     // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
     const requiredToggle = this.page.locator('#editEntityModal').locator('.custom-control-label')
       .filter({ hasText: 'Show Required & Important Fields' }).first();
@@ -1118,7 +1318,9 @@ export class CompaniesPage extends BasePage {
     logger.info(`Adding contact from ellipsis: ${contactData.firstName} ${contactData.lastName}`);
     await this.clickEllipsisOption('Add Contact');
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
+    );
     // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
     const requiredToggleEllipsis = this.page.locator('#editEntityModal').locator('.custom-control-label')
       .filter({ hasText: 'Show Required & Important Fields' }).first();
@@ -1217,7 +1419,9 @@ export class CompaniesPage extends BasePage {
     await this.addDealDirectButton().waitFor({ state: 'visible', timeout: 10000 });
     await this.addDealDirectButton().click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 })
+    );
     await this.page.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('[id="0_11_input_name"]').fill(dealData.name);
     // WHY: Select pipeline — same locator pattern proven in contacts C15 test
@@ -1274,7 +1478,9 @@ export class CompaniesPage extends BasePage {
     logger.info(`Adding deal from ellipsis: ${dealData.name}`);
     await this.clickEllipsisOption('Add Deal');
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Deal', { timeout: 5000 })
+    );
     await this.page.locator('[id="0_11_input_name"]').waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('[id="0_11_input_name"]').fill(dealData.name);
     const pipelineControl = this.page.locator('div').filter({ hasText: /^Search pipeline$/ }).nth(2);
@@ -1390,9 +1596,11 @@ export class CompaniesPage extends BasePage {
 
     await this.performSearch(name);
 
-    await expect(this.companyRowNameCell(name)).toBeHidden({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.companyRowNameCell(name)).toBeHidden({
+        timeout: 10000,
+      })
+    );
 
     logger.success(`Company absent confirmed: ${name}`);
   }
@@ -1515,11 +1723,48 @@ export class CompaniesPage extends BasePage {
 
   async createCompany(data: CompanyData): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
-      await this.clickAddCompany();
-
-      await this.fillCompanyForm(data);
-
-      return await this.saveCompany();
+      // WHY the bounded transient-retry (root-caused 2026-07-21 from a real
+      // failure): the create POST intermittently returns a transient backend
+      // error (HTTP 400/5xx with a generic message and NO field-level
+      // validation — confirmed live as {"message":"Unexpected error
+      // occurred!!","fieldErrors":null} / "Internal server error"), which left
+      // the create with no captured id and failed the test. saveCompany() now
+      // classifies that as a TransientCompanySaveError; we retry the ENTIRE
+      // create here. Duplicate-safe: a transient rejection is blocked before
+      // any DB write, so no company was created — re-creating with the same
+      // (still-unique) data yields exactly one. A GENUINE validation rejection
+      // (duplicate name, bad data) surfaces via assertNoFormErrors() as a
+      // different error and is NOT caught here, so it still fails loudly and is
+      // never silently retried into a false pass. maxAttempts is small — this
+      // covers a brief backend blip, not a sustained outage.
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          await this.clickAddCompany();
+          await this.fillCompanyForm(data);
+          return await this.saveCompany();
+        } catch (error) {
+          if (error instanceof TransientCompanySaveError && attempt < maxAttempts) {
+            logger.warn(
+              `Company create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
+                're-navigating and retrying the whole create'
+            );
+            // Clean slate for the retry via a HARD navigation, NOT a
+            // click-to-close: confirmed via reproduction (2026-07-21) that the
+            // transient-error modal state can leave the cancel button
+            // non-actionable, so goToCompaniesList()'s closeModalIfOpen() click
+            // hangs until the test timeout. page.goto abandons the stuck modal
+            // and forces a fresh list page.
+            await this.navigateTo(`${config.appUrl}/sales/companies/list`);
+            await this.waitForCompanyListPage();
+            continue;
+          }
+          throw error;
+        }
+      }
+      // Unreachable in practice (the loop returns or throws), but keeps the
+      // type checker satisfied and fails loudly if the invariant ever breaks.
+      throw new Error('createCompany: exhausted transient retries without a definitive outcome');
     }, 'createCompany');
   }
 

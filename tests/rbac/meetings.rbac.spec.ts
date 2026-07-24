@@ -19,7 +19,7 @@ import {
 test.describe('Meetings RBAC', () => {
   // ── Test 1: Restricted user navigates ─────────────────────────────────────
 
-  test('@regression restricted user should navigate to meetings list', async ({
+  test('@smoke @regression @prodSafe restricted user should navigate to meetings list', async ({
     restrictedPage,
   }) => {
     const meetingsPage = new MeetingsPage(restrictedPage);

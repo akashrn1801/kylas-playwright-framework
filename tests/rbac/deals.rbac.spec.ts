@@ -147,7 +147,7 @@ async function createFreshContactAndCompany(
 }
 
 test.describe('Deals RBAC', () => {
-  test('@smoke @regression restricted user can navigate to deals list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to deals list', async ({
     restrictedPage,
   }) => {
     const dealsPage = new DealsPage(restrictedPage);
