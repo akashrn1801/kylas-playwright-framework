@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 272 tests across 9 modules (17 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 276 tests across 9 modules (17 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -36,7 +36,7 @@ This document is written so a new engineer — or any of us in six months — ca
 
 **Modules covered** (9): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list`, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-07-22, do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
@@ -45,11 +45,13 @@ This document is written so a new engineer — or any of us in six months — ca
 | Contacts | 19 | 19 | 38 |
 | Dashboard/Login | 4 | — | 4 |
 | Deals | 17 | 22 | 39 |
-| Leads | 19 | 25 | 44 |
+| Leads | 21 | 27 | 48 |
 | Meetings | 8 | 8 | 16 |
 | Quotations | 15 | 14 | 29 |
 | Tasks | 11 | 11 | 22 |
-| **Total** | **131** | **141** | **272** |
+| **Total** | **135** | **143** | **276** |
+
+Leads gained 4 tests on 2026-07-21/22: L20/L21 (UI) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
 ---
 
@@ -412,9 +414,9 @@ Every test carries at least one tag in its title (`@smoke`, `@regression`, `@pro
 
 | Tag | Count | Meaning | Runs on |
 |---|---:|---|---|
-| `@smoke` | 22 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
+| `@smoke` | 23 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
 | `@regression` | 259 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
-| `@prodSafe` | 14 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
+| `@prodSafe` | 31 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
 
 `stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 272-test suite.
 
@@ -677,7 +679,6 @@ Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes —
 - **No cross-browser coverage in CI.** `firefox`/`webkit`/`mobile-chrome` are configured for local runs only; every CI pipeline runs `chromium` exclusively.
 - **`Jenkinsfile.sandbox`'s worker count (always 1) diverges from `sandbox.yml`'s dynamic 1–2** — a minor, currently-harmless inconsistency between the GHA path (primary) and the Jenkins manual fallback for the same branch.
 - **Two CI paths cover different scope for `main`:** the base `Jenkinsfile` (primary, branch-triggered) runs the full suite with no `--grep`; `main.yml` (manual-only fallback) filters to `@regression` only. They are not equivalent runs.
-- **Deals has zero `@prodSafe` tests** — the `prod` pipeline currently has no coverage at all for the Deals module.
 - **No scheduled/nightly runs exist anywhere** — every pipeline is push- or manually-triggered only.
 - **No cross-environment (QA/staging/prod) data-parity check exists.**
 - **QA/staging data grows unboundedly** — no module cleans up the records it creates, so search/list operations get measurably slower over the life of the environment. Retry budgets in `config.searchRetry` account for this, but it's a standing tax on every run, not a one-time cost.
@@ -692,6 +693,9 @@ Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes —
 - **The `[id*="..."]` substring-locator pattern that caused the Company Phones collision (below) also appears, in a narrower/lower-risk form, in `CompaniesPage.ts`, `DealsPage.ts`, `ContactsPage.ts` (`[id*="input_products.0.id"]`, each already scoped with `.first()`) and `QuotationsPage.ts` (`[id*="input_products"][id*="quantity"]`, a compound match).** None confirmed broken — flagged as the same risk shape, worth a look before any of these modules grows a second field with a colliding id suffix.
 - **Company Website field's validation behavior (documented above as "confirmed live to show the identical 'Enter a valid URL' inline validation") has no dedicated negative-validation test** — unlike the custom UrlField, which has `generateLeadCustomFieldInvalidUrl`. The claim was verified ad-hoc at implementation time per its own note, but has not been independently re-confirmed since, and there's no regression test guarding it.
 - **`reports/<env>/misc-errors.json` (and its per-worker files) are overwritten by every subsequent test invocation, including a single isolated test run** — this is a same-process problem, not just the already-documented cross-process race. A full-suite run's own 91-entry report was lost this way during this session's own follow-up work (a later isolated test run overwrote it before its data was fully analyzed) — worth considering a timestamped/run-scoped output path for full-suite runs specifically.
+- **`QuotationsPage.fillOwner()` has the identical unbounded-click race already found and fixed (2026-07-22) in `selectFromContactDropdown`/`selectFromIsInvalidControl`/the 4 modules' Share-modal helper** — confirmed via code read, not yet fixed (explicitly out of scope for that session's work). Same shape: a raw, unbounded `control.click()`/`option.click()` with no timeout. Apply the identical bounded-click + 3-attempt-retry pattern if this ever surfaces as a real hang.
+- **`CallLogsPage.searchAndSelectEntity()`'s search-index-propagation-lag retry has a thin margin on staging specifically** — `config.searchRetry.staging` (3 retries × 5s) is smaller than qa's (5×3s) and prod's (5×5s); a real run needed its full budget (succeeded only on the 3rd/last attempt) to recover from genuine indexing lag. If exhausted, the method's `if (term) {...}` branch falls through to a silent "click first option" fallback, which could pick the wrong entity rather than fail loudly. Two independent proposed fixes not yet applied (deferred, per explicit instruction): (1) bump `staging`'s retry budget to match prod's; (2) make the fallback-to-first-option path throw instead of silently guessing.
+- **`companies.spec.ts` CO4 ("verify all field values on detail page after create") — rare flaky generic-error toast on save, root cause NOT confirmed (2026-07-22).** Original failure: a generic, non-field-specific error toast appeared on `saveCompany()` right after the phone field was filled, ~1.2s after the app's own background "has-duplicates" phone-check lookup (`GET /v1/companies/has-duplicates?fieldName=phoneNumbers`) returned an HTTP 400 — a real, evidence-based correlation, but **not proven causal** (no error was ever captured on the actual company-create save POST itself). 5/5 reproduction attempts in isolation (single worker, retries=0) passed cleanly — this flake needs concurrent multi-worker load to surface, consistent with this codebase's documented "QA degrades under load" pattern. Confirmed via code read on this branch: `saveCompany()` has no retry/network-awareness of any kind today. (Note: a same-shaped `createLead`/`createContact`/`createCompany` creation-POST transient-retry fix was built 2026-07-21/22, but on a separate, not-yet-merged branch — `saveCompany()` on this branch has zero protection of any kind, so this isn't a gap in that fix, there's simply no fix here yet.) **Do not fix on this correlation alone** — needs either a multi-worker reproduction or more captured instances to confirm root cause before any retry/defensive-fix logic is added.
 
 ---
 

@@ -19,7 +19,7 @@ import { generateTaskData } from '../../../src/data/factories/taskFactory';
 test.describe('Tasks', () => {
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to tasks list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to tasks list page', async ({ adminPage }) => {
     const tasksPage = new TasksPage(adminPage);
 
     await tasksPage.goToTasksList();
