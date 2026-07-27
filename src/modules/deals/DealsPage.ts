@@ -1,6 +1,10 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
-import { DealData, formatDateForCalendarLabel } from '../../data/factories/dealFactory';
+import {
+  DealData,
+  formatDateForCalendarLabel,
+  DEAL_CUSTOM_FIELD_NAMES,
+} from '../../data/factories/dealFactory';
 import { TasksPage } from '../tasks/TasksPage';
 import { MeetingsPage } from '../meetings/MeetingsPage';
 import { generateTaskData } from '../../data/factories/taskFactory';
@@ -45,8 +49,18 @@ export class DealsPage extends BasePage {
 
   private readonly nameInput = (): Locator => this.page.locator('[id="0_11_input_name"]');
 
+  // WHY: was a page-wide getByPlaceholder('Pick a Date') — confirmed live
+  // (2026-07-24) this became ambiguous (strict-mode violation, 3 matches) the
+  // moment Deal gained its own Date/DateTimePicker custom fields, which
+  // render with the identical "Pick a Date" placeholder. Scoped to the id
+  // suffix instead — immune to any future custom date-type field, which can
+  // never be named "estimatedClosureOn". WHY scoped to the input tag: react-
+  // dates renders a same-suffixed accessibility <p id="DateInput__screen-
+  // reader-message-<real input id>">, the exact collision already documented
+  // in BasePage.customFieldInputLocator() — excluding non-input tags removes
+  // it the same way.
   private readonly estimatedClosureDateInput = (): Locator =>
-    this.page.getByPlaceholder('Pick a Date');
+    this.page.locator('input[id$="_input_estimatedClosureOn"]');
 
   private readonly calendarForwardButton = (): Locator =>
     this.page.getByLabel('Move forward to switch to the');
@@ -224,14 +238,6 @@ export class DealsPage extends BasePage {
     return this.page.locator(`button.btn.btn-transparent[data-original-title="${title}"]`);
   };
 
-  // ── Associated Contacts card ───────────────────────────────
-
-  private readonly associatedContactsCard = (): Locator =>
-    this.page
-      .locator('.card')
-      .filter({ has: this.page.locator('h2').filter({ hasText: 'Associated Contacts' }) })
-      .first();
-
   // ── Detail page header fields ──────────────────────────────
   // WHY: Selectors confirmed live from the details-page-header-section HTML.
   // WHY: .first() required — confirmed live these ids render twice in the DOM
@@ -255,6 +261,12 @@ export class DealsPage extends BasePage {
   // entirely with this element instead of updating .in-progress-stage.
   private readonly closedPipelineStageEl = (): Locator => this.page.locator('.closed-pipeline-stage');
 
+  // WHY: confirmed live (2026-07-24) — Deal's detail page has 4 tabs (Basic
+  // Information, Campaign Information, Other Details, Internals), so "Other
+  // Details" is index 2 (#nav-tab2-tab) — differs from Contact's
+  // #nav-tab5-tab since Deal has fewer top-level tabs.
+  private readonly otherDetailsDetailPageTab = (): Locator => this.page.locator('#nav-tab2-tab');
+
   // ──────────────────────────────────────────────────────────
   // Constructor
   // ──────────────────────────────────────────────────────────
@@ -267,24 +279,16 @@ export class DealsPage extends BasePage {
   // Private Helpers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: delegates to the shared BasePage.waitForEntityListPage() —
+  // navigation-drift reload-and-retry built and verified once, reused here
+  // instead of a module-local copy. See that method's own comment for the
+  // full history/evidence.
   private async waitForListReady(): Promise<void> {
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for list API response before checking DOM — faster and more reliable
-    await Promise.race([
-      this.armResponseWaitWithRecovery(
-        (res) =>
-          res.url().includes('/v1/deals') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        'deals list response',
-        config.timeouts.navigation
-      ).catch(() => null),
-      this.dealTable()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
-    ]);
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.dealTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    await this.waitForEntityListPage(
+      (res) =>
+        res.url().includes('/v1/deals') && res.request().method() === 'GET' && res.status() === 200,
+      this.dealTable(),
+      'Deals'
     );
     await this.waitForLoaderToDisappear();
   }
@@ -297,21 +301,17 @@ export class DealsPage extends BasePage {
     }
   }
 
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on this exact method), reused here
+  // instead of a module-local copy. See that method's own comment for the
+  // full history/evidence.
   async waitForDealDetailsPage(): Promise<void> {
-    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
-    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
-    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
-    // src/utils/navigation.ts for the full explanation.
-    await this.waitForUrl(/sales\/deals\/details\//, 20000);
-    await this.page.waitForLoadState('domcontentloaded');
-
-    // WHY: Wait for deal GET API response — ensures React has dealId in state
-    // Without this, edit/product/payment actions fire before app resolves dealId
-    await this.armResponseWaitWithRecovery(
+    await this.waitForEntityDetailPage(
+      /sales\/deals\/details\//,
       (res) => res.url().match(/\/v1\/deals\/\d+$/) !== null && res.request().method() === 'GET',
-      'deal details GET response',
-      15000
-    ).catch(() => null);
+      'Deal details'
+    );
   }
 
   async goToDealDetailsById(id: string | number): Promise<void> {
@@ -620,6 +620,71 @@ export class DealsPage extends BasePage {
   // Form Actions
   // ──────────────────────────────────────────────────────────
 
+  // WHY: single choke point for filling all 9 Deal custom fields — called
+  // from both fillDealForm() (create) and fillEditForm() (update), mirroring
+  // LeadsPage.fillLeadCustomFields()/ContactsPage.fillContactCustomFields().
+  // Every BasePage helper checks DOM presence and skips gracefully when a
+  // field doesn't exist yet in the current environment (see BasePage's
+  // custom-field-helpers section for why) — same environment-safety
+  // contract as Lead/Contact.
+  //
+  // WHY no toggle-disable / tab-click here (confirmed live 2026-07-24,
+  // Phase 1 of this branch): unlike Lead (tab-click) and Contact (toggle
+  // only), Deal's create/edit form has NEITHER a "Show Required & Important
+  // Fields" toggle NOR any tab-pane hiding for "Other Details" — all 9
+  // custom fields are already present and fillable in the DOM directly.
+  //
+  // Mutates `data.customFields.pickList`/`.multiPickList` in place with
+  // whatever was actually selected live — PickList/MultiPickList options are
+  // read from the DOM at fill time, so the caller's `data` object needs to
+  // be updated to reflect reality before it's used for later verification.
+  private async fillDealCustomFields(data: DealData): Promise<void> {
+    const cf = data.customFields;
+
+    await this.fillTextLikeCustomField(
+      DEAL_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.fillTextLikeCustomField(
+      DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+    await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    await this.setCheckboxCustomField(DEAL_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.selectDateCustomField(DEAL_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    await this.selectDateTimeCustomField(
+      DEAL_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker'
+    );
+
+    const pickedValue = await this.selectPicklistCustomField(
+      DEAL_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+
+    const pickedValues = await this.selectMultiPicklistCustomField(
+      DEAL_CUSTOM_FIELD_NAMES.multiPickList,
+      'Multi Pick List'
+    );
+    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+  }
+
+  // WHY: thin wrapper around BasePage's generic dedicated-test skip
+  // mechanism, same pattern as Lead's/Contact's own skipIfCustomFieldsAbsent().
+  // Must be called AFTER the relevant create/edit form is open and ONLY from
+  // the dedicated custom-field tests — every other Deal test already
+  // tolerates absent fields via fillDealCustomFields()'s own presence checks.
+  // No toggle/tab-reveal step needed first (see fillDealCustomFields()'s own
+  // comment) — the fields are already in the DOM the moment the form opens.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(DEAL_CUSTOM_FIELD_NAMES), 'Deal');
+  }
+
   async fillDealForm(data: DealData): Promise<void> {
     logger.info('Filling deal form');
 
@@ -726,6 +791,8 @@ export class DealsPage extends BasePage {
     await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
     await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
     await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
+
+    await this.fillDealCustomFields(data);
 
     logger.success('Deal form filled');
   }
@@ -937,6 +1004,8 @@ export class DealsPage extends BasePage {
 
     // Update UTM field to verify campaign info section is editable
     await this.fill(this.utmSourceInput(), data.utmSource, 'utm source (edit)');
+
+    await this.fillDealCustomFields(data);
 
     logger.success('Edit form updated');
   }
@@ -1623,31 +1692,99 @@ export class DealsPage extends BasePage {
   // Add Contact
   // ──────────────────────────────────────────────────────────
 
-  async getAssociatedContactsCount(): Promise<number> {
-    const headerText = await this.associatedContactsCard().locator('h2').textContent().catch(() => '');
-    const match = headerText?.match(/\((\d+)\)/);
-    return match ? parseInt(match[1], 10) : 0;
+  // WHY these three methods read from the real backend API, not the
+  // "Associated Contacts" UI card (confirmed live, 2026-07-27): the deal
+  // detail page's own card has a CONFIRMED, REAL, unresolved app-level
+  // display/rendering bug — it shows "No Contacts found" even when the
+  // backend genuinely has a real association. Verified directly: fetched
+  // `GET /v1/deals/<id>` for a live deal and found
+  // `"associatedContacts":[{"id":466276,"name":"..."}]` in the raw response
+  // body, while that exact same deal's own detail page DOM showed
+  // `<div class="no-associated-entity">...No Contacts found...</div>` —
+  // the card is empty in the UI despite the API having real data. This is a
+  // genuine, user-facing Kylas product defect (documented in full in
+  // CLAUDE.md's Known Issues) — separate from, but the direct cause of, a
+  // second problem: these three methods used to scrape that same broken
+  // card, so they were fooled by it too, reporting "no contact" for deals
+  // that genuinely had one. Fixed by reading the deal's own GET response
+  // directly instead, which reflects the real backend state regardless of
+  // what the (buggy) UI renders.
+  private async fetchCurrentDealApiData(): Promise<Record<string, unknown> | null> {
+    const match = this.page.url().match(/\/deals\/details\/(\d+)/);
+    if (!match) return null;
+    const dealId = match[1];
+    return this.page.evaluate(
+      async ({ id, apiBase }) => {
+        try {
+          const raw = localStorage.getItem('token');
+          if (!raw) return null;
+          const payload = JSON.parse(atob(raw.split('.')[1]));
+          const accessToken = payload?.data?.accessToken;
+          if (!accessToken) return null;
+          const res = await fetch(`${apiBase}/deals/${id}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (!res.ok) return null;
+          return await res.json();
+        } catch {
+          return null;
+        }
+      },
+      { id: dealId, apiBase: config.apiBaseUrl }
+    );
   }
 
+  private async getAssociatedContacts(): Promise<Array<{ id: number; name: string }>> {
+    const data = await this.fetchCurrentDealApiData();
+    return (data?.associatedContacts as Array<{ id: number; name: string }> | undefined) ?? [];
+  }
+
+  // WHY these are DECISION-HELPERS, not UI assertions — used internally by
+  // tests (e.g. Call/Quotation permission) to decide "is a contact actually
+  // associated, yes or no" before acting on that fact (e.g. sharing it).
+  // Their job is to reflect real state so the caller acts correctly — they
+  // are deliberately NOT used to verify what the "Associated Contacts" UI
+  // card displays (see `getDisplayedAssociatedContactsCount()` below for
+  // that distinct purpose, which deliberately keeps reading the UI).
   async getAssociatedContactId(): Promise<number | null> {
-    // WHY: ID-first — read the href directly rather than search by name
-    const contactLink = this.associatedContactsCard().locator('a.list__anchor').first();
-    const href = await contactLink.getAttribute('href').catch(() => null);
-    if (!href) return null;
-    const match = href.match(/\/contacts\/details\/(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
+    return (await this.getAssociatedContacts())[0]?.id ?? null;
   }
 
   async getAssociatedContactName(): Promise<string | null> {
-    const nameEl = this.associatedContactsCard().locator('.deal-contact__name').first();
-    return (await nameEl.textContent().catch(() => null))?.trim() ?? null;
+    return (await this.getAssociatedContacts())[0]?.name ?? null;
+  }
+
+  async getAssociatedContactsCount(): Promise<number> {
+    return (await this.getAssociatedContacts()).length;
+  }
+
+  // WHY this is a SEPARATE method from getAssociatedContactsCount() above,
+  // not a shared one (2026-07-27): D35 (deals.spec.ts) exists specifically
+  // to verify a contact becomes visible in the "Associated Contacts" UI
+  // card after being added — that is the whole point of the test, and its
+  // own confirmed, real, unresolved app-level display bug (see CLAUDE.md)
+  // must keep surfacing through this exact assertion, unaffected by the
+  // API-based fix above. Reading the UI here is deliberate, not a leftover
+  // — do not consolidate this with getAssociatedContactsCount().
+  async getDisplayedAssociatedContactsCount(): Promise<number> {
+    const card = this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Associated Contacts' }) })
+      .first();
+    const headerText = await card.locator('h2').textContent().catch(() => '');
+    const match = headerText?.match(/\((\d+)\)/);
+    return match ? parseInt(match[1], 10) : 0;
   }
 
   async getAssociatedCompanyName(): Promise<string | null> {
     // WHY: The company header field renders as a styled <span>, not an <a href>,
     // so there's no ID to read directly (unlike the contact link) — name-based
     // lookup is the practical option here, not a shortcut around ID-first.
-    return (await this.companyFieldValue().textContent().catch(() => null))?.trim() ?? null;
+    return (
+      (await this.companyFieldValue()
+        .textContent({ timeout: config.timeouts.expect })
+        .catch(() => null))?.trim() ?? null
+    );
   }
 
   async addContactToDeal(): Promise<void> {
@@ -1976,7 +2113,13 @@ export class DealsPage extends BasePage {
     await expect(tabPane).toContainText(data.utmMedium, { timeout: 10000, ignoreCase: true });
     await expect(tabPane).toContainText(data.utmTerm, { timeout: 10000, ignoreCase: true });
 
-    await this.page.locator('#nav-tab2-tab').click();
+    // WHY #nav-tab3-tab, not #nav-tab2-tab: confirmed live (2026-07-24) —
+    // Deal gained its own "Other Details" custom-field tab, which now sits
+    // between Campaign Information and Internals, shifting Internals from
+    // index 2 to index 3. This tab pane's assertion had gone stale the
+    // moment that tab was added to the account; not something introduced by
+    // this change.
+    await this.page.locator('#nav-tab3-tab').click();
     // WHY: Confirmed live — the word "Internals" only labels the tab nav item,
     // it never appears inside the pane's own content. Assert real content
     // instead (Created By/Forecasting Type are always present on any deal).
@@ -1984,6 +2127,68 @@ export class DealsPage extends BasePage {
     await expect(tabPane).toContainText('Forecasting Type');
 
     logger.success('Deal detail fields verified');
+  }
+
+  // WHY: mirrors LeadsPage.assertLeadCustomFieldsOnDetail()/
+  // ContactsPage.assertContactCustomFieldsOnDetail() — only the 2 dedicated
+  // custom-field tests need full value verification, every other Deal test
+  // just needs fillDealCustomFields()'s fill-if-present behavior to run
+  // without erroring. Throws (does not skip) on a missing tab — this method
+  // is called ONLY from the dedicated tests, which always run on an
+  // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
+  // these fields, so a missing tab here means verification genuinely failed
+  // to run, not a legitimate environment-absence case.
+  async assertDealCustomFieldsOnDetail(data: DealData): Promise<void> {
+    logger.info('Asserting all 9 custom field values on deal detail page');
+    const tab = this.otherDetailsDetailPageTab();
+    // WHY wrapped in withSessionExpiryRecovery: this file's own convention
+    // (see assertDealDetailFields() above) wraps every raw expect()/click()
+    // pair on the detail page the same way — matching that, not Lead's
+    // unwrapped equivalent, since this new code lives in DealsPage.ts.
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
+      ).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await tab.click();
+    await this.page.waitForTimeout(500);
+
+    const cf = data.customFields;
+    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Text Field');
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.pickList, cf.pickList, 'Pick List');
+    }
+    if (cf.multiPickList.length > 0) {
+      await this.assertMultiPicklistCustomFieldOnDetail(
+        DEAL_CUSTOM_FIELD_NAMES.multiPickList,
+        cf.multiPickList,
+        'Multi Pick List'
+      );
+    }
+    logger.success('All 9 custom field values verified on deal detail page');
   }
 
   async assertClosedPipelineStage(expectedLabel: string): Promise<void> {

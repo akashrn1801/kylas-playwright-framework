@@ -480,6 +480,25 @@ export class BasePage {
         `${description}: failed to select any of ${total} options after 3 attempts — ${String(lastError)}`
       );
     }
+    // WHY (confirmed live 2026-07-27, Deals D35 "add existing contact" investigation):
+    // this method previously returned immediately after the click, with no wait for
+    // the react-select's own menu-close state transition — the same click-registers-
+    // before-state-commits race already root-caused elsewhere in this codebase
+    // (DealsPage.cloneDeal(), TasksPage.selectReactSelectOption()). Confirmed via a
+    // real log timeline: a caller that saves immediately after this method returns
+    // (DealsPage.addContactToDeal()) logged a 2ms gap between "option selected" and
+    // "clicking save," and the save silently persisted with no contact attached
+    // despite reporting success. Mirrors the wait already used by
+    // selectRandomFromSingleReactSelect()/selectRandomFromSearchableReactSelect() —
+    // a real readiness signal (the library's own state transition), bounded and
+    // non-fatal so a slow-to-close menu can never turn a working selection into a
+    // failure.
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* menu may already be gone, or this control doesn't use this menu class */
+      });
     logger.success(`${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`);
     return selectedText;
   }
@@ -624,6 +643,108 @@ export class BasePage {
     // subclass uses, and non-BasePage code (globalSetup.ts, authManager.ts,
     // fixtures/index.ts) calls safeWaitForURL() directly for the same reason.
     await this.withSessionExpiryRecovery(() => safeWaitForURL(this.page, urlPattern, timeout));
+  }
+
+  /**
+   * Waits for an entity detail page to genuinely settle — URL match, then a
+   * confirmed GET response for that entity — with one bounded reload-and-
+   * retry if the entity response never arrives.
+   *
+   * WHY this exists (confirmed live via 2 real reproductions, 2026-07-27,
+   * same investigation): every `waitForXDetailsPage()` across Deals/
+   * Companies/Contacts/Leads/Tasks/Quotations independently duplicated the
+   * same shape — `waitForUrl()` (which resolves the FIRST moment the URL
+   * matches, with no guarantee it stays matching) followed by an entity-GET
+   * response wait wrapped in `.catch(() => null)`. Under heavy load, the
+   * app's own client-side router can bounce away from the just-matched URL
+   * (observed live landing on "Default Dashboard") before that GET ever
+   * fires — the silent catch swallowed this completely, letting every
+   * caller proceed as if navigation succeeded on a page that was never
+   * actually the entity's detail page. The real failure then surfaced much
+   * later, and much less legibly, as a generic element-not-found timeout
+   * with no signal pointing at the actual cause (e.g. a Quotations-panel
+   * test burning the full 480s test timeout with zero diagnostic trail).
+   *
+   * Mirrors the exact reload-and-retry shape already proven for
+   * `assertRightPanelIconVisible()`/`LeadsPage.markLeadAsStage()` — one
+   * canonical implementation instead of six independently-drifting copies,
+   * same reasoning as `withSessionExpiryRecovery()` itself. Returns the real
+   * `Response` (never null) so callers needing extra checks on it (e.g.
+   * Quotations' 404-means-"does not exist" handling) can inspect it
+   * directly — throws (does not re-swallow) if the retry also fails.
+   *
+   * @param urlPattern         The detail page's URL pattern (e.g. `/sales\/deals\/details\//`).
+   * @param responsePredicate  Matches the entity's own GET response (e.g. `/\/v1\/deals\/\d+$/`).
+   * @param description        Human-readable label for logs (e.g. "Deal details").
+   */
+  protected async waitForEntityDetailPage(
+    urlPattern: RegExp,
+    responsePredicate: (res: Response) => boolean,
+    description: string
+  ): Promise<Response> {
+    await this.waitForUrl(urlPattern, 20000);
+    await this.page.waitForLoadState('domcontentloaded');
+
+    const attempt = (): Promise<Response> =>
+      this.armResponseWaitWithRecovery(responsePredicate, `${description} GET response`, 15000);
+
+    try {
+      return await attempt();
+    } catch (error) {
+      logger.warn(
+        `${description}: entity GET response not observed within 15000ms (possible navigation drift) — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForUrl(urlPattern, 20000);
+      return await attempt();
+    }
+  }
+
+  /**
+   * Waits for an entity LIST page to genuinely settle — the list table
+   * actually visible, with one bounded reload-and-retry if it silently
+   * never renders (same navigation-drift mechanism and evidence as
+   * {@link waitForEntityDetailPage} — see its own comment for the full
+   * background). One canonical implementation shared by Deals/Companies/
+   * Contacts/Leads' near-identical `waitForListReady()` methods.
+   *
+   * @param responsePredicate  Matches the list's own GET response (e.g. `/v1/deals` GET 200).
+   * @param tableLocator       The list table/grid locator (e.g. `this.dealTable()`). Locators
+   *                           are safe to reuse across the retry-after-reload — they always
+   *                           re-query the live DOM, never go stale like an element handle.
+   * @param description        Human-readable label for logs (e.g. "Deals").
+   */
+  protected async waitForEntityListPage(
+    responsePredicate: (res: Response) => boolean,
+    tableLocator: Locator,
+    description: string
+  ): Promise<void> {
+    await this.page.waitForLoadState('domcontentloaded');
+    await Promise.race([
+      this.armResponseWaitWithRecovery(
+        responsePredicate,
+        `${description} list response`,
+        config.timeouts.navigation
+      ).catch(() => null),
+      tableLocator.waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+    ]);
+
+    const assertTableVisible = (): Promise<void> =>
+      this.withSessionExpiryRecovery(() =>
+        expect(tableLocator, `${description} list table should be visible`).toBeVisible({
+          timeout: config.timeouts.navigation,
+        })
+      );
+
+    try {
+      await assertTableVisible();
+    } catch (error) {
+      logger.warn(
+        `${description} list table not visible within ${config.timeouts.navigation}ms (possible navigation drift) — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await assertTableVisible();
+    }
   }
 
   // ─── Assertion Helpers ────────────────────────────────────
