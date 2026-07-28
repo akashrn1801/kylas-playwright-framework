@@ -394,25 +394,17 @@ export class LeadsPage extends BasePage {
   // Private Helpers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: delegates to the shared BasePage.waitForEntityListPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   private async waitForListReady(): Promise<void> {
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for list API response before checking DOM — faster and more reliable
-    // than polling .rt-table which renders async after the API call completes
-    await Promise.race([
-      this.armResponseWaitWithRecovery(
-        (res) =>
-          res.url().includes('/v1/leads') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        'lead list ready',
-        config.timeouts.navigation
-      ).catch(() => null),
-      this.leadTable()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
-    ]);
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.leadTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    await this.waitForEntityListPage(
+      (res) =>
+        res.url().includes('/v1/leads') && res.request().method() === 'GET' && res.status() === 200,
+      this.leadTable(),
+      'Leads'
     );
     await this.waitForLoaderToDisappear();
   }
@@ -442,22 +434,17 @@ export class LeadsPage extends BasePage {
     }
   }
 
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   async waitForLeadDetailsPage(): Promise<void> {
-    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
-    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
-    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
-    // src/utils/navigation.ts for the full explanation.
-    await this.waitForUrl(/sales\/leads\/details\//, 20000);
-
-    await this.page.waitForLoadState('domcontentloaded');
-
-    // WHY: Wait for lead GET API response — ensures React has leadId in state
-    // Without this, share/edit fires before app resolves leadId → /leads/undefined/share
-    await this.armResponseWaitWithRecovery(
+    await this.waitForEntityDetailPage(
+      /sales\/leads\/details\//,
       (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'GET',
-      'lead details page load',
-      15000
-    ).catch(() => null);
+      'Lead details'
+    );
   }
 
   async goToLeadDetailsById(id: string | number): Promise<void> {

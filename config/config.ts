@@ -91,3 +91,24 @@ export const config = {
 
 export type UserRole = keyof typeof config.users;
 export type Config = typeof config;
+
+// WHY this exists (2026-07-28) — confirmed live TWICE independently, in two
+// separate hand-rolled implementations, that config.apiBaseUrl's shape
+// (whether it already ends in /v1) differs between local .env (has it) and
+// the GitHub Actions CI secrets backing the same variable names (confirmed
+// missing it): AuthManager.loginHeadless() 404'd on every headless login in
+// CI until fixed with its own inline normalization (getLoginUrl()), and
+// DealsPage.ts's fetchCurrentDealApiData() had the identical bug, missed
+// during that first fix's own ripple-check because the line was
+// pattern-matched but never actually opened and read. Rather than let a
+// third hand-rolled copy exist (or leave the first two independently
+// drifting), every call site that builds a live API request URL from
+// config.apiBaseUrl must route through this ONE function — mirrors this
+// codebase's own precedent for exactly this problem shape (see
+// src/utils/navigation.ts's safeWaitForURL() consolidation history).
+export function buildApiUrl(path: string): string {
+  const base = config.apiBaseUrl.replace(/\/+$/, '');
+  const v1Base = base.endsWith('/v1') ? base : `${base}/v1`;
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${v1Base}${suffix}`;
+}

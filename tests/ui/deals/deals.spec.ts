@@ -379,11 +379,16 @@ test.describe('Deals', () => {
     const dealId = await dealsPage.createDeal(dealData);
     expect(dealId).not.toBeNull();
     await dealsPage.goToDealDetailsById(dealId!);
-    const baselineCount = await dealsPage.getAssociatedContactsCount();
+    // WHY getDisplayedAssociatedContactsCount(), not getAssociatedContactsCount()
+    // (2026-07-27): this test's whole purpose is verifying the contact becomes
+    // visible in the "Associated Contacts" UI card — deliberately reads the UI,
+    // not the API, so it keeps surfacing the confirmed, real, unresolved
+    // app-level display bug (see CLAUDE.md's Known Issues) if it's still present.
+    const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
     // WHY: Real end-state check — reload and re-read the card count
     await dealsPage.goToDealDetailsById(dealId!);
-    const afterCount = await dealsPage.getAssociatedContactsCount();
+    const afterCount = await dealsPage.getDisplayedAssociatedContactsCount();
     expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
     logger.success('D35 passed');
   });
@@ -405,6 +410,62 @@ test.describe('Deals', () => {
     await dealsPage.assertDealDeletedById(dealId!);
     await dealsPage.assertDealNotInList(dealData.name);
     logger.success('D36 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Custom Fields ("Other Details" section)
+  // ──────────────────────────────────────────────────────────
+  // WHY: these 9 fields exist only on QA today (2026-07-24) and are expected
+  // on Stage/Prod later with identical names — see DealsPage/BasePage's
+  // custom-field helpers for the environment-safety skip logic that makes
+  // these tests (and every other Deal create/update path) work unchanged
+  // once that happens. Deal has no lookup-type custom field, unlike Lead —
+  // no lookup-specific tests here (see CLAUDE.md's Custom Fields entry).
+
+  // ── D37 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a deal with all custom fields and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.skipIfCustomFieldsAbsent();
+    await dealsPage.fillDealForm(dealData);
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.assertDealCustomFieldsOnDetail(dealData);
+    logger.success('D37 passed');
+  });
+
+  // ── D38 ───────────────────────────────────────────────────
+
+  test("@regression admin should update a deal's custom fields and verify updated values", async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.skipIfCustomFieldsAbsent();
+    await dealsPage.fillDealForm(dealData);
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateDealData();
+    await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
+
+    // WHY: updateDeal() leaves the browser on the same deal detail page
+    // (edit is an in-place modal, not a route change) — no re-navigation needed.
+    await dealsPage.assertDealCustomFieldsOnDetail(updatedData);
+    logger.success('D38 passed');
   });
 
   // ──────────────────────────────────────────────────────────
