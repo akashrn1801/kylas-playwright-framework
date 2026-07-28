@@ -12,10 +12,21 @@ import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
 
 test.describe('Quotations — RBAC', () => {
-  test.describe.configure({ mode: 'serial' });
+  // WHY: serial mode removed (2026-07-24) — this file used to force
+  // mode: 'serial', serializing all 14 tests onto 1 worker regardless of
+  // the --workers flag or fullyParallel:true in playwright.config.ts.
+  // Reviewed the file first: no module-level/shared state between tests —
+  // each test creates and owns its own quotation/deal/contact data, so
+  // there was no structural dependency on execution order. Verified live:
+  // ran with mode: 'serial' removed and --workers=4 — all 14 tests passed
+  // clean, 9.8m -> 4.9m (2x faster). Not a full 4x, likely partial QA
+  // backend contention under concurrent load, but a real, safe win with
+  // zero failures. If this ever needs to go back to serial, that would
+  // point to genuine session/auth contention between concurrent
+  // restrictedPage instances — investigate before just reverting blindly.
 
   // ─── T5 ───────────────────────────────────────────────────────────────────
-  test('@smoke @regression restricted user should navigate to quotations list', async ({
+  test('@smoke @regression @prodSafe restricted user should navigate to quotations list', async ({
     restrictedPage,
   }) => {
     const qp = new QuotationsPage(restrictedPage);
@@ -318,7 +329,23 @@ test.describe('Quotations — RBAC', () => {
   test('@regression restricted user should verify grand total math', async ({ restrictedPage }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
-    const data = generateRestrictedQuotationData();
+    // WHY: Confirmed live (2026-07-06) — this test doesn't care which deal backs
+    // the quotation, only the discount/tax/adjustment math, so relying on
+    // fillQuotationForm's selectRandomDeal() (any deal visible to the restricted
+    // user, including ones shared with only partial associated-entity access)
+    // risked landing on a deal whose linked contact/company the restricted user
+    // can't fully access, tripping the "required permissions on associated
+    // entities" (029003) error on save — this test has no strip-and-retry
+    // handling for that, unlike T7/T7b. A self-created deal with NO associated
+    // entities (skipAssociatedEntities) removes that failure class entirely
+    // rather than just narrowing its odds.
+    const restrictedDealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData({ skipAssociatedEntities: true });
+    await restrictedDealsPage.goToDealsList();
+    await restrictedDealsPage.createDeal(dealData);
+    logger.info(`Restricted-owned deal created (no associated entities): "${dealData.name}"`);
+
+    const data = generateRestrictedQuotationData({ dealName: dealData.name });
     const productRow = generateProductRowData({ discount: 3, tax: 5 });
 
     await qp.goToQuotationsList();
@@ -374,9 +401,7 @@ test.describe('Quotations — RBAC', () => {
     const { id } = await adminQP.createQuotationWithOwner(adminData, restrictedUserName);
 
     if (id) {
-      await restrictedPage.goto(`${config.appUrl}/sales/quotations/details/${id}`, {
-        waitUntil: 'domcontentloaded',
-      });
+      await restrictedQP.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
       await restrictedPage
         .locator('.related-entity-container')
         .first()
@@ -429,9 +454,22 @@ test.describe('Quotations — RBAC', () => {
     logger.info(`Admin created quotation ID: ${id}`);
 
     // Step 4 — restricted user opens detail page
-    const detailUrl = `${config.appUrl}/sales/quotations/details/${id}`;
-    await restrictedPage.goto(detailUrl, { waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(3000);
+    // WHY: fixed 2026-07-20 — this used to be a raw restrictedPage.goto(),
+    // bypassing BasePage.navigateTo() (and its mid-test session-recovery)
+    // entirely. That gap is exactly why this test failed live (2026-07-19,
+    // sandbox CI): the restricted user's session genuinely expired
+    // server-side ~24 minutes in, mid-test, landing on /signIn — a raw goto
+    // has no recovery path at all. goToQuotationDetail() already exists and
+    // is already used later in this same test (see below) — using it here
+    // too means this navigation now benefits from the same recovery
+    // mechanism, automatically, with no test-specific logic added.
+    await restrictedQP.goToQuotationDetail(id!);
+    // WHY: fixed 2026-07-20 — found via a real re-run failure after the fix
+    // above: goToQuotationDetail() only waits for the URL + API response, not
+    // for React to actually render the page. The old raw goto's flat
+    // waitForTimeout(3000) was accidentally covering this gap too; removing
+    // it exposed it. See waitForDetailPageRendered()'s own comment.
+    await restrictedQP.waitForDetailPageRendered();
 
     const currentUrl = restrictedPage.url();
     logger.info(`Restricted user current URL: ${currentUrl}`);

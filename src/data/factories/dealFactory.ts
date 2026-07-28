@@ -1,4 +1,67 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Deal Custom Fields
+// ──────────────────────────────────────────────────────────────────────────
+// WHY: confirmed live (2026-07-24 investigation) — Deal has the same 9
+// custom fields as Lead/Contact, QA-only for now, with identical names/types
+// and identical DOM/locator conventions (see BasePage's "Custom Field
+// Helpers"). Deal has NO lookup-type custom field (no Company/Contact
+// Lookup equivalent), unlike Lead. DEAL_CUSTOM_FIELD_NAMES is its own
+// single source of truth, per CLAUDE.md's Custom Fields pattern — never
+// import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES here even
+// though the values happen to be identical today: each module owns its own
+// field-name constant so the two can diverge safely later.
+export const DEAL_CUSTOM_FIELD_NAMES = {
+  textField: 'TextField',
+  paragraphText: 'ParagraphText',
+  number: 'Number',
+  pickList: 'PickList',
+  multiPickList: 'MultiPickList',
+  checkbox: 'Checkbox',
+  date: 'Date',
+  dateTimePicker: 'DateTimePicker',
+  urlField: 'UrlField',
+} as const;
+
+export type DealCustomFieldKey = keyof typeof DEAL_CUSTOM_FIELD_NAMES;
+
+export interface DealCustomFieldData {
+  textField: string;
+  paragraphText: string;
+  number: number;
+  // WHY: PickList/MultiPickList options only exist live in the DOM (never
+  // hardcode them) — these start as placeholders and are overwritten in
+  // place by DealsPage.fillDealForm()/fillEditForm() with whatever was
+  // actually selected at fill time, so the same `data` object stays
+  // accurate for later verification against the detail page.
+  pickList: string;
+  multiPickList: string[];
+  checkbox: boolean;
+  date: Date;
+  dateTimePicker: Date;
+  urlField: string;
+}
+
+export function generateDealCustomFieldData(
+  overrides: Partial<DealCustomFieldData> = {}
+): DealCustomFieldData {
+  return {
+    textField: `CF-Text-${faker.string.alphanumeric(12)}`,
+    paragraphText: faker.lorem.paragraph(),
+    number: faker.number.int({ min: 1, max: 100000 }),
+    pickList: '',
+    multiPickList: [],
+    // WHY: random true/false each run, not a fixed constant — per explicit instruction.
+    checkbox: faker.datatype.boolean(),
+    date: randomFutureDateWithinOneMonth(),
+    dateTimePicker: randomFutureDateWithinOneMonth(),
+    urlField: `https://example.com/${faker.string.alphanumeric(10)}`,
+    ...overrides,
+  };
+}
+
 // ──────────────────────────────────────────────────────────
 // Enums — must match exact app-rendered option text
 // ──────────────────────────────────────────────────────────
@@ -90,6 +153,8 @@ export interface DealData {
   utmMedium: string;
   utmContent: string;
   utmTerm: string;
+
+  customFields: DealCustomFieldData;
 }
 
 // ──────────────────────────────────────────────────────────
@@ -136,6 +201,7 @@ export function formatMonthYear(date: Date): { month: string; year: string } {
 // ──────────────────────────────────────────────────────────
 
 export function generateDealData(overrides: Partial<DealData> = {}): DealData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     name: `Deal-${faker.commerce.productName()}-${faker.string.alphanumeric(4)}`,
     estimatedClosureDate: futureDateFromToday(5),
@@ -149,7 +215,8 @@ export function generateDealData(overrides: Partial<DealData> = {}): DealData {
     utmMedium: faker.helpers.arrayElement(['cpc', 'organic', 'email', 'social']),
     utmContent: `content_${faker.string.alphanumeric(6)}`,
     utmTerm: faker.helpers.arrayElement(['crm', 'sales', 'deals', 'pipeline']),
-    ...overrides,
+    customFields: generateDealCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -158,6 +225,7 @@ export function generateDealData(overrides: Partial<DealData> = {}): DealData {
 // no collision with any existing or previously created test data.
 export function generateAdminDealData(overrides: Partial<DealData> = {}): DealData {
   const timestamp = Date.now().toString();
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     name: `ADM${timestamp}-Deal`,
     estimatedClosureDate: futureDateFromToday(5),
@@ -171,7 +239,8 @@ export function generateAdminDealData(overrides: Partial<DealData> = {}): DealDa
     utmMedium: 'cpc',
     utmContent: `adm_content_${timestamp}`,
     utmTerm: 'crm',
-    ...overrides,
+    customFields: generateDealCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -181,6 +250,7 @@ export function generateAdminDealData(overrides: Partial<DealData> = {}): DealDa
 // generateSharedContactData/generateSharedCompanyData exactly.
 export function generateSharedDealData(overrides: Partial<DealData> = {}): DealData {
   const timestamp = Date.now().toString();
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     name: `SHR${timestamp}-Deal`,
     estimatedClosureDate: futureDateFromToday(5),
@@ -194,6 +264,7 @@ export function generateSharedDealData(overrides: Partial<DealData> = {}): DealD
     utmMedium: 'cpc',
     utmContent: `shr_content_${timestamp}`,
     utmTerm: 'crm',
-    ...overrides,
+    customFields: generateDealCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }

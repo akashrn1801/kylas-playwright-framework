@@ -341,12 +341,11 @@ export class CallLogsPage extends BasePage {
     await this.page.waitForTimeout(500);
     const options = this.page.locator('.is-invalid__option');
     await options.first().waitFor({ state: 'visible', timeout: 5000 });
-    const count = await options.count();
-    const idx = Math.floor(Math.random() * count);
-    const selectedText = (await options.nth(idx).textContent()) ?? '';
-    await options.nth(idx).click({ force: true });
-    logger.success(`Selected random "${description}": ${selectedText.trim()}`);
-    return selectedText.trim();
+    // WHY: shared bounded+re-roll selector (2026-07-17), force click as before —
+    // was an unbounded textContent()+click() on a random option, same bug class.
+    return await this.selectRandomOptionWithRetry(options, `Selected random "${description}"`, {
+      force: true,
+    });
   }
 
   // WHY: Multi-select React Select — open, select one or two random options
@@ -444,14 +443,30 @@ export class CallLogsPage extends BasePage {
       // WHY: Use last word of name for search — full name may not filter correctly
       // e.g. "ADM1781854620513 Nienow" → search "Nienow"
       const searchQuery = searchTerm.trim().split(' ').pop() ?? searchTerm;
-      logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}")`);
-      await this.page.keyboard.type(searchQuery, { delay: 50 });
-      // WHY: Poll for filtered options after typing
+      const { retries, wait } = this.retryConfig;
       let filteredCount = 0;
-      for (let i = 0; i < 10; i++) {
-        filteredCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
-        if (filteredCount > 0) break;
-        await this.page.waitForTimeout(500);
+      for (let attempt = 1; attempt <= retries && filteredCount === 0; attempt++) {
+        logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}"), attempt ${attempt}/${retries}`);
+        await this.page.keyboard.type(searchQuery, { delay: 50 });
+        // WHY: Poll for filtered options after typing
+        for (let i = 0; i < 10; i++) {
+          filteredCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
+          if (filteredCount > 0) break;
+          await this.page.waitForTimeout(500);
+        }
+        if (filteredCount === 0 && attempt < retries) {
+          // WHY: Confirmed live — a just-created entity can take a moment to hit
+          // the search index. Without this retry, zero filtered matches falls
+          // straight through to the blind "click first option" fallback below,
+          // which can land on an unrelated (possibly inaccessible) entity and
+          // surface as a false-positive "necessary permission" error later.
+          logger.warn(
+            `No filtered options for "${searchQuery}" — entity may not be search-indexed yet, retrying in ${wait}ms`
+          );
+          await this.page.keyboard.press('Control+A');
+          await this.page.keyboard.press('Backspace');
+          await this.page.waitForTimeout(wait);
+        }
       }
       logger.debug(`Filtered options after typing: ${filteredCount}`);
     }
@@ -518,8 +533,33 @@ export class CallLogsPage extends BasePage {
     // navigate toward the target relative to that.
     const targetMonthKey = date.getFullYear() * 12 + date.getMonth();
     while (!found && attempts < 24) {
-      const visibleMonthKeys: number[] = await this.page.evaluate(() =>
-        Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+      // WHY: confirmed live (2026-07-16 root-cause pass, same fix ported
+      // from BasePage.selectDateCustomField()) — react-dates keeps THREE
+      // months' worth of `td[aria-label]` cells in the DOM simultaneously
+      // (the visible month(s) plus a pre-rendered buffer month for smooth
+      // transitions), but only the ones inside the picker's own clipped,
+      // visible bounds are real. Querying ALL cells with no visibility
+      // filter made minVisibleMonth/maxVisibleMonth span a wider range than
+      // what was actually clickable, causing the direction decision below to
+      // be wrong often enough to exhaust all 24 attempts without
+      // converging. Filtering to cells whose bounding rect falls inside the
+      // picker container's rect fixes the root cause.
+      const visibleMonthKeys: number[] = await this.page.evaluate(() => {
+        const container = document.querySelector(
+          '[class*="SingleDatePicker_picker"]'
+        ) as HTMLElement | null;
+        const containerRect = container?.getBoundingClientRect() ?? null;
+        return Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
+          .filter((cell) => {
+            if (!containerRect) return true;
+            const r = cell.getBoundingClientRect();
+            return (
+              r.width > 0 &&
+              r.height > 0 &&
+              r.left >= containerRect.left - 5 &&
+              r.right <= containerRect.right + 5
+            );
+          })
           .map((cell) => {
             // WHY: strip status prefixes like "Selected. "/"Not available. "
             // before parsing — otherwise those cells are silently dropped.
@@ -529,8 +569,8 @@ export class CallLogsPage extends BasePage {
               ? parsed.getFullYear() * 12 + parsed.getMonth()
               : null;
           })
-          .filter((v): v is number => v !== null)
-      );
+          .filter((v): v is number => v !== null);
+      });
       const backButton = this.page.getByLabel('Move backward to switch to the previous month.');
       const backVisible = await backButton.isVisible().catch(() => false);
       const forwardVisible = await this.calendarForwardButton().isVisible().catch(() => false);
@@ -665,14 +705,14 @@ export class CallLogsPage extends BasePage {
     await input.waitFor({ state: 'visible', timeout: 10000 });
     await input.fill(searchText);
     await input.press('Enter');
-    await this.page
-      .waitForResponse(
-        (res: Response) =>
-          res.url().includes('/v1/call-logs') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        { timeout: 15000 }
-      )
+    await this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.url().includes('/v1/call-logs') &&
+        res.request().method() === 'GET' &&
+        res.status() === 200,
+      'performSearch: call-logs GET',
+      15000
+    )
       .catch(() => null);
     await this.page.waitForTimeout(500);
     logger.success(`Search triggered for: "${searchText}"`);
@@ -713,11 +753,11 @@ export class CallLogsPage extends BasePage {
     // regex was anchored with `$` right after the digits, which never matches
     // because of that query string, so this wait always silently timed out.
     const detailResponsePattern = new RegExp(`/v1/call-logs/${callLogId}(?:\\?.*)?$`);
-    await this.page
-      .waitForResponse(
-        (res) => detailResponsePattern.test(res.url()) && res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
+    await this.armResponseWaitWithRecovery(
+      (res) => detailResponsePattern.test(res.url()) && res.request().method() === 'GET',
+      'goToCallLogById: detail GET',
+      15000
+    )
       .catch(() => null);
     await this.detailEntityHeading().waitFor({
       state: 'visible',
@@ -815,8 +855,13 @@ export class CallLogsPage extends BasePage {
       await menu.waitFor({ state: 'visible', timeout: 8000 });
       const option = menu.locator('.is-invalid__option').first();
       await option.waitFor({ state: 'visible', timeout: 5000 });
-      const phoneText = await option.textContent();
-      await option.click();
+      // WHY: bound the read+click to 15000ms (2026-07-17) — this selects the
+      // FIRST phone option (not random, so no re-roll needed), but an unbounded
+      // textContent()/click() could still ride the 480s test timeout if the
+      // option detaches mid-action. Bounding keeps it failing fast, consistent
+      // with the shared selectRandomOptionWithRetry() helper.
+      const phoneText = await option.textContent({ timeout: 15000 });
+      await option.click({ timeout: 15000 });
       await this.page.waitForTimeout(300);
       logger.success(`Phone number selected: ${phoneText?.trim()}`);
     } else {
@@ -887,7 +932,7 @@ export class CallLogsPage extends BasePage {
     // existing searchAndSelectEntity() random-pick behavior — kept optional so
     // callers that don't need this (e.g. admin-only UI tests) are unaffected.
     selectedSecondaryEntityName?: string
-  ): Promise<{ entityName: string; selectedPhone: string }> {
+  ): Promise<{ entityName: string; selectedPhone: string; associatedDealName: string | null }> {
     logger.info(`Filling create form — entity: ${data.entityType}, outcome: ${data.outcome}`);
 
     // Step 1: Entity Type
@@ -933,13 +978,18 @@ export class CallLogsPage extends BasePage {
     }
 
     // Step 4b: Contact flow — optional Associated Deal (after phone, per discovery doc)
+    // WHY track the result (added 2026-07-22, alongside the ensureOwnedDealExists
+    // contact-linkage fix): callers need to know whether a deal was actually
+    // associated or genuinely skipped, so assertAssociatedDealOnDetail() can
+    // verify the right thing instead of assuming a deal is always present.
+    let associatedDealName: string | null = null;
     if (data.entityType === 'Contact' && data.includeAssociatedDeal) {
       logger.info('Contact flow — filling optional Associated Deal');
       const dealInput = this.page.locator('[id="associatedEntity"]');
       // WHY: Deal association is optional — contact may not have deals linked
       // Try to select a deal, skip silently if none available
       try {
-        await this.searchAndSelectEntity(
+        associatedDealName = await this.searchAndSelectEntity(
           dealInput,
           'Associated Deal (Contact flow)',
           selectedSecondaryEntityName
@@ -998,7 +1048,7 @@ export class CallLogsPage extends BasePage {
     }
 
     logger.success('Create form filled');
-    return { entityName, selectedPhone };
+    return { entityName, selectedPhone, associatedDealName };
   }
 
   async saveCallLog(): Promise<number | null> {
@@ -1237,7 +1287,9 @@ export class CallLogsPage extends BasePage {
     // it just times out after 60s with a useless "element not found" error.
     // logACallButton() is part of the page header/toolbar and is always present
     // regardless of list content, making it a reliable "page loaded" signal.
-    await expect(this.logACallButton()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.logACallButton()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     logger.success('Confirmed on Call Logs list page');
   }
 
@@ -1269,6 +1321,33 @@ export class CallLogsPage extends BasePage {
     logger.success(`Detail heading confirmed: "${text}"`);
   }
 
+  // WHY (added 2026-07-22, closing a real test-coverage gap found in CL4/CL22 —
+  // both claimed to "verify both entity associations on detail panel" but never
+  // actually asserted the deal): confirmed live via DOM investigation (temp spec,
+  // deleted after use) that a successfully-associated deal renders as
+  // `<div class="link-primary">{dealName}</div>` on the call log detail panel.
+  // Takes the associatedDealName returned by createCallLog()/fillCreateForm() —
+  // null there means the association was genuinely skipped (no linked deal
+  // found, e.g. a contact truly has no deals), NOT a failure. This method must
+  // never turn that legitimate case into a false assertion failure — if
+  // expectedDealName is null, it logs and returns without asserting presence.
+  async assertAssociatedDealOnDetail(expectedDealName: string | null): Promise<void> {
+    if (!expectedDealName) {
+      logger.info(
+        'No associated deal was selected during create (genuinely unavailable) — skipping ' +
+          'associated-deal detail assertion'
+      );
+      return;
+    }
+    logger.info(`Asserting associated deal on detail: "${expectedDealName}"`);
+    const dealLink = this.page.locator('div.link-primary').filter({ hasText: expectedDealName }).first();
+    await expect(
+      dealLink,
+      `Expected associated deal "${expectedDealName}" to be visible on the call log detail panel`
+    ).toBeVisible({ timeout: 15000 });
+    logger.success(`Associated deal confirmed on detail: "${expectedDealName}"`);
+  }
+
   async assertOutcomeOnDetail(expectedOutcome: string): Promise<void> {
     logger.info(`Asserting outcome on detail: ${expectedOutcome}`);
     await this.detailOutcomeLabel().waitFor({ state: 'visible', timeout: 10000 });
@@ -1291,13 +1370,17 @@ export class CallLogsPage extends BasePage {
 
   async assertEditButtonVisible(): Promise<void> {
     logger.info('Asserting Edit button visible');
-    await expect(this.detailEditButton()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailEditButton()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Edit button confirmed visible');
   }
 
   async assertEditButtonNotVisible(): Promise<void> {
     logger.info('Asserting Edit button NOT visible');
-    await expect(this.detailEditButton()).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailEditButton()).toBeHidden({ timeout: 5000 })
+    );
     logger.success('Edit button correctly absent');
   }
 
@@ -1360,7 +1443,9 @@ export class CallLogsPage extends BasePage {
 
   async assertSearchResultContains(phoneOrName: string): Promise<void> {
     logger.info(`Asserting search result contains: "${phoneOrName}"`);
-    await expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 })
+    );
     const count = await this.callLogListItem().count();
     logger.success(`Search returned ${count} results for: "${phoneOrName}"`);
   }
@@ -1479,10 +1564,27 @@ export class CallLogsPage extends BasePage {
   // call logs against deals they don't own, causing HTTP 403 on save.
   // Public so CL23 (which uses the manual form-fill path) can pre-create a deal
   // and pass its name as selectedEntityName to fillCreateForm.
-  async ensureOwnedDealExists(): Promise<string> {
+  // WHY the optional associatedContactName (root-caused 2026-07-22, NOT a
+  // timing/indexing-lag issue despite what CL4/CL22's "Associated Deal"
+  // search retry warnings suggested): confirmed live via a deliberate
+  // investigation (temp spec, deleted after use) that even a 15s wait + 5
+  // search retries still found ZERO options in the Contact-flow's Associated
+  // Deal dropdown — including the UNFILTERED base list, before typing
+  // anything. Root cause: this deal was created with NO associatedContactName,
+  // so DealsPage.fillDealForm() picks a RANDOM pre-existing contact (already
+  // documented codebase behavior, see DealsPage's own comment on
+  // selectFirstOptionFromDropdown) — the deal is never actually linked to the
+  // specific contact the call log flow just created. The "Associated Deal"
+  // field filters by genuine contact-relationship, so it correctly showed
+  // nothing; no retry count or wait duration could ever fix data that isn't
+  // related. Passing the real contact name here (when the caller has one)
+  // makes the deal genuinely linked, which is the actual fix — not a longer
+  // timeout. Left optional so the entityType==='Deal' call site (which needs
+  // a standalone deal, no contact-linkage requirement) is unaffected.
+  async ensureOwnedDealExists(associatedContactName?: string): Promise<string> {
     logger.info('Creating owned deal for call log entity selection');
     const dealsPage = new DealsPage(this.page);
-    const dealData = generateDealData();
+    const dealData = generateDealData(associatedContactName ? { associatedContactName } : {});
     await dealsPage.goToDealsList();
     await dealsPage.createDeal(dealData);
     logger.success(`Created owned deal: ${dealData.name}`);
@@ -1495,7 +1597,12 @@ export class CallLogsPage extends BasePage {
       includeNoteDuringCreate?: boolean;
       selectedEntityName?: string;
     } = {}
-  ): Promise<{ callLogId: number | null; entityName: string; selectedPhone: string }> {
+  ): Promise<{
+    callLogId: number | null;
+    entityName: string;
+    selectedPhone: string;
+    associatedDealName: string | null;
+  }> {
     logger.info(`Creating call log — entity: ${data.entityType}, outcome: ${data.outcome}`);
     // WHY: Auto-create an owned entity when no specific entity is requested.
     // The entity dropdown may show only SHR/ADM-prefixed items from other test runs.
@@ -1525,11 +1632,15 @@ export class CallLogsPage extends BasePage {
       resolvedSecondaryEntityName = await this.ensureOwnedContactExists();
       await this.goToCallLogsList();
     } else if (data.entityType === 'Contact' && data.includeAssociatedDeal) {
-      resolvedSecondaryEntityName = await this.ensureOwnedDealExists();
+      // WHY pass resolvedEntityName here: see ensureOwnedDealExists()'s own
+      // comment — without this, the created deal has no real relationship to
+      // this specific contact and the Associated Deal field correctly (but
+      // confusingly) shows zero options no matter how long you wait/retry.
+      resolvedSecondaryEntityName = await this.ensureOwnedDealExists(resolvedEntityName);
       await this.goToCallLogsList();
     }
     await this.openLogACallForm();
-    const { entityName, selectedPhone } = await this.fillCreateForm(
+    const { entityName, selectedPhone, associatedDealName } = await this.fillCreateForm(
       data,
       resolvedEntityName,
       options.includeNoteDuringCreate ?? false,
@@ -1538,15 +1649,17 @@ export class CallLogsPage extends BasePage {
     const callLogId = await this.saveCallLog();
 
     logger.success(`Call log created — ID: ${callLogId}, entity: ${entityName}`);
-    return { callLogId, entityName, selectedPhone };
+    return { callLogId, entityName, selectedPhone, associatedDealName };
   }
 
   async updateCallLog(callLogId: number, newData: CallLogData): Promise<void> {
-    logger.info(`Updating call log ID: ${callLogId}`);
-    await this.goToCallLogById(callLogId);
-    await this.clickEditButton();
-    await this.fillEditForm(newData);
-    await this.saveEditedCallLog();
-    logger.success(`Call log ID ${callLogId} updated`);
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Updating call log ID: ${callLogId}`);
+      await this.goToCallLogById(callLogId);
+      await this.clickEditButton();
+      await this.fillEditForm(newData);
+      await this.saveEditedCallLog();
+      logger.success(`Call log ID ${callLogId} updated`);
+    }, 'updateCallLog');
   }
 }

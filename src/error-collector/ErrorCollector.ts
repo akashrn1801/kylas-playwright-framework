@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { isNoise, isExpectedRbacError } from './errorFilters';
+import { isNoise, isExpectedRbacError, isExpectedBackgroundNoise } from './errorFilters';
 
 export type MiscErrorType =
   | 'pageerror'
@@ -10,6 +10,13 @@ export type MiscErrorType =
   | 'node-exception'
   | 'node-rejection';
 
+// WHY: Two distinct "this is fine" reasons, kept separate rather than a single
+// boolean — RBAC-expected means "the app correctly denied access," background-
+// noise means "a non-load-bearing side widget failed." Conflating them would
+// mislabel a calendar-integration 400 as "Expected RBAC" in the report, which
+// is actively misleading about what actually happened.
+export type ExpectedReason = 'rbac' | 'background-noise';
+
 export interface MiscError {
   type: MiscErrorType;
   message: string;
@@ -18,7 +25,7 @@ export interface MiscError {
   statusCode?: number;
   responseBody?: string;
   apiErrorMessage?: string;
-  expected?: boolean; // WHY: true = expected RBAC behaviour, not a real bug
+  expectedReason?: ExpectedReason;
   testTitle?: string;
   testFile?: string;
   timestamp: string;
@@ -30,6 +37,7 @@ export interface MiscErrorReport {
   totalErrors: number;
   unexpectedErrors: number;
   expectedRbacErrors: number;
+  expectedBackgroundNoiseErrors: number;
   byType: Record<string, number>;
   errors: MiscError[];
 }
@@ -40,7 +48,15 @@ export interface MiscErrorReport {
 // worker's captured history. Each worker instead writes its own file (keyed
 // by Playwright's TEST_WORKER_INDEX env var), and MiscErrorReporter.onEnd()
 // merges them into the final reports/misc-errors.json once the run completes.
-const REPORTS_DIR = path.resolve(process.cwd(), 'reports');
+// WHY: Confirmed live (2026-07-07) — TEST_WORKER_INDEX restarts at 0 for
+// EVERY separate `npx playwright test` process, so two concurrent runs
+// against different environments (e.g. QA + Staging run in parallel) would
+// have both worker-0s write to the exact same reports/misc-errors-worker-0.json
+// — and worse, MiscErrorReporter's onBegin() DELETES all worker files in this
+// directory at start, so one environment's run-start could destroy the
+// other's in-progress data mid-run. Namespace by env so concurrent
+// cross-environment runs never share a path.
+const REPORTS_DIR = path.resolve(process.cwd(), 'reports', process.env.ENV || 'qa');
 const WORKER_ID = process.env.TEST_WORKER_INDEX ?? String(process.pid);
 const OUTPUT_PATH = path.join(REPORTS_DIR, `misc-errors-worker-${WORKER_ID}.json`);
 
@@ -74,12 +90,23 @@ class ErrorCollectorSingleton {
       if (this.recentKeys.has(dedupKey)) return;
       this.recentKeys.add(dedupKey);
       setTimeout(() => this.recentKeys.delete(dedupKey), 2000);
-      // WHY: Mark RBAC permission errors as expected — they are correct app behaviour
-      const expected = isExpectedRbacError(error.message, (error as any).apiErrorMessage);
+      // WHY: Mark RBAC permission errors as expected — they are correct app behaviour.
+      // Separately, mark completed (non-abort) HTTP errors on known non-load-bearing
+      // background widgets as expected too — see errorFilters.ts's
+      // BACKGROUND_WIDGET_NOISE_PATTERNS for the per-endpoint evidence bar this is
+      // held to. Kept as a distinct reason (not folded into isNoise()'s silent drop)
+      // so these still show up in the report, just correctly labeled and out of the
+      // "unexpected — go investigate" bucket.
+      let expectedReason: MiscError['expectedReason'];
+      if (isExpectedRbacError(error.message, (error as any).apiErrorMessage)) {
+        expectedReason = 'rbac';
+      } else if (isExpectedBackgroundNoise(error.message, error.url, error.responseBody)) {
+        expectedReason = 'background-noise';
+      }
 
       const entry: MiscError = {
         ...error,
-        expected,
+        expectedReason,
         testTitle: this.currentTestTitle,
         testFile: this.currentTestFile,
         timestamp: new Date().toISOString(),
@@ -114,12 +141,21 @@ class ErrorCollectorSingleton {
     for (const e of this.errors) {
       byType[e.type] = (byType[e.type] || 0) + 1;
     }
-    const unexpectedErrors = this.errors.filter((e) => !e.expected).length;
-    const expectedRbacErrors = this.errors.filter((e) => e.expected).length;
+    // WHY: removed the redundant `expected` boolean (2026-07-14) — it was
+    // always exactly `!!e.expectedReason`, confirmed via exhaustive grep to
+    // have exactly 3 real consumers (this one, MiscErrorReporter.ts, and
+    // EmailTemplate.ts's background-errors rendering), all now reading
+    // expectedReason directly instead of a redundant derived field.
+    const unexpectedErrors = this.errors.filter((e) => !e.expectedReason).length;
+    const expectedRbacErrors = this.errors.filter((e) => e.expectedReason === 'rbac').length;
+    const expectedBackgroundNoiseErrors = this.errors.filter(
+      (e) => e.expectedReason === 'background-noise'
+    ).length;
     return {
       capturedAt: new Date().toISOString(),
       totalErrors: this.errors.length,
       unexpectedErrors,
+      expectedBackgroundNoiseErrors,
       expectedRbacErrors,
       byType,
       errors: this.errors,

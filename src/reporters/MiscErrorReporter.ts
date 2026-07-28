@@ -2,7 +2,12 @@ import type { Reporter, FullConfig, Suite, FullResult } from '@playwright/test/r
 import * as fs from 'fs';
 import * as path from 'path';
 
-const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', 'misc-errors.json');
+// WHY: Confirmed live (2026-07-07) — namespaced by env to match
+// ErrorCollector.ts's REPORTS_DIR, so two concurrent runs against different
+// environments (e.g. QA + Staging in parallel) never share a directory —
+// onBegin()'s stale-file cleanup below would otherwise delete the OTHER
+// environment's in-progress worker files, not just silently overwrite.
+const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', process.env.ENV || 'qa', 'misc-errors.json');
 const WORKER_FILE_PATTERN = /^misc-errors-worker-.+\.json$/;
 
 class MiscErrorReporter implements Reporter {
@@ -74,8 +79,21 @@ class MiscErrorReporter implements Reporter {
       const merged = {
         capturedAt: new Date().toISOString(),
         totalErrors: mergedErrors.length,
-        unexpectedErrors: mergedErrors.filter((e) => !e.expected).length,
-        expectedRbacErrors: mergedErrors.filter((e) => e.expected).length,
+        // WHY: reads expectedReason directly — the redundant `expected`
+        // boolean (always exactly !!e.expectedReason) was removed 2026-07-14
+        // after an exhaustive grep confirmed exactly 3 real consumers, all
+        // migrated to expectedReason together in the same change.
+        unexpectedErrors: mergedErrors.filter((e) => !e.expectedReason).length,
+        // WHY: Confirmed live (2026-07-07 reporting overhaul) — must filter by the
+        // specific expectedReason, not the bare `expected` boolean, now that a
+        // second expected reason (background-noise) exists. Before this change
+        // there was only ever one reason so `e.expected` alone happened to be
+        // correct; it would silently start double-counting background-noise
+        // errors as RBAC ones the moment errorFilters.ts gained a second reason.
+        expectedRbacErrors: mergedErrors.filter((e) => e.expectedReason === 'rbac').length,
+        expectedBackgroundNoiseErrors: mergedErrors.filter(
+          (e) => e.expectedReason === 'background-noise'
+        ).length,
         byType,
         errors: mergedErrors,
       };
@@ -103,10 +121,16 @@ class MiscErrorReporter implements Reporter {
         console.log(`   🔴 Unexpected (potential bugs): ${report.unexpectedErrors}`);
       if (report.expectedRbacErrors > 0)
         console.log(`   🟡 Expected RBAC behaviour:     ${report.expectedRbacErrors}`);
+      if (report.expectedBackgroundNoiseErrors > 0)
+        console.log(`   🔵 Known background noise:      ${report.expectedBackgroundNoiseErrors}`);
       console.log('═'.repeat(70));
       console.log('   Unexpected errors = review and raise bugs.');
       console.log(
-        '   Expected RBAC errors = correct app behaviour (restricted user access denied).\n'
+        '   Expected RBAC errors = correct app behaviour (restricted user access denied).'
+      );
+      console.log(
+        '   Known background noise = non-load-bearing side-widget failure, confirmed\n' +
+          '   never to affect a test outcome — see errorFilters.ts for the evidence bar.\n'
       );
       console.log('📊 Error Breakdown:');
       const icons: Record<string, string> = {
@@ -132,7 +156,15 @@ class MiscErrorReporter implements Reporter {
       for (const [testTitle, errors] of byTest.entries()) {
         console.log(`\n   🧪 ${testTitle}`);
         for (const e of errors) {
-          console.log(`      ${icons[e.type] || '❓'} [${e.type}] ${e.message.substring(0, 120)}`);
+          const tag =
+            e.expectedReason === 'rbac'
+              ? ' [Expected RBAC]'
+              : e.expectedReason === 'background-noise'
+                ? ' [Known background noise]'
+                : '';
+          console.log(
+            `      ${icons[e.type] || '❓'} [${e.type}]${tag} ${e.message.substring(0, 120)}`
+          );
           if (e.url) console.log(`            URL: ${e.url}`);
           if (e.method) console.log(`            Method: ${e.method}`);
           if (e.statusCode) console.log(`            HTTP ${e.statusCode}`);

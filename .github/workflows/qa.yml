@@ -46,6 +46,25 @@ jobs:
           echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
+      # WHY: Confirmed live (2026-07-07 reporting overhaul, P2) — must run BEFORE
+      # notify so the delta/recurring-flaky file it writes (reports/qa/history-
+      # delta.json) exists in time for the email to read it. Never fails the
+      # build — syncHistory.ts catches its own errors and always exits 0; `|| true`
+      # here is belt-and-suspenders for the rare case node itself fails to start.
+      # NOTE: pushing to the dedicated ci/reporting-history branch needs this
+      # workflow's checkout to have write access (either `permissions:
+      # contents: write` on this job, or a credentialed remote) — this has not
+      # been provisioned/verified against the real GitHub remote as part of this
+      # change; first real run here should be watched to confirm the push
+      # actually succeeds rather than silently no-op'ing every time.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: qa
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
+
       - name: Send notification email
         if: always()
         env:

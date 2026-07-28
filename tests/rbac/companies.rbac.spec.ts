@@ -19,7 +19,7 @@ test.describe('Companies RBAC', () => {
 
   // ── COR1 ──────────────────────────────────────────────────
 
-  test('@smoke @regression restricted user can navigate to companies list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to companies list', async ({
     restrictedPage,
   }) => {
     const companiesPage = new CompaniesPage(restrictedPage);
@@ -116,7 +116,7 @@ test.describe('Companies RBAC', () => {
     const companyId = await companiesPage.createCompany(companyData);
     expect(companyId).not.toBeNull();
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
-    const { companyId: clonedId, clonedName } = await companiesPage.cloneCompany();
+    const { companyId: clonedId, clonedName } = await companiesPage.cloneCompany(companyData.name);
     if (!clonedId) throw new Error('Cloned company ID not captured — cannot verify');
     await companiesPage.assertClonedCompanyName(clonedName, clonedId);
     logger.success('COR6 passed');
@@ -297,7 +297,13 @@ test.describe('Companies RBAC', () => {
       .locator('.card')
       .filter({ has: restrictedPage.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
+    // own related-quotations list independently of the main entity GET.
+    // scrollIntoViewIfNeeded() right after the panel opens can grab a
+    // reference to a card mid-refetch that React replaces, hanging until the
+    // test timeout. Wait for the card itself with an auto-retrying expect()
+    // instead of a manual scroll.
+    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
     await expect(quotationsCard.locator(`text=${quotationId}`).first()).toBeVisible({ timeout: 10000 })
       .catch(async () => {
         // WHY: Fallback — quotation row may show quotationNumber not raw ID, check card has at least 1 entry
@@ -577,8 +583,11 @@ test.describe('Companies RBAC', () => {
     // WHY: Verify contact appears in the Contacts card on company detail
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     const contactsCard = restrictedPage.locator('.card').filter({ hasText: 'Contacts' }).first();
-    await contactsCard.scrollIntoViewIfNeeded();
-    await expect(contactsCard).toContainText(contactData.firstName, { timeout: 10000 });
+    // WHY: Confirmed live (2026-07-06/07) — related-entity cards refetch
+    // independently of the main entity GET; drop the manual scroll, which can
+    // grab a reference to a card mid-refetch that React replaces, hanging
+    // until the test timeout. toContainText() already auto-retries.
+    await expect(contactsCard).toContainText(contactData.firstName, { timeout: 15000 });
     logger.success(`COR18 passed — contact added by restricted user: ${contactId}`);
   });
 

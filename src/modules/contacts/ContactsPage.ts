@@ -1,9 +1,19 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { faker } from '@faker-js/faker';
 import { BasePage } from '../../core/BasePage';
-import { ContactData } from '../../data/factories/contactFactory';
+import { ContactData, CONTACT_CUSTOM_FIELD_NAMES } from '../../data/factories/contactFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
+
+// WHY: ported 2026-07-22 from CompaniesPage.TransientCompanySaveError /
+// LeadsPage.TransientLeadSaveError — same transient-vs-genuine classification
+// for the contact-create POST. See captureContactCreateOutcome()/createContact().
+class TransientContactSaveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientContactSaveError';
+  }
+}
 
 export class ContactsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
@@ -38,6 +48,15 @@ export class ContactsPage extends BasePage {
   private readonly showRequiredToggle = (): Locator =>
     this.page.locator('label').filter({ hasText: 'Show Required & Important Fields' });
 
+  // WHY: the actual checkbox behind the toggle above — same xpath-sibling
+  // approach as LeadsPage.showRequiredToggleCheckbox(). Confirmed live
+  // (2026-07-14) this toggle's on/off state persists across modal
+  // open/close within a session for Contact too (identical to Lead's
+  // documented finding) — needed to check current state before deciding
+  // whether to click, rather than clicking unconditionally.
+  private readonly showRequiredToggleCheckbox = (): Locator =>
+    this.showRequiredToggle().locator('xpath=preceding-sibling::input[@type="checkbox"]');
+
   private readonly firstNameInput = (): Locator => this.page.locator('input[name="firstName"]');
 
   private readonly lastNameInput = (): Locator => this.page.locator('input[name="lastName"]');
@@ -50,7 +69,15 @@ export class ContactsPage extends BasePage {
   private readonly addPhoneButton = (): Locator =>
     this.page.getByText('Add Phone', { exact: true }).first();
 
-  private readonly phoneInput = (): Locator => this.page.locator('input[id*="input_phone_0"]');
+  // WHY: exact `name` match, not a loose `id*="input_phone_0"` substring
+  // (2026-07-16 fix) — that pattern is confirmed live to collide with any
+  // future repeatable field whose first entry also ends in "_input_phone_0"
+  // (confirmed via the identical bug in LeadsPage.ts, caused there by its
+  // new Company Phones field). Contact has no such field today, but
+  // `name="phoneNumbers[0]"` is the actual bound form field and is strictly
+  // safer at zero cost, so it's fixed here too rather than left as a latent
+  // risk for whenever Contact grows a similar field.
+  private readonly phoneInput = (): Locator => this.page.locator('input[name="phoneNumbers[0]"]');
 
   private readonly addressInput = (): Locator => this.page.locator('input[name="address"]');
 
@@ -66,6 +93,23 @@ export class ContactsPage extends BasePage {
 
   // NOTE: contacts use 'linkedin' (all lowercase) — leads use 'linkedIn'
   private readonly linkedinInput = (): Locator => this.page.locator('input[name="linkedin"]');
+
+  // WHY: confirmed live (2026-07-16) — same field/id as Lead's Timezone,
+  // sitting at the same Communication/Location DOM boundary. Company is a
+  // live async lookup (not a static picklist) against real Company records —
+  // confirmed live it requires 3+ typed characters before returning results
+  // ("Type atleast 3 characters..." shown below that threshold) and that
+  // admin vs. restricted user see genuinely different, role-scoped result
+  // sets for the identical search term.
+  private readonly timezoneControl = (): Locator =>
+    this.page
+      .locator('[id="1_22_input_timezone"]')
+      .locator('xpath=ancestor::div[contains(@class,"__control")]');
+
+  private readonly companyInput = (): Locator => this.page.locator('[id="4_11_input_company"]');
+
+  private readonly companyControl = (): Locator =>
+    this.companyInput().locator('xpath=ancestor::div[contains(@class,"__control")]');
 
   private readonly departmentInput = (): Locator => this.page.locator('input[name="department"]');
 
@@ -97,8 +141,24 @@ export class ContactsPage extends BasePage {
 
   private readonly editModal = (): Locator => this.page.locator('#editEntityModal');
 
+  // WHY: scoped to #editEntityModal, not page-wide — same confirmed root
+  // cause as LeadsPage.modalCancelButton() (see that file's own comment):
+  // this app has multiple modal templates that all share the generic
+  // `data-dismiss="modal"` attribute on their own close buttons. An unscoped
+  // `.first()` can resolve to a hidden, 0×0 button belonging to an
+  // unrelated, closed modal template instead of the real, visible
+  // editEntityModal close button — Playwright then retries the click
+  // forever waiting for an element that can never become visible. This
+  // stayed dormant because closeModalIfOpen() only runs at the start of
+  // goToContactsList(), and every Contact test before C18 called
+  // goToContactsList() only once per test, before any modal was ever open
+  // — never triggering this click. C18's per-case loop (leave the modal
+  // open after an intentionally-failed save, then call goToContactsList()
+  // again for the next case) was the first real trigger — confirmed live
+  // (2026-07-14) via an 805-retry, 8-minute actionability hang that burned
+  // the entire test timeout.
   private readonly modalCancelButton = (): Locator =>
-    this.page.locator('button[data-dismiss="modal"]').first();
+    this.editModal().locator('button[data-dismiss="modal"]').first();
 
   // ── Ellipsis menu ─────────────────────────────────────────
   // WHY: Contacts uses same btn-down-arrow btn-primary as Leads
@@ -157,6 +217,11 @@ export class ContactsPage extends BasePage {
   // ── Detail page ───────────────────────────────────────────
   private readonly pageTitle = (): Locator => this.page.locator('.page-title');
 
+  // WHY: confirmed live (2026-07-14) — same "Other Details" tab convention
+  // as the other detail-page tabs already used in assertContactDetailFields()
+  // (#nav-tab0-tab through #nav-tab4-tab), one index further along.
+  private readonly otherDetailsDetailPageTab = (): Locator => this.page.locator('#nav-tab5-tab');
+
   // ──────────────────────────────────────────────────────────
   // 3. Constructor
   // ──────────────────────────────────────────────────────────
@@ -169,24 +234,18 @@ export class ContactsPage extends BasePage {
   // 4. Private Helpers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: delegates to the shared BasePage.waitForEntityListPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   private async waitForListReady(): Promise<void> {
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for list API response before checking DOM — faster and more reliable
-    await Promise.race([
-      this.page
-        .waitForResponse(
-          (res) =>
-            res.url().includes('/v1/contacts') &&
-            res.request().method() === 'GET' &&
-            res.status() === 200,
-          { timeout: config.timeouts.navigation }
-        )
-        .catch(() => null),
-      this.contactTable()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
-    ]);
-    await expect(this.contactTable()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.waitForEntityListPage(
+      (res) =>
+        res.url().includes('/v1/contacts') && res.request().method() === 'GET' && res.status() === 200,
+      this.contactTable(),
+      'Contacts'
+    );
     await this.waitForLoaderToDisappear();
   }
 
@@ -200,22 +259,26 @@ export class ContactsPage extends BasePage {
 
   private async waitForSearchResults(firstName: string): Promise<boolean> {
     try {
-      await expect(this.contactRowNameCell(firstName)).toBeVisible({ timeout: 5000 });
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.contactRowNameCell(firstName)).toBeVisible({ timeout: 5000 })
+      );
       return true;
     } catch {
       return false;
     }
   }
 
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   async waitForContactDetailsPage(): Promise<void> {
-    await this.page.waitForURL(/sales\/contacts\/details\//, { timeout: 20000 });
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for contact GET API response — ensures React has contactId in state
-    // Without this, share/edit fires before app resolves contactId → /contacts/undefined/share
-    await this.page.waitForResponse(
+    await this.waitForEntityDetailPage(
+      /sales\/contacts\/details\//,
       (res) => res.url().match(/\/v1\/contacts\/\d+$/) !== null && res.request().method() === 'GET',
-      { timeout: 15000 }
-    ).catch(() => null);
+      'Contact details'
+    );
   }
 
   async goToContactDetailsById(id: string | number): Promise<void> {
@@ -234,7 +297,11 @@ export class ContactsPage extends BasePage {
     try {
       if (await modal.isVisible()) {
         logger.info('Closing existing modal');
-        await this.modalCancelButton().click();
+        // WHY: explicit timeout — a raw, unbounded click() here previously
+        // inherited the whole test's timeout (up to 8 minutes) on failure
+        // instead of failing fast into this method's own try/catch. Same
+        // fix as LeadsPage.closeModalIfOpen().
+        await this.modalCancelButton().click({ timeout: 10000 });
         await modal.waitFor({ state: 'hidden', timeout: 5000 });
         logger.success('Modal closed');
       }
@@ -247,14 +314,101 @@ export class ContactsPage extends BasePage {
     try {
       const toggle = this.showRequiredToggle();
       if (await toggle.isVisible()) {
+        // WHY: confirmed live (2026-07-14) — same bug as LeadsPage's toggle,
+        // and same fix. This toggle's on/off state is NOT re-initialized per
+        // form open; it persists across modal open/close within a session
+        // (confirmed: reopening the edit modal a second time in the same
+        // session kept the toggle's prior state). A blind, unconditional
+        // click here would flip an already-off toggle back ON — hiding
+        // "Other Details" (and its custom fields) right when a caller needs
+        // it visible. Only click when it's actually checked.
+        const isChecked = await this.showRequiredToggleCheckbox()
+          .isChecked()
+          .catch(() => true);
+        if (!isChecked) {
+          logger.debug('Show Required & Important Fields already disabled — skipping click');
+          return;
+        }
         logger.info('Disabling Show Required & Important Fields');
         await toggle.click();
-        await expect(this.firstNameInput()).toBeVisible({ timeout: 20000 });
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.firstNameInput()).toBeVisible({ timeout: 20000 })
+        );
         logger.success('Toggle disabled');
       }
     } catch (error) {
       logger.debug(`Toggle not available: ${String(error)}`);
     }
+  }
+
+  // WHY: single choke point for filling all 9 Contact custom fields — called
+  // from both fillContactForm() (create) and fillEditForm() (update) so
+  // every Contact creation/update path attempts these fields, per the
+  // environment-safety contract: each BasePage helper checks DOM presence
+  // and skips gracefully when a field doesn't exist yet in the current
+  // environment (see BasePage's Custom Field Helpers section for why).
+  //
+  // WHY no tab-click step (unlike LeadsPage.fillLeadCustomFields(), which
+  // calls openOtherDetailsFormSection() first): confirmed live (2026-07-14,
+  // both create and edit forms) — Contact's form renders all 7 sections
+  // (Basic Information, Communication, Location, Social, Professional,
+  // Campaign Information, Other Details) in one continuous scrollable page;
+  // the "Other Details" nav-link only scrolls to that section, it does not
+  // toggle a hidden tab-pane the way Lead's modal does. The custom field
+  // inputs are already visible and fillable as soon as
+  // disableRequiredFieldsToggle() has run — matching how this file's
+  // existing Campaign Information fields (campaign/source) are already
+  // filled today with no tab click at all. Do not port
+  // openOtherDetailsFormSection() here — it would be dead code for this
+  // entity's actual DOM structure.
+  //
+  // Mutates `data.customFields.pickList`/`.multiPickList` in place with
+  // whatever was actually selected live — PickList/MultiPickList options
+  // are read from the DOM at fill time, so the caller's `data` object needs
+  // to be updated to reflect reality before it's used for later
+  // verification.
+  private async fillContactCustomFields(data: ContactData): Promise<void> {
+    const cf = data.customFields;
+
+    await this.fillTextLikeCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.fillTextLikeCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.fillTextLikeCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.fillTextLikeCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.setCheckboxCustomField(CONTACT_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.selectDateCustomField(CONTACT_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    await this.selectDateTimeCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker'
+    );
+
+    const pickedValue = await this.selectPicklistCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+
+    const pickedValues = await this.selectMultiPicklistCustomField(
+      CONTACT_CUSTOM_FIELD_NAMES.multiPickList,
+      'Multi Pick List'
+    );
+    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
   }
 
   private async performSearch(searchText: string): Promise<void> {
@@ -266,12 +420,13 @@ export class ContactsPage extends BasePage {
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
-      return await this.page.waitForResponse(
+      return await this.armResponseWaitWithRecovery(
         (response) =>
           response.url().includes('search') &&
           response.request().method() === 'GET' &&
           response.status() === 200,
-        { timeout: 15000 }
+        'contact search API',
+        15000
       );
     } catch {
       return null;
@@ -280,12 +435,21 @@ export class ContactsPage extends BasePage {
 
   private async captureContactIdFromResponse(): Promise<number | null> {
     try {
-      const response = await this.page.waitForResponse(
+      const response = await this.armResponseWaitWithRecovery(
         (res) =>
+          // WHY: hardened 2026-07-19 — same ID-capture bug class already fixed
+          // in DealsPage/CompaniesPage/Deals' quotation-panel flow: a bare
+          // `.includes('/v1/contacts')` substring with no `/reports/`
+          // exclusion and no 201 acceptance. Found via a codebase-wide re-audit
+          // of every waitForResponse call after the same class turned up in
+          // LeadsPage — not independently live-reproduced for Contacts, but
+          // fixed as defense-in-depth since it shares the identical shape.
           res.url().includes('/v1/contacts') &&
+          !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          res.status() === 200,
-        { timeout: 30000 }
+          (res.status() === 200 || res.status() === 201),
+        'capture contact ID',
+        30000
       );
       const body = await response.json();
       const contactId = body?.id ?? body?.data?.id ?? null;
@@ -301,6 +465,22 @@ export class ContactsPage extends BasePage {
   // the control container. Scoping options to the visible .is-invalid__menu (the portal
   // root) prevents accidentally clicking stale options from a simultaneously-open dropdown.
   // Steps mirror selectFromIsInvalidControl in QuotationsPage but add the menu-visible gate.
+  // WHY the bounded whole-sequence retry (root-caused 2026-07-22 from a real
+  // PROD failure): every click in this method used to be a raw, UNBOUNDED
+  // Playwright `.click()` — no `timeout` option, and no `actionTimeout` set
+  // anywhere in the config (confirmed via grep), so Playwright's default of
+  // NO timeout applies. Reproduced live: on prod, `option.click()` (the final
+  // click, selecting Campaign/Source) hung with ZERO further log activity
+  // for the rest of the test's 480s budget, only surfacing as a generic
+  // "Test timeout exceeded" + "Target page ... closed" once the outer test
+  // timeout force-killed the browser. This is the same "click lands but
+  // nothing happens" React click-handler race already root-caused and fixed
+  // elsewhere in this codebase (CompaniesPage.clickAddCompany,
+  // DealsPage.cloneDeal) — the fix here is the same shape: bound every click
+  // to config.timeouts.expect so a stuck click fails FAST instead of eating
+  // the whole test budget, and retry the entire open->filter->select
+  // sequence (not just the click) since a half-opened/half-filtered menu
+  // from a failed attempt isn't a valid state to resume from.
   private async selectFromContactDropdown(inputId: string, optionText: string): Promise<void> {
     const input = this.page.locator(`[id="${inputId}"]`);
     await input.scrollIntoViewIfNeeded();
@@ -308,21 +488,57 @@ export class ContactsPage extends BasePage {
     // WHY: Click the ancestor .is-invalid__control wrapper — clicking the input alone
     // does not reliably trigger the React Select open handler on portalled dropdowns
     const control = input.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-    await control.click();
-    // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
-    await input.fill(optionText);
-    // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
-    // options are rendered in the portal. Prevents racing against another open dropdown.
     const menu = this.page.locator('.is-invalid__menu');
-    await menu.waitFor({ state: 'visible', timeout: 10000 });
-    // WHY: Scope the option click to the visible menu container — avoids clicking options
-    // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
-    const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
-    await option.waitFor({ state: 'visible', timeout: 5000 });
-    await option.click();
-    // WHY: Wait for menu to collapse — confirms React Select registered the selection
-    await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-    logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
+
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await control.click({ timeout: config.timeouts.expect });
+        // WHY: Confirmed live — a control click can occasionally fail to register (e.g.
+        // scroll/animation still settling right after a modal opens), which previously
+        // just burned the full menu-visible timeout for a click that never landed. Check
+        // for the menu portal being ATTACHED (React mounts it immediately on open, well
+        // before any visible-state CSS transition finishes) as a fast, safe signal the
+        // click worked. Only re-click if it's genuinely not attached — re-clicking an
+        // already-open dropdown would just toggle it closed.
+        const opened = await menu
+          .waitFor({ state: 'attached', timeout: 3000 })
+          .then(() => true)
+          .catch(() => false);
+        if (!opened) {
+          logger.warn(`Dropdown did not open on first click for ${inputId} — retrying click`);
+          await control.click({ timeout: config.timeouts.expect });
+        }
+        // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
+        await input.fill(optionText);
+        // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
+        // options are rendered in the portal. Prevents racing against another open dropdown.
+        await menu.waitFor({ state: 'visible', timeout: 10000 });
+        // WHY: Scope the option click to the visible menu container — avoids clicking options
+        // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
+        const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
+        await option.waitFor({ state: 'visible', timeout: 5000 });
+        await option.click({ timeout: config.timeouts.expect });
+        // WHY: Wait for menu to collapse — confirms React Select registered the selection
+        await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+        logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `selectFromContactDropdown(${inputId}) attempt ${attempt}/${maxAttempts} failed: ` +
+            `${String(error)} — closing any stuck menu and retrying`
+        );
+        // Best-effort: close a possibly stuck-open menu before the next attempt
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `selectFromContactDropdown: failed to select "${optionText}" for ${inputId} after ` +
+        `${maxAttempts} attempts — ${String(lastError)}`
+    );
   }
 
   private async retryFindContact(firstName: string): Promise<boolean> {
@@ -358,7 +574,9 @@ export class ContactsPage extends BasePage {
   async clickAddContact(): Promise<void> {
     logger.info('Clicking Add Contact');
     await this.click(this.addButton(), 'add contact button');
-    await expect(this.firstNameInput()).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.firstNameInput()).toBeVisible({ timeout: 10000 })
+    );
     logger.success('Contact form opened');
   }
 
@@ -375,18 +593,55 @@ export class ContactsPage extends BasePage {
     await this.fill(this.firstNameInput(), data.firstName, 'first name');
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
     await this.click(this.addEmailButton(), 'add email button');
-    await expect(this.emailInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
     await this.fill(this.emailInput(), data.email, 'email');
     await this.click(this.addPhoneButton(), 'add phone button');
-    await expect(this.phoneInput()).toBeVisible();
+    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
     await this.fill(this.phoneInput(), data.phone, 'phone');
-    await this.fill(this.addressInput(), data.address, 'address');
+    // WHY: Timezone sits at the same Communication/Location DOM boundary as
+    // Lead's, filled here to match top-to-bottom form order. Mutated in
+    // place with whatever was actually selected, same reasoning as
+    // salutation/campaign/source.
+    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
+    // WHY: mutate data.address in place with whatever actually ended up in
+    // the field — a live GPS/autocomplete lookup when available, the
+    // manual value otherwise — so later detail-page verification checks
+    // reality, not the pre-fill guess. Same reasoning as PickList/Campaign
+    // fields elsewhere in this method.
+    //
+    // WHY pass the Location section container explicitly (2026-07-16
+    // hardening): Contact only has one "Get GPS Address" trigger today, but
+    // scoping to its own section keeps this robust even if a second
+    // GPS-enabled field is ever added to this form — the same helper Lead
+    // now depends on for its two triggers.
+    data.address = await this.fillAddressViaGpsOrManual(
+      this.addressInput(),
+      data.address,
+      'address',
+      this.getFormSectionContainer('Location')
+    );
     await this.fill(this.cityInput(), data.city, 'city');
     await this.fill(this.stateInput(), data.state, 'state');
     await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
     await this.fill(this.facebookInput(), data.facebook, 'facebook');
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
     await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+    // WHY: Company sits right after LinkedIn and before Department (confirmed
+    // live DOM order). A live async lookup, not a static picklist — searched
+    // and selected within THIS page's own current role/session, so the
+    // result set is naturally role-scoped without any explicit branching.
+    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+    // data.company with a known, freshly-created company name (e.g. so it
+    // can independently share that exact company too) gets that exact
+    // company selected instead of a random pick; passing '' (the default
+    // placeholder) preserves the original random-pick behavior unchanged.
+    data.company = await this.selectRandomFromSearchableReactSelect(
+      this.companyControl(),
+      this.companyInput(),
+      'com',
+      'Company',
+      data.company || undefined
+    );
     await this.fill(this.departmentInput(), data.department, 'department');
     await this.fill(this.designationInput(), data.designation, 'designation');
     // WHY: UTM fields sit below address and may be off-screen.
@@ -404,18 +659,85 @@ export class ContactsPage extends BasePage {
     await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
     await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
     await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
+    await this.fillContactCustomFields(data);
     logger.success('Contact form filled');
+  }
+
+  // WHY: ported 2026-07-22 from CompaniesPage.captureCompanyCreateOutcome —
+  // captureContactIdFromResponse() only matches 200/201, so a transient
+  // backend rejection just times out into a null id. Matches the create POST
+  // at ANY status, classifies 2xx->id, non-2xx generic message/5xx->transient,
+  // populated fieldErrors->genuine. Same /reports/ exclusion as the existing
+  // captureContactIdFromResponse hardening.
+  private async captureContactCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+    try {
+      const response = await this.armResponseWaitWithRecovery(
+        (res) =>
+          res.url().includes('/v1/contacts') &&
+          !res.url().includes('/reports/') &&
+          res.request().method() === 'POST',
+        'capture contact create response',
+        30000
+      );
+      const status = response.status();
+      const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+      if (status === 200 || status === 201) {
+        const id = ((body?.id as number | undefined) ?? (body?.data as { id?: number } | undefined)?.id ?? null) as
+          | number
+          | null;
+        logger.success(`Captured contact ID: ${id} from ${response.url()}`);
+        return { id, transient: false };
+      }
+      const message = String((body as { message?: unknown })?.message ?? '');
+      const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
+      const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
+      const transient =
+        !hasFieldErrors &&
+        (status >= 500 ||
+          /unexpected error occurred|internal server error|something didn't work as expected/i.test(message));
+      logger.warn(
+        `Contact create returned HTTP ${status} (message: "${message}", ` +
+          `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
+          `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
+      );
+      return { id: null, transient };
+    } catch (error) {
+      logger.debug(`Contact create response not captured (${String(error)}) — treating as non-transient`);
+      return { id: null, transient: false };
+    }
   }
 
   async saveContact(): Promise<number | null> {
     logger.info('Saving contact');
-    const contactIdPromise = this.captureContactIdFromResponse();
+    const outcomePromise = this.captureContactCreateOutcome();
     await this.click(this.saveButton(), 'save button');
-    await this.assertNoFormErrors('contact create form');
-    const contactId = await contactIdPromise;
-    await this.waitForContactListPage();
-    logger.success('Contact saved successfully');
-    return contactId;
+    // WHY capture the form-error instead of throwing immediately — same
+    // proven ordering fix as CompaniesPage.saveCompany/LeadsPage.saveLead.
+    let formError: unknown = null;
+    try {
+      await this.assertNoFormErrors('contact create form');
+    } catch (error) {
+      formError = error;
+    }
+    const outcome = await outcomePromise;
+    if (outcome.id) {
+      await this.waitForContactListPage();
+      logger.success('Contact saved successfully');
+      return outcome.id;
+    }
+    if (outcome.transient) {
+      throw new TransientContactSaveError(
+        'Contact create hit a transient backend error (no field-level validation) — retryable'
+      );
+    }
+    if (formError) {
+      throw formError;
+    }
+    // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
+    // logged "Contact saved successfully" and returned null, letting callers proceed on a
+    // contact that doesn't exist. Fail fast instead, matching the "Fresh company ID not
+    // captured" convention already used elsewhere in this codebase.
+    throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
   }
 
   // ──────────────────────────────────────────────────────────
@@ -457,11 +779,13 @@ export class ContactsPage extends BasePage {
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
     logger.info(`Asserting ellipsis option NOT visible: ${optionText}`);
     const item = this.ellipsisMenuItem(optionText);
-    await expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
-      // WHY: Option may not exist at all — check count as fallback
-      const count = await item.count();
-      expect(count).toBe(0);
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(item).toBeHidden({ timeout: 3000 }).catch(async () => {
+        // WHY: Option may not exist at all — check count as fallback
+        const count = await item.count();
+        expect(count).toBe(0);
+      })
+    );
     logger.success(`Ellipsis option not visible confirmed: ${optionText}`);
   }
 
@@ -472,7 +796,9 @@ export class ContactsPage extends BasePage {
   async clickEditIcon(): Promise<void> {
     logger.info('Opening edit modal');
     await this.click(this.editIconButton(), 'edit icon');
-    await expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
     // WHY: Wait for firstName input — modal animation on GHA is slow
     await this.firstNameInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     logger.success('Edit modal opened');
@@ -489,8 +815,17 @@ export class ContactsPage extends BasePage {
     await this.fill(this.page.locator('[id="1_11_input_email_0"]'), data.email, 'email');
     // WHY: Update phone — id="1_12_input_phone_0"
     await this.fill(this.page.locator('[id="1_12_input_phone_0"]'), data.phone, 'phone');
-    // WHY: Update address fields
-    await this.fill(this.addressInput(), data.address, 'address');
+    // WHY: Update timezone — same field/mutate-in-place reasoning as create
+    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
+    // WHY: Update address fields — same GPS-or-manual mutate-in-place
+    // reasoning as fillContactForm() above, including the section-scoped
+    // GPS trigger (2026-07-16 hardening).
+    data.address = await this.fillAddressViaGpsOrManual(
+      this.addressInput(),
+      data.address,
+      'address',
+      this.getFormSectionContainer('Location')
+    );
     await this.fill(this.cityInput(), data.city, 'city');
     await this.fill(this.stateInput(), data.state, 'state');
     await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
@@ -498,6 +833,19 @@ export class ContactsPage extends BasePage {
     await this.fill(this.facebookInput(), data.facebook, 'facebook');
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
     await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+    // WHY: Update company — same live, role-scoped lookup reasoning as create
+    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+    // data.company with a known, freshly-created company name (e.g. so it
+    // can independently share that exact company too) gets that exact
+    // company selected instead of a random pick; passing '' (the default
+    // placeholder) preserves the original random-pick behavior unchanged.
+    data.company = await this.selectRandomFromSearchableReactSelect(
+      this.companyControl(),
+      this.companyInput(),
+      'com',
+      'Company',
+      data.company || undefined
+    );
     // WHY: Update professional fields
     await this.fill(this.departmentInput(), data.department, 'department');
     await this.fill(this.designationInput(), data.designation, 'designation');
@@ -514,6 +862,13 @@ export class ContactsPage extends BasePage {
     await this.fill(this.page.locator('[id="5_32_input_utmMedium"]'), data.utmMedium, 'utmMedium');
     await this.fill(this.page.locator('[id="5_41_input_utmContent"]'), data.utmContent, 'utmContent');
     await this.fill(this.page.locator('[id="5_42_input_utmTerm"]'), data.utmTerm, 'utmTerm');
+    // WHY: Bug fix (2026-07-14) — fillEditForm() never called this at all
+    // before, unlike LeadsPage's edit path, so "Other Details"/custom fields
+    // were unreachable on update. disableRequiredFieldsToggle() is now
+    // idempotent (see its own comment) so calling it here is safe even if a
+    // prior action in this session already turned the toggle off.
+    await this.disableRequiredFieldsToggle();
+    await this.fillContactCustomFields(data);
     logger.success('Edit form updated');
   }
 
@@ -521,7 +876,9 @@ export class ContactsPage extends BasePage {
     logger.info('Saving updated contact');
     await this.click(this.saveButton(), 'save button');
     await this.assertNoFormErrors('contact edit form');
-    await expect(this.editModal()).toBeHidden({ timeout: 15000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeHidden({ timeout: 15000 })
+    );
     logger.success('Contact updated');
   }
 
@@ -537,9 +894,14 @@ export class ContactsPage extends BasePage {
   async cloneContact(): Promise<number | null> {
     logger.info('Cloning contact via ellipsis menu');
     await this.clickEllipsisOption('Clone');
-    // WHY: Clone opens create form pre-filled — update email and phone to avoid duplicate errors
+    // WHY: Clone opens create form pre-filled — update email and phone to avoid duplicate errors.
+    // WHY no extra wait after saveButton becomes visible (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1000)): confirmed live (same
+    // investigation as LeadsPage.cloneLead()) — the pre-filled email/phone
+    // values are already fully populated the instant the save button
+    // itself becomes visible, so saveButton().waitFor() is already the
+    // correct, sufficient condition.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    await this.page.waitForTimeout(1000);
     // WHY: Change email to unique value — same email as original causes duplicate error
     const emailInput = this.emailInput();
     if (await emailInput.isVisible().catch(() => false)) {
@@ -567,18 +929,57 @@ export class ContactsPage extends BasePage {
     await this.click(this.saveButton(), 'save cloned contact');
     await this.assertNoFormErrors('contact clone form');
     const contactId = await contactIdPromise;
-    // WHY: After clone save, app stays on original contact detail — no redirect to list
-    await this.page.waitForTimeout(1500);
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveContact() above.
+    if (!contactId) {
+      throw new Error('Cloned contact ID not captured after save — cannot proceed (save likely failed silently)');
+    }
+    // WHY: After clone save, app stays on original contact detail — no
+    // redirect to list. No trailing wait needed here (2026-07-16 fix,
+    // removed a hardcoded waitForTimeout(1500)): assertNoFormErrors() and
+    // the ID capture above already confirm the save genuinely completed
+    // server-side, and the caller's very next action is always a fresh
+    // navigation to the CLONE's own detail page (assertClonedContactLastName's
+    // ID-direct-nav), which has its own proper GET-response wait.
     logger.success('Contact cloned successfully');
     return contactId;
   }
 
-  // WHY: Confirmed live (Deals module investigation) — a substring hasText
-  // match against a user/entity search dropdown can select the wrong option
-  // whenever a similarly-named entity exists. Always anchor-match the exact
-  // text when selecting among multiple options by name.
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
+  // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
+
+  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
+  // stalled a full-suite regression run across many share-based RBAC tests):
+  // see LeadsPage.openUserShareTypeSearch() for the full explanation — same
+  // "click registers, handler race" class already fixed elsewhere in this
+  // module (selectFromContactDropdown), applied here to the Share modal's
+  // type-dropdown selection. If userOption.click() (User) didn't register,
+  // shareToUserInput() never mounts and the following raw `.fill()` hangs
+  // until the outer test timeout. Fixed identically here.
+  private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await shareTypeControl.click({ timeout: config.timeouts.expect });
+        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await userOption.click({ timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+    }
+    throw new Error(
+      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
+        `${String(lastError)}`
+    );
   }
 
   async shareContact(restrictedUserName: string, permissions: string[] = []): Promise<void> {
@@ -588,19 +989,14 @@ export class ContactsPage extends BasePage {
     // WHY: Click the Share To type dropdown control — opens User/Team options
     const shareTypeControl = this.page.locator('.modal.show').locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
-    await shareTypeControl.click();
-    await this.page.waitForTimeout(500);
-    // WHY: Select "User" option
-    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-    await userOption.waitFor({ state: 'visible', timeout: 5000 });
-    await userOption.click();
+    await this.openUserShareTypeSearch(shareTypeControl);
     await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
-    await this.shareToUserInput().fill(validWord);
+    await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
     await this.page.waitForTimeout(800);
     // WHY: Select matching user from dropdown — exact match, not substring
     // (a substring match can select the wrong, similarly-named entity)
@@ -609,7 +1005,7 @@ export class ContactsPage extends BasePage {
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
       .first();
     await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    await userItem.click({ timeout: config.timeouts.expect });
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
@@ -628,13 +1024,12 @@ export class ContactsPage extends BasePage {
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the share-API response wait BEFORE clicking — confirms the
     // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const shareResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
+      'contact share response',
+      15000
+    ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
     await this.page.waitForTimeout(300);
@@ -662,13 +1057,12 @@ export class ContactsPage extends BasePage {
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
     // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
+    const reassignResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
+      'contact reassign response',
+      15000
+    ).catch(() => null);
     await reassignConfirmButton.click();
     await reassignResponsePromise;
     await this.page.waitForTimeout(300);
@@ -690,26 +1084,42 @@ export class ContactsPage extends BasePage {
     await this.clickRightPanelIcon('Quotations');
     await this.page.waitForTimeout(2000);
     // WHY: Add button is button.btn-primary.btn-xs inside Quotations card
-    // Scroll to Quotations card first — it may be below the fold
     const quotationsCard = this.page
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
+    // own related-quotations list independently of the main entity GET.
+    // scrollIntoViewIfNeeded() right after the panel opens can grab a
+    // reference to a card mid-refetch that React then replaces, hanging in
+    // its "wait for stable position" check. An auto-retrying expect()
+    // re-queries the locator on every poll; click() below auto-scrolls its
+    // own target, so no manual scroll is needed.
+    await this.withSessionExpiryRecovery(() =>
+      expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 })
+    );
     const quotationCardAdd = quotationsCard.locator('button.btn-primary.btn-xs').first();
     await quotationCardAdd.waitFor({ state: 'visible', timeout: 10000 });
     await quotationCardAdd.click();
     // WHY: Wait for modal to open with "Add Quotation" title
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
-    await expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 })
+    );
     logger.success('Add Quotation modal opened');
     // WHY: Capture quotation ID from POST response before saving
-    const quotationIdPromise = this.page.waitForResponse(
+    // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
+    // no /reports/ exclusion, same bug class as LeadsPage/ContactsPage's other
+    // capture methods; fixed as defense-in-depth (not independently
+    // live-reproduced for this specific flow).
+    const quotationIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
         (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
+        !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
+      'contact panel quotation ID',
+      30000
     ).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
@@ -763,6 +1173,10 @@ export class ContactsPage extends BasePage {
     await this.assertNoFormErrors('add quotation from panel');
     await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
     const quotationId = await quotationIdPromise;
+    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveContact() above.
+    if (!quotationId) {
+      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
+    }
     logger.success(`Quotation added from panel: ${quotationId}`);
     return quotationId;
   }
@@ -790,7 +1204,9 @@ export class ContactsPage extends BasePage {
     logger.info(`Validating contact absent: ${firstName}`);
     await this.goToContactsList();
     await this.performSearch(firstName);
-    await expect(this.contactRowNameCell(firstName)).toBeHidden({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.contactRowNameCell(firstName)).toBeHidden({ timeout: 10000 })
+    );
     logger.success(`Contact absent confirmed: ${firstName}`);
   }
 
@@ -811,11 +1227,29 @@ export class ContactsPage extends BasePage {
   }
 
   async assertClonedContactLastName(originalLastName: string, clonedId?: number | null): Promise<void> {
-    logger.info(`Asserting cloned contact has "Copy" in lastName — original: ${originalLastName}`);
-    // WHY: Clone appends "Copy" to lastName — search for it in list (same as Leads pattern)
     const clonedLastName = `${originalLastName} Copy`;
+    // WHY: fixed 2026-07-16 — this method previously took an optional
+    // clonedId that was never referenced in the body at all; verification
+    // fell through entirely to retryFindContact(), the same flaky list-
+    // search-with-retry pattern already root-caused for Lead's update
+    // verification (search-index/list-refresh lag racing a fresh write).
+    // Mirrors LeadsPage.assertClonedLeadLastName() exactly: ID-direct-nav
+    // as the primary, deterministic path, with clonedId optional and a
+    // list-search fallback for the (currently unreachable in practice,
+    // since cloneContact() itself fails fast on a missing ID) case where a
+    // caller genuinely has no ID to give.
+    if (clonedId) {
+      logger.info(
+        `Asserting cloned contact (ID: ${clonedId}) has "Copy" in lastName — original: ${originalLastName}`
+      );
+      await this.goToContactDetailsById(clonedId);
+      await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
+      logger.success(`Cloned contact found with lastName: ${clonedLastName}`);
+      return;
+    }
+    logger.warn('Cloned contact ID not available — falling back to list search');
     const found = await this.retryFindContact(clonedLastName);
-    expect(found).toBeTruthy();
+    expect(found, `Cloned contact "${clonedLastName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned contact found with lastName: ${clonedLastName}`);
   }
 
@@ -843,21 +1277,34 @@ export class ContactsPage extends BasePage {
     await expect(this.page.locator('body')).toContainText(data.lastName, { timeout: 5000 });
     // WHY: Same tab pattern as LeadsPage.assertDetailTabContent()
     const tabPane = this.page.locator('.tab-pane.active.show');
-    // WHY: Verify Communication tab — email, phone
+    // WHY: Verify Communication tab — email, phone, timezone
     await this.page.locator('#nav-tab0-tab').click();
     await this.page.waitForTimeout(800);
     const tab0Text = (await tabPane.textContent() ?? '').toLowerCase();
     expect(tab0Text).toContain(data.email.toLowerCase());
     expect(tab0Text).toContain(data.phone);
-    logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone}`);
+    // WHY: confirmed live (2026-07-17) via direct DOM inspection of a fresh
+    // contact's detail page — Timezone renders on this same Communication
+    // tab, container id "timezone", same as Lead's equivalent field.
+    if (data.timezone) {
+      expect(tab0Text).toContain(data.timezone.toLowerCase());
+    }
+    logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone} | timezone: ${data.timezone}`);
     // WHY: Verify Location tab — address, city, state, zipcode
     await this.page.locator('#nav-tab1-tab').click();
     await this.page.waitForTimeout(800);
     const tab1Text = (await tabPane.textContent() ?? '').toLowerCase();
+    // WHY: this line was missing despite the comment above claiming address
+    // was already checked (2026-07-15 fix) — added now because PART B's
+    // GPS-address work needs the detail page to genuinely verify whatever
+    // address text ended up in the field (GPS-selected or manual), and every
+    // other Contact test benefits from the same real coverage this comment
+    // always claimed to provide.
+    expect(tab1Text).toContain(data.address.toLowerCase());
     expect(tab1Text).toContain(data.city.toLowerCase());
     expect(tab1Text).toContain(data.state.toLowerCase());
     expect(tab1Text).toContain(data.zipcode.toLowerCase());
-    logger.debug(`Location tab — city: ${data.city} | state: ${data.state} | zipcode: ${data.zipcode}`);
+    logger.debug(`Location tab — address: ${data.address} | city: ${data.city} | state: ${data.state} | zipcode: ${data.zipcode}`);
     // WHY: Verify Social tab — facebook, twitter, linkedin
     await this.page.locator('#nav-tab2-tab').click();
     await this.page.waitForTimeout(800);
@@ -866,13 +1313,18 @@ export class ContactsPage extends BasePage {
     expect(tab2Text).toContain(data.twitter.toLowerCase());
     expect(tab2Text).toContain(data.linkedin.toLowerCase());
     logger.debug(`Social tab — facebook: ${data.facebook} | twitter: ${data.twitter} | linkedin: ${data.linkedin}`);
-    // WHY: Verify Professional tab — department, designation
+    // WHY: Verify Professional tab — department, designation, company
     await this.page.locator('#nav-tab3-tab').click();
     await this.page.waitForTimeout(800);
     const tab3Text = (await tabPane.textContent() ?? '').toLowerCase();
     expect(tab3Text).toContain(data.department.toLowerCase());
     expect(tab3Text).toContain(data.designation.toLowerCase());
-    logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation}`);
+    // WHY: confirmed live (2026-07-17) via direct DOM inspection — Company
+    // renders on this same Professional tab, container id "company".
+    if (data.company) {
+      expect(tab3Text).toContain(data.company.toLowerCase());
+    }
+    logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation} | company: ${data.company}`);
     // WHY: Salutation appears in page header/name area — assert in body text
     if (data.salutation) {
       await expect(this.page.locator('body')).toContainText(data.salutation, { timeout: 5000 });
@@ -894,6 +1346,100 @@ export class ContactsPage extends BasePage {
     logger.success('Contact detail fields verified');
   }
 
+  // WHY: full per-field verification against the Contact detail page's
+  // "Other Details" tab (#nav-tab5-tab, confirmed live 2026-07-14) — only
+  // used by the dedicated custom-field tests, same scope rule as
+  // LeadsPage.assertLeadCustomFieldsOnDetail(): every other Contact test
+  // only needs the fill-if-present behavior to run without erroring, not a
+  // full value-by-value assertion here.
+  //
+  // WHY throw instead of skip-and-return if the tab never appears: this
+  // method is called only from the dedicated custom-field tests, which
+  // always run on an environment already confirmed to have these fields —
+  // a missing tab here can only mean verification didn't happen, which
+  // must fail loudly, not report a false pass.
+  // WHY: PART C — thin, module-owned wrapper around BasePage's generic
+  // dedicated-test skip mechanism, same pattern as LeadsPage's equivalent.
+  // Must be called AFTER the relevant create/edit form is open and ONLY
+  // from the dedicated custom-field tests.
+  //
+  // WHY disableRequiredFieldsToggle() is called here too: confirmed live
+  // (2026-07-15) — same finding as Lead's equivalent method: a custom
+  // field input does not exist in the DOM at all (count() === 0) until
+  // this toggle is switched off; count becomes 1 immediately after. Safe
+  // and non-duplicative in effect — the same idempotent method
+  // fillContactForm()/fillEditForm() call themselves right after.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.disableRequiredFieldsToggle();
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(CONTACT_CUSTOM_FIELD_NAMES),
+      'Contact'
+    );
+  }
+
+  async assertContactCustomFieldsOnDetail(data: ContactData): Promise<void> {
+    logger.info('Asserting all 9 custom field values on contact detail page');
+    const tab = this.otherDetailsDetailPageTab();
+    await expect(
+      tab,
+      '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
+    ).toBeVisible({ timeout: config.timeouts.navigation });
+    await tab.click();
+    await this.page.waitForTimeout(500);
+
+    const cf = data.customFields;
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      CONTACT_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(
+        CONTACT_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
+    }
+    if (cf.multiPickList.length > 0) {
+      await this.assertMultiPicklistCustomFieldOnDetail(
+        CONTACT_CUSTOM_FIELD_NAMES.multiPickList,
+        cf.multiPickList,
+        'Multi Pick List'
+      );
+    }
+    logger.success('All 9 custom field values verified on contact detail page');
+  }
+
   async assertDetailTabContent(iconTitle: string): Promise<void> {
     logger.info(`Asserting detail tab content for: ${iconTitle}`);
     // WHY: Click the right panel icon to open that section
@@ -905,7 +1451,7 @@ export class ContactsPage extends BasePage {
       .locator('.card-header')
       .filter({ has: this.page.locator('h2').filter({ hasText: iconTitle }) })
       .first();
-    await expect(cardHeader).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() => expect(cardHeader).toBeVisible({ timeout: 10000 }));
     logger.success(`Detail tab content visible: ${iconTitle}`);
   }
 
@@ -916,21 +1462,41 @@ export class ContactsPage extends BasePage {
       .locator('.invalid-feedback, .error-message, .toastr.rrt-error, [class*="error"]')
       .filter({ hasText: message })
       .first();
-    await expect(errorLocator).toBeVisible({ timeout: 10000 });
+    await this.withSessionExpiryRecovery(() => expect(errorLocator).toBeVisible({ timeout: 10000 }));
     logger.success(`Validation error confirmed: ${message}`);
   }
 
   async assertRightPanelIconVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon visible: ${title}`);
-    // WHY: Wait for icon to be attached first — SVG icons load after React renders
-    await this.rightPanelIcon(title).waitFor({ state: 'attached', timeout: 15000 });
-    await expect(this.rightPanelIcon(title)).toBeVisible({ timeout: 15000 });
+    const icon = this.rightPanelIcon(title);
+    try {
+      // WHY: Wait for icon to be attached first — SVG icons load after React renders
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    } catch (error) {
+      // WHY the reload-and-retry — same confirmed gap as LeadsPage's own
+      // assertRightPanelIconVisible (CI flake 2026-07-22, right after an
+      // admin share): the right panel's icon set reads a permissions
+      // snapshot taken once at page mount, so a plain wait cannot recover if
+      // that snapshot predates the share's propagation. A reload forces a
+      // fresh mount/fetch. Applied here defensively (not from a live repro of
+      // THIS module specifically) since the mechanism is structural.
+      logger.warn(
+        `Right panel icon "${title}" not visible — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.waitForContactDetailsPage();
+      await icon.waitFor({ state: 'attached', timeout: 15000 });
+      await this.withSessionExpiryRecovery(() => expect(icon).toBeVisible({ timeout: 15000 }));
+    }
     logger.success(`Right panel icon visible: ${title}`);
   }
 
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
-    await expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
+    );
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
@@ -938,9 +1504,11 @@ export class ContactsPage extends BasePage {
     logger.info(`Asserting quotation in panel: ${quotationNumber}`);
     await this.clickRightPanelIcon('Quotations');
     await this.page.waitForTimeout(1000);
-    await expect(this.page.locator('.quotation').filter({ hasText: quotationNumber })).toBeVisible({
-      timeout: 10000,
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.quotation').filter({ hasText: quotationNumber })).toBeVisible({
+        timeout: 10000,
+      })
+    );
     logger.success(`Quotation visible in panel: ${quotationNumber}`);
   }
 
@@ -948,25 +1516,87 @@ export class ContactsPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
-  async createContact(data: ContactData): Promise<number | null> {
-    await this.clickAddContact();
-    await this.fillContactForm(data);
-    return await this.saveContact();
+  // WHY: shared by createContact()/updateContact() below — confirmed live
+  // that fillContactForm()/fillEditForm() mutate their parameter in place
+  // (timezone, address, company are reassigned directly on the object; the
+  // NESTED customFields.pickList/multiPickList are also conditionally
+  // reassigned) — a shallow `{...data}` alone would still share the same
+  // `customFields` object reference with the original, so a retry could
+  // still inherit attempt 1's mutated custom-field picks. This clones one
+  // level deeper, exactly as far as the confirmed mutations reach.
+  private cloneContactDataForRetry(data: ContactData): ContactData {
+    return { ...data, customFields: { ...data.customFields } };
   }
 
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): confirmed self-
+  // starting (clickAddContact() reopens the create form fresh each call) and
+  // confirmed safe to retry with the same input — a real session expiry
+  // always surfaces as a clean HTTP 400/401 rejection (nothing gets
+  // created), never a duplicate. `attemptData` is a fresh clone per attempt
+  // — see cloneContactDataForRetry()'s own comment for why a shallow clone
+  // alone isn't enough here.
+  async createContact(data: ContactData): Promise<number | null> {
+    return this.withSessionExpiryRetry(async () => {
+      // WHY the bounded transient-retry (ported 2026-07-22, same pattern as
+      // CompaniesPage.createCompany/LeadsPage.createLead): saveContact() now
+      // classifies a generic-error create rejection as
+      // TransientContactSaveError; retry the ENTIRE create here.
+      // Duplicate-safe — a transient rejection is blocked before any DB
+      // write. A GENUINE validation rejection is a different error and is
+      // NOT caught here, so it still fails loudly.
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const attemptData = this.cloneContactDataForRetry(data);
+        try {
+          await this.clickAddContact();
+          await this.fillContactForm(attemptData);
+          return await this.saveContact();
+        } catch (error) {
+          if (error instanceof TransientContactSaveError && attempt < maxAttempts) {
+            logger.warn(
+              `Contact create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
+                're-navigating and retrying the whole create'
+            );
+            await this.navigateTo(`${config.appUrl}/sales/contacts/list`);
+            await this.waitForContactListPage();
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw new Error('createContact: exhausted transient retries without a definitive outcome');
+    }, 'createContact');
+  }
+
+  // WHY wrapped in withSessionExpiryRetry (2026-07-20): same reasoning as
+  // createContact() above — searchAndOpenContact() re-navigates from
+  // scratch each call (self-starting), and fillEditForm() shares the same
+  // in-place-mutation risk as fillContactForm().
   async updateContact(
     newData: ContactData,
     originalFirstName?: string,
     contactId?: number
   ): Promise<void> {
-    const searchName = originalFirstName ?? newData.firstName;
-    await this.searchAndOpenContact(searchName, contactId);
-    await this.clickEditIcon();
-    await this.fillEditForm(newData);
-    await this.saveEditedContact();
+    return this.withSessionExpiryRetry(async () => {
+      const attemptData = this.cloneContactDataForRetry(newData);
+      const searchName = originalFirstName ?? attemptData.firstName;
+      await this.searchAndOpenContact(searchName, contactId);
+      await this.clickEditIcon();
+      await this.fillEditForm(attemptData);
+      await this.saveEditedContact();
+    }, 'updateContact');
   }
 
-  async assertContactUpdated(data: ContactData): Promise<void> {
+  async assertContactUpdated(data: ContactData, contactId?: number): Promise<void> {
+    // WHY: ID-first — mirrors DealsPage.assertDealUpdated. List search via
+    // retryFindContact is subject to search-index/list-refresh lag under
+    // load; direct navigation to the known ID is deterministic. List search
+    // remains the fallback for callers with no ID.
+    if (contactId) {
+      await this.goToContactDetailsById(contactId);
+      await expect(this.page.locator('body')).toContainText(data.firstName, { timeout: 15000 });
+      return;
+    }
     await this.goToContactsList();
     await this.assertContactExistsInList(data.firstName);
   }

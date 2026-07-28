@@ -19,7 +19,7 @@ import {
 test.describe('Meetings RBAC', () => {
   // ── Test 1: Restricted user navigates ─────────────────────────────────────
 
-  test('@regression restricted user should navigate to meetings list', async ({
+  test('@smoke @regression @prodSafe restricted user should navigate to meetings list', async ({
     restrictedPage,
   }) => {
     const meetingsPage = new MeetingsPage(restrictedPage);
@@ -253,5 +253,33 @@ test.describe('Meetings RBAC', () => {
     await restrictedPage.keyboard.press('Escape');
     await restrictedPage.waitForTimeout(500);
     logger.success('M14 passed');
+  });
+
+  // ── Test: Restricted user clones their own meeting ─────────────────────────
+  // WHY: added 2026-07-16 — the only prior Meetings RBAC clone coverage
+  // (the "M12" test above) checked that the "Clone" menu item is merely
+  // VISIBLE for a restricted user on an admin-owned meeting, never actually
+  // clicked it or verified a clone was created. This test exercises the
+  // real clone-and-verify flow on a meeting the restricted user owns.
+
+  test('@regression restricted user can clone their own meeting and verify cloned meeting exists', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(240000);
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const title = `Meeting-${Date.now()}`;
+
+    await meetingsPage.goToMeetingsList();
+    await meetingsPage.openAddForm();
+    await meetingsPage.fillTitleOnly(title);
+    const meetingId = await meetingsPage.saveMeeting();
+    if (!meetingId) throw new Error('Meeting ID should be captured after create');
+
+    await meetingsPage.searchMeetingById(meetingId);
+    await meetingsPage.openMeetingFromList(title);
+    const clonedId = await meetingsPage.cloneMeeting();
+    if (!clonedId) throw new Error('Cloned meeting ID should be captured after clone');
+    await meetingsPage.assertClonedMeetingTitle(title, clonedId);
+    logger.success('M16 passed');
   });
 });

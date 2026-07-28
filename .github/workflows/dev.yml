@@ -46,6 +46,16 @@ jobs:
           echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
+      # WHY: see qa.yml for the full explanation — must run before notify so its
+      # delta output exists in time for the email; never fails the build.
+      - name: Sync run history
+        if: always()
+        env:
+          ENV: qa
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run history:sync || true
+
       - name: Send notification email
         if: always()
         env:

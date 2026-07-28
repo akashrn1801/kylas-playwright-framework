@@ -1,4 +1,5 @@
 import { test, expect } from '../../src/fixtures/index';
+import { safeWaitForURL } from '../../src/utils/navigation';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import {
   generateDealData,
@@ -146,7 +147,7 @@ async function createFreshContactAndCompany(
 }
 
 test.describe('Deals RBAC', () => {
-  test('@smoke @regression restricted user can navigate to deals list', async ({
+  test('@smoke @regression @prodSafe restricted user can navigate to deals list', async ({
     restrictedPage,
   }) => {
     const dealsPage = new DealsPage(restrictedPage);
@@ -185,21 +186,35 @@ test.describe('Deals RBAC', () => {
   // User names captured from /v1/users/me API — no hardcoding.
   // ──────────────────────────────────────────────────────────
 
-  test('@regression restricted user contact and company owned by restricted not admin', async ({
+  // WHY split 2026-07-27 (was one combined test, "D13"): the original single
+  // test checked Company owner AND Contact owner in one assertion block.
+  // Manual verification confirmed Company association on Deals works
+  // correctly (owner displays as expected) while Contact association has a
+  // genuine, pre-existing, confirmed APP-LEVEL bug — the contact never
+  // actually persists to the deal at all (see CLAUDE.md's Known Issues for
+  // the full evidence trail). Combined into one test, the real Contact bug
+  // was masking a working Company feature — every run failed with a single,
+  // conflated signal instead of two precise ones. Split into D13a (Company —
+  // expected to pass) and D13b (Contact — expected to fail until the app bug
+  // is fixed), mirroring this file's own D24a/D24b split precedent for
+  // exactly this "one test conflates two independent things" problem.
+  test('@regression restricted user can view Company owner on a deal they own', async ({
     restrictedPage,
-    adminPage,
   }) => {
     test.setTimeout(480000);
 
-    // WHY: /v1/users/me is called automatically on every page load.
-    // We intercept it to get the display name without any UI interaction.
+    // WHY: /v1/users/me is called automatically on every page load. We
+    // intercept it to get the display name without any UI interaction.
     const getUserName = async (page: typeof restrictedPage): Promise<string> => {
       try {
         const responsePromise = page.waitForResponse(
-          (res) => res.url().includes('/v1/users/me') && res.status() === 200,
+          (res) =>
+            res.url().includes('/v1/users/me') &&
+            !res.url().includes('/reports/') &&
+            res.status() === 200,
           { timeout: config.timeouts.navigation }
         );
-        await page.goto(`${config.appUrl}/sales/deals/list`, { waitUntil: 'domcontentloaded' });
+        await new DealsPage(page).navigateTo(`${config.appUrl}/sales/deals/list`);
         const response = await responsePromise;
         const body = await response.json();
         const name = (body?.name ?? '').trim();
@@ -211,28 +226,19 @@ test.describe('Deals RBAC', () => {
       }
     };
 
-    // Step 1 — Capture both user names via API interception
-    const adminName = await getUserName(adminPage);
-    logger.info(`Admin: ${adminName}`);
-
     const restrictedName = await getUserName(restrictedPage);
     logger.info(`Restricted: ${restrictedName}`);
 
-    // Step 2 — Restricted user creates a deal
     const dealsPage = new DealsPage(restrictedPage);
     const dealData = generateDealData();
     await dealsPage.goToDealsList();
     const dealId = await dealsPage.createDeal(dealData);
     if (!dealId) throw new Error('Deal ID not captured — cannot verify ownership');
 
-    // Step 3 — Navigate to deal details
-    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+    await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
     logger.info('On deal details page');
 
-    // Step 4 — Verify Company Owner via modal
     logger.info('Verifying company owner');
     const companyLink = restrictedPage.locator('.title.text-break.link-primary span').first();
     await companyLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
@@ -270,41 +276,101 @@ test.describe('Deals RBAC', () => {
 
     await companyModal.locator('button[aria-label="Close"]').click();
     await companyModal.waitFor({ state: 'hidden', timeout: config.timeouts.navigation });
+    logger.success('D13a passed');
+  });
 
-    // Step 5 — Verify Contact Owner via new tab
+  // WHY expected to fail: confirmed real, pre-existing app-level bug — Deal's
+  // Contact association does not persist. See CLAUDE.md's Known Issues entry
+  // for full evidence. This test is deliberately left asserting the CORRECT
+  // expected behavior (contact owner = restricted user), not loosened to
+  // match the broken actual behavior — per this file's own precedent of
+  // never masking a confirmed real defect.
+  test('@regression restricted user can view Contact owner on a deal they own', async ({
+    restrictedPage,
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+
+    // WHY: /v1/users/me is called automatically on every page load. We
+    // intercept it to get the display name without any UI interaction.
+    const getUserName = async (page: typeof restrictedPage): Promise<string> => {
+      try {
+        const responsePromise = page.waitForResponse(
+          (res) =>
+            res.url().includes('/v1/users/me') &&
+            !res.url().includes('/reports/') &&
+            res.status() === 200,
+          { timeout: config.timeouts.navigation }
+        );
+        await new DealsPage(page).navigateTo(`${config.appUrl}/sales/deals/list`);
+        const response = await responsePromise;
+        const body = await response.json();
+        const name = (body?.name ?? '').trim();
+        logger.info(`Captured user name from API: ${name}`);
+        return name;
+      } catch (error) {
+        logger.warn(`Could not capture user name: ${String(error)}`);
+        return '';
+      }
+    };
+
+    const adminName = await getUserName(adminPage);
+    logger.info(`Admin: ${adminName}`);
+    const restrictedName = await getUserName(restrictedPage);
+    logger.info(`Restricted: ${restrictedName}`);
+
+    // WHY: generateDealData() with no associatedContactName falls through to
+    // DealsPage.selectFirstOptionFromDropdown()'s documented random-pick path,
+    // which can land on ANY visible contact regardless of owner — unsafe for
+    // this test, which asserts a SPECIFIC owner. Create a contact as the
+    // restricted user first (ownership = creator, per this codebase's own
+    // factory convention) and pin the deal to it by exact name.
+    const restrictedContactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateContactData();
+    await restrictedContactsPage.goToContactsList();
+    const ownContactId = await restrictedContactsPage.createContact(contactData);
+    if (!ownContactId) throw new Error('Restricted-owned contact ID not captured — cannot proceed');
+    const ownContactName = `${contactData.firstName} ${contactData.lastName}`;
+
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData({ associatedContactName: ownContactName });
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    if (!dealId) throw new Error('Deal ID not captured — cannot verify ownership');
+
+    await dealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
+    await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
+    logger.info('On deal details page');
+
     logger.info('Verifying contact owner');
     const contactLink = restrictedPage.locator('.deal-contact__name').first();
     await contactLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
 
-    try {
-      const [newTab] = await Promise.all([
-        restrictedPage.context().waitForEvent('page', { timeout: config.timeouts.navigation }),
-        contactLink.click(),
-      ]);
-      await newTab.waitForLoadState('domcontentloaded');
-      logger.info(`Contact tab URL: ${newTab.url()}`);
+    const [newTab] = await Promise.all([
+      restrictedPage.context().waitForEvent('page', { timeout: config.timeouts.navigation }),
+      contactLink.click(),
+    ]);
+    await newTab.waitForLoadState('domcontentloaded');
+    logger.info(`Contact tab URL: ${newTab.url()}`);
 
-      const contactOwner =
-        (
-          await newTab
-            .locator('.read-only-info')
-            .filter({ has: newTab.locator('label', { hasText: 'Owner' }) })
-            .first()
-            .locator('span.title')
-            .first()
-            .textContent()
-        )?.trim() ?? '';
-      logger.info(`Contact owner: ${contactOwner}`);
+    const contactOwner =
+      (
+        await newTab
+          .locator('.read-only-info')
+          .filter({ has: newTab.locator('label', { hasText: 'Owner' }) })
+          .first()
+          .locator('span.title')
+          .first()
+          .textContent()
+      )?.trim() ?? '';
+    logger.info(`Contact owner: ${contactOwner}`);
 
-      if (adminName) expect(contactOwner).not.toBe(adminName);
-      if (restrictedName) expect(contactOwner).toBe(restrictedName);
-      logger.success(`Contact owner verified: ${contactOwner}`);
+    if (adminName) expect(contactOwner).not.toBe(adminName);
+    if (restrictedName) expect(contactOwner).toBe(restrictedName);
+    logger.success(`Contact owner verified: ${contactOwner}`);
 
-      await newTab.close();
-    } catch (error) {
-      logger.warn(`Contact owner verification skipped: ${String(error)}`);
-    }
-    logger.success('D13 passed');
+    await newTab.close();
+    logger.success('D13b passed');
   });
 
   // ──────────────────────────────────────────────────────────
@@ -318,18 +384,17 @@ test.describe('Deals RBAC', () => {
     test.setTimeout(480000);
 
     const adminDealsPage = new DealsPage(adminPage);
+    const restrictedDealsPage = new DealsPage(restrictedPage);
     const adminDealData = generateAdminDealData();
     await adminDealsPage.goToDealsList();
     const dealId = await adminDealsPage.createDeal(adminDealData);
     if (!dealId) throw new Error('Admin deal ID not captured');
 
     // Restricted user navigates directly to admin deal via URL
-    await restrictedPage.goto(`${config.appUrl}/sales/deals/details/${dealId}`, {
-      waitUntil: 'domcontentloaded',
-    });
+    await restrictedDealsPage.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
 
     try {
-      await restrictedPage.waitForURL(/deals\/details\//, { timeout: config.timeouts.navigation });
+      await safeWaitForURL(restrictedPage, /deals\/details\//, config.timeouts.navigation);
       // Page loaded — verify edit button is NOT visible
       const editBtn = restrictedPage.locator('#edit-action-btn');
       const editBtnVisible = await editBtn.isVisible();
@@ -641,10 +706,22 @@ test.describe('Deals RBAC', () => {
       .locator('.card')
       .filter({ has: restrictedPage.locator('h2').filter({ hasText: 'Quotations' }) })
       .first();
-    await quotationsCard.scrollIntoViewIfNeeded();
+    // WHY: Confirmed live (2026-07-06/07) — same root cause as CompaniesPage's
+    // Quotations card (tests/ui/companies/companies.spec.ts CO12): the card
+    // refetches its own related-quotations list independently of the main
+    // deal GET. scrollIntoViewIfNeeded() right after re-navigation can grab a
+    // reference to a card mid-refetch that React then replaces, hanging in
+    // its "wait for stable position" check until the whole test's timeout
+    // fires — surfaces as "Target page ... closed", the timeout kill, not
+    // the real cause. An auto-retrying expect() re-queries the locator on
+    // every poll instead of holding one DOM snapshot; no manual scroll is
+    // needed for a pure visibility check.
+    await expect(quotationsCard, 'Quotations card should be visible after refetch').toBeVisible({
+      timeout: 15000,
+    });
     const quotationEntry = quotationsCard.locator('ul.card-list li, .list-item, a').first();
     await expect(quotationEntry, 'Quotations card should show at least one entry').toBeVisible({
-      timeout: 10000,
+      timeout: 15000,
     });
     logger.success('D22 passed');
   });
@@ -1054,11 +1131,17 @@ test.describe('Deals RBAC', () => {
     const dealId = await dealsPage.createDeal(dealData);
     if (!dealId) throw new Error('Deal ID not captured');
     await dealsPage.goToDealDetailsById(dealId);
-    const baselineCount = await dealsPage.getAssociatedContactsCount();
+    // WHY getDisplayedAssociatedContactsCount(), not getAssociatedContactsCount()
+    // (2026-07-27): same reasoning as D35 (deals.spec.ts) — this test's purpose is
+    // verifying the contact becomes visible in the "Associated Contacts" UI card,
+    // for the restricted user's own view specifically. Deliberately reads the UI,
+    // not the API, so it keeps surfacing the confirmed, real, unresolved app-level
+    // display bug (see CLAUDE.md's Known Issues) if still present.
+    const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
     // WHY: Real end-state check — reload and re-read the card, don't trust the same render
     await dealsPage.goToDealDetailsById(dealId);
-    const afterCount = await dealsPage.getAssociatedContactsCount();
+    const afterCount = await dealsPage.getDisplayedAssociatedContactsCount();
     expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
     logger.success('D27 passed');
   });

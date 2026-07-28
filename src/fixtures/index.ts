@@ -13,12 +13,13 @@
  * 3. ErrorCollector.clearCurrentTest() in the use() callback
  */
 
-import { test as base, Page, BrowserContext } from '@playwright/test';
+import { test as base, Page, BrowserContext, Browser, TestInfo } from '@playwright/test';
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
-import { AuthManager } from '../auth/authManager';
+import { AuthManager, registerPageForRecovery } from '../auth/authManager';
 import { logger } from '../utils/logger';
+import { safeWaitForURL } from '../utils/navigation';
 
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
@@ -128,6 +129,190 @@ function attachErrorListeners(page: Page): void {
   });
 }
 
+// ── Role page lifecycle (shared by adminPage + restrictedPage) ────────────────
+
+type NavOutcome = 'sales' | 'signIn' | 'timeout';
+
+// WHY: Confirmed live (2026-07-06) — this used to be duplicated 2x per fixture
+// (once for the "fresh" path, once for the "session expired" path), and the
+// ONLY session-expiry detection was a one-shot check of page.url() for
+// '/signIn'/'/login' taken right after goto(). If the page was neither on
+// signIn NOR yet on /sales/ within the timeout (a one-off slow load, or a
+// session that expired in the brief window between AuthManager's own
+// validation and this page's navigation), there was NO recovery path at
+// all — a hard, unrecoverable `waitForURL` timeout failed the test outright.
+// This raced the two genuine terminal outcomes instead of a blind wait, so a
+// signIn/login redirect is caught whenever it actually happens, and gives a
+// bounded number of forced-relogin retries before finally throwing — a real
+// failure (e.g. the app is genuinely down) still fails loudly, it's just no
+// longer indistinguishable from an ordinary, recoverable session expiry.
+async function navigateAndConfirmLoggedIn(
+  page: Page,
+  role: 'admin' | 'restricted'
+): Promise<NavOutcome> {
+  // WHY: QA env has intermittent TCP timeouts under parallel load — retry the
+  // raw navigation itself before ever judging where it landed.
+  for (let gotoAttempt = 1; gotoAttempt <= 3; gotoAttempt++) {
+    try {
+      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      break;
+    } catch (e) {
+      if (gotoAttempt === 3) throw e;
+      logger.warn(`${role}Page goto attempt ${gotoAttempt} failed — retrying in 3s`);
+      await page.waitForTimeout(3000);
+    }
+  }
+
+  // WHY: migrated 2026-07-19 to safeWaitForURL() — both branches were bare
+  // waitForURL() calls defaulting to 'load'. This function runs on EVERY
+  // test's fixture setup — CI evidence (2026-07-19, sandbox run 29673393047,
+  // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
+  // setting up 'adminPage'/'restrictedPage'" failures, several tracing
+  // through this exact code path (createRolePage → getContextForRole).
+  return Promise.race([
+    safeWaitForURL(page, /sales\//, config.timeouts.navigation)
+      .then((): NavOutcome => 'sales')
+      .catch((): NavOutcome => 'timeout'),
+    safeWaitForURL(page, /\/(signIn|login)/, config.timeouts.navigation)
+      .then((): NavOutcome => 'signIn')
+      .catch((): NavOutcome => 'timeout'),
+  ]);
+}
+
+async function dismissStartupPopup(page: Page): Promise<void> {
+  try {
+    const popup = page.locator('#cancel[data-dismiss="modal"]');
+    await popup.waitFor({ state: 'visible', timeout: 3000 });
+    await popup.click();
+    await popup.waitFor({ state: 'hidden', timeout: 3000 });
+  } catch {
+    /* no popup — continue */
+  }
+}
+
+async function createRolePage(
+  browser: Browser,
+  role: 'admin' | 'restricted',
+  testInfo: TestInfo,
+  use: (page: Page) => Promise<void>
+): Promise<void> {
+  // WHY: Set current test context so errors captured during this test
+  // are tagged with the correct test title and file
+  ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
+
+  // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
+  // AuthManager validates the session before creating the context and
+  // re-logins automatically if expired. This prevents mid-suite session
+  // expiry from causing flaky failures.
+  const authManager = new AuthManager(browser);
+  let context = await authManager.getContextForRole(role);
+  let page = await context.newPage();
+
+  // WHY: Attach error listeners before navigating so we capture ALL errors
+  // from the very first page load, not just after the test starts
+  attachErrorListeners(page);
+  attachSessionExpiryListener(page, role, authManager);
+  // WHY: registers (role, authManager) for this exact page so BasePage's
+  // click()/fill() can call tryRecoverSessionForPage() if a mid-test
+  // redirect to /signIn is ever hit — see authManager.ts's own comment for
+  // the full mechanism and why a WeakMap registry instead of a constructor
+  // param on every page object.
+  registerPageForRecovery(page, role, authManager);
+
+  // WHY: Stagger restricted user initialization on CI to avoid concurrent session conflicts
+  if (role === 'restricted' && process.env.CI) {
+    await page.waitForTimeout(Math.floor(Math.random() * 3000));
+  }
+
+  const maxAttempts = 2;
+  let landed = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const outcome = await navigateAndConfirmLoggedIn(page, role);
+    if (outcome === 'sales') {
+      landed = true;
+      break;
+    }
+
+    if (attempt === maxAttempts) {
+      // WHY: Confirmed live (2026-07-07 reporting-overhaul investigation) —
+      // this used to throw directly, leaking the context/page created above
+      // (or re-created on a prior loop iteration) since a throw before
+      // reaching `await use(page)` skips this fixture's own teardown code
+      // entirely. Every time this genuine-failure path fired, one browser
+      // context leaked for the rest of the worker's lifetime. Capture the URL
+      // before closing — page.url() after close() is not reliable.
+      const failureUrl = page.url();
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      throw new Error(
+        `${role} page failed to reach the app's /sales/ area after ${maxAttempts} login ` +
+          `attempts (last outcome: ${outcome}, current URL: ${failureUrl}). This is a genuine ` +
+          `failure, not a session-expiry false positive a retry could paper over — investigate ` +
+          `the app/environment.`
+      );
+    }
+
+    logger.warn(
+      `${role} page did not land on /sales/ (outcome: ${outcome}, url: ${page.url()}) — ` +
+        `forcing a fresh login and retrying (attempt ${attempt}/${maxAttempts})`
+    );
+    await authManager.clearStorageState(role).catch(() => {});
+    AuthManager['lastValidated'].delete(role);
+    await authManager.loginAndSaveState(role);
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+    context = await authManager.getContextForRole(role);
+    page = await context.newPage();
+    attachErrorListeners(page);
+    attachSessionExpiryListener(page, role, authManager);
+    registerPageForRecovery(page, role, authManager);
+  }
+
+  if (!landed) {
+    // Unreachable — the loop above either sets landed=true or throws — but
+    // keeps TypeScript's control-flow analysis happy without a non-null cast.
+    throw new Error(`${role} page never landed on /sales/ — see prior log for details`);
+  }
+
+  await dismissStartupPopup(page);
+
+  // WHY here, after landing/popup-dismiss but before the test body runs
+  // (2026-07-23, Option 6 — proactive layer): this is the natural "test is
+  // about to start" point for every adminPage/restrictedPage fixture,
+  // mirroring exactly how registerPageForRecovery()/attachErrorListeners()
+  // above are already wired in once per page with zero action needed from
+  // any test or page object. See AuthManager.ensureFreshSession()'s own
+  // comment for the full mechanism — this is complementary to, not a
+  // replacement for, the reactive withSessionExpiryRecovery() a test can
+  // still fall back on if it runs long enough to cross the buffer mid-test.
+  // WHY wrapped in try/catch (2026-07-28, found via a real CI incident — see
+  // authManager.ts's getLoginUrl()/loginHeadless() comments for the full
+  // story): this call used to be unguarded, so ANY failure inside it (the
+  // 404-from-a-mismatched-apiBaseUrl bug that caused this, or any other
+  // future transient failure of the same headless-login call) threw straight
+  // out of fixture setup and failed the ENTIRE test before its body even
+  // ran — turning an optional pre-flight optimization into a single point of
+  // failure with much higher blast radius than the problem it exists to
+  // prevent. This is a proactive layer only; withSessionExpiryRecovery() and
+  // the click()/fill()/navigateTo() reactive paths remain the backstop if a
+  // genuine mid-test expiry happens anyway, so silently proceeding here is
+  // safe — the test is no worse off than it would be if this check didn't
+  // exist at all.
+  try {
+    await authManager.ensureFreshSession(page, role);
+  } catch (error) {
+    logger.warn(
+      `ensureFreshSession failed for role ${role} — proceeding without proactive refresh; ` +
+        `reactive session-expiry recovery will handle a genuine mid-test expiry if one occurs: ${String(error)}`
+    );
+  }
+
+  await use(page);
+
+  ErrorCollector.clearCurrentTest();
+  await context.close();
+}
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 export type TestFixtures = {
@@ -139,123 +324,11 @@ export type TestFixtures = {
 
 export const test = base.extend<TestFixtures>({
   adminPage: async ({ browser }, use, testInfo) => {
-    // WHY: Set current test context so errors captured during this test
-    // are tagged with the correct test title and file
-    ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
-
-    // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
-    // AuthManager validates the session before creating the context and
-    // re-logins automatically if expired. This prevents mid-suite session
-    // expiry from causing flaky failures.
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('admin');
-    const page = await context.newPage();
-
-    // WHY: Attach error listeners before navigating so we capture ALL errors
-    // from the very first page load, not just after the test starts
-    attachErrorListeners(page);
-    attachSessionExpiryListener(page, 'admin', authManager);
-
-    await page.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-
-    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
-    const adminUrl = page.url();
-    if (adminUrl.includes('/signIn') || adminUrl.includes('/login')) {
-      logger.warn('Admin session expired mid-run — re-logging in');
-      await authManager.loginAndSaveState('admin');
-      const freshContext = await authManager.getContextForRole('admin');
-      const freshPage = await freshContext.newPage();
-      attachErrorListeners(freshPage);
-      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-      try {
-        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
-        await popup.waitFor({ state: 'visible', timeout: 3000 });
-        await popup.click();
-        await popup.waitFor({ state: 'hidden', timeout: 3000 });
-      } catch { /* no popup */ }
-      await use(freshPage);
-      ErrorCollector.clearCurrentTest();
-      await freshContext.close();
-      await context.close();
-      return;
-    }
-
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-
-    try {
-      const popup = page.locator('#cancel[data-dismiss="modal"]');
-      await popup.waitFor({ state: 'visible', timeout: 3000 });
-      await popup.click();
-      await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch {
-      /* no popup — continue */
-    }
-
-    await use(page);
-
-    ErrorCollector.clearCurrentTest();
-    await context.close();
+    await createRolePage(browser, 'admin', testInfo, use);
   },
 
   restrictedPage: async ({ browser }, use, testInfo) => {
-    ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
-    // WHY: Use AuthManager.getContextForRole() — validates session before
-    // creating context and re-logins if expired. Same as adminPage.
-    const authManager = new AuthManager(browser);
-    const context = await authManager.getContextForRole('restricted');
-    const page = await context.newPage();
-    // WHY: Attach error listeners before any navigation
-    attachErrorListeners(page);
-    attachSessionExpiryListener(page, 'restricted', authManager);
-    // WHY: Stagger restricted user initialization on GHA to avoid concurrent session conflicts
-    if (process.env.CI) await page.waitForTimeout(Math.floor(Math.random() * 3000));
-    // WHY: QA env has intermittent TCP timeouts under parallel load — mirror AuthManager 3-retry pattern.
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        break;
-      } catch (e) {
-        if (attempt === 3) throw e;
-        logger.warn(`restrictedPage goto attempt ${attempt} failed — retrying in 3s`);
-        await page.waitForTimeout(3000);
-      }
-    }
-    // WHY: Detect session expiry — if redirected to /signIn, re-login and retry
-    const restrictedUrl = page.url();
-    if (restrictedUrl.includes('/signIn') || restrictedUrl.includes('/login')) {
-      logger.warn('Restricted session expired mid-run — re-logging in');
-      await authManager.loginAndSaveState('restricted');
-      const freshContext = await authManager.getContextForRole('restricted');
-      const freshPage = await freshContext.newPage();
-      attachErrorListeners(freshPage);
-      await freshPage.goto(config.appUrl, { waitUntil: 'domcontentloaded' });
-      await freshPage.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-      try {
-        const popup = freshPage.locator('#cancel[data-dismiss="modal"]');
-        await popup.waitFor({ state: 'visible', timeout: 3000 });
-        await popup.click();
-        await popup.waitFor({ state: 'hidden', timeout: 3000 });
-      } catch { /* no popup */ }
-      await use(freshPage);
-      ErrorCollector.clearCurrentTest();
-      await freshContext.close();
-      await context.close();
-      return;
-    }
-
-    await page.waitForURL(/sales\//, { timeout: config.timeouts.navigation });
-    try {
-      const popup = page.locator('#cancel[data-dismiss="modal"]');
-      await popup.waitFor({ state: 'visible', timeout: 3000 });
-      await popup.click();
-      await popup.waitFor({ state: 'hidden', timeout: 3000 });
-    } catch {
-      /* no popup — continue */
-    }
-    await use(page);
-    ErrorCollector.clearCurrentTest();
-    await context.close();
+    await createRolePage(browser, 'restricted', testInfo, use);
   },
 
   adminContext: async ({ browser }, use) => {

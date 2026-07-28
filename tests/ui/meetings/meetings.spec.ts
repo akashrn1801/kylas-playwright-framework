@@ -12,7 +12,7 @@ import {
 test.describe('Meetings', () => {
   // ── Test 1: Navigate ───────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to meetings list', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to meetings list', async ({ adminPage }) => {
     const meetingsPage = new MeetingsPage(adminPage);
 
     await meetingsPage.goToMeetingsList();
@@ -216,5 +216,33 @@ test.describe('Meetings', () => {
     await adminPage.waitForTimeout(500);
     logger.success('GPS address test completed');
     logger.success('M7 passed');
+  });
+
+  // ── Test 8: Clone ──────────────────────────────────────────────────────────
+  // WHY: added 2026-07-16 — prior to this, the only Meetings clone coverage
+  // was an RBAC check that the "Clone" menu item is merely VISIBLE, never
+  // actually clicked. Confirmed live that cloning genuinely works (opens a
+  // real "Clone Meeting" modal, needs no field edits before saving) — see
+  // MeetingsPage.cloneMeeting()'s own comment for the full evidence.
+
+  test('@regression admin should clone a meeting and verify cloned meeting exists', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(240000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const title = `Meeting-${Date.now()}`;
+
+    await meetingsPage.goToMeetingsList();
+    await meetingsPage.openAddForm();
+    await meetingsPage.fillTitleOnly(title);
+    const meetingId = await meetingsPage.saveMeeting();
+    if (!meetingId) throw new Error('Meeting ID should be captured after create');
+
+    await meetingsPage.searchMeetingById(meetingId);
+    await meetingsPage.openMeetingFromList(title);
+    const clonedId = await meetingsPage.cloneMeeting();
+    if (!clonedId) throw new Error('Cloned meeting ID should be captured after clone');
+    await meetingsPage.assertClonedMeetingTitle(title, clonedId);
+    logger.success('M15 passed');
   });
 });

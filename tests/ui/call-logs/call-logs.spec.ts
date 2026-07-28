@@ -1,5 +1,6 @@
 import { test } from '../../../src/fixtures/index';
 import { expect } from '@playwright/test';
+import { safeWaitForURL } from '../../../src/utils/navigation';
 import { CallLogsPage } from '../../../src/modules/call-logs/CallLogsPage';
 import {
   generateCallLogData,
@@ -37,7 +38,7 @@ test.describe('Call Logs', () => {
 
   // ── CL1 ───────────────────────────────────────────────────────────────────
 
-  test('@smoke @regression admin should navigate to call logs list page and verify list is visible', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to call logs list page and verify list is visible', async ({ adminPage }) => {
     test.setTimeout(180000);
     const callLogsPage = new CallLogsPage(adminPage);
     await callLogsPage.goToCallLogsList();
@@ -93,11 +94,12 @@ test.describe('Call Logs', () => {
       includeAssociatedDeal: true,
     });
     await callLogsPage.goToCallLogsList();
-    const { callLogId, entityName } = await callLogsPage.createCallLog(data);
+    const { callLogId, entityName, associatedDealName } = await callLogsPage.createCallLog(data);
     expect(callLogId).not.toBeNull();
     await callLogsPage.assertCallLogInList(callLogId!);
     await callLogsPage.assertDetailEntityHeadingContains(entityName);
     await callLogsPage.assertOutcomeOnDetail('No Answer');
+    await callLogsPage.assertAssociatedDealOnDetail(associatedDealName);
     logger.success('CL4 passed');
   });
 
@@ -252,9 +254,11 @@ test.describe('Call Logs', () => {
     const toastLink = callLogsPage['toasterCallLogIdLink']();
     await toastLink.waitFor({ state: 'visible', timeout: 10000 });
     await toastLink.click();
-    await adminPage.waitForURL(new RegExp(`/sales/calls/list\\?id=${callLogId}`), {
-      timeout: config.timeouts.navigation,
-    });
+    await safeWaitForURL(
+      adminPage,
+      new RegExp(`/sales/calls/list\\?id=${callLogId}`),
+      config.timeouts.navigation
+    );
     expect(adminPage.url()).toContain(`?id=${callLogId}`);
     logger.info(`Navigated to: ${adminPage.url()}`);
     logger.success('CL11 passed');
