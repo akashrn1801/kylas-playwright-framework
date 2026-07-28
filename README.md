@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 276 tests across 9 modules (17 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 279 tests across 9 modules (17 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -36,7 +36,7 @@ This document is written so a new engineer — or any of us in six months — ca
 
 **Modules covered** (9): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-07-22, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-07-27, do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
@@ -44,7 +44,7 @@ This document is written so a new engineer — or any of us in six months — ca
 | Companies | 17 | 20 | 37 |
 | Contacts | 19 | 19 | 38 |
 | Dashboard/Login | 4 | — | 4 |
-| Deals | 17 | 22 | 39 |
+| Deals | 19 | 23 | 42 |
 | Leads | 21 | 27 | 48 |
 | Meetings | 8 | 8 | 16 |
 | Quotations | 15 | 14 | 29 |
@@ -700,6 +700,8 @@ Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes —
 ---
 
 ## Contributing / Adding a New Module
+
+Before making any change, read `CLAUDE.md`'s **Standing Engineering Checklist** — a permanent, always-apply 14-point list distilled from real issues found and fixed across multiple sessions in this codebase.
 
 Full daily-workflow and branch-promotion mechanics live in `CONTRIBUTING.md` and `GIT_WORKFLOW.md` — this is the module-specific checklist:
 
