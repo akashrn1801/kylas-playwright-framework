@@ -1,5 +1,5 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
-import { config } from '../../config/config';
+import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
 import { safeWaitForURL } from '../utils/navigation';
 import * as fs from 'fs';
@@ -494,16 +494,15 @@ export class AuthManager {
   // Deliberately calls the real endpoint directly rather than adding a
   // fake/mocked login — this IS the same request the browser's own login
   // form issues; we're just skipping the DOM round-trip to get there.
-  // WHY this exists (2026-07-28 — see loginHeadless()'s own comment for the
-  // full incident this fixes): config.apiBaseUrl's shape (whether it already
-  // ends in /v1) is set per-environment via .env locally and via CI secrets
-  // in GitHub Actions — nothing enforces these match, and confirmed live they
-  // did not for QA. Normalizing here means correctness no longer depends on
-  // every environment's secret happening to be configured the same way as
-  // whichever one was last checked by hand.
+  // WHY this delegates to the shared buildApiUrl() (refactored 2026-07-28,
+  // see config.ts's own comment on buildApiUrl for the full history): this
+  // method used to carry its own inline normalization logic — a second,
+  // independent hand-rolled copy of the same fix was then found needed in
+  // DealsPage.ts's fetchCurrentDealApiData(), which is exactly the kind of
+  // drift a single shared implementation prevents. No behavior change for
+  // this method's callers — same computed URL as before.
   private getLoginUrl(): string {
-    const base = config.apiBaseUrl.replace(/\/+$/, '');
-    return base.endsWith('/v1') ? `${base}/users/login` : `${base}/v1/users/login`;
+    return buildApiUrl('/users/login');
   }
 
   private async loginHeadless(role: UserRole, page: Page): Promise<string> {

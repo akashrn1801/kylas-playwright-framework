@@ -8,7 +8,7 @@ import {
 import { TasksPage } from '../tasks/TasksPage';
 import { MeetingsPage } from '../meetings/MeetingsPage';
 import { generateTaskData } from '../../data/factories/taskFactory';
-import { config } from '../../../config/config';
+import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
 export class DealsPage extends BasePage {
@@ -1709,29 +1709,79 @@ export class DealsPage extends BasePage {
   // that genuinely had one. Fixed by reading the deal's own GET response
   // directly instead, which reflects the real backend state regardless of
   // what the (buggy) UI renders.
+  // WHY built via buildApiUrl() (fixed 2026-07-28, second occurrence of the
+  // same bug class as AuthManager.getLoginUrl() — see config.ts's own
+  // comment on buildApiUrl for the full history): this used to build the
+  // URL as `${config.apiBaseUrl}/deals/${id}` directly, which 404'd on
+  // every call in CI (confirmed via direct curl against a real deal from a
+  // live CI run: WITH /v1 -> HTTP 200 with real deal data; WITHOUT /v1 ->
+  // HTTP 404 {"status":"NOT_FOUND"}) because the CI secret backing
+  // config.apiBaseUrl lacks the /v1 suffix the local .env copy has — the
+  // exact same root cause as the login-URL bug, missed during that fix's
+  // own ripple-check because this line was pattern-matched but never
+  // actually opened and read. Also fixed here: this method used to swallow
+  // every failure completely silently (`if (!res.ok) return null`, a bare
+  // `catch { return null; }`) — logging now runs on BOTH branches so a
+  // future occurrence of this bug class (or any other request failure)
+  // surfaces immediately instead of silently masquerading as "no contact
+  // associated."
   private async fetchCurrentDealApiData(): Promise<Record<string, unknown> | null> {
     const match = this.page.url().match(/\/deals\/details\/(\d+)/);
     if (!match) return null;
     const dealId = match[1];
-    return this.page.evaluate(
-      async ({ id, apiBase }) => {
+    const apiUrl = buildApiUrl(`/deals/${dealId}`);
+    const result = await this.page.evaluate(
+      async ({ url }) => {
         try {
           const raw = localStorage.getItem('token');
-          if (!raw) return null;
+          if (!raw) return { ok: false as const, reason: 'no-token-in-localStorage' };
           const payload = JSON.parse(atob(raw.split('.')[1]));
           const accessToken = payload?.data?.accessToken;
-          if (!accessToken) return null;
-          const res = await fetch(`${apiBase}/deals/${id}`, {
+          if (!accessToken) return { ok: false as const, reason: 'no-accessToken-in-decoded-token' };
+          const res = await fetch(url, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
-          if (!res.ok) return null;
-          return await res.json();
-        } catch {
-          return null;
+          const bodyText = await res.text().catch(() => '');
+          if (!res.ok) {
+            return {
+              ok: false as const,
+              reason: 'http-error',
+              status: res.status,
+              body: bodyText.slice(0, 500),
+            };
+          }
+          let json: Record<string, unknown> | null = null;
+          try {
+            json = JSON.parse(bodyText);
+          } catch {
+            /* leave json null — reported as a distinct reason below */
+          }
+          return { ok: true as const, data: json };
+        } catch (e) {
+          return { ok: false as const, reason: 'exception', message: String(e) };
         }
       },
-      { id: dealId, apiBase: config.apiBaseUrl }
+      { url: apiUrl }
     );
+
+    if (!result.ok) {
+      const detail =
+        result.reason === 'http-error'
+          ? `HTTP ${result.status}${result.body ? ` — ${result.body}` : ''}`
+          : result.reason === 'exception'
+            ? result.message
+            : result.reason;
+      logger.warn(
+        `fetchCurrentDealApiData: GET ${apiUrl} did not return usable data (${detail}) — ` +
+          `treating as no associated-contact data available for this call`
+      );
+      return null;
+    }
+    logger.debug(
+      `fetchCurrentDealApiData: GET ${apiUrl} succeeded — ` +
+        `associatedContacts count: ${Array.isArray(result.data?.associatedContacts) ? (result.data.associatedContacts as unknown[]).length : 'field absent'}`
+    );
+    return result.data;
   }
 
   private async getAssociatedContacts(): Promise<Array<{ id: number; name: string }>> {
