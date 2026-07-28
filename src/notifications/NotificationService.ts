@@ -225,7 +225,7 @@ export class NotificationService {
 
     console.log(`[Notification] Sending email — Subject: ${subject}`);
     try {
-      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html });
+      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
       console.log('[Notification] ✅ Email sent successfully');
     } catch (err) {
       console.error('[Notification] ❌ Failed to send email:', err);
