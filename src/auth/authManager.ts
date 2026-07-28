@@ -494,6 +494,18 @@ export class AuthManager {
   // Deliberately calls the real endpoint directly rather than adding a
   // fake/mocked login — this IS the same request the browser's own login
   // form issues; we're just skipping the DOM round-trip to get there.
+  // WHY this exists (2026-07-28 — see loginHeadless()'s own comment for the
+  // full incident this fixes): config.apiBaseUrl's shape (whether it already
+  // ends in /v1) is set per-environment via .env locally and via CI secrets
+  // in GitHub Actions — nothing enforces these match, and confirmed live they
+  // did not for QA. Normalizing here means correctness no longer depends on
+  // every environment's secret happening to be configured the same way as
+  // whichever one was last checked by hand.
+  private getLoginUrl(): string {
+    const base = config.apiBaseUrl.replace(/\/+$/, '');
+    return base.endsWith('/v1') ? `${base}/users/login` : `${base}/v1/users/login`;
+  }
+
   private async loginHeadless(role: UserRole, page: Page): Promise<string> {
     const credentials = this.getCredentials(role);
     if (!credentials.email || !credentials.password) {
@@ -506,19 +518,27 @@ export class AuthManager {
     // own browser context — no extra process/context to spin up and tear
     // down, and keeps this call attributable to the same context the
     // caller is already operating on.
-    // WHY no extra "/v1" segment here: confirmed via a live 404 caught during
-    // deliberate reproduction (2026-07-23) that config.apiBaseUrl ALREADY
-    // includes the /v1 suffix for every environment (e.g.
-    // https://api-qa.sling-dev.com/v1) — appending another /v1/ built a
-    // double-/v1/v1/ URL that 404'd. The real endpoint is exactly
-    // `${config.apiBaseUrl}/users/login`, matching the real PUT captured
-    // via live network inspection earlier in this same investigation.
-    const response = await page.request.put(`${config.apiBaseUrl}/users/login`, {
+    // WHY normalized via getLoginUrl(), not a hardcoded `${apiBaseUrl}/users/login`
+    // (fixed 2026-07-28, replacing the 2026-07-23 version of this comment):
+    // that version asserted config.apiBaseUrl "ALREADY includes the /v1 suffix
+    // for every environment," confirmed only against the LOCAL .env file. Real
+    // CI evidence (sandbox run 30286886093 AND qa-regression run 30092655209,
+    // both 2026-07-26/27) proved this false — the GitHub Actions secret backing
+    // QA_API_BASE_URL does NOT include /v1, so this exact call 404'd on every
+    // single invocation in CI (confirmed via direct curl against the real
+    // backend: with /v1 → 401 as expected; without /v1 → 404, an exact match
+    // for the CI error text). That made every proactive/reactive re-auth in CI
+    // fail outright, which is what actually produced the mass test-failure
+    // pattern investigated that day — not a token-lifetime or concurrency bug.
+    // getLoginUrl() normalizes so this is correct regardless of which shape a
+    // given environment's config happens to have, instead of re-relying on a
+    // convention that has already silently drifted once between local and CI.
+    const response = await page.request.put(this.getLoginUrl(), {
       data: { email: credentials.email, password: credentials.password, rememberMe: false },
     });
     if (!response.ok()) {
       throw new Error(
-        `Headless login failed for role ${role}: HTTP ${response.status()} from /v1/users/login`
+        `Headless login failed for role ${role}: HTTP ${response.status()} from ${this.getLoginUrl()}`
       );
     }
     const body = (await response.json()) as { token?: string };
