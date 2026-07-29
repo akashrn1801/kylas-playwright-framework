@@ -285,7 +285,27 @@ async function createRolePage(
   // comment for the full mechanism — this is complementary to, not a
   // replacement for, the reactive withSessionExpiryRecovery() a test can
   // still fall back on if it runs long enough to cross the buffer mid-test.
-  await authManager.ensureFreshSession(page, role);
+  // WHY wrapped in try/catch (2026-07-28, found via a real CI incident — see
+  // authManager.ts's getLoginUrl()/loginHeadless() comments for the full
+  // story): this call used to be unguarded, so ANY failure inside it (the
+  // 404-from-a-mismatched-apiBaseUrl bug that caused this, or any other
+  // future transient failure of the same headless-login call) threw straight
+  // out of fixture setup and failed the ENTIRE test before its body even
+  // ran — turning an optional pre-flight optimization into a single point of
+  // failure with much higher blast radius than the problem it exists to
+  // prevent. This is a proactive layer only; withSessionExpiryRecovery() and
+  // the click()/fill()/navigateTo() reactive paths remain the backstop if a
+  // genuine mid-test expiry happens anyway, so silently proceeding here is
+  // safe — the test is no worse off than it would be if this check didn't
+  // exist at all.
+  try {
+    await authManager.ensureFreshSession(page, role);
+  } catch (error) {
+    logger.warn(
+      `ensureFreshSession failed for role ${role} — proceeding without proactive refresh; ` +
+        `reactive session-expiry recovery will handle a genuine mid-test expiry if one occurs: ${String(error)}`
+    );
+  }
 
   await use(page);
 

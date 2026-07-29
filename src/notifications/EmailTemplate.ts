@@ -137,7 +137,7 @@ export class EmailTemplate {
       this.buildEnvironmentInfoBlock(ctx),
       this.buildCiCdInfoBlock(ctx),
       this.buildCtaButtons(ctx),
-      this.buildFooter(),
+      this.buildFooter(ctx),
     ].join('');
 
     return `<!DOCTYPE html><html><head>
@@ -201,7 +201,7 @@ ${body}
     return `
 <tr><td style="background:${INK};padding:20px 28px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td style="font-size:16px;font-weight:700;color:#ffffff;">Kylas <span style="font-weight:400;color:#9BA9FF;">QA Automation</span></td>
+    <td style="font-size:16px;font-weight:700;color:#ffffff;">Kylas <span style="font-weight:400;color:#9BA9FF;">${this.esc(ctx.env.toUpperCase())} Automation</span></td>
     <td align="right" style="font-size:11px;color:#9BA5B1;">Automation Health: <strong style="color:#ffffff;">${health.label}</strong></td>
   </tr></table>
   <div style="font-size:12px;color:#9BA5B1;margin-top:6px;">Test Execution Report — ${this.esc(this.formatReportDate(ctx.report.startTime))}</div>
@@ -1070,11 +1070,11 @@ ${body}
 
   // ===================== Footer =====================
 
-  private buildFooter(): string {
+  private buildFooter(ctx: EmailContext): string {
     const generatedAt = new Date().toISOString();
     return `
 <tr><td style="padding:16px 28px;text-align:center;border-top:1px solid ${CANVAS_TINT};">
-  <div style="font-size:11px;color:${MUTED};">Sent by Kylas QA Automation System &nbsp;·&nbsp; akash.rn1908@gmail.com</div>
+  <div style="font-size:11px;color:${MUTED};">Sent by Kylas ${this.esc(ctx.env.toUpperCase())} Automation System &nbsp;·&nbsp; akash.rn1908@gmail.com</div>
   <div style="font-size:10px;color:${MUTED};margin-top:4px;">Generated ${generatedAt} · Report engine v${REPORT_ENGINE_VERSION}</div>
 </td></tr>`;
   }
