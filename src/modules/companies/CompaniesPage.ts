@@ -210,24 +210,19 @@ export class CompaniesPage extends BasePage {
   // 4. Private Helpers
   // ──────────────────────────────────────────────────────────
 
+  // WHY: delegates to the shared BasePage.waitForEntityListPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   private async waitForListReady(): Promise<void> {
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for list API response before checking DOM — faster and more reliable
-    await Promise.race([
-      this.armResponseWaitWithRecovery(
-        (res) =>
-          res.url().includes('/v1/companies') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        'companies list response',
-        config.timeouts.navigation
-      ).catch(() => null),
-      this.companyTable()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
-    ]);
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.companyTable()).toBeVisible({ timeout: config.timeouts.navigation })
+    await this.waitForEntityListPage(
+      (res) =>
+        res.url().includes('/v1/companies') &&
+        res.request().method() === 'GET' &&
+        res.status() === 200,
+      this.companyTable(),
+      'Companies'
     );
     await this.waitForLoaderToDisappear();
   }
@@ -257,21 +252,17 @@ export class CompaniesPage extends BasePage {
     }
   }
 
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. See that method's own comment for
+  // the full history/evidence.
   async waitForCompanyDetailsPage(): Promise<void> {
-    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
-    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
-    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
-    // src/utils/navigation.ts for the full explanation.
-    await this.waitForUrl(/sales\/companies\/details\//, 20000);
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Wait for company GET API response — ensures React has companyId in state
-    // Without this, share/edit fires before app resolves companyId → /companies/undefined/share
-    // Same fix applied to ContactsPage.waitForContactDetailsPage() — proven race condition
-    await this.armResponseWaitWithRecovery(
+    await this.waitForEntityDetailPage(
+      /sales\/companies\/details\//,
       (res) => res.url().match(/\/v1\/companies\/\d+$/) !== null && res.request().method() === 'GET',
-      'company details GET response',
-      15000
-    ).catch(() => null);
+      'Company details'
+    );
   }
 
   async goToCompanyDetailsById(id: string | number): Promise<void> {

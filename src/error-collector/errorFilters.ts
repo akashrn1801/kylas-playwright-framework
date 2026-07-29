@@ -298,6 +298,24 @@ export const BACKGROUND_WIDGET_NOISE_PATTERNS: RegExp[] = [
   // Dashboard background polls — no test in this suite navigates to or asserts
   // on the dashboard (verified: zero matches for "dashboards" across tests/).
   /\/v1\/dashboards\/?$/i,
+  // WHY: confirmed live 2026-07-27 (Deals custom-fields branch regression run) —
+  // a specific-dashboard-by-id widget (e.g. /v1/dashboards/5067) fires the same
+  // background poll as the bare /v1/dashboards$ entry above, just with a numeric
+  // ID the anchored `$` didn't cover. Occurred on "verify deal detail header
+  // fields and tabs," which passed cleanly with every one of its own deal-specific
+  // assertions succeeding — same "non-load-bearing header widget" mechanism as
+  // the rest of this list. Single-occurrence evidence (narrower than the
+  // ~500-execution bar for the original entries, same honesty bar already used
+  // for the has-duplicates entry below) — revisit if it ever correlates with an
+  // actual assertion failure.
+  /\/v1\/dashboards\/\d+/i,
+  // WHY: confirmed live 2026-07-27 (same run as above) — a background token-
+  // refresh poll (`/v1/tokens/refresh/?refresh-token=...`) 400s with "we are not
+  // able to recognize you" on the same otherwise-cleanly-passing test, with zero
+  // session-expiry-detected log line and zero assertion failure — the page's
+  // actual authenticated session was unaffected. Single-occurrence evidence,
+  // same honesty caveat as the entry above.
+  /\/v1\/tokens\/refresh\//i,
   // Dashboard summary-card widgets on entity list pages — confirmed 400 on
   // /v3/reports/leads/summary and /v3/reports/deals/summary, zero test impact.
   /\/v3\/reports\//i,

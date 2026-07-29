@@ -127,18 +127,20 @@ export class TasksPage extends BasePage {
   // WHY: Tasks has no separate /details/{id} page — the detail panel opens
   // over /sales/tasks/list?id={id}. This is the canonical wait for that URL
   // shape, mirroring waitForXDetailsPage() in the other modules.
+  //
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. The `?id=` requirement in the URL
+  // pattern still correctly distinguishes this from a bare list-page
+  // navigation drift (e.g. the app dropping the id param) — a reload
+  // preserves the full URL including its query string.
   async waitForTaskDetailsPage(): Promise<void> {
-    // WHY: migrated 2026-07-19 to the shared safeWaitForURL() helper (via
-    // this.waitForUrl()) — this was a bare page.waitForURL() defaulting to
-    // 'load', the same bug class as globalSetup.ts/fixtures/index.ts. See
-    // src/utils/navigation.ts for the full explanation.
-    await this.waitForUrl(/sales\/tasks\/list\?.*id=/, 20000);
-    await this.page.waitForLoadState('domcontentloaded');
-    await this.armResponseWaitWithRecovery(
+    await this.waitForEntityDetailPage(
+      /sales\/tasks\/list\?.*id=/,
       (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-      'waitForTaskDetailsPage (task GET)',
-      15000
-    ).catch(() => null);
+      'Task details'
+    );
   }
 
   async goToTaskDetailsById(id: string | number): Promise<void> {
