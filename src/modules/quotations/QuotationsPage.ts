@@ -373,18 +373,21 @@ export class QuotationsPage extends BasePage {
   // Without this, clickEditButton() fires before React resolves the quotation entity
   // from /v1/quotations/{id} — causing the edit modal to open with disabled fields or
   // failing entirely when the session is under load. Mirrors waitForContactDetailsPage.
+  // WHY: delegates to the shared BasePage.waitForEntityDetailPage() —
+  // navigation-drift reload-and-retry built and verified once (2026-07-27,
+  // via 2 real live reproductions on DealsPage's identical pattern), reused
+  // here instead of a module-local copy. A genuine 404 (quotation actually
+  // deleted/doesn't exist) is a real, fast response that still satisfies the
+  // predicate — it does NOT trigger the reload-retry (that only fires when
+  // no matching response arrives at all) — so the 404-means-"does not
+  // exist" check below still fires exactly as before.
   private async waitForQuotationDetailPage(): Promise<void> {
-    await this.waitForUrl(/\/quotations\/details\//, 20000);
-    await this.page.waitForLoadState('domcontentloaded');
-    // WHY: Await the GET /v1/quotations/{id} API response — React depends on this to
-    // populate the edit form. If it returns 404, fail fast instead of waiting for timeout.
-    const response = await this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
-      'waitForQuotationDetailPage: detail GET',
-      15000
-    ).catch(() => null);
-    if (response?.status() === 404) {
+    const response = await this.waitForEntityDetailPage(
+      /\/quotations\/details\//,
+      (res) => res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
+      'Quotation detail'
+    );
+    if (response.status() === 404) {
       throw new Error('Quotation detail page returned 404 — quotation does not exist');
     }
   }

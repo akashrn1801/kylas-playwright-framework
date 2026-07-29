@@ -6,6 +6,7 @@ export interface EmailPayload {
   cc?: string[];
   subject: string;
   html: string;
+  env: string;
 }
 
 export class EmailAdapter {
@@ -36,7 +37,7 @@ export class EmailAdapter {
   async send(payload: EmailPayload): Promise<void> {
     // smtp config accessed via notificationConfig.smtp directly
     const info = await this.transporter.sendMail({
-      from: `"Kylas QA Automation" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
+      from: `"Kylas ${payload.env.toUpperCase()} Automation" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
       to: payload.to.join(', '),
       cc: payload.cc?.join(', '),
       subject: payload.subject,
