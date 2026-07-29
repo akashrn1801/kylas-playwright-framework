@@ -149,17 +149,31 @@ export class TasksPage extends BasePage {
     await this.waitForTaskDetailsPage();
   }
 
+  // WHY plain page.waitForResponse(), not armResponseWaitWithRecovery(): same
+  // fix, same root cause, as BasePage.waitForEntityListPage() (see that
+  // method's own comment for the full evidence trail) — this method has its
+  // own separate inline copy of the identical Promise.race shape, found via
+  // the same codebase sweep (2026-07-28) rather than fixed only where first
+  // discovered. armResponseWaitWithRecovery() arms page-level
+  // response/framenavigated listeners via armSessionExpirySignal() that only
+  // get detached when ITS OWN internal race settles — an abandoned losing
+  // branch of THIS OUTER race never gives it that chance, leaving the
+  // listeners attached to the page for up to config.timeouts.navigation
+  // (60000ms) after this method has already returned, ready to fire a
+  // spurious, wrongly-targeted recovery attempt if a genuine session expiry
+  // happens later on a completely different page/step.
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.armResponseWaitWithRecovery(
-        (res) =>
-          res.url().includes('/v1/tasks') &&
-          res.request().method() === 'GET' &&
-          res.status() === 200,
-        'waitForListReady (tasks list GET)',
-        config.timeouts.navigation
-      ).catch(() => null),
+      this.page
+        .waitForResponse(
+          (res) =>
+            res.url().includes('/v1/tasks') &&
+            res.request().method() === 'GET' &&
+            res.status() === 200,
+          { timeout: config.timeouts.navigation }
+        )
+        .catch(() => null),
       this.taskList()
         .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
         .catch(() => null),
