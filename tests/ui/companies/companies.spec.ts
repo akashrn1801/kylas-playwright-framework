@@ -424,4 +424,50 @@ test.describe('Companies', () => {
     logger.success(`CO17 passed — task from pending activity verified: ${taskName}`);
   });
 
+  // ── CO18 ──────────────────────────────────────────────────
+
+  test('@regression admin should create a company with all custom fields and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateCompanyData();
+
+    await companiesPage.goToCompaniesList();
+    await companiesPage.clickAddCompany();
+    await companiesPage.skipIfCustomFieldsAbsent();
+    await companiesPage.fillCompanyForm(companyData);
+    const companyId = await companiesPage.saveCompany();
+    expect(companyId, 'Company ID should be captured after create').not.toBeNull();
+
+    await companiesPage.goToCompanyDetailsById(companyId!);
+    await companiesPage.assertCompanyCustomFieldsOnDetail(companyData);
+    logger.success('CO18 passed');
+  });
+
+  // ── CO19 ──────────────────────────────────────────────────
+
+  test("@regression admin should update a company's custom fields and verify updated values", async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateCompanyData();
+
+    await companiesPage.goToCompaniesList();
+    await companiesPage.clickAddCompany();
+    await companiesPage.skipIfCustomFieldsAbsent();
+    await companiesPage.fillCompanyForm(companyData);
+    const companyId = await companiesPage.saveCompany();
+    expect(companyId, 'Company ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateCompanyData();
+    await companiesPage.updateCompany(updatedData, companyData.name, companyId ?? undefined);
+
+    // WHY: updateCompany() leaves the browser on the same company detail page
+    // (edit is an in-place modal, not a route change) — no re-navigation needed.
+    await companiesPage.assertCompanyCustomFieldsOnDetail(updatedData);
+    logger.success('CO19 passed');
+  });
+
 });

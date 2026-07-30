@@ -1188,4 +1188,66 @@ test.describe('Deals RBAC', () => {
     await dealsPage.assertDealNotInList(dealData.name);
     logger.success('D29 passed');
   });
+
+  // ──────────────────────────────────────────────────────────
+  // Custom Fields
+  // ──────────────────────────────────────────────────────────
+  // WHY: generateDealData() (NOT generateAdminDealData()) — this is a
+  // restricted user creating and owning their own deal, not a cross-role
+  // isolation scenario, so the ADM-prefix uniqueness guarantee doesn't apply
+  // here. Mirrors LeadsPage's/ContactsPage's equivalent restricted-user
+  // dedicated custom-field tests (L29/CR20) — this coverage was missing for
+  // Deal entirely (confirmed via grep: zero `skipIfCustomFieldsAbsent()`
+  // calls anywhere in this file before this test was added, 2026-07-28),
+  // despite Deal's UI custom-field tests (D37/D38) existing since 2026-07-24.
+
+  test('@regression restricted user can create a deal with all custom fields, verified on details', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.skipIfCustomFieldsAbsent();
+    await dealsPage.fillDealForm(dealData);
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+
+    // WHY: reuses DealsPage.assertDealCustomFieldsOnDetail() unchanged — the
+    // same BasePage-generic method admin's tests use — to confirm the
+    // custom-field design is genuinely role-agnostic, not admin-specific.
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.assertDealCustomFieldsOnDetail(dealData);
+    logger.success('D39 passed');
+  });
+
+  // WHY: same isolation reasoning as D39 above — plain generateDealData(),
+  // restricted user creating/editing their own deal. Mirrors D38 (admin's
+  // update-custom-fields UI test) so the update path gets the same
+  // role-agnostic coverage the create path (D39) already has.
+
+  test("@regression restricted user can update a deal's custom fields, verified on details", async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.skipIfCustomFieldsAbsent();
+    await dealsPage.fillDealForm(dealData);
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateDealData();
+    await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
+
+    // WHY: updateDeal() leaves the browser on the same deal detail page
+    // (edit is an in-place modal, not a route change) — no re-navigation needed.
+    await dealsPage.assertDealCustomFieldsOnDetail(updatedData);
+    logger.success('D40 passed');
+  });
 });

@@ -708,6 +708,61 @@ export class BasePage {
    * background). One canonical implementation shared by Deals/Companies/
    * Contacts/Leads' near-identical `waitForListReady()` methods.
    *
+   * WHY the response-wait branch is a PLAIN `page.waitForResponse()`, not
+   * `armResponseWaitWithRecovery()` (fixed 2026-07-28, found via live
+   * evidence from a real full-suite run, not speculation): the previous
+   * version raced `armResponseWaitWithRecovery(...).catch(() => null)`
+   * against `tableLocator.waitFor(...).catch(() => null)`. `Promise.race`
+   * never cancels its LOSING branch — only abandons it. Since the table
+   * almost always becomes visible before the list GET response predicate is
+   * even checked, the response branch is nearly always the loser. But
+   * `armResponseWaitWithRecovery()` internally calls `armSessionExpirySignal()`
+   * (see authManager.ts), which attaches `page.on('response')`/
+   * `page.on('framenavigated')` listeners directly on the shared Playwright
+   * `Page` — and those listeners are only detached via that promise's OWN
+   * internal `signal.cancel()`, which only fires once ITS OWN race (real
+   * response vs. expiry signal) settles. An abandoned loser's race never
+   * gets a chance to settle that way, so the listeners stay attached to the
+   * page for up to `config.timeouts.navigation` (60000ms) after this method
+   * has already returned and the caller has moved on to something else
+   * entirely — a "zombie" listener with a 60-SECOND live window.
+   *
+   * CONFIRMED live (2026-07-28, real full-suite run on qa, not reproduced
+   * synthetically): `deals.rbac.spec.ts`'s "admin shares deal Quotation
+   * permission..." test calls `goToContactsList()`→create contact→
+   * `goToCompaniesList()`→create company→`goToDealsList()`. A genuine
+   * mid-test session expiry hit during the `goToDealsList()` navigation. The
+   * log showed TWO zombie listeners — from the EARLIER, already-returned
+   * `goToContactsList()`'s and `goToCompaniesList()`'s own `waitForListReady()`
+   * calls — firing their OWN independent recovery ("Contacts list response:
+   * session expiry detected...", "Companies list response: session expiry
+   * detected...") within 3ms of each other, CONCURRENTLY with
+   * `navigateTo()`'s own live recovery for the deals-list navigation. Three
+   * concurrent `tryRecoverSessionForPage()` calls then raced on the same
+   * page, each targeting a DIFFERENT stale captured URL (contacts list,
+   * companies list, deals list) — leaving the page's final state
+   * unpredictable and causing the test's next real step (`createDeal()`,
+   * which assumes it's on the deals list) to fail. This is a deterministic
+   * race, not flakiness: it reproduces EVERY time a genuine expiry lands
+   * within the 60s zombie window after any `goToXList()` call, which is why
+   * the failing test always self-heals on Playwright's own retry (a fresh
+   * attempt starts with a newly-recovered token, so the trigger condition —
+   * expiry landing mid-suite — doesn't recur inside that one attempt).
+   *
+   * FIX: use a plain, listener-free `page.waitForResponse()` for the race's
+   * response branch instead. This is 100% behavior-preserving for the
+   * method's actual purpose (list-readiness detection: use the GET response
+   * OR the table, whichever settles first) — the only thing removed is the
+   * unused, dangerous side-channel expiry-signal arming. Expiry protection
+   * for this method is NOT lost: if a real expiry happens while this race is
+   * running, the table-visibility branch also fails to observe the list
+   * table (a page mid-redirect to /signIn never shows it), the race times
+   * out on both branches, and `assertTableVisible()` below — already wrapped
+   * in `withSessionExpiryRecovery()`, which is a synchronous try/catch/retry
+   * with NO lingering listener of its own — correctly detects and recovers.
+   * That gives this method exactly ONE code path responsible for expiry
+   * recovery instead of two, which can no longer race each other.
+   *
    * @param responsePredicate  Matches the list's own GET response (e.g. `/v1/deals` GET 200).
    * @param tableLocator       The list table/grid locator (e.g. `this.dealTable()`). Locators
    *                           are safe to reuse across the retry-after-reload — they always
@@ -721,11 +776,9 @@ export class BasePage {
   ): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.armResponseWaitWithRecovery(
-        responsePredicate,
-        `${description} list response`,
-        config.timeouts.navigation
-      ).catch(() => null),
+      this.page
+        .waitForResponse(responsePredicate, { timeout: config.timeouts.navigation })
+        .catch(() => null),
       tableLocator.waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
     ]);
 
