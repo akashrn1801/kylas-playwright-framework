@@ -629,4 +629,62 @@ test.describe('Companies RBAC', () => {
     logger.success('COR20 passed');
   });
 
+  // ── COR21 ─────────────────────────────────────────────────
+  // WHY: generateCompanyData() (NOT generateAdminCompanyData()) — this is a
+  // restricted user creating and owning their own company, not a cross-role
+  // isolation scenario, so the ADM-prefix uniqueness guarantee doesn't apply
+  // here. Mirrors LeadsPage's/ContactsPage's/DealsPage's equivalent
+  // restricted-user dedicated custom-field tests (L29/CR20/D39).
+
+  test('@regression restricted user can create a company with all custom fields, verified on details', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateCompanyData();
+
+    await companiesPage.goToCompaniesList();
+    await companiesPage.clickAddCompany();
+    await companiesPage.skipIfCustomFieldsAbsent();
+    await companiesPage.fillCompanyForm(companyData);
+    const companyId = await companiesPage.saveCompany();
+    expect(companyId, 'Company ID should be captured after create').not.toBeNull();
+
+    // WHY: reuses CompaniesPage.assertCompanyCustomFieldsOnDetail() unchanged
+    // — the same BasePage-generic method admin's tests use — to confirm the
+    // custom-field design is genuinely role-agnostic, not admin-specific.
+    await companiesPage.goToCompanyDetailsById(companyId!);
+    await companiesPage.assertCompanyCustomFieldsOnDetail(companyData);
+    logger.success('COR21 passed');
+  });
+
+  // ── COR22 ─────────────────────────────────────────────────
+  // WHY: same isolation reasoning as COR21 above — plain generateCompanyData(),
+  // restricted user creating/editing their own company. Mirrors CO19 (admin's
+  // update-custom-fields UI test) so the update path gets the same
+  // role-agnostic coverage the create path (COR21) already has.
+
+  test("@regression restricted user can update a company's custom fields, verified on details", async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateCompanyData();
+
+    await companiesPage.goToCompaniesList();
+    await companiesPage.clickAddCompany();
+    await companiesPage.skipIfCustomFieldsAbsent();
+    await companiesPage.fillCompanyForm(companyData);
+    const companyId = await companiesPage.saveCompany();
+    expect(companyId, 'Company ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateCompanyData();
+    await companiesPage.updateCompany(updatedData, companyData.name, companyId ?? undefined);
+
+    // WHY: updateCompany() leaves the browser on the same company detail page
+    // (edit is an in-place modal, not a route change) — no re-navigation needed.
+    await companiesPage.assertCompanyCustomFieldsOnDetail(updatedData);
+    logger.success('COR22 passed');
+  });
+
 });
