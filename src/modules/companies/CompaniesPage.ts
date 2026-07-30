@@ -1,7 +1,7 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { faker } from '@faker-js/faker';
 import { BasePage } from '../../core/BasePage';
-import { CompanyData } from '../../data/factories/companyFactory';
+import { CompanyData, COMPANY_CUSTOM_FIELD_NAMES } from '../../data/factories/companyFactory';
 import { ContactData } from '../../data/factories/contactFactory';
 import { DealData } from '../../data/factories/dealFactory';
 import { DealsPage } from '../deals/DealsPage';
@@ -59,6 +59,13 @@ export class CompaniesPage extends BasePage {
 
   private readonly showRequiredToggle = (): Locator =>
     this.page.locator('label').filter({ hasText: 'Show Required & Important Fields' });
+
+  // WHY: same idempotency-check locator as ContactsPage/LeadsPage's
+  // showRequiredToggleCheckbox() — added 2026-07-28 while wiring in custom
+  // fields (see disableRequiredFieldsToggle()'s own comment for why this
+  // matters).
+  private readonly showRequiredToggleCheckbox = (): Locator =>
+    this.showRequiredToggle().locator('xpath=preceding-sibling::input[@type="checkbox"]');
 
   private readonly nameInput = (): Locator => this.page.locator('[id="0_11_input_name"]');
 
@@ -198,6 +205,14 @@ export class CompaniesPage extends BasePage {
       .locator('button', { hasText: 'Add Task' })
       .first();
 
+  // WHY #nav-tab3-tab, not #nav-tab2-tab: confirmed live (2026-07-28) — Company
+  // gained its own "Other Details" custom-field tab, which now sits between
+  // Social and Internals, shifting Internals from index 3 to index 4 — the
+  // exact same drift already documented for DealsPage.otherDetailsDetailPageTab().
+  // Tab order confirmed live: Communication(0), Location(1), Social(2), Other
+  // Details(3), Internals(4).
+  private readonly otherDetailsDetailPageTab = (): Locator => this.page.locator('#nav-tab3-tab');
+
   // ──────────────────────────────────────────────────────────
   // 3. Constructor
   // ──────────────────────────────────────────────────────────
@@ -300,6 +315,21 @@ export class CompaniesPage extends BasePage {
       const toggle = this.showRequiredToggle();
 
       if (await toggle.isVisible()) {
+        // WHY: same idempotency bug already found and fixed in
+        // ContactsPage/LeadsPage's equivalent (2026-07-28, found while wiring
+        // in custom fields here) — this toggle's on/off state persists
+        // across sessions rather than resetting per form open. A blind,
+        // unconditional click on an already-off toggle flips it back ON,
+        // hiding "Other Details" (and its custom fields) right when a caller
+        // needs it visible. Only click when it's actually checked.
+        const isChecked = await this.showRequiredToggleCheckbox()
+          .isChecked()
+          .catch(() => true);
+        if (!isChecked) {
+          logger.debug('Show Required & Important Fields already disabled — skipping click');
+          return;
+        }
+
         logger.info('Disabling Show Required & Important Fields');
 
         await toggle.click();
@@ -504,6 +534,91 @@ export class CompaniesPage extends BasePage {
   // 6. Form Actions
   // ──────────────────────────────────────────────────────────
 
+  // WHY: single choke point for filling all 9 Company custom fields — called
+  // from both fillCompanyForm() (create) and fillEditForm() (update),
+  // mirroring LeadsPage.fillLeadCustomFields()/ContactsPage.fillContactCustomFields()/
+  // DealsPage.fillDealCustomFields(). Every BasePage helper checks DOM
+  // presence and skips gracefully when a field doesn't exist yet in the
+  // current environment (see BasePage's custom-field-helpers section for
+  // why) — same environment-safety contract as Lead/Contact/Deal.
+  //
+  // WHY no tab-click step (unlike LeadsPage.fillLeadCustomFields(), which
+  // calls openOtherDetailsFormSection() first): confirmed live (2026-07-28,
+  // Phase 1 of this branch) — Company's create/edit form renders all 5
+  // sections (General Information, Communication, Location, Social, Other
+  // Details) in one continuous scrollable page, same as Contact; the "Other
+  // Details" sidebar nav-link only scrolls to that section, it does not
+  // toggle a hidden tab-pane. The custom field inputs are already visible
+  // and fillable as soon as disableRequiredFieldsToggle() has run.
+  //
+  // Mutates `data.customFields.pickList`/`.multiPickList` in place with
+  // whatever was actually selected live — PickList/MultiPickList options are
+  // read from the DOM at fill time, so the caller's `data` object needs to
+  // be updated to reflect reality before it's used for later verification.
+  private async fillCompanyCustomFields(data: CompanyData): Promise<void> {
+    const cf = data.customFields;
+
+    await this.fillTextLikeCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.fillTextLikeCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.fillTextLikeCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.fillTextLikeCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.setCheckboxCustomField(COMPANY_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.selectDateCustomField(COMPANY_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    await this.selectDateTimeCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker'
+    );
+
+    const pickedValue = await this.selectPicklistCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+
+    const pickedValues = await this.selectMultiPicklistCustomField(
+      COMPANY_CUSTOM_FIELD_NAMES.multiPickList,
+      'Multi Pick List'
+    );
+    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+  }
+
+  // WHY: thin wrapper around BasePage's generic dedicated-test skip
+  // mechanism, same pattern as Lead's/Contact's/Deal's own
+  // skipIfCustomFieldsAbsent(). Must be called AFTER the relevant create/edit
+  // form is open and ONLY from the dedicated custom-field tests — every
+  // other Company test already tolerates absent fields via
+  // fillCompanyCustomFields()'s own presence checks.
+  //
+  // WHY disableRequiredFieldsToggle() is called here too: same reasoning as
+  // ContactsPage's equivalent — a custom field input may not exist in the
+  // DOM at all until this toggle is switched off. Safe and non-duplicative
+  // (idempotent) even if a prior action in this session already turned it
+  // off.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.disableRequiredFieldsToggle();
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(COMPANY_CUSTOM_FIELD_NAMES),
+      'Company'
+    );
+  }
+
   async fillCompanyForm(data: CompanyData): Promise<void> {
     logger.info('Filling company form');
 
@@ -552,6 +667,8 @@ export class CompaniesPage extends BasePage {
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
 
     await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+
+    await this.fillCompanyCustomFields(data);
 
     logger.success('Company form filled');
   }
@@ -796,6 +913,15 @@ export class CompaniesPage extends BasePage {
     await this.fill(this.facebookInput(), data.facebook, 'facebook');
     await this.fill(this.twitterInput(), data.twitter, 'twitter');
     await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+
+    // WHY: mirrors ContactsPage.fillEditForm()'s own fix (2026-07-14) for the
+    // identical gap — without this, "Other Details"/custom fields would be
+    // unreachable on update whenever the toggle happens to be in its ON
+    // state. disableRequiredFieldsToggle() is idempotent (see its own
+    // comment) so calling it here is safe even if a prior action in this
+    // session already turned the toggle off.
+    await this.disableRequiredFieldsToggle();
+    await this.fillCompanyCustomFields(data);
 
     logger.success('Edit form updated')
   }
@@ -1691,10 +1817,13 @@ export class CompaniesPage extends BasePage {
     expect(tab2Text).toContain(data.twitter.toLowerCase());
     expect(tab2Text).toContain(data.linkedIn.toLowerCase());
     logger.debug(`Social tab — facebook: ${data.facebook} | twitter: ${data.twitter} | linkedin: ${data.linkedIn}`);
-    // WHY: Company "Internals" tab (#nav-tab3-tab) shows audit info (Created By/At, etc.) — NOT
-    // the company's own fields. numberOfEmployees, industry, businessType, website, uniqueText1,
-    // uniqueText2 are rendered in the RIGHT PANEL info section (not inside any tab).
-    // Verify them via the full page body text which includes the main panel.
+    // WHY: Company "Internals" tab (#nav-tab4-tab, confirmed live 2026-07-28 — shifted
+    // from #nav-tab3-tab now that Company has its own "Other Details" custom-field tab
+    // at that index, see otherDetailsDetailPageTab()) shows audit info (Created By/At,
+    // etc.) — NOT the company's own fields. numberOfEmployees, industry, businessType,
+    // website, uniqueText1, uniqueText2 are rendered in the RIGHT PANEL info section
+    // (not inside any tab). Verify them via the full page body text which includes the
+    // main panel.
     await this.page.waitForTimeout(400);
     const bodyText = (await this.page.locator('body').textContent() ?? '').toLowerCase();
     expect(bodyText).toContain(data.numberOfEmployees.toLowerCase());
@@ -1706,6 +1835,81 @@ export class CompaniesPage extends BasePage {
     // TODO: annualRevenue assertion skipped — currency formatting varies (₹1,23,456 vs 123456)
     logger.debug(`Main panel — employees: ${data.numberOfEmployees} | industry: ${data.industry} | bizType: ${data.businessType}`);
     logger.success('Company detail fields verified');
+  }
+
+  // WHY: mirrors LeadsPage.assertLeadCustomFieldsOnDetail()/
+  // ContactsPage.assertContactCustomFieldsOnDetail()/
+  // DealsPage.assertDealCustomFieldsOnDetail() — only the 2 dedicated
+  // custom-field tests need full value verification, every other Company
+  // test just needs fillCompanyCustomFields()'s fill-if-present behavior to
+  // run without erroring. Throws (does not skip) on a missing tab — this
+  // method is called ONLY from the dedicated tests, which always run on an
+  // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
+  // these fields, so a missing tab here means verification genuinely failed
+  // to run, not a legitimate environment-absence case.
+  async assertCompanyCustomFieldsOnDetail(data: CompanyData): Promise<void> {
+    logger.info('Asserting all 9 custom field values on company detail page');
+    const tab = this.otherDetailsDetailPageTab();
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
+      ).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    // WHY this.click() and not a raw tab.click(): the DealsPage reference
+    // implementation this method was ported from uses a raw, unwrapped
+    // tab.click() here (DealsPage.assertDealCustomFieldsOnDetail()) — that's
+    // a pre-existing gap in the reference, not something to blindly carry
+    // forward. this.click() is the existing bounded, session-expiry-covered
+    // BasePage helper (see its own comment), so using it here means this new
+    // method introduces zero raw Playwright calls that bypass that
+    // protection, per the standing checklist (points 2/3).
+    await this.click(tab, 'Other Details tab');
+    await this.page.waitForTimeout(500);
+
+    const cf = data.customFields;
+    await this.assertCustomFieldOnDetail(
+      COMPANY_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(COMPANY_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+    await this.assertCustomFieldOnDetail(COMPANY_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    await this.assertCustomFieldOnDetail(
+      COMPANY_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      COMPANY_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      COMPANY_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(
+        COMPANY_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
+    }
+    if (cf.multiPickList.length > 0) {
+      await this.assertMultiPicklistCustomFieldOnDetail(
+        COMPANY_CUSTOM_FIELD_NAMES.multiPickList,
+        cf.multiPickList,
+        'Multi Pick List'
+      );
+    }
+    logger.success('All 9 custom field values verified on company detail page');
   }
 
   // ──────────────────────────────────────────────────────────
