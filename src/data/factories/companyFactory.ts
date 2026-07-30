@@ -1,4 +1,65 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Company Custom Fields
+// ──────────────────────────────────────────────────────────────────────────
+// WHY: confirmed live (2026-07-28 investigation) — Company has the same 9
+// custom fields as Lead/Contact/Deal, with identical names/types and
+// identical DOM/locator conventions (see BasePage's "Custom Field Helpers").
+// Company has NO lookup-type custom field, same as Deal. COMPANY_CUSTOM_FIELD_NAMES
+// is its own single source of truth, per CLAUDE.md's Custom Fields pattern —
+// never import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES/
+// DEAL_CUSTOM_FIELD_NAMES here even though the values happen to be identical
+// today: each module owns its own field-name constant so the two can diverge
+// safely later.
+export const COMPANY_CUSTOM_FIELD_NAMES = {
+  textField: 'TextField',
+  paragraphText: 'ParagraphText',
+  number: 'Number',
+  pickList: 'PickList',
+  multiPickList: 'MultiPickList',
+  checkbox: 'Checkbox',
+  date: 'Date',
+  dateTimePicker: 'DateTimePicker',
+  urlField: 'UrlField',
+} as const;
+
+export type CompanyCustomFieldKey = keyof typeof COMPANY_CUSTOM_FIELD_NAMES;
+
+export interface CompanyCustomFieldData {
+  textField: string;
+  paragraphText: string;
+  number: number;
+  // WHY: PickList/MultiPickList options only exist live in the DOM (never
+  // hardcode them) — these start as placeholders and are overwritten in
+  // place by CompaniesPage.fillCompanyForm()/fillEditForm() with whatever
+  // was actually selected at fill time, so the same `data` object stays
+  // accurate for later verification against the detail page.
+  pickList: string;
+  multiPickList: string[];
+  checkbox: boolean;
+  date: Date;
+  dateTimePicker: Date;
+  urlField: string;
+}
+
+export function generateCompanyCustomFieldData(
+  overrides: Partial<CompanyCustomFieldData> = {}
+): CompanyCustomFieldData {
+  return {
+    textField: `CF-Text-${faker.string.alphanumeric(12)}`,
+    paragraphText: faker.lorem.paragraph(),
+    number: faker.number.int({ min: 1, max: 100000 }),
+    pickList: '',
+    multiPickList: [],
+    checkbox: faker.datatype.boolean(),
+    date: randomFutureDateWithinOneMonth(),
+    dateTimePicker: randomFutureDateWithinOneMonth(),
+    urlField: `https://example.com/${faker.string.alphanumeric(10)}`,
+    ...overrides,
+  };
+}
 
 // WHY: these are the exact values rendered by the numberOfEmployees picklist
 // in the app — selecting outside this set will cause option-not-found failures
@@ -65,11 +126,13 @@ export interface CompanyData {
   facebook: string;
   twitter: string;
   linkedIn: string; // companies use 'linkedIn' (capital N) — same as leads
+  customFields: CompanyCustomFieldData;
 }
 
 export function generateCompanyData(overrides: Partial<CompanyData> = {}): CompanyData {
   const companyName = `${faker.company.name()}-${Date.now()}`;
   const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
 
   return {
     name: companyName,
@@ -89,7 +152,8 @@ export function generateCompanyData(overrides: Partial<CompanyData> = {}): Compa
     facebook: `https://facebook.com/${slug}`,
     twitter: `https://twitter.com/${slug}`,
     linkedIn: `https://linkedin.com/company/${slug}`,
-    ...overrides,
+    customFields: generateCompanyCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -101,6 +165,7 @@ export function generateAdminCompanyData(overrides: Partial<CompanyData> = {}): 
   const timestamp = Date.now().toString();
   const name = `ADM${timestamp} Corp`;
   const slug = `adm${timestamp}corp`;
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
 
   return {
     name,
@@ -120,7 +185,8 @@ export function generateAdminCompanyData(overrides: Partial<CompanyData> = {}): 
     facebook: `https://facebook.com/${slug}`,
     twitter: `https://twitter.com/${slug}`,
     linkedIn: `https://linkedin.com/company/${slug}`,
-    ...overrides,
+    customFields: generateCompanyCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -129,6 +195,7 @@ export function generateRestrictedCompanyData(overrides: Partial<CompanyData> = 
   const timestamp = Date.now().toString();
   const name = `RES${timestamp} Corp`;
   const slug = `res${timestamp}corp`;
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
 
   return {
     name,
@@ -148,7 +215,8 @@ export function generateRestrictedCompanyData(overrides: Partial<CompanyData> = 
     facebook: `https://facebook.com/${slug}`,
     twitter: `https://twitter.com/${slug}`,
     linkedIn: `https://linkedin.com/company/${slug}`,
-    ...overrides,
+    customFields: generateCompanyCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -158,6 +226,7 @@ export function generateSharedCompanyData(overrides: Partial<CompanyData> = {}):
   const timestamp = Date.now().toString();
   const name = `SHR${timestamp} Corp`;
   const slug = `shr${timestamp}corp`;
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
 
   return {
     name,
@@ -177,6 +246,7 @@ export function generateSharedCompanyData(overrides: Partial<CompanyData> = {}):
     facebook: `https://facebook.com/${slug}`,
     twitter: `https://twitter.com/${slug}`,
     linkedIn: `https://linkedin.com/company/${slug}`,
-    ...overrides,
+    customFields: generateCompanyCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
