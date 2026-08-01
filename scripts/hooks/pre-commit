@@ -1,0 +1,32 @@
+#!/bin/bash
+# Pre-commit hook: block waitForTimeout() anti-pattern
+
+echo "🔍 Checking for waitForTimeout() anti-pattern..."
+
+# Get list of staged files, excluding hook scripts and documentation
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -v "^scripts/hooks/" | grep -v "^\.claude/")
+
+if [ -z "$STAGED_FILES" ]; then
+    exit 0
+fi
+
+# Check each staged file for waitForTimeout(
+VIOLATIONS=$(git diff --cached -- $STAGED_FILES 2>/dev/null | grep "^\+.*waitForTimeout(" || true)
+
+if [ -n "$VIOLATIONS" ]; then
+    echo ""
+    echo "❌ COMMIT BLOCKED: Staged changes contain waitForTimeout() anti-pattern"
+    echo ""
+    echo "CLAUDE.md Rule #2: No unbounded clicks/actions."
+    echo "Use condition-based waits instead:"
+    echo "  ❌ await page.waitForTimeout(5000);"
+    echo "  ✅ await page.waitForResponse(..., { timeout: 5000 });"
+    echo "  ✅ await locator.waitFor({ state: 'visible', timeout: 5000 });"
+    echo ""
+    echo "Violations found:"
+    echo "$VIOLATIONS"
+    echo ""
+    exit 1
+fi
+
+exit 0

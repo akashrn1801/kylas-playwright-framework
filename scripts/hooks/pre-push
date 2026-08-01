@@ -1,0 +1,23 @@
+#!/bin/bash
+# Pre-push hook: code quality gate
+# This runs checks before allowing a push to any branch
+
+set -e
+
+echo "🔍 Running pre-push checks..."
+
+# Check for waitForTimeout in the entire push
+if git diff origin/HEAD...HEAD | grep -q "waitForTimeout("; then
+    echo "❌ PUSH BLOCKED: Branch contains waitForTimeout() anti-pattern"
+    echo "See CLAUDE.md Rule #2 for details."
+    exit 1
+fi
+
+# Check for hardcoded URLs in TypeScript/test files
+if git diff origin/HEAD...HEAD -- '*.ts' '*.tsx' | grep -qE "(http://localhost|app-qa\.sling-dev|staging\.kylas)"; then
+    echo "⚠️  WARNING: Push contains hardcoded URLs. Verify these are in test files only."
+    # Don't block, just warn - these might be intentional in tests
+fi
+
+echo "✅ Pre-push checks passed"
+exit 0
