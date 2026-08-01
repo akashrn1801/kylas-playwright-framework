@@ -35,6 +35,8 @@
 - [x] **Status:** ✅ COMPLETE — Commit c554ddd
 
 ### Task 3 — Create 13 specialized subagents in `.claude/agents/`
+- [x] All 13 agents defined and registered
+- [x] **Status:** ✅ COMPLETE — Commits ec6c590, 4a5c120, 40a3f8c, 3fab6f2, ec9c12a
 
 #### Subagent 1: `flaky-test-auditor`
 - [x] Agent created and registered
@@ -55,51 +57,51 @@
 - [x] **Status:** ✅ COMPLETE — Commit 9d8f5e2
 
 #### Subagent 4: `resilience-architect`
-- [ ] Agent created and registered
-- [ ] MCP tools gated behind approval
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] MCP tools gated behind approval
+- [x] **Status:** ✅ COMPLETE — Commit 3fab6f2
 
 #### Subagent 5: `enterprise-code-reviewer`
-- [ ] Agent created and registered
-- [ ] Tools configured
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Tools configured (Read, Bash grep, Glob)
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 6: `pipeline-guard`
-- [ ] Agent created and registered
-- [ ] Read-only git commands enforced
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Read-only git commands enforced
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 7: `security-dependency-auditor`
-- [ ] Agent created and registered
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 8: `test-coverage-strategist`
-- [ ] Agent created and registered
-- [ ] Write permissions scoped to new spec files only
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Write permissions scoped to new spec files only
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 9: `failure-triage-investigator`
-- [ ] Agent created and registered
-- [ ] MCP tools gated behind approval
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] MCP tools gated behind approval
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 10: `discovery-agent`
-- [ ] Agent created and registered
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 11: `test-data-lifecycle-manager`
-- [ ] Agent created and registered
-- [ ] Hard scope limit: never prod
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Hard scope limit: never prod (enforced)
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 12: `release-readiness-summarizer`
-- [ ] Agent created and registered
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 #### Subagent 13: `accessibility-auditor`
-- [ ] Agent created and registered
-- [ ] MCP tools gated behind approval
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] MCP tools gated behind approval
+- [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
 ### Task 4 — Set up hooks in `.claude/settings.json`
 - [ ] Add hard permission deny for `git push`, `git merge`, `gh pr merge`
@@ -128,8 +130,8 @@
 
 ## Currently In Progress
 
-**Item:** Task 3 (Subagent 3) — Build `self-healing-locator-scout` agent  
-**Next Action:** Write agent definition in `.claude/agents/self-healing-locator-scout.md`
+**Item:** Task 4 — Set up hooks in `.claude/settings.json`  
+**Next Action:** Configure pre-commit, pre-push, post-file-edit hooks
 
 ---
 
@@ -137,7 +139,7 @@
 - ✅ Task 0 — Setup branch and progress tracking (commit 8c61643)
 - ✅ Task 1 — Install Playwright MCP and verify tools available
 - ✅ Task 2 — Refactor CLAUDE.md and extract reference files (commit c554ddd)
-- ⏳ Task 3 (Subagents 1-2 done, 11 pending) — in progress
+- ✅ Task 3 — Build all 13 subagents (commits ec6c590, 4a5c120, 40a3f8c, 3fab6f2, ec9c12a)
 
 ---
 
