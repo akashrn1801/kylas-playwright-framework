@@ -1,4 +1,70 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Call Log Custom Fields
+// ──────────────────────────────────────────────────────────────────────────
+// WHY: confirmed live (2026-07-31) — Call Log has the same 8 custom fields
+// as Meeting (Text, Paragraph, Number, PickList, Checkbox, Date,
+// DateTimePicker, UrlField — no MultiPickList, same as every child entity).
+// Live on QA today. CALL_LOG_CUSTOM_FIELD_NAMES is its own single source of
+// truth, per CLAUDE.md's Custom Fields pattern — never import another
+// module's constant here even where values happen to coincide.
+//
+// WHY 'URLField' (capital URL), matching Meeting/Quotation: confirmed live
+// via DOM inspection of the real input id (`..._input_cfURLField`) — the
+// same naming drift vs. Lead/Deal/Contact/Company's `cfUrlField`, independently
+// confirmed for Call Log, not assumed to transfer from the other entities.
+//
+// WHY the PLAIN suffix convention (`_input_cf<Name>`), matching Meeting, NOT
+// Quotation/Task: confirmed live via the same DOM inspection — Call Log's
+// custom-field ids have no "customFieldValues." segment
+// (e.g. "2_41_input_cfTextField"), matching CLAUDE.md's own documented
+// finding that Meetings AND Call Logs share this shorter convention.
+export const CALL_LOG_CUSTOM_FIELD_NAMES = {
+  textField: 'TextField',
+  paragraphText: 'ParagraphText',
+  number: 'Number',
+  pickList: 'PickList',
+  checkbox: 'Checkbox',
+  date: 'Date',
+  dateTimePicker: 'DateTimePicker',
+  urlField: 'URLField',
+} as const;
+
+export type CallLogCustomFieldKey = keyof typeof CALL_LOG_CUSTOM_FIELD_NAMES;
+
+export interface CallLogCustomFieldData {
+  textField: string;
+  paragraphText: string;
+  number: number;
+  // WHY: PickList options only exist live in the DOM (never hardcode them) —
+  // this starts as a placeholder and is overwritten in place by
+  // CallLogsPage.fillCallLogCustomFields() with whatever was actually
+  // selected at fill time, so the same `data` object stays accurate for
+  // later verification against the detail page.
+  pickList: string;
+  checkbox: boolean;
+  date: Date;
+  dateTimePicker: Date;
+  urlField: string;
+}
+
+export function generateCallLogCustomFieldData(
+  overrides: Partial<CallLogCustomFieldData> = {}
+): CallLogCustomFieldData {
+  return {
+    textField: `CF-Text-${faker.string.alphanumeric(12)}`,
+    paragraphText: faker.lorem.paragraph(),
+    number: faker.number.int({ min: 1, max: 100000 }),
+    pickList: '',
+    checkbox: faker.datatype.boolean(),
+    date: randomFutureDateWithinOneMonth(),
+    dateTimePicker: randomFutureDateWithinOneMonth(),
+    urlField: `https://example.com/${faker.string.alphanumeric(10)}`,
+    ...overrides,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types & Enums
@@ -83,6 +149,7 @@ export interface CallLogData {
   notes: string;
   // WHY: includeAssociatedDeal only relevant for Contact entity — optional
   includeAssociatedDeal?: boolean;
+  customFields: CallLogCustomFieldData;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,6 +198,7 @@ export function generateCallLogData(overrides: Partial<CallLogData> = {}): CallL
   const outcome: CallLogOutcome =
     overrides.outcome ?? faker.helpers.arrayElement(CALL_LOG_OUTCOMES);
   const callType = overrides.callType ?? getCallTypeForEntity(entityType);
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
 
   return {
     entityType,
@@ -143,7 +211,8 @@ export function generateCallLogData(overrides: Partial<CallLogData> = {}): CallL
     callSummary: `Summary: ${faker.lorem.sentence()} — ${Date.now()}`,
     notes: `Note: ${faker.lorem.sentence()} — ${Date.now()}`,
     includeAssociatedDeal: overrides.includeAssociatedDeal ?? false,
-    ...overrides,
+    customFields: generateCallLogCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 

@@ -106,9 +106,31 @@ export type Config = typeof config;
 // config.apiBaseUrl must route through this ONE function — mirrors this
 // codebase's own precedent for exactly this problem shape (see
 // src/utils/navigation.ts's safeWaitForURL() consolidation history).
+// WHY rewritten 2026-07-30 (a real CI run, 2026-07-29T11:45:35Z "CI — qa
+// (regression)", hit `https://api-qa.sling-dev.com/v/v1/users/login` — a
+// malformed, doubled path): the previous version only checked for the exact
+// suffix `/v1` via `endsWith('/v1')`. A configured `apiBaseUrl` ending in the
+// PARTIAL segment `/v` (not the full `/v1`) fails that check — `/v` !==
+// `/v1` — so the old code appended `/v1` anyway, producing `.../v` + `/v1`
+// = `.../v/v1`, exactly the malformed URL seen in CI. Confirmed via direct
+// reproduction (not just theory): `buildApiUrl` with a base ending in `/v`
+// reliably produced this doubled path before this fix.
+// GitHub Actions masks the actual secret value in logs, so the EXACT
+// current shape of the CI secret couldn't be directly confirmed — this fix
+// is deliberately robust to any of the shapes that could produce this
+// symptom, not just the one specific case that could be reproduced locally:
+// a base ending in `/v1` (correct), `/v1/` (trailing slash), `/v` (partial/
+// truncated), or even an already-doubled `/v/v1` (in case the corruption is
+// baked into the stored value itself) — strips trailing `/v1` or `/v`
+// segments REPEATEDLY until none remain, then appends exactly one canonical
+// `/v1`. This guarantees a single, correct `/v1` regardless of how malformed
+// the input already is, rather than only handling the one shape a given
+// investigation happened to reproduce.
 export function buildApiUrl(path: string): string {
-  const base = config.apiBaseUrl.replace(/\/+$/, '');
-  const v1Base = base.endsWith('/v1') ? base : `${base}/v1`;
+  let base = config.apiBaseUrl.replace(/\/+$/, '');
+  while (/\/v1?$/.test(base)) {
+    base = base.replace(/\/v1?$/, '');
+  }
   const suffix = path.startsWith('/') ? path : `/${path}`;
-  return `${v1Base}${suffix}`;
+  return `${base}/v1${suffix}`;
 }

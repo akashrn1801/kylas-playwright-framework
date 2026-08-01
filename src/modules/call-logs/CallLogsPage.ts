@@ -10,6 +10,8 @@ import { DealsPage } from '@modules/deals/DealsPage';
 import { generateDealData } from '@data/factories/dealFactory';
 import {
   CallLogData,
+  CallLogCustomFieldData,
+  CALL_LOG_CUSTOM_FIELD_NAMES,
   formatDateForCalendarLabel,
 } from '@data/factories/callLogFactory';
 
@@ -803,6 +805,80 @@ export class CallLogsPage extends BasePage {
     logger.success('Log a Call form opened');
   }
 
+  // WHY a SEPARATE method from openLogACallForm(), not a reuse (2026-07-31):
+  // openLogACallForm()'s reload-and-retry loop is specifically built for the
+  // standalone Call Logs list context — its retry path calls
+  // waitForListReady(), which assumes the page is on /sales/calls/list. A
+  // reload from a Lead/Contact's own detail panel would lose that page
+  // entirely, stranding the test away from the entity whose panel was just
+  // opened.
+  //
+  // WHY this waits for callTypeControl(), NOT entityType input (2026-07-31,
+  // found via a real live failure — the first version of this method
+  // incorrectly copied the standalone flow's readiness check): confirmed
+  // live via direct DOM inspection that the panel-context modal has NO
+  // "Entity Type" or "Associated Entity" field at all — both are implicit
+  // (the entity whose panel this was opened from), so the modal goes
+  // straight to Call Type. `1_11_input_entityType` never attaches in this
+  // context, which is exactly why the first version's wait timed out.
+  async openLogACallFormFromEntityDetailPanel(): Promise<void> {
+    logger.info('Opening Log a Call form from an entity detail panel');
+    const logACallButton = this.page.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    await logACallButton.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(logACallButton, 'Log a call button (from entity panel)');
+    const modal = this.page.locator('#callLogModal');
+    await modal.waitFor({ state: 'visible', timeout: 15000 });
+    await this.callTypeControl().waitFor({ state: 'visible', timeout: 15000 });
+    await this.page.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
+    logger.success('Log a Call form opened from entity detail panel');
+  }
+
+  // WHY a DEDICATED fill method, not fillCreateForm() (2026-07-31, found via
+  // the same live failure): fillCreateForm() always calls fillEntityType()
+  // and searchAndSelectEntity() for the associated entity — both of which
+  // target fields that DO NOT EXIST in the panel-context modal (confirmed
+  // via direct DOM dump: the modal goes straight from open to Call Type,
+  // Outcome, Phone Number, ...). Reusing fillCreateForm() unmodified would
+  // therefore always time out here, the same way the readiness check above
+  // did before its own fix. This method fills every field that DOES exist
+  // in this context — phone number (still a real field here, same as the
+  // standalone Lead/Contact flow — only the Deal flow auto-populates and
+  // disables it, and this method is only used for Lead/Contact panels),
+  // call type/outcome/duration/date/time/disposition/summary/sentiment/
+  // emotion, plus custom fields — and saves, mirroring
+  // QuotationsPage.fillAndSaveQuotationFromPanel()'s identical "own reduced
+  // fill+save method for the panel context" pattern.
+  async fillAndSaveCallLogFromPanel(data: CallLogData): Promise<number | null> {
+    logger.info(`Filling call log form from entity panel — outcome: ${data.outcome}`);
+    await this.fillPhoneNumber();
+    await this.fillCallType(data.callType);
+    await this.fillOutcome(data.outcome);
+    if (data.outcome === 'Connected' && data.duration) {
+      await this.fillDuration(data.duration.value, data.duration.type);
+    }
+    await this.selectDateInPicker(data.date);
+    await this.selectTimeInPicker(
+      data.timeConfig.hour,
+      data.timeConfig.minute,
+      data.timeConfig.second,
+      data.timeConfig.amPm
+    );
+    await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+    if (data.outcome === 'Connected' && data.recording) {
+      await this.uploadRecording(data.recording);
+    }
+    await this.fillCallSummary(data.callSummary);
+    await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
+    await this.selectRandomFromMultiReactSelect(
+      this.customerEmotionControl(),
+      'Customer Emotion',
+      Math.random() > 0.5 ? 1 : 2
+    );
+    await this.fillCallLogCustomFields(data.customFields);
+    logger.success('Call log form filled from entity panel');
+    return await this.saveCallLog();
+  }
+
   async fillEntityType(entityType: string): Promise<void> {
     logger.info(`Selecting entity type: ${entityType}`);
     const modal = this.page.locator('#callLogModal');
@@ -1047,8 +1123,146 @@ export class CallLogsPage extends BasePage {
       await this.fillNoteDuringCreate(data.notes);
     }
 
+    // Step 15: Custom fields
+    await this.fillCallLogCustomFields(data.customFields);
+
     logger.success('Create form filled');
     return { entityName, selectedPhone, associatedDealName };
+  }
+
+  // WHY 'plain' passed explicitly on every call: Call Log's custom-field ids
+  // use the shorter `_input_cf<Name>` suffix, not the `_input_
+  // customFieldValues.cf<Name>` suffix parent entities use — confirmed live
+  // 2026-07-31, matching CLAUDE.md's own documented finding that Meetings
+  // and Call Logs share this convention. Mirrors
+  // MeetingsPage.fillMeetingCustomFields()'s identical structure.
+  private async fillCallLogCustomFields(cf: CallLogCustomFieldData): Promise<void> {
+    await this.fillTextLikeCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field',
+      'plain'
+    );
+    await this.setCheckboxCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox,
+      'Checkbox',
+      'plain'
+    );
+    await this.selectDateCustomField(CALL_LOG_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
+    await this.selectDateTimeCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker',
+      'plain'
+    );
+    // WHY mutate `cf.pickList` in place — same reasoning as Meeting/Deal's
+    // identical field: the option is read live from the DOM, never
+    // hardcoded, so the caller's own data object needs the actually-selected
+    // value written back into it for later detail-page verification.
+    const pickedValue = await this.selectPicklistCustomField(
+      CALL_LOG_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List',
+      'plain'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+  }
+
+  // WHY: mirrors DealsPage/MeetingsPage's skipIfCustomFieldsAbsent() — a
+  // whole-test-level skip, called once right after the create/edit form is
+  // open, so an environment without these fields (Stage, as of 2026-07-31)
+  // skips cleanly with a clear reason instead of failing deep inside a
+  // fill/assert call.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(CALL_LOG_CUSTOM_FIELD_NAMES),
+      'Call Log',
+      'plain'
+    );
+  }
+
+  // WHY: mirrors MeetingsPage's assertMeetingCustomFieldsOnDetail() — only
+  // this module's dedicated custom-field tests call this, always on an
+  // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
+  // these fields, so it throws (does not skip) on a missing field. The
+  // "Other Details" tab click is required first — confirmed live (2026-07-31)
+  // the Call Log detail page is tabbed (5 tabs: Basic Info, Sentiment
+  // Information, Campaign Information, Other Details, Internals), same
+  // shape as Meeting's own tabbed detail page, and the custom-field
+  // containers only exist in the DOM once "Other Details" is the active tab.
+  async assertCallLogCustomFieldsOnDetail(cf: CallLogCustomFieldData): Promise<void> {
+    logger.info('Asserting all 8 custom field values on call log detail page');
+    const tab = this.page.locator('a.nav-item.nav-link, a.nav-link').filter({ hasText: 'Other Details' });
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        '"Other Details" tab did not appear on the call log detail page — custom field verification cannot proceed'
+      ).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await this.click(tab, 'Other Details tab');
+    await this.page.waitForTimeout(500);
+
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      CALL_LOG_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(
+        CALL_LOG_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
+    }
+    logger.success('All 8 custom field values verified on call log detail page');
   }
 
   async saveCallLog(): Promise<number | null> {
@@ -1138,7 +1352,16 @@ export class CallLogsPage extends BasePage {
     logger.success('Edit form opened');
   }
 
-  async fillEditForm(data: CallLogData): Promise<void> {
+  // WHY the optional updateCustomFields param (2026-07-31, defaults to
+  // false — zero behavior change for every existing caller): `data` here is
+  // a full, non-partial `CallLogData`, so `data.customFields` is always
+  // populated (the type is mandatory) — unlike Quotation's `Partial<...>`
+  // edit-changes shape, there's no way to tell "caller didn't specify
+  // customFields" from the data alone. Without this flag, every existing
+  // update test would silently start mutating custom fields too, changing
+  // scope beyond what those tests actually assert. Only a dedicated
+  // custom-field update test passes `true`.
+  async fillEditForm(data: CallLogData, updateCustomFields = false): Promise<void> {
     logger.info('Filling edit form');
     // WHY: Only editable fields — Type, Outcome, Date, Time, Summary, Sentiment, Emotion
     await this.fillCallType(data.callType);
@@ -1160,6 +1383,22 @@ export class CallLogsPage extends BasePage {
       'Customer Emotion',
       Math.random() > 0.5 ? 1 : 2
     );
+    if (updateCustomFields) {
+      // WHY the "Other Details" tab click here, NOT in fillCallLogCustomFields()
+      // itself: confirmed live (2026-07-31) the EDIT form (unlike create) is
+      // also tabbed, and custom-field inputs only exist in the DOM once
+      // "Other Details" is active — the CREATE form renders every section
+      // inline, so fillCallLogCustomFields() itself must stay tab-agnostic
+      // for that context to keep working unchanged.
+      const otherDetailsTab = this.page
+        .locator('a.nav-item.nav-link, a.nav-link')
+        .filter({ hasText: 'Other Details' });
+      if ((await otherDetailsTab.count()) > 0) {
+        await this.click(otherDetailsTab.first(), 'Other Details tab (edit form)');
+        await this.page.waitForTimeout(500);
+      }
+      await this.fillCallLogCustomFields(data.customFields);
+    }
     logger.success('Edit form filled');
   }
 
@@ -1591,11 +1830,18 @@ export class CallLogsPage extends BasePage {
     return dealData.name;
   }
 
+  // WHY the optional checkCustomFieldsAbsent option (2026-07-31, defaults to
+  // false — zero behavior change for every existing caller): same reasoning
+  // as QuotationsPage.createQuotation()'s identical param — see that
+  // method's own comment. Adding the skip-check unconditionally would have
+  // silently started skipping every OTHER pre-existing Call Log test on
+  // Stage too.
   async createCallLog(
     data: CallLogData,
     options: {
       includeNoteDuringCreate?: boolean;
       selectedEntityName?: string;
+      checkCustomFieldsAbsent?: boolean;
     } = {}
   ): Promise<{
     callLogId: number | null;
@@ -1640,6 +1886,9 @@ export class CallLogsPage extends BasePage {
       await this.goToCallLogsList();
     }
     await this.openLogACallForm();
+    if (options.checkCustomFieldsAbsent) {
+      await this.skipIfCustomFieldsAbsent();
+    }
     const { entityName, selectedPhone, associatedDealName } = await this.fillCreateForm(
       data,
       resolvedEntityName,
@@ -1652,12 +1901,16 @@ export class CallLogsPage extends BasePage {
     return { callLogId, entityName, selectedPhone, associatedDealName };
   }
 
-  async updateCallLog(callLogId: number, newData: CallLogData): Promise<void> {
+  async updateCallLog(
+    callLogId: number,
+    newData: CallLogData,
+    updateCustomFields = false
+  ): Promise<void> {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Updating call log ID: ${callLogId}`);
       await this.goToCallLogById(callLogId);
       await this.clickEditButton();
-      await this.fillEditForm(newData);
+      await this.fillEditForm(newData, updateCustomFields);
       await this.saveEditedCallLog();
       logger.success(`Call log ID ${callLogId} updated`);
     }, 'updateCallLog');
