@@ -22,13 +22,17 @@
 - [ ] **Status:** Pending — awaiting Task 0 completion
 
 ### Task 2 — Write/refresh `CLAUDE.md`
-- [ ] Encode branch/promotion flow from `GIT_WORKFLOW.md`
-- [ ] Document `requireEnv()` pattern
-- [ ] Document no-`waitForTimeout()` rule
-- [ ] Document call-logs hang ruled-out theory
-- [ ] Add "when in doubt" section
-- [ ] Note about `INVESTIGATION_LOG.md` logging
-- [ ] **Status:** Pending
+- [x] Refactored CLAUDE.md from 175KB → 11.2KB (under 40k limit)
+- [x] Extracted engineering-checklist.md (25 standing rules)
+- [x] Extracted architecture.md (file layout, fixtures, auth flow)
+- [x] Extracted reference-patterns.md (canonical code patterns)
+- [x] Extracted known-issues.md (documented bugs and investigations)
+- [x] Extracted cicd-reference.md and module-status.md
+- [x] Added framework overhaul context to main CLAUDE.md
+- [x] Documented 13-agent delegation chains and auto-triggers
+- [x] Documented Playwright MCP scope and evidence protocol
+- [x] Added "When You're Stuck" guidance linking to agents
+- [x] **Status:** ✅ COMPLETE — Commit c554ddd
 
 ### Task 3 — Create 13 specialized subagents in `.claude/agents/`
 
@@ -122,8 +126,15 @@
 
 ## Currently In Progress
 
-**Item:** Task 0 — Creating progress file and setting up directory structure  
-**Next Action:** Create `.claude/agents/` directory and make initial commit
+**Item:** Task 3 (Subagent 1) — Build `flaky-test-auditor` agent  
+**Next Action:** Write first agent definition in `.claude/agents/flaky-test-auditor.md`
+
+---
+
+**Tasks Completed:**
+- ✅ Task 0 — Setup branch and progress tracking (commit 8c61643)
+- ✅ Task 1 — Install Playwright MCP and verify tools available (commit automatic)
+- ✅ Task 2 — Refactor CLAUDE.md and extract reference files (commit c554ddd)
 
 ---
 
