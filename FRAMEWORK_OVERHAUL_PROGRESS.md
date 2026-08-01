@@ -103,18 +103,21 @@
 - [x] MCP tools gated behind approval
 - [x] **Status:** ✅ COMPLETE — Commit ec9c12a
 
-### Task 4 — Set up hooks in `.claude/settings.json`
-- [x] Add hard permission deny for `git push`, `git merge`, `gh pr merge`
-- [x] Configure pre-commit hook (block `waitForTimeout()`)
-- [x] Configure pre-push hook (flaky-test-auditor + enterprise-code-reviewer)
-- [x] Configure post-file-edit hook (locator-reviewer)
-- [x] **Status:** ✅ COMPLETE — Commit ec0c856
+### Task 4 — Install real git hooks
+- [x] Add hard permission deny for `git push`, `git merge`, `gh pr merge` in `.claude/settings.json` (Commit ec0c856)
+- [x] Create real bash-based pre-commit hook (blocks `waitForTimeout()` anti-pattern)
+- [x] Create real bash-based pre-push hook (validates code quality)
+- [x] Install hooks to `.git/hooks/` (executable, active)
+- [x] Track hook source code in `scripts/hooks/` for version control
+- [x] Verified working: commit with `waitForTimeout()` is actually blocked with exit code 1
+- [x] **Status:** ✅ COMPLETE — Hooks are real, enforced, and working — Commit 3ce3096
 
 ### Task 5 — Wire up automatic delegation
 - [x] Document orchestration chains in AGENT_DELEGATION_GUIDE.md
 - [x] Create agent activation reference table (auto-triggers + manual)
-- [x] Wire hooks to agent invocation (pre-commit, pre-push, post-file-edit)
-- [x] **Status:** ✅ COMPLETE — Commit 9b1c76f
+- [x] Wire hooks to agent invocation (pre-commit, pre-push)
+- [x] Document that post-file-edit auto-triggering is NOT Claude Code native — manual invocation is correct
+- [x] **Status:** ✅ COMPLETE — Commit 9b1c76f; real hooks implemented Commit 3ce3096
 
 ### Task 6 — Test the setup for real
 - [x] Pre-commit hook design: blocks `waitForTimeout(` pattern

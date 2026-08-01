@@ -1,22 +1,59 @@
 #!/bin/bash
 # Pre-push hook: code quality gate
-# This runs checks before allowing a push to any branch
-
-set -e
+# Reads stdin to get remote branch, then checks for anti-patterns
 
 echo "🔍 Running pre-push checks..."
 
-# Check for waitForTimeout in the entire push
-if git diff origin/HEAD...HEAD | grep -q "waitForTimeout("; then
-    echo "❌ PUSH BLOCKED: Branch contains waitForTimeout() anti-pattern"
-    echo "See CLAUDE.md Rule #2 for details."
+# Read git push stdin: <local-ref> <local-sha1> <remote-ref> <remote-sha1>
+# Example: refs/heads/feature/x 1234abc refs/heads/dev 5678def
+read local_ref local_sha remote_ref remote_sha
+
+# Extract remote branch name from remote_ref (e.g., refs/heads/dev → dev)
+remote_branch="${remote_ref#refs/heads/}"
+remote_name="${remote_ref%/*}"
+
+if [ -z "$remote_branch" ] || [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # Pushing a new branch or deleting — skip checks
+    exit 0
+fi
+
+# Determine merge base for comparison
+# Try: fork-point (preferred), then merge-base, then fallback to remote-sha
+MERGE_BASE=$(git merge-base --fork-point "origin/$remote_branch" 2>/dev/null || \
+             git merge-base "origin/$remote_branch" HEAD 2>/dev/null || \
+             echo "$remote_sha")
+
+# Fail closed: if we couldn't determine a merge base, block the push
+if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "0000000000000000000000000000000000000000" ]; then
+    echo "❌ PUSH BLOCKED: Could not determine merge base for origin/$remote_branch"
+    echo "   This may indicate a missing remote branch or tracking configuration."
+    echo "   Run: git fetch origin && git branch -u origin/$remote_branch"
     exit 1
 fi
 
-# Check for hardcoded URLs in TypeScript/test files
-if git diff origin/HEAD...HEAD -- '*.ts' '*.tsx' | grep -qE "(http://localhost|app-qa\.sling-dev|staging\.kylas)"; then
+# Check for waitForTimeout() in staged changes (fail closed on command error)
+if ! git diff "$MERGE_BASE...HEAD" -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/git_diff_out 2>&1; then
+    echo "❌ PUSH BLOCKED: Could not compute diff for validation"
+    cat /tmp/git_diff_out
+    exit 1
+fi
+
+if grep -q "waitForTimeout(" /tmp/git_diff_out; then
+    echo "❌ PUSH BLOCKED: Branch contains waitForTimeout() anti-pattern"
+    echo ""
+    echo "CLAUDE.md Rule #2: No unbounded clicks/actions."
+    echo "Use condition-based waits instead:"
+    echo "  ❌ await page.waitForTimeout(5000);"
+    echo "  ✅ await page.waitForResponse(..., { timeout: 5000 });"
+    echo "  ✅ await locator.waitFor({ state: 'visible', timeout: 5000 });"
+    echo ""
+    grep "waitForTimeout(" /tmp/git_diff_out | head -3
+    exit 1
+fi
+
+# Check for hardcoded URLs in TypeScript/test files (warning only)
+if grep -qE "(http://localhost|app-qa\.sling-dev|staging\.kylas)" /tmp/git_diff_out; then
     echo "⚠️  WARNING: Push contains hardcoded URLs. Verify these are in test files only."
-    # Don't block, just warn - these might be intentional in tests
 fi
 
 echo "✅ Pre-push checks passed"
