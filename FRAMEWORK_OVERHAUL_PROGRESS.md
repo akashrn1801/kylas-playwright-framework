@@ -37,15 +37,16 @@
 ### Task 3 — Create 13 specialized subagents in `.claude/agents/`
 
 #### Subagent 1: `flaky-test-auditor`
-- [ ] Agent created and registered
-- [ ] Read-only tools configured
-- [ ] Description and system prompt finalized
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Read-only tools configured (Read, Bash grep, Glob)
+- [x] Description and system prompt finalized
+- [x] **Status:** ✅ COMPLETE — Commit ec6c590
 
 #### Subagent 2: `locator-reviewer`
-- [ ] Agent created and registered
-- [ ] Tools configured (Read, Grep, Glob, MCP pending)
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] Tools configured (Read, Bash grep, Glob, MCP for live pass)
+- [x] Description and system prompt finalized (two-phase: static + live)
+- [x] **Status:** ✅ COMPLETE — Commit 4a5c120
 
 #### Subagent 3: `self-healing-locator-scout`
 - [ ] Agent created and registered
@@ -126,15 +127,16 @@
 
 ## Currently In Progress
 
-**Item:** Task 3 (Subagent 1) — Build `flaky-test-auditor` agent  
-**Next Action:** Write first agent definition in `.claude/agents/flaky-test-auditor.md`
+**Item:** Task 3 (Subagent 3) — Build `self-healing-locator-scout` agent  
+**Next Action:** Write agent definition in `.claude/agents/self-healing-locator-scout.md`
 
 ---
 
 **Tasks Completed:**
 - ✅ Task 0 — Setup branch and progress tracking (commit 8c61643)
-- ✅ Task 1 — Install Playwright MCP and verify tools available (commit automatic)
+- ✅ Task 1 — Install Playwright MCP and verify tools available
 - ✅ Task 2 — Refactor CLAUDE.md and extract reference files (commit c554ddd)
+- ⏳ Task 3 (Subagents 1-2 done, 11 pending) — in progress
 
 ---
 
