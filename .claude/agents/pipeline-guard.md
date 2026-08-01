@@ -19,6 +19,13 @@ tools:
 
 **Always verify against `GIT_WORKFLOW.md` (source of truth), not memory.**
 
+### Sandbox CI Gate (BLOCKING before PR to dev)
+- [ ] Sandbox environment was reset before feature work started (`npm run sandbox:reset`)
+- [ ] Feature branch was merged to sandbox for CI verification
+- [ ] Sandbox CI pipeline (`.github/workflows/sandbox.yml`) passed on the latest sandbox commit
+- [ ] No failures or errors in sandbox CI logs
+- Only after sandbox CI passes: proceed to PR dev
+
 ### Branch Lineage (BLOCKING)
 - [ ] Current branch was cut from correct base per GIT_WORKFLOW.md
 - [ ] Feature branches cut from `dev` (never sandbox/qa/stage/prod/main)
