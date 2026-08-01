@@ -73,7 +73,7 @@ Example output:
 ```
 DealsPage.ts:234 | Raw click with no retry on Save button | blocking | Add bounded retry: waitFor(saveButton).then(() => click())
 LeadsPage.ts:189 | Raw expect().toBeVisible on form field | blocking | Wrap in withSessionExpiryRecovery(() => expect(field).toBeVisible())
-CallLogsPage.ts:456 | waitForTimeout(1500) instead of condition-based wait | advisory | Wait for entity list table render: waitForResponse(/v1/call-logs/)
+CallLogsPage.ts:456 | waitForTimeout(1500) instead of condition-based wait | blocking | Use condition-based wait: waitForResponse(/v1/call-logs/) or locator.waitFor({ state: 'visible', timeout: 5000 })
 ```
 
 ### 4. Check for Bug Class Patterns
@@ -88,6 +88,7 @@ Document any pattern you find across multiple modules — don't report the same 
 ### 5. Severity Classification
 
 - **BLOCKING:** will reliably cause CI flakiness under normal load
+  - `waitForTimeout()` anywhere (CLAUSE.md rule #2; pre-commit hook blocks; no condition-based waits allowed)
   - Raw `.click()` after async pre-fill (DealsPage.cloneDeal() precedent)
   - Raw `expect().toBeVisible/toHaveText` on detail pages without session-expiry wrap
   - ID-capture `waitForResponse()` with no predicate or wrong predicate
@@ -95,7 +96,6 @@ Document any pattern you find across multiple modules — don't report the same 
   - Missing retry entirely where retries already exist in similar code paths
   
 - **ADVISORY:** works but fragile; could break with app changes or higher latency
-  - `waitForTimeout(1500)` instead of a real wait (works in local, fails in CI under load)
   - Unscoped locator that's currently unique but could become ambiguous (once new field added)
   - Retry budget that's currently sufficient but threadbare (works 9/10 times, not 10/10)
   
