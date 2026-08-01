@@ -4,6 +4,7 @@ description: Tags and cleans up test data created during runs. Prevents orphaned
 tools:
   - Read
   - Bash (API calls only, no shell destructive commands)
+  - Playwright MCP (verify app state before cleanup, gated behind Task 1 approval)
 ---
 
 # Test Data Lifecycle Manager
