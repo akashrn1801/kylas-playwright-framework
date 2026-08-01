@@ -1,6 +1,6 @@
 # Session Status — 2026-07-30 (child-entity custom-fields branch)
 
-Branch: `feature/child-entity-custom-fields-20260729`. Nothing committed — all commits are the user's own, per standing instruction.
+Branch: `feature/child-entity-custom-fields-20260729`. Commit 40dc671 (Task #5 + bonus Call Log RBAC tests) complete. Awaiting manual push to feature branch. All other work in earlier commits from this session — user's responsibility per standing instruction.
 
 ## ✅ DONE
 
