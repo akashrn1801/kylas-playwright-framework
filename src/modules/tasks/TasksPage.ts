@@ -2,7 +2,7 @@ import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
-import { TaskData } from '@data/factories/taskFactory';
+import { TaskData, TaskCustomFieldData, TaskCustomFieldKey, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
 class InaccessibleRelationError extends Error {}
 export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
@@ -604,6 +604,9 @@ export class TasksPage extends BasePage {
       logger.info('Skipping relation — skipRelation=true');
     }
 
+    // Custom Fields
+    await this.fillTaskCustomFields(data.customFields);
+
     logger.success('Detailed Task form filled');
   }
 
@@ -821,6 +824,8 @@ export class TasksPage extends BasePage {
     await this.fillDueDate(3);
     await this.selectReactSelectOption('0_51_input_reminder', data.reminder);
     // WHY: Relation NOT touched — belongs to task owner
+    // Custom Fields
+    await this.fillTaskCustomFields(data.customFields);
     logger.success('Edit form filled');
   }
 
@@ -920,6 +925,123 @@ export class TasksPage extends BasePage {
       );
       return false;
     }
+  }
+
+  private async fillTaskCustomFields(cf: TaskCustomFieldData): Promise<void> {
+    logger.info('Filling Task custom fields');
+
+    // WHY: Task uses 'plain' suffix convention (_input_cf<Name>, not _input_customFieldValues.cf<Name>)
+    // matching Meeting/Call Log, confirmed live 2026-08-01
+
+    // TextField
+    if (cf.textField) {
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField', 'plain');
+    }
+
+    // ParagraphText
+    if (cf.paragraphText) {
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText', 'plain');
+    }
+
+    // Number
+    if (cf.number !== undefined) {
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number', 'plain');
+    }
+
+    // PickList
+    const pickListSelected = await this.selectPicklistCustomField(TASK_CUSTOM_FIELD_NAMES.pickList, 'Task custom field: pickList', 'plain');
+    if (pickListSelected) {
+      cf.pickList = pickListSelected;
+    }
+
+    // Checkbox
+    if (cf.checkbox !== undefined) {
+      await this.setCheckboxCustomField(TASK_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Task custom field: checkbox', 'plain');
+    }
+
+    // Date
+    if (cf.date) {
+      await this.selectDateCustomField(TASK_CUSTOM_FIELD_NAMES.date, cf.date, 'Task custom field: date', 'plain');
+    }
+
+    // DateTimePicker
+    if (cf.dateTimePicker) {
+      await this.selectDateTimeCustomField(TASK_CUSTOM_FIELD_NAMES.dateTimePicker, cf.dateTimePicker, 'Task custom field: dateTimePicker', 'plain');
+    }
+
+    // URLField
+    if (cf.urlField) {
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'Task custom field: urlField', 'plain');
+    }
+
+    logger.success('Task custom fields filled');
+  }
+
+  async assertTaskCustomFieldsOnDetail(cf: TaskCustomFieldData): Promise<void> {
+    logger.info('Asserting Task custom fields on detail page');
+
+    // WHY: Click "Other Details" tab first — custom fields only exist in DOM when tab is active
+    // Same pattern as Call Log/Meeting detail pages (all are tabbed with custom fields under "Other Details")
+    const tab = this.page.locator('a.nav-item.nav-link, a.nav-link').filter({ hasText: 'Other Details' });
+    const tabVisible = await tab.count() > 0;
+    if (tabVisible) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(tab, '"Other Details" tab should be visible').toBeVisible({ timeout: 5000 })
+      );
+      await this.click(tab.first(), '"Other Details" tab');
+      await this.page.waitForTimeout(500);
+    }
+
+    // TextField
+    if (cf.textField) {
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField);
+    }
+
+    // ParagraphText
+    if (cf.paragraphText) {
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText);
+    }
+
+    // Number
+    if (cf.number !== undefined) {
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number));
+    }
+
+    // PickList
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.pickList, cf.pickList);
+    }
+
+    // Checkbox
+    if (cf.checkbox !== undefined) {
+      const checkboxText = cf.checkbox ? 'Yes' : 'No';
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.checkbox, checkboxText);
+    }
+
+    // Date
+    if (cf.date) {
+      const formattedDate = this.formatCustomFieldDetailDate(cf.date);
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.date, formattedDate);
+    }
+
+    // DateTimePicker
+    if (cf.dateTimePicker) {
+      const formattedDateTime = this.formatCustomFieldDetailDateTime(cf.dateTimePicker);
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.dateTimePicker, formattedDateTime);
+    }
+
+    // URLField
+    if (cf.urlField) {
+      await this.assertCustomFieldOnDetail(TASK_CUSTOM_FIELD_NAMES.urlField, cf.urlField);
+    }
+
+    logger.success('Task custom fields verified on detail page');
+  }
+
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    // WHY: Custom fields are QA-only (not yet on Stage/Prod) — gracefully skip if absent
+    // matching Meeting/Call Log/Quotation's pattern (calls test.skip() automatically)
+    await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(TASK_CUSTOM_FIELD_NAMES), 'Task', 'plain');
   }
 
   // ──────────────────────────────────────────────────────────
