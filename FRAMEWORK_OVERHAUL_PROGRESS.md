@@ -49,9 +49,10 @@
 - [x] **Status:** ✅ COMPLETE — Commit 4a5c120
 
 #### Subagent 3: `self-healing-locator-scout`
-- [ ] Agent created and registered
-- [ ] MCP tools gated behind approval
-- [ ] **Status:** Pending
+- [x] Agent created and registered
+- [x] MCP tools gated behind approval (required to run)
+- [x] Description and system prompt finalized (7-phase: reproduce → find → ripple-check → propose → verify → edit → report)
+- [x] **Status:** ✅ COMPLETE — Commit 9d8f5e2
 
 #### Subagent 4: `resilience-architect`
 - [ ] Agent created and registered
