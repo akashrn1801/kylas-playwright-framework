@@ -919,25 +919,19 @@ export class CallLogsPage extends BasePage {
     logger.info('Selecting phone number');
     const modal = this.page.locator('#callLogModal');
     // WHY: Observer shows phone field uses id="1_21_input_phoneNumber" React Select
-    // after entity selected. Click its is-invalid__control ancestor to open dropdown.
+    // after entity selected. Use openDropdownById() with JS event dispatch (not UI click)
+    // to avoid pointer event interception from dropdown menu.
     const phoneInput = modal.locator('[id="1_21_input_phoneNumber"]');
     const phoneInputVisible = await phoneInput.isVisible().catch(() => false);
     if (phoneInputVisible) {
-      const phoneControl = phoneInput.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-      await phoneControl.waitFor({ state: 'visible', timeout: 10000 });
-      await phoneControl.click();
-      await this.page.waitForTimeout(500);
+      await this.openDropdownById('1_21_input_phoneNumber');
       const menu = this.page.locator('.is-invalid__menu');
       await menu.waitFor({ state: 'visible', timeout: 8000 });
       const option = menu.locator('.is-invalid__option').first();
       await option.waitFor({ state: 'visible', timeout: 5000 });
-      // WHY: bound the read+click to 15000ms (2026-07-17) — this selects the
-      // FIRST phone option (not random, so no re-roll needed), but an unbounded
-      // textContent()/click() could still ride the 480s test timeout if the
-      // option detaches mid-action. Bounding keeps it failing fast, consistent
-      // with the shared selectRandomOptionWithRetry() helper.
+      // WHY: Use force: true to bypass aria-hidden blocking from React Select
       const phoneText = await option.textContent({ timeout: 15000 });
-      await option.click({ timeout: 15000 });
+      await option.click({ force: true, timeout: 15000 });
       await this.page.waitForTimeout(300);
       logger.success(`Phone number selected: ${phoneText?.trim()}`);
     } else {
@@ -1394,7 +1388,7 @@ export class CallLogsPage extends BasePage {
         .locator('a.nav-item.nav-link, a.nav-link')
         .filter({ hasText: 'Other Details' });
       if ((await otherDetailsTab.count()) > 0) {
-        await this.click(otherDetailsTab.first(), 'Other Details tab (edit form)');
+        await this.click(otherDetailsTab.first(), 'Other Details tab (edit form)', true);
         await this.page.waitForTimeout(500);
       }
       await this.fillCallLogCustomFields(data.customFields);
