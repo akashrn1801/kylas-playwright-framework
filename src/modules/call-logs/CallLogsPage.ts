@@ -591,13 +591,13 @@ export class CallLogsPage extends BasePage {
       } else if (backVisible) {
         await backButton.click();
       }
-      await this.page.waitForTimeout(400);
-      try {
-        await dayCell.waitFor({ state: 'visible', timeout: 1000 });
-        found = true;
-      } catch {
-        found = false;
-      }
+      // WHY: Direct condition-based wait instead of blind pause — matches
+      // BasePage.selectDateCustomField() and avoids oscillation when calendar
+      // DOM update takes longer than the hardcoded 400ms pause.
+      found = await dayCell
+        .waitFor({ state: 'visible', timeout: 1000 })
+        .then(() => true)
+        .catch(() => false);
       attempts++;
     }
     if (!found) {
