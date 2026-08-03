@@ -1,0 +1,74 @@
+#!/bin/bash
+# Pre-push hook: code quality gate
+# Reads stdin to get remote branch, then checks for anti-patterns
+
+echo "🔍 Running pre-push checks..."
+
+# Read git push stdin: <local-ref> <local-sha1> <remote-ref> <remote-sha1>
+# Example: refs/heads/feature/x 1234abc refs/heads/dev 5678def
+read local_ref local_sha remote_ref remote_sha
+
+# Extract remote branch name from remote_ref (e.g., refs/heads/dev → dev)
+remote_branch="${remote_ref#refs/heads/}"
+remote_name="${remote_ref%/*}"
+
+# Skip ONLY if deleting (local_sha is null), not for new branches (remote_sha is null)
+if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    # Deleting remote ref — skip checks
+    exit 0
+fi
+
+if [ -z "$remote_branch" ]; then
+    echo "❌ PUSH BLOCKED: Could not parse remote branch name from $remote_ref"
+    exit 1
+fi
+
+# Determine merge base for comparison
+# For new branches (remote doesn't exist): compare against origin/dev (tracked default)
+# For existing branches: compare against remote tracking branch
+if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch — compare against origin/dev (the tracked default branch)
+    MERGE_BASE=$(git merge-base origin/dev HEAD 2>/dev/null)
+    if [ -z "$MERGE_BASE" ]; then
+        echo "❌ PUSH BLOCKED: Could not determine merge base against origin/dev"
+        echo "   Run: git fetch origin"
+        exit 1
+    fi
+else
+    # Existing branch — compare against remote tracking branch
+    MERGE_BASE=$(git merge-base --fork-point "origin/$remote_branch" 2>/dev/null || \
+                 git merge-base "origin/$remote_branch" HEAD 2>/dev/null)
+    if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "0000000000000000000000000000000000000000" ]; then
+        echo "❌ PUSH BLOCKED: Could not determine merge base for origin/$remote_branch"
+        echo "   This may indicate a missing remote branch or tracking configuration."
+        exit 1
+    fi
+fi
+
+# Check for waitForTimeout() in staged changes (fail closed on command error)
+if ! git diff "$MERGE_BASE...HEAD" -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/git_diff_out 2>&1; then
+    echo "❌ PUSH BLOCKED: Could not compute diff for validation"
+    cat /tmp/git_diff_out
+    exit 1
+fi
+
+if grep -q "waitForTimeout(" /tmp/git_diff_out; then
+    echo "❌ PUSH BLOCKED: Branch contains waitForTimeout() anti-pattern"
+    echo ""
+    echo "CLAUDE.md Rule #2: No unbounded clicks/actions."
+    echo "Use condition-based waits instead:"
+    echo "  ❌ await page.waitForTimeout(5000);"
+    echo "  ✅ await page.waitForResponse(..., { timeout: 5000 });"
+    echo "  ✅ await locator.waitFor({ state: 'visible', timeout: 5000 });"
+    echo ""
+    grep "waitForTimeout(" /tmp/git_diff_out | head -3
+    exit 1
+fi
+
+# Check for hardcoded URLs in TypeScript/test files (warning only)
+if grep -qE "(http://localhost|app-qa\.sling-dev|staging\.kylas)" /tmp/git_diff_out; then
+    echo "⚠️  WARNING: Push contains hardcoded URLs. Verify these are in test files only."
+fi
+
+echo "✅ Pre-push checks passed"
+exit 0
