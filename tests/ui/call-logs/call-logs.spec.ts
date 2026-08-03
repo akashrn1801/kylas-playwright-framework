@@ -2,6 +2,10 @@ import { test } from '../../../src/fixtures/index';
 import { expect } from '@playwright/test';
 import { safeWaitForURL } from '../../../src/utils/navigation';
 import { CallLogsPage } from '../../../src/modules/call-logs/CallLogsPage';
+import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
+import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
+import { generateLeadData } from '../../../src/data/factories/leadFactory';
+import { generateContactData } from '../../../src/data/factories/contactFactory';
 import {
   generateCallLogData,
   formatDateForCalendarLabel,
@@ -432,6 +436,194 @@ test.describe('Call Logs', () => {
     await callLogsPage.goToCallLogsList();
     await callLogsPage.assertOnCallLogsListPage();
     logger.success('CL18 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Custom Fields ("Other Details" section)
+  // ──────────────────────────────────────────────────────────
+  // WHY: these 8 fields exist on QA today, not yet on Stage — see
+  // CallLogsPage/BasePage's custom-field helpers for the environment-safety
+  // skip logic that makes these tests (and every other Call Log create/
+  // update path) work unchanged once Stage gets them too. Call Log has no
+  // lookup-type or MultiPickList custom field, like Meeting/Deal/Quotation.
+  // Uses the 'plain' suffix convention, same as Meeting.
+  //
+  // WHY 3 create contexts (standalone + Lead panel + Contact panel), not 5
+  // like Meeting/4 like Quotation: confirmed live (2026-07-30/31 research)
+  // Deal has no addCallFromPanel() equivalent built at all — the Deal-panel
+  // Call Log flow depends on a genuinely-resolvable associated contact
+  // (pre-existing, previously-confirmed app defect), and only exists today
+  // as inline, RBAC-test-local scaffolding (logCallWithRetry() in
+  // deals.rbac.spec.ts), not a first-class DealsPage method this test file
+  // can call. Company has no Call Logs panel entry at all (confirmed via
+  // CompaniesPage's own rightPanelIconSvgMap, which omits 'Call Logs'
+  // entirely). Building a dedicated DealsPage.addCallFromPanel() is out of
+  // scope for this custom-field work — it would need its own investigation
+  // given the associated-contact dependency.
+  //
+  // WHY update/validation are NOT repeated per context (unlike create):
+  // confirmed live — editing/validating a call log goes through the same
+  // detail-panel Edit button → same modal regardless of which panel
+  // originally created it; there is no context-dependent variation to test,
+  // same conclusion already reached for Meeting/Quotation.
+
+  // ── CL20 ──────────────────────────────────────────────────
+  test('@regression admin should create a call log with all custom fields and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({ entityType: 'Lead', outcome: 'Connected' });
+
+    await callLogsPage.goToCallLogsList();
+    const { callLogId } = await callLogsPage.createCallLog(data, { checkCustomFieldsAbsent: true });
+    expect(callLogId, 'Call log ID should be captured after create').not.toBeNull();
+
+    await callLogsPage.goToCallLogById(callLogId!);
+    await callLogsPage.assertCallLogCustomFieldsOnDetail(data.customFields);
+    logger.success('CL20 passed');
+  });
+
+  // ── CL21 ──────────────────────────────────────────────────
+  test('@regression admin should create a call log with all custom fields from a lead detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const leadData = generateLeadData();
+    const data = generateCallLogData({ entityType: 'Lead' });
+
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.clickRightPanelIcon('Call Logs');
+    await callLogsPage.openLogACallFormFromEntityDetailPanel();
+    await callLogsPage.skipIfCustomFieldsAbsent();
+    const callLogId = await callLogsPage.fillAndSaveCallLogFromPanel(data);
+    expect(callLogId, 'Call log ID should be captured after create').not.toBeNull();
+
+    await callLogsPage.goToCallLogById(callLogId!);
+    await callLogsPage.assertCallLogCustomFieldsOnDetail(data.customFields);
+    logger.success('CL21 passed');
+  });
+
+  // ── CL22 ──────────────────────────────────────────────────
+  test('@regression admin should create a call log with all custom fields from a contact detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const contactData = generateContactData();
+    const data = generateCallLogData({ entityType: 'Contact' });
+
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId, 'Contact ID should be captured after create').not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.clickRightPanelIcon('Call Logs');
+    await callLogsPage.openLogACallFormFromEntityDetailPanel();
+    await callLogsPage.skipIfCustomFieldsAbsent();
+    const callLogId = await callLogsPage.fillAndSaveCallLogFromPanel(data);
+    expect(callLogId, 'Call log ID should be captured after create').not.toBeNull();
+
+    await callLogsPage.goToCallLogById(callLogId!);
+    await callLogsPage.assertCallLogCustomFieldsOnDetail(data.customFields);
+    logger.success('CL22 passed');
+  });
+
+  // ── CL23 ──────────────────────────────────────────────────
+  test("@regression admin should update a call log's custom fields and verify updated values", async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({ entityType: 'Lead', outcome: 'Connected' });
+
+    await callLogsPage.goToCallLogsList();
+    const { callLogId } = await callLogsPage.createCallLog(data, { checkCustomFieldsAbsent: true });
+    expect(callLogId, 'Call log ID should be captured after create').not.toBeNull();
+
+    const updatedData = generateCallLogData({
+      entityType: data.entityType,
+      callType: data.callType,
+      outcome: 'Busy',
+    });
+    await callLogsPage.updateCallLog(callLogId!, updatedData, true);
+
+    await callLogsPage.goToCallLogById(callLogId!);
+    await callLogsPage.assertCallLogCustomFieldsOnDetail(updatedData.customFields);
+    logger.success('CL23 passed');
+  });
+
+  // ── CL24 ──────────────────────────────────────────────────
+  // SKIPPED: Call Log custom fields do not yet enforce character-limit/format
+  // validation on the backend (unlike Meeting/Quotation/Task which do enforce it).
+  // This test will be re-enabled once backend validation is introduced for Call Log
+  // custom fields. See INVESTIGATION_LOG.md for details. (2026-08-03)
+  test.skip('@regression admin should see validation errors for invalid call log custom field values and not save the call log', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+
+    interface InvalidCustomFieldCase {
+      description: string;
+      fieldSuffix: string;
+      invalidValue: string;
+      expectedError: string;
+    }
+
+    // WHY: confirmed live (2026-07-31), NOT assumed to transfer from Meeting
+    // — Call Log's Number field is also a native <input type="number"> (no
+    // realistic UI path to enter invalid text), so it's excluded here for
+    // the same reason as every other entity's Number field.
+    const cases: InvalidCustomFieldCase[] = [
+      {
+        description: 'TextField exceeding 255 characters',
+        fieldSuffix: 'cfTextField',
+        invalidValue: 'A'.repeat(256),
+        expectedError: 'Enter the value having length between 1 - 255',
+      },
+      {
+        description: 'ParagraphText exceeding 2,550 characters',
+        fieldSuffix: 'cfParagraphText',
+        invalidValue: 'B'.repeat(2551),
+        expectedError: 'Enter the value having length between 1 - 2550',
+      },
+      {
+        description: 'UrlField with a malformed URL',
+        fieldSuffix: 'cfURLField',
+        invalidValue: 'not a valid url###',
+        expectedError: 'Enter a valid URL',
+      },
+    ];
+
+    await callLogsPage.goToCallLogsList();
+    await callLogsPage.openLogACallForm();
+    await callLogsPage.skipIfCustomFieldsAbsent();
+
+    for (const testCase of cases) {
+      logger.info(`Negative custom field case: ${testCase.description}`);
+      const input = adminPage.locator(`[id$="_input_${testCase.fieldSuffix}"]`);
+      await input.fill(testCase.invalidValue);
+      await adminPage.keyboard.press('Tab');
+      const error = adminPage
+        .locator('.invalid-feedback:visible, .alert-danger:visible, .help-text.error:visible')
+        .filter({ hasText: testCase.expectedError });
+      await expect(
+        error.first(),
+        `Expected validation error "${testCase.expectedError}" for ${testCase.description}, but it never appeared`
+      ).toBeVisible({ timeout: 10000 });
+      await input.fill('');
+      logger.success(`Validation error confirmed for: ${testCase.description}`);
+    }
+
+    logger.success('CL24 passed');
   });
 
 });

@@ -4,6 +4,8 @@ import { BasePage } from '../../core/BasePage';
 import { ContactData, CONTACT_CUSTOM_FIELD_NAMES } from '../../data/factories/contactFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import { QuotationsPage } from '../quotations/QuotationsPage';
+import { QuotationCustomFieldData } from '../../data/factories/quotationFactory';
 
 // WHY: ported 2026-07-22 from CompaniesPage.TransientCompanySaveError /
 // LeadsPage.TransientLeadSaveError — same transient-vs-genuine classification
@@ -194,17 +196,24 @@ export class ContactsPage extends BasePage {
     'Quotations': 'Quotation_Icon-16px_New',
   };
 
+  // WHY data-original-title + :not([data-original-title]) exclusion — see
+  // LeadsPage's identical rightPanelIcon() for the full explanation
+  // (2026-07-30, found live while building Call Log panel entry points):
+  // every button's `title` attribute is confirmed always empty (the real
+  // label is in `data-original-title`), and "Emails"/"Call Logs" share
+  // identical svg ids, so a plain comma-OR + .first() can silently select
+  // the wrong button. Mirrored here for the same reason.
   private readonly rightPanelIcon = (title: string): Locator => {
-    // WHY: Try title attribute first (admin view), fallback to SVG ID (restricted view)
     const svgId = this.rightPanelIconSvgMap[title];
     if (svgId) {
       return this.page
         .locator(
-          `button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[title="${title}"]`
+          `button.btn.btn-transparent[data-original-title="${title}"], ` +
+            `button.btn.btn-transparent:has(svg #${svgId}):not([data-original-title])`
         )
         .first();
     }
-    return this.page.locator(`button.btn.btn-transparent[title="${title}"]`);
+    return this.page.locator(`button.btn.btn-transparent[data-original-title="${title}"]`);
   };
 
   // ── Quotation panel ───────────────────────────────────────
@@ -677,7 +686,12 @@ export class ContactsPage extends BasePage {
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST',
         'capture contact create response',
-        30000
+        // WHY 45000, not 30000 — see CompaniesPage.captureCompanyCreateOutcome()'s
+        // identical comment (2026-07-30) for the full real-evidence writeup.
+        // Confirmed here too, independently: the exact transient signature
+        // (`{"message":"Unexpected error occurred!!","fieldErrors":null}`)
+        // arrived only 479ms after the old 30000ms wait had already given up.
+        45000
       );
       const status = response.status();
       const body = await response.json().catch(() => ({}) as Record<string, unknown>);
@@ -998,14 +1012,11 @@ export class ContactsPage extends BasePage {
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
     await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
     await this.page.waitForTimeout(800);
-    // WHY: Select matching user from dropdown — exact match, not substring
-    // (a substring match can select the wrong, similarly-named entity)
-    const userItem = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
-      .first();
-    await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click({ timeout: config.timeouts.expect });
+    // WHY selectUserOptionWithRetry(), not a bare fill+wait (2026-07-30,
+    // found via a real CI failure — see BasePage's own comment on this
+    // method for the full evidence): retries the search up to 3x for a
+    // genuinely-just-created user's search-index propagation lag.
+    await this.selectUserOptionWithRetry(this.shareToUserInput(), validWord, restrictedUserName);
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
@@ -1048,10 +1059,9 @@ export class ContactsPage extends BasePage {
     await reassignUserInput.waitFor({ state: 'visible', timeout: 5000 });
     await reassignUserInput.fill(validWord);
     await this.page.waitForTimeout(800);
-    const userItem = this.page.locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`) }).first();
-    await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    // WHY selectUserOptionWithRetry() — see shareContact()'s identical
+    // comment for the full evidence (2026-07-30).
+    await this.selectUserOptionWithRetry(reassignUserInput, validWord, userName);
     await this.page.waitForTimeout(500);
     const reassignConfirmButton = this.page.locator('.modal.show button.btn-primary.ml-auto').first();
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
@@ -1078,7 +1088,17 @@ export class ContactsPage extends BasePage {
     logger.success(`Right panel icon clicked: ${title}`);
   }
 
-  async addQuotationFromPanel(): Promise<string | null> {
+  // WHY delegates to QuotationsPage.fillAndSaveQuotationFromPanel() (2026-07-29
+  // refactor) instead of hand-duplicating the fill+save+capture sequence
+  // inline: this exact logic had already drifted out of sync with Deals' own
+  // copy (that one had a tightened ID-capture regex + a toast fallback; this
+  // one didn't) — see that method's own comment for the full rationale. The
+  // panel-open sequence below (icon → card → Add button → modal-title check)
+  // stays here since it's genuinely Contact-specific.
+  async addQuotationFromPanel(
+    customFields?: QuotationCustomFieldData,
+    checkCustomFieldsAbsent = false
+  ): Promise<string | null> {
     logger.info('Adding quotation from contact productivity panel');
     // WHY: Click Quotations right panel icon to open quotations section
     await this.clickRightPanelIcon('Quotations');
@@ -1107,78 +1127,9 @@ export class ContactsPage extends BasePage {
       expect(this.quotationAddModalTitle()).toHaveText('Add Quotation', { timeout: 10000 })
     );
     logger.success('Add Quotation modal opened');
-    // WHY: Capture quotation ID from POST response before saving
-    // WHY: hardened 2026-07-19 — bare '/quotations'/'/quotation' substring had
-    // no /reports/ exclusion, same bug class as LeadsPage/ContactsPage's other
-    // capture methods; fixed as defense-in-depth (not independently
-    // live-reproduced for this specific flow).
-    const quotationIdPromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        (res.url().includes('/quotations') || res.url().includes('/quotation')) &&
-        !res.url().includes('/reports/') &&
-        res.request().method() === 'POST' &&
-        (res.status() === 200 || res.status() === 201),
-      'contact panel quotation ID',
-      30000
-    ).then(async (res) => {
-      const body = await res.json().catch(() => ({}));
-      const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
-      logger.debug(`Captured quotation ID: ${id} from ${res.url()}`);
-      return id ? String(id) : null;
-    }).catch((e) => {
-      logger.warn(`Quotation ID capture failed: ${String(e)}`);
-      return null;
-    });
-    // WHY: Fill minimum required fields — quotationNumber and summary
-    const timestamp = Date.now();
-    const quotationNumber = `QUO-${timestamp}`;
-    const summaryInput = this.page.locator('[id="0_11_input_quotationNumber"]');
-    await summaryInput.waitFor({ state: 'visible', timeout: 10000 });
-    await this.fill(summaryInput, quotationNumber, 'quotation number');
-    const summaryField = this.page.locator('[id="0_21_input_summary"]');
-    await this.fill(summaryField, `Summary-${timestamp}`, 'summary');
-    // WHY: Fill existing empty product row (row 0) — don't add new row
-    // The quotation modal always opens with one empty product row
-    // Check price field — if empty, fill the product selector
-    const firstProductPrice = this.page.locator('[id="1_03_input_products.0.price"]');
-    const firstProductValue = await firstProductPrice.inputValue().catch(() => '');
-    logger.debug(`First product price value: "${firstProductValue}"`);
-    if (!firstProductValue || firstProductValue === '0' || firstProductValue === '') {
-      // WHY: Fill existing row 0 product selector — do NOT click Add New
-      const productInput = this.page.locator('[id*="input_products.0.id"]').first();
-      if (await productInput.isVisible().catch(() => false)) {
-        const productControl = this.page.locator('.is-invalid__control').filter({ has: productInput });
-        await productControl.click();
-        await productInput.fill('BHK');
-        const productOptions = this.page.locator('.is-invalid__option');
-        await productOptions.first().waitFor({ state: 'visible', timeout: 15000 });
-        await productOptions.first().click();
-        await this.page.locator('.is-invalid__menu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-        const quantityInput = this.page.locator('input[name="products.0.quantity"]').first();
-        if (await quantityInput.isVisible().catch(() => false)) {
-          const qtyVal = await quantityInput.inputValue().catch(() => '');
-          if (!qtyVal || qtyVal === '0') {
-            await quantityInput.fill('1');
-          }
-        }
-        logger.success('Product row 0 filled in quotation');
-      }
-    } else {
-      logger.info('Product already pre-filled — skipping');
-    }
-    // WHY: Save the quotation using modal save button
-    const modalSaveButton = this.page.locator('#editEntityModal button[type="submit"].btn-primary');
-    await modalSaveButton.waitFor({ state: 'visible', timeout: 5000 });
-    await modalSaveButton.click();
-    await this.assertNoFormErrors('add quotation from panel');
-    await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
-    const quotationId = await quotationIdPromise;
-    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveContact() above.
-    if (!quotationId) {
-      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
-    }
-    logger.success(`Quotation added from panel: ${quotationId}`);
-    return quotationId;
+
+    const quotationsPage = new QuotationsPage(this.page);
+    return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent);
   }
 
   // ──────────────────────────────────────────────────────────

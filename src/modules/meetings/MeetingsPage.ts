@@ -1,10 +1,12 @@
-import { Page, Response } from '@playwright/test';
+import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
 import {
   MeetingData,
   MeetingTimeConfig,
+  MeetingCustomFieldData,
+  MEETING_CUSTOM_FIELD_NAMES,
   formatDateForCalendarLabel,
 } from '@data/factories/meetingFactory';
 
@@ -162,6 +164,17 @@ export class MeetingsPage extends BasePage {
 
   private readonly detailFieldValue = (label: string) =>
     this.page.locator(`#${label} span.title`).first();
+
+  // WHY text-filtered, not an index-based `#nav-tab<N>-tab` id like
+  // Deal's/Company's own otherDetailsDetailPageTab(): confirmed live
+  // (2026-07-29) Meeting's detail page tab order is Basic Info (index 0) /
+  // Other Details (index 1) / Internals (index 2) — a different index than
+  // Deal/Company, since Meeting has fewer standard-field tabs. Filtering by
+  // the tab's own stable text avoids hardcoding an index that's already
+  // proven to drift entity-to-entity (see CLAUDE.md's Company custom-field
+  // entry, which documents the identical index shifting for that entity).
+  private readonly otherDetailsDetailPageTab = () =>
+    this.page.locator('a.nav-item.nav-link').filter({ hasText: 'Other Details' });
 
   // ──────────────────────────────────────────────────────────
   // Constructor
@@ -528,6 +541,113 @@ export class MeetingsPage extends BasePage {
     await this.fill(this.titleInput(), title, 'Meeting title');
   }
 
+  // WHY: mirrors DealsPage.fillDealCustomFields()/CompaniesPage's equivalent —
+  // one generic BasePage call per field, each already presence-checked and
+  // env-safe (see BasePage's Custom Field Helpers section). Confirmed live
+  // (2026-07-29) the Add-Meeting form is byte-identical across standalone
+  // creation and all 4 embedded parent-entity panel contexts (Lead/Deal/
+  // Contact/Company), so this same method works unchanged from any of the 5
+  // creation contexts — no per-context branching needed.
+  //
+  // WHY takes `cf: MeetingCustomFieldData` directly rather than the whole
+  // `MeetingData` (unlike DealsPage.fillDealCustomFields(data: DealData),
+  // which destructures data.customFields internally): this method's only
+  // dependency is the customFields sub-object, and taking it directly keeps
+  // the signature honest about that — it also lets fillEditForm() below
+  // accept an optional customFields param without needing a full, partially
+  // irrelevant MeetingData object just to update fields it doesn't touch.
+  // WHY 'plain' passed explicitly on every call: Meeting's custom-field ids
+  // use the shorter `_input_cf<Name>` suffix, not the `_input_
+  // customFieldValues.cf<Name>` suffix every parent entity (Lead/Deal/
+  // Contact/Company) uses — see BasePage.customFieldSuffix()'s own comment.
+  // Detail-page assertions (assertCustomFieldOnDetail() etc., used by
+  // assertMeetingCustomFieldsOnDetail() below) don't take this parameter —
+  // they key off the detail page's own `id="cf<Name>"` container, which is
+  // the same regardless of which suffix convention the create/edit FORM
+  // input used.
+  private async fillMeetingCustomFields(cf: MeetingCustomFieldData): Promise<void> {
+    await this.fillTextLikeCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number',
+      'plain'
+    );
+    await this.fillTextLikeCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field',
+      'plain'
+    );
+    await this.setCheckboxCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox,
+      'Checkbox',
+      'plain'
+    );
+    await this.selectDateCustomField(MEETING_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
+    await this.selectDateTimeCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker',
+      'plain'
+    );
+    // WHY mutate `cf.pickList` in place — same reasoning as Deal's identical
+    // field: the option is read live from the DOM, never hardcoded, so the
+    // caller's own data object needs the actually-selected value written
+    // back into it for later detail-page verification to compare against.
+    const pickedValue = await this.selectPicklistCustomField(
+      MEETING_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List',
+      'plain'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+  }
+
+  // WHY: mirrors DealsPage.skipIfCustomFieldsAbsent() — a whole-test-level
+  // skip, called once right after the create/edit form is open, so an
+  // environment without these fields (Stage, as of 2026-07-29) skips
+  // cleanly with a clear reason instead of failing deep inside a fill/assert
+  // call. No toggle/tab-reveal step needed first — the create form renders
+  // "Other Details" inline with "Basic Info" (confirmed live, unlike Lead's
+  // carousel-paged sections), so fillMeetingCustomFields()'s own presence
+  // checks are sufficient on their own once the form is open.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(MEETING_CUSTOM_FIELD_NAMES),
+      'Meeting',
+      'plain'
+    );
+  }
+
+  // WHY: the 4 embedded-panel contexts (Lead/Deal/Contact/Company) each open
+  // the Add Meeting form via the SAME stable `#addMeeting` button once their
+  // own Meetings right-panel icon has been clicked (already used, unchanged,
+  // by DealsPage.addMeetingFromPanel()/CompaniesPage's equivalent). This
+  // method starts the instant AFTER that icon click, so it's shared by any
+  // dedicated custom-field test creating a meeting from a parent's panel —
+  // without needing to touch or extend those existing title-only panel
+  // helpers (which other, already-passing tests depend on unchanged).
+  async openAddFormFromEntityDetailPanel(): Promise<void> {
+    logger.info('Opening Add Meeting form from an entity detail panel');
+    const addMeetingButton = this.page.locator('#addMeeting');
+    await addMeetingButton.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(addMeetingButton, 'Add Meeting button (from entity panel)');
+    await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    logger.success('Add Meeting form opened from entity detail panel');
+  }
+
   async fillMeetingForm(
     data: MeetingData,
     createdBy = 'Admin',
@@ -587,6 +707,8 @@ export class MeetingsPage extends BasePage {
     await this.descriptionEditor().click();
     await this.descriptionEditor().fill(`${data.description} - Created by ${createdBy}`);
     logger.info('Description filled');
+
+    await this.fillMeetingCustomFields(data.customFields);
   }
 
   async saveMeeting(): Promise<number | null> {
@@ -787,7 +909,12 @@ export class MeetingsPage extends BasePage {
   // Edit Actions
   // ──────────────────────────────────────────────────────────
 
-  async fillEditForm(newTitle: string, newStatus?: string, newDescription?: string): Promise<void> {
+  async fillEditForm(
+    newTitle: string,
+    newStatus?: string,
+    newDescription?: string,
+    customFields?: MeetingCustomFieldData
+  ): Promise<void> {
     logger.info(`Editing meeting new title: "${newTitle}"`);
     await this.titleInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.titleInput().fill('');
@@ -797,6 +924,12 @@ export class MeetingsPage extends BasePage {
       await this.descriptionEditor().click();
       await this.page.keyboard.press('Control+a');
       await this.descriptionEditor().fill(newDescription);
+    }
+    // WHY optional, additive 4th param: existing callers (updateMeeting(), M3
+    // test) never pass this and are completely unaffected — only a dedicated
+    // custom-field update test supplies it.
+    if (customFields) {
+      await this.fillMeetingCustomFields(customFields);
     }
   }
 
@@ -999,6 +1132,76 @@ export class MeetingsPage extends BasePage {
       timeout: config.timeouts.navigation,
     });
     logger.success(`Meeting status confirmed: ${expectedStatus}`);
+  }
+
+  // WHY: mirrors CompaniesPage.assertCompanyCustomFieldsOnDetail() — only
+  // this module's dedicated custom-field tests call this, always on an
+  // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
+  // these fields, so it throws (does not skip) on a missing tab or field —
+  // a miss here means verification genuinely failed to run.
+  //
+  // WHY the "Other Details" tab click, confirmed live (2026-07-29) and NOT
+  // present in Deal's reference implementation: Meeting's CREATE form is a
+  // single continuously-scrollable modal (no tab needed to reach custom
+  // fields), but its DETAIL page is tabbed — confirmed live the custom-field
+  // containers exist in the DOM only once "Other Details" is the active
+  // tab. Caller must already be on the meeting's own detail page (e.g. via
+  // searchMeetingById()) before calling this.
+  async assertMeetingCustomFieldsOnDetail(cf: MeetingCustomFieldData): Promise<void> {
+    logger.info('Asserting all 8 custom field values on meeting detail page');
+    const tab = this.otherDetailsDetailPageTab();
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        '"Other Details" tab did not appear on the meeting detail page — custom field verification cannot proceed'
+      ).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await this.click(tab, 'Other Details tab');
+    await this.page.waitForTimeout(500);
+
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox ? 'Yes' : 'No',
+      'Checkbox'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.date,
+      this.formatCustomFieldDetailDate(cf.date),
+      'Date'
+    );
+    await this.assertCustomFieldOnDetail(
+      MEETING_CUSTOM_FIELD_NAMES.dateTimePicker,
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker),
+      'Date Time Picker'
+    );
+    if (cf.pickList) {
+      await this.assertCustomFieldOnDetail(
+        MEETING_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
+    }
+    logger.success('All 8 custom field values verified on meeting detail page');
   }
 
   // ──────────────────────────────────────────────────────────

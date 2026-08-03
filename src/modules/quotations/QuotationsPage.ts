@@ -4,6 +4,8 @@ import {
   QuotationData,
   ProductRowData,
   QuotationStatus,
+  QuotationCustomFieldData,
+  QUOTATION_CUSTOM_FIELD_NAMES,
   formatDateForCalendarLabel,
 } from '../../data/factories/quotationFactory';
 import { config } from '../../../config/config';
@@ -543,6 +545,95 @@ export class QuotationsPage extends BasePage {
     }
   }
 
+  // WHY a SEPARATE, more defensive product-row helper for the panel context
+  // (2026-07-30, found via a real live failure): ensureProductRowExists()/
+  // addRandomProduct() above assume a deal is already selected (true for the
+  // standalone create form, which always selects one), so the product
+  // control is enabled. In the panel context opened from a Contact's or
+  // Company's own panel (not a Deal's), no deal is selected yet — confirmed
+  // live the product control is genuinely DISABLED in that case
+  // (`is-invalid__control--is-disabled`), and addRandomProduct() has no
+  // enabled-check before clicking, so it hangs retrying an unclickable
+  // control for the full test timeout (reproduced live: 8.6 minutes, 804
+  // retry attempts, until the test's own 480s timeout killed it). This
+  // mirrors the ORIGINAL, previously-verified panel code's own defensive
+  // check (a visibility gate before ever attempting the click) plus an
+  // explicit enabled check the original didn't have — skipping gracefully,
+  // matching prior verified behavior, when the row isn't genuinely
+  // interactable. Deliberately kept separate from ensureProductRowExists()/
+  // addRandomProduct() rather than modifying those — this specific
+  // no-deal-selected scenario cannot occur in the standalone create/edit
+  // flows those methods serve (a deal is always selected there), so this
+  // avoids any ripple risk to the 15+ existing Quotation tests using them.
+  private async ensureProductRowExistsFromPanel(): Promise<void> {
+    await this.page.waitForTimeout(2000);
+    const firstPrice = this.page.locator('[id="1_03_input_products.0.price"]');
+    const firstPriceValue = await firstPrice.inputValue().catch(() => '');
+    if (firstPriceValue && firstPriceValue !== '0') {
+      logger.info('Product already pre-filled — skipping');
+      return;
+    }
+    const productInput = this.page.locator('[id*="input_products.0.id"]').first();
+    const productControl = productInput.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
+    let isVisible = await productInput.isVisible().catch(() => false);
+    let controlClass = isVisible ? await productControl.getAttribute('class').catch(() => null) : null;
+    let isDisabled = controlClass?.includes('is-invalid__control--is-disabled') ?? false;
+    if (isDisabled) {
+      // WHY: confirmed live (2026-07-30) — the product control's disabled
+      // state is genuinely data-dependent, not a render-timing race (stable
+      // across a 10s poll): it's disabled exactly when NO deal is linked to
+      // this quotation yet, which is the normal case when opened from a
+      // Contact's/Company's own panel (unlike a Deal's own panel, where a
+      // deal is already implicit). Confirmed empty-deal check before
+      // selecting one, so this never fires for the Deal-panel context where
+      // associatedDeal is already populated. Selecting a deal here — rather
+      // than giving up — matches this app's own real constraint (a
+      // Quotation is always deal-based; see CLAUDE.md's Quotations
+      // pre-created-on-deals note) and is the only way to reliably save a
+      // quotation with a product from these two panel contexts.
+      const dealValue = await this.dealInput().inputValue().catch(() => '');
+      if (!dealValue) {
+        logger.info('Product row disabled with no deal linked — selecting a deal to enable it');
+        await this.selectRandomDeal();
+        await this.page.waitForTimeout(1000);
+        // WHY re-check price first, same as ensureProductRowExists(): the
+        // selected deal may auto-populate its own product line item, same
+        // behavior already confirmed for the standalone create form.
+        const priceAfterDeal = await firstPrice.inputValue().catch(() => '');
+        if (priceAfterDeal && priceAfterDeal !== '0') {
+          logger.info('Product auto-populated after selecting a deal — skipping manual fill');
+          return;
+        }
+        isVisible = await productInput.isVisible().catch(() => false);
+        controlClass = isVisible ? await productControl.getAttribute('class').catch(() => null) : null;
+        isDisabled = controlClass?.includes('is-invalid__control--is-disabled') ?? false;
+      }
+    }
+    if (!isVisible || isDisabled) {
+      logger.info('Product row not interactable from this panel — skipping');
+      return;
+    }
+    await productControl.click();
+    await productInput.fill('BHK');
+    const productOptions = this.page.locator('.is-invalid__option');
+    await productOptions.first().waitFor({ state: 'visible', timeout: 15000 });
+    await productOptions.first().click();
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => {});
+    const quantityInput = this.page.locator('input[name="products.0.quantity"]').first();
+    if (await quantityInput.isVisible().catch(() => false)) {
+      const qtyVal = await quantityInput.inputValue().catch(() => '');
+      if (!qtyVal || qtyVal === '0') {
+        await quantityInput.fill('1');
+      }
+    }
+    logger.success('Product row filled in panel-opened quotation modal');
+  }
+
   private async addRandomProduct(row: number): Promise<void> {
     const productInput = this.productIdInput(row);
     const productVisible = await productInput.isVisible().catch(() => false);
@@ -710,8 +801,170 @@ export class QuotationsPage extends BasePage {
       }
     }
 
+    await this.fillQuotationCustomFields(data.customFields);
+
     logger.success('Quotation form filled');
     return selectedDealName;
+  }
+
+  // WHY shared between fillQuotationForm() (standalone create) and
+  // fillAndSaveQuotationFromPanel() (embedded-panel create): confirmed live
+  // (2026-07-30) the panel-opened "Add Quotation" modal is NOT a reduced
+  // form — it has the exact same 9 custom-field inputs as the standalone
+  // create form (same ids, same `_input_customFieldValues.cf<Name>` suffix
+  // as Lead/Deal/Contact/Company — no suffixStyle override needed here,
+  // unlike Meeting/Call Log). Uses the default 'legacy' suffixStyle on every
+  // generic BasePage call.
+  private async fillQuotationCustomFields(cf: QuotationCustomFieldData): Promise<void> {
+    // WHY this wait exists (2026-07-30, found via a real live failure, not
+    // guessed): confirmed live that checking custom-field presence
+    // immediately after the EDIT modal opens can race the form's own async
+    // re-population from the fetched quotation data — 3 of 8 fields
+    // (Text/Paragraph/Number, the first 3 in DOM order) were incorrectly
+    // reported absent while the later 5 (Checkbox/Date/DateTimePicker/
+    // PickList/URL) rendered in time, in the exact same edit session, with
+    // the exact same real ids confirmed present moments later via direct DOM
+    // inspection. This is a rendering-order race, not create-vs-edit-context
+    // specific — CREATE mode already fills many other fields first (deal,
+    // status, dates, product row, addresses), incidentally giving the
+    // custom-field section time to mount; EDIT mode's fillEditForm() can
+    // reach this method sooner. Waiting for the shipping-address-toggle
+    // input (the last standard field before custom fields in DOM order,
+    // confirmed present in both create and edit modal dumps) is a real
+    // render-progress signal rather than a blind sleep.
+    await this.sameAddressToggle()
+      .waitFor({ state: 'attached', timeout: config.timeouts.expect })
+      .catch(() => {});
+    await this.fillTextLikeCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
+    await this.fillTextLikeCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.paragraphText,
+      cf.paragraphText,
+      'Paragraph Text'
+    );
+    await this.fillTextLikeCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.fillTextLikeCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
+    await this.setCheckboxCustomField(QUOTATION_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.selectDateCustomField(QUOTATION_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    await this.selectDateTimeCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.dateTimePicker,
+      cf.dateTimePicker,
+      'Date Time Picker'
+    );
+    // WHY mutate `cf.pickList` in place — same reasoning as Meeting/Deal's
+    // identical field: the option is read live from the DOM, never
+    // hardcoded, so the caller's own data object needs the actually-selected
+    // value written back into it for later detail-page verification.
+    const pickedValue = await this.selectPicklistCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.pickList,
+      'Pick List'
+    );
+    if (pickedValue !== null) cf.pickList = pickedValue;
+  }
+
+  // WHY: mirrors DealsPage/MeetingsPage's skipIfCustomFieldsAbsent() — a
+  // whole-test-level skip, called once right after the create/edit form is
+  // open, so an environment without these fields (Stage, as of 2026-07-30)
+  // skips cleanly with a clear reason instead of failing deep inside a
+  // fill/assert call.
+  // WHY the render-settle wait before the presence check (2026-07-30, found
+  // via a real live failure): both create and panel-opened Quotation modals
+  // render the custom-field section LAST, after many other fields (deal,
+  // company, contacts, status, dates, product row, addresses) — confirmed
+  // live that checking presence immediately after the panel-opened modal
+  // becomes visible can race that render, incorrectly concluding every
+  // field is absent and skipping the whole test. Waiting for the shipping-
+  // address-toggle input (the last standard field before custom fields in
+  // DOM order) first is a real render-progress signal, not a blind sleep —
+  // same fix, same reasoning as fillQuotationCustomFields()'s identical
+  // wait, applied here so the SKIP decision itself doesn't race too.
+  async skipIfCustomFieldsAbsent(): Promise<void> {
+    await this.sameAddressToggle()
+      .waitFor({ state: 'attached', timeout: config.timeouts.expect })
+      .catch(() => {});
+    await this.skipDedicatedCustomFieldTestIfAbsent(
+      Object.values(QUOTATION_CUSTOM_FIELD_NAMES),
+      'Quotation'
+    );
+  }
+
+  // WHY a QUOTATION-SPECIFIC detail-page assertion, NOT BasePage's generic
+  // assertCustomFieldOnDetail(): confirmed live (2026-07-30) — Quotation's
+  // detail page custom-field markup has NO `id="cf<Name>"` container at all,
+  // unlike every other entity with custom fields (Lead/Deal/Contact/Company/
+  // Meeting). The real markup is a plain
+  // `<div class="...read-only-info"><label class="label">{Display Label}
+  // </label><span class="text-truncate">{value}</span></div>` (URL Field
+  // renders its value as an `<a>` link instead of a span — confirmed via the
+  // same live DOM dump) inside a `.other-details` container, matched ONLY by
+  // the field's live DISPLAY LABEL text — there is no internal-name-based
+  // anchor anywhere in this markup to key off instead.
+  //
+  // This is a deliberate, confirmed exception to this codebase's own rule
+  // against label-based locators (CLAUDE.md: "Locators must be built on
+  // internal names, never display labels... labels can be renamed by account
+  // admins; internal names cannot") — forced by the DOM itself offering no
+  // alternative for this one entity, not a shortcut taken by choice. If
+  // Quotation's custom fields ever gain an id-based container matching
+  // Lead/Deal/Meeting, switch this back to assertCustomFieldOnDetail()
+  // instead of extending this label-based pattern further.
+  private quotationOtherDetailsFieldContainer(label: string): Locator {
+    return this.page.locator('.other-details div.read-only-info').filter({
+      has: this.page.locator('label.label', {
+        hasText: new RegExp(`^${this.escapeRegExp(label)}$`),
+      }),
+    });
+  }
+
+  private async assertQuotationCustomFieldOnDetailByLabel(
+    label: string,
+    expectedValue: string
+  ): Promise<void> {
+    const container = this.quotationOtherDetailsFieldContainer(label);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        container,
+        `Expected custom field "${label}" to show "${expectedValue}" on the quotation detail page, but it never appeared`
+      ).toContainText(expectedValue, { timeout: config.timeouts.expect })
+    );
+    logger.success(`Custom field "${label}" verified on quotation detail page: "${expectedValue}"`);
+  }
+
+  // WHY: mirrors DealsPage/MeetingsPage's assertXxxCustomFieldsOnDetail() —
+  // only this module's dedicated custom-field tests call this, always on an
+  // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
+  // these fields, so it throws (does not skip) on a missing field. Unlike
+  // MeetingsPage's equivalent, no "Other Details" tab click is needed first
+  // — confirmed live (2026-07-30) the Quotation detail page renders zero
+  // `a.nav-item.nav-link`/`a.nav-link` elements at all (no tab structure,
+  // unlike Meeting's tabbed detail page).
+  async assertQuotationCustomFieldsOnDetail(cf: QuotationCustomFieldData): Promise<void> {
+    logger.info('Asserting all 8 custom field values on quotation detail page');
+    await this.assertQuotationCustomFieldOnDetailByLabel('Text Field', cf.textField);
+    await this.assertQuotationCustomFieldOnDetailByLabel('Paragraph Text', cf.paragraphText);
+    await this.assertQuotationCustomFieldOnDetailByLabel('Number', String(cf.number));
+    await this.assertQuotationCustomFieldOnDetailByLabel('URL Field', cf.urlField);
+    await this.assertQuotationCustomFieldOnDetailByLabel('Checkbox', cf.checkbox ? 'Yes' : 'No');
+    await this.assertQuotationCustomFieldOnDetailByLabel('Date', this.formatCustomFieldDetailDate(cf.date));
+    await this.assertQuotationCustomFieldOnDetailByLabel(
+      'Date Time Picker',
+      this.formatCustomFieldDetailDateTime(cf.dateTimePicker)
+    );
+    if (cf.pickList) {
+      await this.assertQuotationCustomFieldOnDetailByLabel('Pick List', cf.pickList);
+    }
+    logger.success('All 8 custom field values verified on quotation detail page');
   }
 
   async fillOwner(ownerName: string): Promise<void> {
@@ -785,6 +1038,109 @@ export class QuotationsPage extends BasePage {
   async saveQuotationExpectingError(): Promise<void> {
     logger.info('Saving quotation — expecting error response');
     await this.modalSaveButton().click();
+  }
+
+  // WHY this exists (2026-07-29, child-entity custom-fields work) —
+  // DealsPage/ContactsPage/CompaniesPage's own addQuotationFromPanel()
+  // methods each hand-duplicated this exact fill+save+capture sequence
+  // independently, and had already drifted out of sync with each other
+  // (Deals' copy had a tightened ID-capture regex + a toast-text fallback;
+  // Contacts'/Companies' copies still used the older, looser substring match
+  // with no toast fallback) — confirmed via direct comparison of all three.
+  // Mirrors the existing DealsPage.addTaskFromPanel()/addMeetingFromPanel()
+  // precedent of composing another page object (`new TasksPage(this.page)`/
+  // `new MeetingsPage(this.page)`) instead of re-implementing its logic
+  // inline.
+  //
+  // WHY this fills only quotation-number/summary/product (not the full
+  // fillQuotationForm() field set): confirmed live — the panel-opened "Add
+  // Quotation" modal (reached from a Deal/Contact/Company's own productivity
+  // panel) is a reduced form with no deal-selection/status/date/discount/
+  // address fields, unlike the standalone create form fillQuotationForm()
+  // fills. Deal-selection is absent here because opening this modal from a
+  // Deal's own panel makes the deal link implicit, and the identical reduced
+  // modal shape is used from Contact's/Company's panels too.
+  //
+  // WHY the panel-open sequence itself (right-panel icon → card → Add button
+  // → modal-title check) stays local to each entity's own page object rather
+  // than moving here too: that sequence is genuinely entity-specific (a
+  // different card/icon lookup per entity), matching how addMeetingFromPanel()
+  // keeps its own save/navigation-stranding handling local while delegating
+  // only the fill step to MeetingsPage.
+  // WHY the optional customFields param (2026-07-30, added on top of the
+  // already-verified refactor above): confirmed live the panel-opened modal
+  // has the same custom-field inputs as the standalone form (see
+  // fillQuotationCustomFields()'s own comment) — but deliberately does NOT
+  // switch this method to call the full fillQuotationForm(), which would
+  // also touch the associated-deal/status/date/address fields this method
+  // has never touched. Whether the panel's associated-deal field is
+  // pre-filled/locked to the entity whose panel it was opened from was not
+  // independently verified, and blindly running fillQuotationForm()'s
+  // selectRandomDeal()/selectSpecificDeal() logic here risks silently
+  // relinking the quotation to an unrelated deal — a correctness regression
+  // in already-verified, unrelated behavior. Filling ONLY the custom fields
+  // (when provided) keeps every other field's existing behavior completely
+  // untouched.
+  // WHY the checkCustomFieldsAbsent param (2026-07-30, defaults to false —
+  // zero behavior change for the 3 existing panel-method callers): same
+  // reasoning as createQuotation()'s identical param — see that method's own
+  // comment. The modal is already open by the time this method is entered
+  // (the panel-open sequence runs in the caller), so this is the correct
+  // place to check, right before any field gets filled.
+  async fillAndSaveQuotationFromPanel(
+    customFields?: QuotationCustomFieldData,
+    checkCustomFieldsAbsent = false
+  ): Promise<string> {
+    if (checkCustomFieldsAbsent) {
+      await this.skipIfCustomFieldsAbsent();
+    }
+    const timestamp = Date.now();
+    const quotationNumber = `QUO-${timestamp}`;
+    const summary = `Summary-${timestamp}`;
+
+    // WHY armed before the fill/save steps, not just before the click: a
+    // fast backend could in principle respond before a later "arm" call
+    // ever registers its listener — matches the same ordering already used
+    // by DealsPage's own (now-removed) inline copy of this logic.
+    const idPromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        /\/v1\/quotations\/?(\?|$)/.test(new URL(res.url()).pathname) &&
+        res.request().method() === 'POST',
+      'fillAndSaveQuotationFromPanel: capture quotation ID',
+      30000
+    )
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
+        return id ? String(id) : null;
+      })
+      .catch(() => null);
+
+    await this.fill(this.quotationNumberInput(), quotationNumber, 'quotation number');
+    await this.fill(this.summaryInput(), summary, 'summary');
+    await this.ensureProductRowExistsFromPanel();
+    if (customFields) {
+      await this.fillQuotationCustomFields(customFields);
+    }
+
+    await this.saveQuotation();
+
+    let quotationId = await idPromise;
+    // WHY toast-text fallback: the network capture can still miss a genuine
+    // save (e.g. a response arriving right as saveQuotation()'s modal-hidden
+    // wait resolves), and the app's own success toast visibly shows the ID
+    // regardless — the same proven mechanism as captureIdFromToast()'s other
+    // callers, reused here rather than re-derived.
+    if (!quotationId) {
+      quotationId = await this.captureIdFromToast();
+    }
+    if (!quotationId) {
+      throw new Error(
+        'Quotation ID not captured after save from panel — cannot proceed (save likely failed silently)'
+      );
+    }
+    logger.success(`Quotation added from panel: ${quotationId}`);
+    return quotationId;
   }
 
   // WHY: Confirmed live on staging — a deal-inaccessible-entity save failure
@@ -1107,6 +1463,12 @@ export class QuotationsPage extends BasePage {
     if (changes.billingZipcode !== undefined) {
       await this.fill(this.billingZipcodeInput(), changes.billingZipcode, 'Billing Zipcode (edit)');
     }
+    // WHY optional, additive: existing callers never pass `customFields` on a
+    // `Partial<QuotationData>` and are completely unaffected — only a
+    // dedicated custom-field update test supplies it.
+    if (changes.customFields !== undefined) {
+      await this.fillQuotationCustomFields(changes.customFields);
+    }
 
     logger.success('Edit form filled');
   }
@@ -1365,13 +1727,28 @@ export class QuotationsPage extends BasePage {
     }
   }
 
-  async createQuotation(data: QuotationData): Promise<{ id: string | null; dealName: string }> {
+  // WHY the optional checkCustomFieldsAbsent param (2026-07-30, defaults to
+  // false — zero behavior change for every existing caller): dedicated
+  // custom-field tests need to skip cleanly (with a clear reason) on an
+  // environment that doesn't have these fields yet (Stage, as of this
+  // writing), the same way MeetingsPage's own dedicated tests do. Adding the
+  // skip-check unconditionally inside this shared, 20+-caller method would
+  // have silently started skipping every OTHER pre-existing Quotation test
+  // on Stage too — a real regression to unrelated test coverage this
+  // parameter avoids entirely by defaulting to off.
+  async createQuotation(
+    data: QuotationData,
+    checkCustomFieldsAbsent = false
+  ): Promise<{ id: string | null; dealName: string }> {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Creating quotation: ${data.quotationNumber}`);
       // WHY: Previous test may have left edit modal open — dismiss before navigating
       await this.dismissModalIfOpen();
       await this.goToQuotationsList();
       await this.openCreateForm();
+      if (checkCustomFieldsAbsent) {
+        await this.skipIfCustomFieldsAbsent();
+      }
       const selectedDeal = await this.fillQuotationForm(data);
       // WHY: A randomly-selected deal (the common case here) can auto-populate
       // an Associated Contact/Company the current user cannot access, causing
