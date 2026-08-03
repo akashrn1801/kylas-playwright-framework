@@ -773,30 +773,29 @@ export class TasksPage extends BasePage {
 
   async openTaskInDetailPanel(name: string, taskId?: number | null): Promise<void> {
     logger.info(`Opening task detail panel: "${name}"`);
-    // WHY: Row click doesn't always navigate (panel can open in-place), so we
-    // wait for the task GET response directly instead of a URL change —
-    // confirms the panel's data actually loaded, not just that time passed.
+    // WHY: After task creation, smartlists (My Tasks/My Open Tasks) hide newly
+    // created tasks because they don't match the list's filter criteria (e.g.,
+    // owner, due date). Direct clicking fails because the task isn't in the
+    // current DOM view. Solution: use URL parameter ?id=<taskId> to force the
+    // task to display (same pattern as searchTaskById()), then click it.
+    // Fallback to name search if ID approach isn't applicable.
     if (taskId) {
-      const itemById = this.taskListItemById(taskId);
-      const visible = await itemById.isVisible().catch(() => false);
-      if (visible) {
-        await itemById.click();
-        await this.armResponseWaitWithRecovery(
-          (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-          'openTaskInDetailPanel (by id GET)',
-          10000
-        ).catch(() => null);
-        logger.success(`Task ${taskId} opened via ID`);
+      logger.info(`Attempting to navigate to task by ID: ${taskId}`);
+      await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${taskId}`);
+      await this.waitForListReady();
+      const found = await this.taskListItemById(taskId)
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .then(() => true)
+        .catch(() => false);
+      if (found) {
+        await this.click(this.taskListItemById(taskId), `Task ${taskId} list item`);
+        logger.success(`Task ${taskId} opened via ID navigation`);
         return;
       }
+      logger.warn(`Task ID ${taskId} not found via URL filter — falling back to name search`);
     }
-    // Fallback to name
+    // Fallback to name search
     await this.taskListItemByName(name).click();
-    await this.armResponseWaitWithRecovery(
-      (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
-      'openTaskInDetailPanel (by name GET)',
-      10000
-    ).catch(() => null);
     logger.success(`Task "${name}" opened`);
   }
 
@@ -988,8 +987,17 @@ export class TasksPage extends BasePage {
       await this.withSessionExpiryRecovery(() =>
         expect(tab, '"Other Details" tab should be visible').toBeVisible({ timeout: 5000 })
       );
-      await this.click(tab.first(), '"Other Details" tab');
-      await this.page.waitForTimeout(500);
+      await this.withSessionExpiryRecovery(() =>
+        this.click(tab.first(), '"Other Details" tab')
+      );
+      // WHY: Wait for the tab content to render. Custom fields appear under
+      // "Other Details" tab in a div with role="tabpanel". Same pattern as
+      // MeetingsPage.assertMeetingCustomFieldsOnDetail().
+      await this.page
+        .locator('[role="tabpanel"]')
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
+        .catch(() => {});
     }
 
     // TextField

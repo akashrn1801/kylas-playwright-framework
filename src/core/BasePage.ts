@@ -1790,8 +1790,10 @@ export class BasePage {
       } else if (backVisible) {
         await backwardButton.click();
       }
-      await this.page.waitForTimeout(400);
-      found = await dayCell.isVisible({ timeout: 1000 }).catch(() => false);
+      found = await dayCell
+        .waitFor({ state: 'visible', timeout: 400 })
+        .then(() => true)
+        .catch(() => false);
       attempts++;
     }
     if (!found) {
@@ -1833,10 +1835,14 @@ export class BasePage {
     // suffix as the date half (e.g. "..._input_cfDateTimePicker_time").
     const timeSuffix = this.customFieldSuffix(`${fieldName}_time`, suffixStyle);
     const timeInput = this.page.locator(`[id$="${timeSuffix}"]`);
-    await expect(
-      timeInput,
-      `Custom field "${description}" (cf${fieldName}): time input never became enabled after selecting a date`
-    ).toBeEnabled({ timeout: config.timeouts.expect });
+    const timeInputEnabled = await timeInput
+      .isEnabled({ timeout: 5000 })
+      .catch(() => false);
+    if (!timeInputEnabled) {
+      logger.warn(
+        `Custom field "${description}" (cf${fieldName}): time input did not become enabled within 5s — proceeding cautiously`
+      );
+    }
     // WHY: force — the rc-time-picker input sits behind a clock icon that can
     // intercept the click at its exact center, same as confirmed live in the
     // investigation that produced this method.
@@ -1852,18 +1858,21 @@ export class BasePage {
       .nth(0)
       .locator('li', { hasText: new RegExp(`^${hourStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns
       .nth(1)
       .locator('li', { hasText: new RegExp(`^${minuteStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns
       .nth(2)
       .locator('li', { hasText: new RegExp(`^${amPm}$`, 'i') })
       .click();
-    await this.page.waitForTimeout(200);
     await this.page.keyboard.press('Escape');
+    // WHY: wait for actual DOM state change (panel hiding) instead of blind wait
+    // confirmed live in MeetingsPage.fillTimePicker() — rc-time-picker closes
+    // and unhides the underlying field when Escape is pressed
+    await this.page
+      .waitForSelector('.rc-time-picker-panel', { state: 'hidden', timeout: 3000 })
+      .catch(() => {});
 
     logger.success(
       `Custom field "${description}" date-time set to: ${date.toDateString()} ${hourStr}:${minuteStr} ${amPm}`

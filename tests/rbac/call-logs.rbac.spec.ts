@@ -707,7 +707,7 @@ test.describe('Call Logs — RBAC', () => {
     expect(callLogId, 'Call Log ID should be captured after create').not.toBeNull();
 
     // Update the call log with new custom field data and verify it was updated
-    await callLogsPage.updateCallLog(callLogId!, updatedData);
+    await callLogsPage.updateCallLog(callLogId!, updatedData, true);
     await callLogsPage.assertCallLogInList(callLogId!);
     logger.success('CL39 passed');
   });
