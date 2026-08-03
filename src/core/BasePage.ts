@@ -11,6 +11,10 @@ import {
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 
+// See BasePage.customFieldSuffix()'s own comment for what these mean and why
+// this is an opt-in parameter rather than an unconditional dual-match.
+export type CustomFieldSuffixStyle = 'legacy' | 'plain';
+
 export class BasePage {
   protected page: Page;
 
@@ -933,7 +937,42 @@ export class BasePage {
   // rather than typed to any one entity, so Contacts/Companies/Deals can
   // reuse them unchanged when they get their own custom fields later.
 
-  private customFieldInputLocator(fieldName: string): Locator {
+  // 'legacy' = `_input_customFieldValues.cf<Name>` (Lead/Deal/Contact/Company/
+  // Quotation/Task's detailed form). 'plain' = `_input_cf<Name>` (Meeting,
+  // Call Log). See customFieldSuffix()'s own comment for why this is an
+  // opt-in parameter rather than an unconditional dual-match.
+
+  // WHY two suffix conventions, not one (2026-07-29 child-entity investigation):
+  // Lead/Deal/Contact/Company, Quotations, and Task's detailed form all use
+  // `_input_customFieldValues.cf<Name>` ("legacy" below), but Meetings and
+  // Call Logs were confirmed live to use the shorter `_input_cf<Name>`
+  // ("plain") — no "customFieldValues." segment.
+  //
+  // WHY an opt-in parameter defaulting to "legacy", not an unconditional
+  // dual-match: an unconditional match (an earlier version of this change)
+  // is provably safe in effect — it only adds match alternatives, never
+  // removes the existing one — but it means every existing Lead/Deal/
+  // Contact/Company call site would silently take a DIFFERENT code path
+  // than before (matching two selectors instead of one), even though the
+  // result happens to be identical today. Explicit approval was required
+  // before landing that: existing call sites must take the exact same code
+  // path, byte for byte, as before this entire child-entity effort started.
+  // Defaulting the parameter to 'legacy' guarantees that — every call site
+  // in this codebase that doesn't pass 'plain' explicitly (i.e. every
+  // Lead/Deal/Contact/Company/Quotation/Task call today) resolves to
+  // EXACTLY the single-suffix locator that existed before this parameter
+  // was added. Only Meeting's (and later Call Log's) own new calls pass
+  // 'plain' explicitly.
+  private customFieldSuffix(fieldName: string, suffixStyle: CustomFieldSuffixStyle): string {
+    return suffixStyle === 'plain'
+      ? `_input_cf${fieldName}`
+      : `_input_customFieldValues.cf${fieldName}`;
+  }
+
+  private customFieldInputLocator(
+    fieldName: string,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
+  ): Locator {
     // WHY: matches by suffix, not the full id — the numeric prefix Kylas
     // generates (e.g. "7_11_input_...") was confirmed live (2026-07-08) to be
     // a static per-render wrapper index, not something that varies by field,
@@ -949,12 +988,15 @@ export class BasePage {
     // types is either an <input> or a <textarea> (ParagraphText) — excluding
     // every other tag removes this collision without narrowing which real
     // fields can match.
-    const suffix = `_input_customFieldValues.cf${fieldName}`;
+    const suffix = this.customFieldSuffix(fieldName, suffixStyle);
     return this.page.locator(`input[id$="${suffix}"], textarea[id$="${suffix}"]`);
   }
 
-  private async isCustomFieldPresent(fieldName: string): Promise<boolean> {
-    return (await this.customFieldInputLocator(fieldName).count()) > 0;
+  private async isCustomFieldPresent(
+    fieldName: string,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
+  ): Promise<boolean> {
+    return (await this.customFieldInputLocator(fieldName, suffixStyle).count()) > 0;
   }
 
   // WHY: PART C (2026-07-15) — a DEDICATED-TEST-level skip mechanism, built
@@ -976,9 +1018,12 @@ export class BasePage {
   // today) that simply doesn't have these fields yet.
   protected async skipDedicatedCustomFieldTestIfAbsent(
     fieldNames: string[],
-    moduleName: string
+    moduleName: string,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<void> {
-    const presence = await Promise.all(fieldNames.map((name) => this.isCustomFieldPresent(name)));
+    const presence = await Promise.all(
+      fieldNames.map((name) => this.isCustomFieldPresent(name, suffixStyle))
+    );
     const anyPresent = presence.some(Boolean);
     test.skip(
       !anyPresent,
@@ -1002,25 +1047,31 @@ export class BasePage {
   async fillTextLikeCustomField(
     fieldName: string,
     value: string,
-    description = fieldName
+    description = fieldName,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<void> {
-    if (!(await this.isCustomFieldPresent(fieldName))) {
+    if (!(await this.isCustomFieldPresent(fieldName, suffixStyle))) {
       this.logCustomFieldSkipped(description, fieldName, 'fill');
       return;
     }
-    await this.fill(this.customFieldInputLocator(fieldName), value, `custom field: ${description}`);
+    await this.fill(
+      this.customFieldInputLocator(fieldName, suffixStyle),
+      value,
+      `custom field: ${description}`
+    );
   }
 
   async setCheckboxCustomField(
     fieldName: string,
     checked: boolean,
-    description = fieldName
+    description = fieldName,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<void> {
-    if (!(await this.isCustomFieldPresent(fieldName))) {
+    if (!(await this.isCustomFieldPresent(fieldName, suffixStyle))) {
       this.logCustomFieldSkipped(description, fieldName, 'checkbox toggle');
       return;
     }
-    const checkbox = this.customFieldInputLocator(fieldName);
+    const checkbox = this.customFieldInputLocator(fieldName, suffixStyle);
     const isChecked = await checkbox.isChecked().catch(() => false);
     if (isChecked !== checked) {
       await this.click(checkbox, `custom field checkbox: ${description}`);
@@ -1079,6 +1130,49 @@ export class BasePage {
   // duplicated, per "no duplicated logic" — DealsPage now delegates to this.
   protected escapeRegExp(text: string): string {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // WHY this exists (2026-07-30, found via a real CI failure): every
+  // share/reassign flow across Lead/Deal/Contact/Company independently
+  // duplicated the same shape — fill a user-search input, wait up to 5-10s
+  // for an exact-match `.is-invalid__option`, ONE attempt, no retry. A real
+  // CI run showed this failing for a genuinely-just-created user
+  // ("User 1"), a plausible transient search-index propagation lag (the
+  // same class already retried elsewhere in this codebase, e.g.
+  // CallLogsPage.searchAndSelectEntity()) — the single-attempt wait had no
+  // chance to recover. Extracted here (rather than fixed independently in
+  // 7 places) so the retry logic lives in exactly one place — matches this
+  // codebase's own established precedent for consolidating a duplicated,
+  // independently-drifting shape (see safeWaitForURL()'s own history).
+  protected async selectUserOptionWithRetry(
+    userInput: Locator,
+    searchTerm: string,
+    exactName: string,
+    maxAttempts = 3
+  ): Promise<void> {
+    const userItem = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactName)}\\s*$`) })
+      .first();
+    let found = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      found = await userItem
+        .waitFor({ state: 'visible', timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      if (found) break;
+      logger.warn(
+        `User search: "${exactName}" not found on attempt ${attempt}/${maxAttempts} — retrying`
+      );
+      await userInput.fill('', { timeout: config.timeouts.expect }).catch(() => {});
+      await this.page.waitForTimeout(500);
+      await userInput.fill(searchTerm, { timeout: config.timeouts.expect });
+      await this.page.waitForTimeout(800);
+    }
+    if (!found) {
+      throw new Error(`User search: "${exactName}" did not appear after ${maxAttempts} attempts`);
+    }
+    await userItem.click({ timeout: config.timeouts.expect });
   }
 
   // WHY: for async-search react-select lookups where options are NOT
@@ -1159,13 +1253,14 @@ export class BasePage {
   // apart from "selected an empty-looking value".
   async selectPicklistCustomField(
     fieldName: string,
-    description = fieldName
+    description = fieldName,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<string | null> {
-    if (!(await this.isCustomFieldPresent(fieldName))) {
+    if (!(await this.isCustomFieldPresent(fieldName, suffixStyle))) {
       this.logCustomFieldSkipped(description, fieldName, 'picklist selection');
       return null;
     }
-    const control = this.customFieldInputLocator(fieldName).locator(
+    const control = this.customFieldInputLocator(fieldName, suffixStyle).locator(
       'xpath=ancestor::div[contains(@class,"__control")]'
     );
     return this.selectRandomFromSingleReactSelect(control, `Custom field "${description}"`);
@@ -1615,13 +1710,14 @@ export class BasePage {
   async selectDateCustomField(
     fieldName: string,
     date: Date,
-    description = fieldName
+    description = fieldName,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<void> {
-    if (!(await this.isCustomFieldPresent(fieldName))) {
+    if (!(await this.isCustomFieldPresent(fieldName, suffixStyle))) {
       this.logCustomFieldSkipped(description, fieldName, 'date selection');
       return;
     }
-    const input = this.customFieldInputLocator(fieldName);
+    const input = this.customFieldInputLocator(fieldName, suffixStyle);
     await this.click(input, `custom field date input: ${description}`);
     const label = this.formatCustomFieldDateLabel(date);
     const dayCell = this.page.locator(`.SingleDatePicker td[aria-label="${label}"]`);
@@ -1694,8 +1790,10 @@ export class BasePage {
       } else if (backVisible) {
         await backwardButton.click();
       }
-      await this.page.waitForTimeout(400);
-      found = await dayCell.isVisible({ timeout: 1000 }).catch(() => false);
+      found = await dayCell
+        .waitFor({ state: 'visible', timeout: 400 })
+        .then(() => true)
+        .catch(() => false);
       attempts++;
     }
     if (!found) {
@@ -1723,19 +1821,28 @@ export class BasePage {
   async selectDateTimeCustomField(
     fieldName: string,
     date: Date,
-    description = fieldName
+    description = fieldName,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<void> {
-    if (!(await this.isCustomFieldPresent(fieldName))) {
+    if (!(await this.isCustomFieldPresent(fieldName, suffixStyle))) {
       this.logCustomFieldSkipped(description, fieldName, 'date-time selection');
       return;
     }
-    await this.selectDateCustomField(fieldName, date, description);
+    await this.selectDateCustomField(fieldName, date, description, suffixStyle);
 
-    const timeInput = this.page.locator(`[id$="_input_customFieldValues.cf${fieldName}_time"]`);
-    await expect(
-      timeInput,
-      `Custom field "${description}" (cf${fieldName}): time input never became enabled after selecting a date`
-    ).toBeEnabled({ timeout: config.timeouts.expect });
+    // WHY the same suffixStyle for the time half — confirmed live (2026-07-29)
+    // Meetings/Call Logs' DateTimePicker time input follows the same "plain"
+    // suffix as the date half (e.g. "..._input_cfDateTimePicker_time").
+    const timeSuffix = this.customFieldSuffix(`${fieldName}_time`, suffixStyle);
+    const timeInput = this.page.locator(`[id$="${timeSuffix}"]`);
+    const timeInputEnabled = await timeInput
+      .isEnabled({ timeout: 5000 })
+      .catch(() => false);
+    if (!timeInputEnabled) {
+      logger.warn(
+        `Custom field "${description}" (cf${fieldName}): time input did not become enabled within 5s — proceeding cautiously`
+      );
+    }
     // WHY: force — the rc-time-picker input sits behind a clock icon that can
     // intercept the click at its exact center, same as confirmed live in the
     // investigation that produced this method.
@@ -1751,18 +1858,21 @@ export class BasePage {
       .nth(0)
       .locator('li', { hasText: new RegExp(`^${hourStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns
       .nth(1)
       .locator('li', { hasText: new RegExp(`^${minuteStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns
       .nth(2)
       .locator('li', { hasText: new RegExp(`^${amPm}$`, 'i') })
       .click();
-    await this.page.waitForTimeout(200);
     await this.page.keyboard.press('Escape');
+    // WHY: wait for actual DOM state change (panel hiding) instead of blind wait
+    // confirmed live in MeetingsPage.fillTimePicker() — rc-time-picker closes
+    // and unhides the underlying field when Escape is pressed
+    await this.page
+      .waitForSelector('.rc-time-picker-panel', { state: 'hidden', timeout: 3000 })
+      .catch(() => {});
 
     logger.success(
       `Custom field "${description}" date-time set to: ${date.toDateString()} ${hourStr}:${minuteStr} ${amPm}`
@@ -1813,10 +1923,17 @@ export class BasePage {
     // so the value is genuinely visible when this passes.
     await this.revealDetailCarouselSlideFor(containerId);
     const valueLocator = this.page.locator(`[id="${containerId}"] .title`);
-    await expect(
-      valueLocator,
-      `Expected "${description}" (container #${containerId}) to show "${expectedValue}" on the detail page, but it never appeared`
-    ).toContainText(expectedValue, { timeout: config.timeouts.expect });
+    // WHY wrapped (2026-07-29): this raw expect() was a pre-existing gap —
+    // every other page-level assertion in this file routes through
+    // withSessionExpiryRecovery() (see assertFormErrorToast() just above),
+    // but this one didn't. Same reasoning applies: a mid-wait session expiry
+    // would otherwise time out here with no recovery attempt at all.
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        valueLocator,
+        `Expected "${description}" (container #${containerId}) to show "${expectedValue}" on the detail page, but it never appeared`
+      ).toContainText(expectedValue, { timeout: config.timeouts.expect })
+    );
     logger.success(`"${description}" verified on detail page: "${expectedValue}"`);
   }
 
@@ -1943,10 +2060,14 @@ export class BasePage {
     await this.revealDetailCarouselSlideFor(containerId);
     const container = this.page.locator(`[id="${containerId}"] .with-details-multi-value`);
     const items = container.locator('li');
-    await expect(
-      items.first(),
-      `"${description}" (container #${containerId}): expected at least one rendered value on the detail page, but none appeared`
-    ).toBeVisible({ timeout: config.timeouts.expect });
+    // WHY wrapped (2026-07-29): same pre-existing gap as
+    // assertFieldOnDetailByContainerId() above — see that method's comment.
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        items.first(),
+        `"${description}" (container #${containerId}): expected at least one rendered value on the detail page, but none appeared`
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
 
     const rawTexts = await items.allInnerTexts();
     const itemTexts = rawTexts.map((t) => t.replace(/^,\s*/, '').trim());
@@ -2016,10 +2137,14 @@ export class BasePage {
     const error = this.page
       .locator('.invalid-feedback:visible, .help-text.error:visible')
       .filter({ hasText: expectedMessage });
-    await expect(
-      error.first(),
-      `Expected validation error "${expectedMessage}" for custom field "${description}" (cf${fieldName}), but it never appeared`
-    ).toBeVisible({ timeout: config.timeouts.expect });
+    // WHY wrapped (2026-07-29): same pre-existing gap as
+    // assertFieldOnDetailByContainerId() above — see that method's comment.
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        error.first(),
+        `Expected validation error "${expectedMessage}" for custom field "${description}" (cf${fieldName}), but it never appeared`
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success(
       `Custom field "${description}" validation error confirmed: "${expectedMessage}"`
     );

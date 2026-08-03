@@ -369,17 +369,44 @@ export class LeadsPage extends BasePage {
     Documents: 'Rectangle_5931',
   };
 
+  // WHY data-original-title, not title (fixed 2026-07-30, found live while
+  // building Call Log panel entry points): confirmed via direct DOM dump —
+  // EVERY right-panel button's `title` attribute is an empty string on this
+  // page (not absent, literally `""`), on the admin view too; the real label
+  // lives in `data-original-title` (same attribute DealsPage's own
+  // rightPanelIcon() already correctly used). The old `title="${title}"`
+  // fallback branch therefore never matched anything at all — admin-view
+  // icon selection was silently relying on the SVG-id branch alone this
+  // whole time.
+  //
+  // WHY `:not([data-original-title])` on the SVG-id branch (2026-07-30,
+  // same investigation): confirmed live that "Emails" and "Call Logs" share
+  // the IDENTICAL svg ids (`paint1_linear_leads`/`paint2_linear_leads`) on a
+  // Lead's detail page — a plain comma-separated OR-selector has no
+  // priority between branches, so `.first()` picks whichever button is
+  // FIRST IN DOM ORDER among ALL matches from EITHER branch, not
+  // necessarily the one that matched by the more specific attribute. Since
+  // Emails renders before Call Logs in DOM order, clicking "Call Logs"
+  // silently opened the Emails panel instead (reproduced live). Excluding
+  // any button that already HAS a `data-original-title` from the SVG-id
+  // branch makes the two branches mutually exclusive: on the admin view
+  // (every button has `data-original-title`), only the exact
+  // `data-original-title="${title}"` match applies, eliminating the
+  // collision entirely; the SVG-id branch remains exactly as effective as
+  // before for a view that genuinely has no `data-original-title` at all
+  // (restricted view, per this method's original comment) — zero behavior
+  // change there.
   private readonly rightPanelIcon = (title: string): Locator => {
-    // WHY: Try title attribute first (admin view), fallback to SVG ID (restricted view)
     const svgId = this.rightPanelIconSvgMap[title];
     if (svgId) {
       return this.page
         .locator(
-          `button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[title="${title}"]`
+          `button.btn.btn-transparent[data-original-title="${title}"], ` +
+            `button.btn.btn-transparent:has(svg #${svgId}):not([data-original-title])`
         )
         .first();
     }
-    return this.page.locator(`button.btn.btn-transparent[title="${title}"]`);
+    return this.page.locator(`button.btn.btn-transparent[data-original-title="${title}"]`);
   };
 
   // ──────────────────────────────────────────────────────────
@@ -1953,15 +1980,12 @@ export class LeadsPage extends BasePage {
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     const searchTerm = validWord;
     logger.debug(`Share search term: "${searchTerm}" (from: "${restrictedUserName}")`);
-    await this.shareToUserInput().fill(searchTerm, { timeout: config.timeouts.expect });
-    await this.page.waitForTimeout(800);
-    // WHY: Select matching user from dropdown
-    const userItem = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
-      .first();
-    await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click({ timeout: config.timeouts.expect });
+    // WHY selectUserOptionWithRetry(), not a bare fill+wait (2026-07-30,
+    // found via a real CI failure — see BasePage's own comment on this
+    // method for the full evidence): retries the search up to 3x, giving a
+    // genuinely-just-created user's search-index propagation a real chance
+    // to catch up instead of failing fast on one 5s window.
+    await this.selectUserOptionWithRetry(this.shareToUserInput(), searchTerm, restrictedUserName);
     await this.page.waitForTimeout(500);
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
@@ -2008,12 +2032,9 @@ export class LeadsPage extends BasePage {
     await this.reassignUserInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.reassignUserInput().fill(validWord);
     await this.page.waitForTimeout(800);
-    const userItem = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userDisplayName)}\\s*$`) })
-      .first();
-    await userItem.waitFor({ state: 'visible', timeout: 5000 });
-    await userItem.click();
+    // WHY selectUserOptionWithRetry() — see shareLead()'s identical comment
+    // for the full evidence (2026-07-30).
+    await this.selectUserOptionWithRetry(this.reassignUserInput(), validWord, userDisplayName);
     await this.page.waitForTimeout(500);
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE

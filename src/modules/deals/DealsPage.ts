@@ -7,6 +7,8 @@ import {
 } from '../../data/factories/dealFactory';
 import { TasksPage } from '../tasks/TasksPage';
 import { MeetingsPage } from '../meetings/MeetingsPage';
+import { QuotationsPage } from '../quotations/QuotationsPage';
+import { QuotationCustomFieldData } from '../../data/factories/quotationFactory';
 import { generateTaskData } from '../../data/factories/taskFactory';
 import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
@@ -226,12 +228,23 @@ export class DealsPage extends BasePage {
     Quotations: 'Quotation_Icon-16px_New',
   };
 
+  // WHY :not([data-original-title]) exclusion added 2026-07-30 (found live
+  // while building Call Log panel entry points, see LeadsPage's identical
+  // rightPanelIcon() for the full explanation): this method already used
+  // the correct `data-original-title` attribute, but the SVG-id branch was
+  // still combined via a plain comma-OR with no priority over the
+  // attribute-based branch — confirmed elsewhere (Leads' Emails/Call Logs)
+  // that two icons can share an identical svg id, which `.first()` cannot
+  // disambiguate without this exclusion. No collision independently
+  // confirmed for Deals specifically, but this closes the same latent risk
+  // defensively, at zero cost to the already-correct matching case.
   private readonly rightPanelIcon = (title: string): Locator => {
     const svgId = this.rightPanelIconSvgMap[title];
     if (svgId) {
       return this.page
         .locator(
-          `button.btn.btn-transparent:has(svg #${svgId}), button.btn.btn-transparent[data-original-title="${title}"]`
+          `button.btn.btn-transparent[data-original-title="${title}"], ` +
+            `button.btn.btn-transparent:has(svg #${svgId}):not([data-original-title])`
         )
         .first();
     }
@@ -1616,12 +1629,11 @@ export class DealsPage extends BasePage {
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
-    const userItem = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(restrictedUserName)}\\s*$`) })
-      .first();
-    await userItem.waitFor({ state: 'visible', timeout: 10000 });
-    await userItem.click({ timeout: config.timeouts.expect });
+    // WHY selectUserOptionWithRetry(), not a bare fill+wait (2026-07-30,
+    // found via a real CI failure — see BasePage's own comment on this
+    // method for the full evidence): retries the search up to 3x for a
+    // genuinely-just-created user's search-index propagation lag.
+    await this.selectUserOptionWithRetry(this.shareToUserInput(), validWord, restrictedUserName);
 
     // WHY: Enable specific permissions — JS click on label sibling of input,
     // then verify the toggle actually reflects checked state before moving on.
@@ -1666,12 +1678,9 @@ export class DealsPage extends BasePage {
     const words = userName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? userName.trim().substring(0, 3);
     await this.reassignUserInput().fill(validWord);
-    const userItem = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`) })
-      .first();
-    await userItem.waitFor({ state: 'visible', timeout: 10000 });
-    await userItem.click();
+    // WHY selectUserOptionWithRetry() — see shareDeal()'s identical comment
+    // for the full evidence (2026-07-30).
+    await this.selectUserOptionWithRetry(this.reassignUserInput(), validWord, userName);
 
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: Register the reassign-API (owner change) response wait BEFORE
@@ -1990,7 +1999,19 @@ export class DealsPage extends BasePage {
     logger.success(`Meeting added from panel: "${meetingTitle}"`);
   }
 
-  async addQuotationFromPanel(): Promise<string | null> {
+  // WHY delegates to QuotationsPage.fillAndSaveQuotationFromPanel() (2026-07-29
+  // refactor) instead of hand-duplicating the fill+save+capture sequence
+  // inline: this exact logic had already drifted out of sync with Contacts'/
+  // Companies' own copies of the same thing (this one had a tightened
+  // ID-capture regex + toast fallback; theirs didn't) — see that method's
+  // own comment for the full rationale. The panel-open sequence below (icon
+  // → card → Add button → modal-title check) stays here since it's genuinely
+  // Deal-specific, matching how addMeetingFromPanel() keeps its own
+  // save/navigation handling local while delegating only the fill step.
+  async addQuotationFromPanel(
+    customFields?: QuotationCustomFieldData,
+    checkCustomFieldsAbsent = false
+  ): Promise<string | null> {
     logger.info('Adding quotation from deal productivity panel');
     await this.clickRightPanelIcon('Quotations');
     const quotationsCard = this.page
@@ -2012,99 +2033,8 @@ export class DealsPage extends BasePage {
       expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 })
     );
 
-    // WHY: tightened 2026-07-17 — confirmed live (Deals RBAC "Quotation
-    // permission" test, 2/2 reproductions across two separate full-Deals
-    // verification runs) that the loose `.includes('/quotations')` match
-    // — the exact same shape of bug already root-caused and fixed for
-    // DealsPage.captureDealIdFromResponse() and
-    // CompaniesPage.captureCompanyIdFromResponse() earlier tonight — throws
-    // "Quotation ID not captured... save likely failed silently" even
-    // though the save genuinely succeeded (the failure screenshot's own
-    // toast read "Quotation created (Quotation ID: 8794)"). Tightened to
-    // require `/v1/quotations` specifically, matching the real create
-    // endpoint already confirmed and documented in
-    // `QuotationsPage.captureQuotationIdFromResponse()`'s own comment
-    // ("the real create endpoint is `/v1/quotations/` WITH a trailing
-    // slash"). Also added a toast-text fallback — `QuotationsPage` already
-    // has a working `captureIdFromToast()` for exactly this ID shape
-    // ("Quotation ID: (\d+)"), so reuse that proven mechanism as
-    // defense-in-depth rather than relying on the network capture alone.
-    const quotationIdPromise = this.armResponseWaitWithRecovery(
-      (res) => /\/v1\/quotations\/?(\?|$)/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
-      'capture quotation ID (from deal panel)',
-      30000
-    )
-      .then(async (res) => {
-        const body = await res.json().catch(() => ({}));
-        const id = body?.id ?? body?.data?.id ?? body?.quotationId ?? null;
-        return id ? String(id) : null;
-      })
-      .catch(() => null);
-
-    const timestamp = Date.now();
-    const quotationNumber = `QUO-${timestamp}`;
-    const quotationNumberInput = this.page.locator('[id="0_11_input_quotationNumber"]');
-    await quotationNumberInput.waitFor({ state: 'visible', timeout: 10000 });
-    await this.fill(quotationNumberInput, quotationNumber, 'quotation number');
-    const summaryField = this.page.locator('[id="0_21_input_summary"]');
-    await this.fill(summaryField, `Summary-${timestamp}`, 'summary');
-
-    const firstProductPrice = this.page.locator('[id="1_03_input_products.0.price"]');
-    const firstProductValue = await firstProductPrice.inputValue().catch(() => '');
-    if (!firstProductValue || firstProductValue === '0') {
-      const productInput = this.page.locator('[id*="input_products.0.id"]').first();
-      if (await productInput.isVisible().catch(() => false)) {
-        const productControl = this.page.locator('.is-invalid__control').filter({ has: productInput });
-        await productControl.click();
-        await productInput.fill('BHK');
-        const productOptions = this.page.locator('.is-invalid__option');
-        await productOptions.first().waitFor({ state: 'visible', timeout: 15000 });
-        await productOptions.first().click();
-        await this.page
-          .locator('.is-invalid__menu')
-          .waitFor({ state: 'hidden', timeout: 10000 })
-          .catch(() => {});
-        const quantityInput = this.page.locator('input[name="products.0.quantity"]').first();
-        if (await quantityInput.isVisible().catch(() => false)) {
-          const qtyVal = await quantityInput.inputValue().catch(() => '');
-          if (!qtyVal || qtyVal === '0') {
-            await quantityInput.fill('1');
-          }
-        }
-      }
-    }
-
-    const modalSaveButton = this.page.locator('#editEntityModal button[type="submit"].btn-primary');
-    await modalSaveButton.waitFor({ state: 'visible', timeout: 5000 });
-    await modalSaveButton.click();
-    await this.assertNoFormErrors('add quotation from panel');
-    await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
-    let quotationId = await quotationIdPromise;
-    // WHY: toast-text fallback (2026-07-17) — reuses the same proven
-    // "Quotation ID: (\d+)" parse already working in
-    // QuotationsPage.captureIdFromToast(). The network capture can still
-    // miss a genuine save (e.g. a response arriving right as the modal-hide
-    // wait above resolves), and the app's own success toast visibly shows
-    // the ID regardless — confirmed live in the exact failure this fixes
-    // (toast read "Quotation created (Quotation ID: 8794)" while the network
-    // capture returned null).
-    if (!quotationId) {
-      const toastLink = this.page.locator('.toastr.rrt-success .link-primary');
-      const toastText = await toastLink.textContent({ timeout: 3000 }).catch(() => null);
-      const toastMatch = toastText?.match(/Quotation ID:\s*(\d+)/);
-      if (toastMatch) {
-        quotationId = toastMatch[1];
-        logger.info(`Quotation ID recovered from toast text (network capture missed it): ${quotationId}`);
-      }
-    }
-    // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above. Does not
-    // affect the permission-denied test path, which throws earlier via assertNoFormErrors()
-    // on the visible validation banner before this line is ever reached.
-    if (!quotationId) {
-      throw new Error('Quotation ID not captured after save — cannot proceed (save likely failed silently)');
-    }
-    logger.success(`Quotation added from panel: ${quotationId}`);
-    return quotationId;
+    const quotationsPage = new QuotationsPage(this.page);
+    return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent);
   }
 
   // ──────────────────────────────────────────────────────────
