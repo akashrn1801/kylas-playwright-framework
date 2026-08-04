@@ -1,4 +1,69 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task Custom Fields
+// ──────────────────────────────────────────────────────────────────────────
+// WHY: confirmed live (2026-08-01) — Task has the same 8 custom fields as
+// Meeting (Text, Paragraph, Number, PickList, Checkbox, Date, DateTimePicker,
+// URLField — no MultiPickList; child entities never get one). Live on QA today.
+// TASK_CUSTOM_FIELD_NAMES is its own single source of truth, per CLAUDE.md's
+// Custom Fields pattern — never import MEETING_CUSTOM_FIELD_NAMES here even
+// where values happen to coincide.
+//
+// WHY 'URLField' (capital URL), matching Meeting: confirmed live via DOM
+// inspection of the real input id (`..._input_cfURLField`) — Task uses the
+// same naming as Meeting, different from the `cfUrlField` in
+// Lead/Deal/Contact/Company/Call Log.
+//
+// WHY the PLAIN suffix convention (`_input_cf<Name>`), matching Meeting:
+// confirmed live — Task's custom-field ids have no "customFieldValues."
+// segment (e.g. "2_41_input_cfTextField"), matching Meeting/Call Log's
+// documented shorter convention.
+export const TASK_CUSTOM_FIELD_NAMES = {
+  textField: 'TextField',
+  paragraphText: 'ParagraphText',
+  number: 'Number',
+  pickList: 'PickList',
+  checkbox: 'Checkbox',
+  date: 'Date',
+  dateTimePicker: 'DateTimePicker',
+  urlField: 'URLField',
+} as const;
+
+export type TaskCustomFieldKey = keyof typeof TASK_CUSTOM_FIELD_NAMES;
+
+export interface TaskCustomFieldData {
+  textField: string;
+  paragraphText: string;
+  number: number;
+  // WHY: PickList options only exist live in the DOM (never hardcode them) —
+  // this starts as a placeholder and is overwritten in place by
+  // TasksPage.fillTaskCustomFields() with whatever was actually selected at
+  // fill time, so the same `data` object stays accurate for later verification
+  // against the detail page.
+  pickList: string;
+  checkbox: boolean;
+  date: Date;
+  dateTimePicker: Date;
+  urlField: string;
+}
+
+export function generateTaskCustomFieldData(
+  overrides: Partial<TaskCustomFieldData> = {}
+): TaskCustomFieldData {
+  return {
+    textField: `CF-Text-${faker.string.alphanumeric(12)}`,
+    paragraphText: faker.lorem.paragraph(),
+    number: faker.number.int({ min: 1, max: 100000 }),
+    pickList: '',
+    checkbox: faker.datatype.boolean(),
+    date: randomFutureDateWithinOneMonth(),
+    dateTimePicker: randomFutureDateWithinOneMonth(),
+    urlField: `https://example.com/${faker.string.alphanumeric(10)}`,
+    ...overrides,
+  };
+}
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +95,7 @@ export interface TaskData {
   status: TaskStatus;
   priority: TaskPriority;
   reminder: TaskReminder;
+  customFields: TaskCustomFieldData;
 }
 
 // ─── Factories ────────────────────────────────────────────────────────────────
@@ -42,6 +108,7 @@ export function generateTaskData(overrides: Partial<TaskData> = {}): TaskData {
     status: 'Open',
     priority: faker.helpers.arrayElement(TASK_PRIORITY_OPTIONS),
     reminder: '1 hour before the due date and time',
+    customFields: generateTaskCustomFieldData(),
     ...overrides,
   };
 }
@@ -59,6 +126,7 @@ export function generateAdminTaskData(overrides: Partial<TaskData> = {}): TaskDa
     status: 'Open',
     priority: faker.helpers.arrayElement(TASK_PRIORITY_OPTIONS),
     reminder: '1 hour before the due date and time',
+    customFields: generateTaskCustomFieldData(),
     ...overrides,
   };
 }

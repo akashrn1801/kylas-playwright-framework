@@ -582,6 +582,78 @@ export class AuthManager {
     logger.info(`Headless re-authentication complete for role: ${role}`);
   }
 
+  // WHY this exists (2026-07-30, defensive hardening — root cause NOT fully
+  // confirmed, see the investigation this fix is based on): two independent
+  // real occurrences (Meeting custom-field tests, companies.rbac.spec.ts)
+  // showed the SAME pattern — reauthenticatePage()'s headless token swap
+  // reports success, tryRecoverSessionForPage()'s own goto+verification
+  // confirms the app STILL redirects back to /signIn immediately after, and
+  // this can happen TWICE in a row (once via the proactive ensureFreshSession()
+  // path, once via the reactive withSessionExpiryRecovery() path) before a
+  // test finally fails. Both occurrences showed an HTTP 400 on the app's own
+  // `GET /v1/tokens/refresh/` firing at the exact moment of each redirect —
+  // that endpoint was independently confirmed broken/non-functional earlier
+  // in this codebase's history (see loginHeadless()'s own comment history),
+  // suggesting the app's frontend may force a signIn redirect when ITS OWN
+  // internal refresh attempt fails, regardless of whether our actual bearer
+  // token is still valid. A direct, targeted reproduction attempt (a second
+  // headless login for the same account immediately after a fresh UI login)
+  // did NOT reproduce this — the real trigger likely requires genuine
+  // multi-hour token age, which cannot be forced on demand. This fix is
+  // therefore HARDENING BASED ON CODE REVIEW, not a proven root-cause fix
+  // (per this codebase's own standing rule: document defensive fixes as
+  // such, don't overstate them) — it gives tryRecoverSessionForPage() a
+  // qualitatively different fallback (a real, full UI-driven login,
+  // exercising the app's actual login form end-to-end) to try before giving
+  // up, rather than a second identical headless-swap attempt that has now
+  // been observed to fail the same way twice.
+  //
+  // WHY UI-driven here specifically, despite reauthenticatePage()'s own
+  // comment explaining why headless was chosen over this for the COMMON
+  // case (speed: ~300ms vs several seconds): this method is only ever
+  // reached as a LAST-RESORT escalation, after the fast headless path has
+  // already been tried and confirmed not to have taken effect — the speed
+  // cost that matters for the common path is irrelevant here, and a real
+  // login form submission exercises code (the app's own post-login
+  // initialization) that a silent localStorage swap never touches.
+  async reauthenticatePageViaUI(page: Page, role: UserRole): Promise<void> {
+    logger.warn(
+      `Escalating to a full UI-driven re-login for role ${role} — the headless recovery ` +
+        `did not stick (still redirected to signIn immediately after)`
+    );
+    const credentials = this.getCredentials(role);
+    if (!credentials.email || !credentials.password) {
+      throw new Error(
+        `Credentials missing for role: ${role}, ENV: ${config.env} — cannot escalate to UI login`
+      );
+    }
+
+    await this.navigateToLoginPage(page);
+
+    const emailInput = page.locator('#input_email');
+    await emailInput.clear();
+    await emailInput.fill(credentials.email);
+
+    const passwordInput = page.locator('#input_password');
+    await passwordInput.clear();
+    await passwordInput.fill(credentials.password);
+
+    await page.locator('#loginBtn:not([disabled])').waitFor({ state: 'visible', timeout: 15000 });
+    await page.locator('#loginBtn').click();
+    await page.waitForURL(/sales\//, { timeout: 90000, waitUntil: 'domcontentloaded' });
+    await this.dismissPopupIfPresent(page);
+
+    await this.withFileLock(role, async () => {
+      const stateFile = this.getStorageStateFile(role);
+      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
+      await page.context().storageState({ path: tmpStateFile });
+      fs.renameSync(tmpStateFile, stateFile);
+    });
+    AuthManager.lastValidated.set(role, Date.now());
+
+    logger.info(`UI-driven re-authentication complete for role: ${role}`);
+  }
+
   // WHY this exists (2026-07-23, Option 6 — a PROACTIVE layer, complementary
   // to withSessionExpiryRecovery()'s REACTIVE one): that mechanism only ever
   // helps after something has already failed because the session expired.
@@ -887,10 +959,27 @@ export async function tryRecoverSessionForPage(page: Page, returnUrl: string): P
   }
 
   if (isSignInUrl(page.url())) {
-    throw new Error(
-      `Session recovery for role ${role} failed — still on ${page.url()} after ` +
-        `re-authenticating and navigating back to ${returnUrl}`
+    // WHY escalate here instead of throwing immediately (2026-07-30,
+    // defensive hardening — see AuthManager.reauthenticatePageViaUI()'s own
+    // comment for the full investigation and why this is labeled hardening,
+    // not a proven fix): two independent real occurrences showed the
+    // headless recovery above report success while the app still redirects
+    // back to signIn moments later. Try a qualitatively different recovery
+    // — a real, full UI-driven login — exactly once before giving up.
+    logger.warn(
+      `Session recovery for role ${role} via headless re-auth did not stick — still on ` +
+        `${page.url()} after re-authenticating and navigating back to ${returnUrl}. ` +
+        `Escalating to a full UI-driven re-login before giving up.`
     );
+    await authManager.reauthenticatePageViaUI(page, role);
+    await page.goto(returnUrl, { waitUntil: 'domcontentloaded' });
+
+    if (isSignInUrl(page.url())) {
+      throw new Error(
+        `Session recovery for role ${role} failed even after escalating to a full UI-driven ` +
+          `re-login — still on ${page.url()} after navigating back to ${returnUrl}`
+      );
+    }
   }
 
   const bodyText = await page.locator('body').innerText().catch(() => '');

@@ -1,4 +1,69 @@
 import { faker } from '@faker-js/faker';
+import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Meeting Custom Fields
+// ──────────────────────────────────────────────────────────────────────────
+// WHY: confirmed live (2026-07-29 child-entity investigation) — Meeting has
+// the same 8 custom fields as Deal (Text, Paragraph, Number, PickList,
+// Checkbox, Date, DateTimePicker, UrlField — no MultiPickList; child
+// entities deliberately never get one, unlike Lead/Contact/Deal/Company).
+// QA-only for now (added to QA and Prod as of 2026-07-29 — Stage does not
+// have them yet). MEETING_CUSTOM_FIELD_NAMES is its own single source of
+// truth, per CLAUDE.md's Custom Fields pattern — never import
+// DEAL_CUSTOM_FIELD_NAMES here even where values happen to coincide.
+//
+// WHY 'URLField' (capital URL), not 'UrlField' like the parent entities:
+// confirmed live — Meeting's field was created with this exact internal
+// name. This is a real, entity-specific naming difference (not a typo to
+// "fix") — each module owns its own constant precisely so this can diverge
+// safely without any shared code needing to know about it.
+export const MEETING_CUSTOM_FIELD_NAMES = {
+  textField: 'TextField',
+  paragraphText: 'ParagraphText',
+  number: 'Number',
+  pickList: 'PickList',
+  checkbox: 'Checkbox',
+  date: 'Date',
+  dateTimePicker: 'DateTimePicker',
+  urlField: 'URLField',
+} as const;
+
+export type MeetingCustomFieldKey = keyof typeof MEETING_CUSTOM_FIELD_NAMES;
+
+export interface MeetingCustomFieldData {
+  textField: string;
+  paragraphText: string;
+  number: number;
+  // WHY: PickList options only exist live in the DOM (never hardcode them) —
+  // this starts as a placeholder and is overwritten in place by
+  // MeetingsPage.fillMeetingForm()/fillEditForm() with whatever was actually
+  // selected at fill time, so the same `data` object stays accurate for
+  // later verification against the detail page.
+  pickList: string;
+  checkbox: boolean;
+  date: Date;
+  dateTimePicker: Date;
+  urlField: string;
+}
+
+export function generateMeetingCustomFieldData(
+  overrides: Partial<MeetingCustomFieldData> = {}
+): MeetingCustomFieldData {
+  return {
+    textField: `CF-Text-${faker.string.alphanumeric(12)}`,
+    paragraphText: faker.lorem.paragraph(),
+    number: faker.number.int({ min: 1, max: 100000 }),
+    pickList: '',
+    // WHY: random true/false each run, not a fixed constant — same
+    // reasoning as Deal's identical field.
+    checkbox: faker.datatype.boolean(),
+    date: randomFutureDateWithinOneMonth(),
+    dateTimePicker: randomFutureDateWithinOneMonth(),
+    urlField: `https://example.com/${faker.string.alphanumeric(10)}`,
+    ...overrides,
+  };
+}
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +100,7 @@ export interface MeetingData {
   description: string;
   inviteeSearchTerm: string;
   timeConfig: MeetingTimeConfig;
+  customFields: MeetingCustomFieldData;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,6 +162,7 @@ export function getFutureDate(daysFromNow: number): string {
 // ─── Factories ────────────────────────────────────────────────────────────────
 
 export function generateMeetingData(overrides: Partial<MeetingData> = {}): MeetingData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     title: `${faker.company.buzzVerb()} ${faker.company.buzzNoun()} Meeting`,
     status: 'scheduled',
@@ -104,7 +171,8 @@ export function generateMeetingData(overrides: Partial<MeetingData> = {}): Meeti
     description: `Meeting created by automation. Agenda: ${faker.lorem.sentence()}`,
     inviteeSearchTerm: 'playwright',
     timeConfig: generateTimeConfig(),
-    ...overrides,
+    customFields: generateMeetingCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -115,6 +183,7 @@ export function generateMeetingData(overrides: Partial<MeetingData> = {}): Meeti
  */
 export function generateAdminMeetingData(overrides: Partial<MeetingData> = {}): MeetingData {
   const timestamp = Date.now().toString();
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     title: `ADM${timestamp} Meeting`,
     status: 'scheduled',
@@ -123,7 +192,8 @@ export function generateAdminMeetingData(overrides: Partial<MeetingData> = {}): 
     description: `Admin meeting created at ${timestamp}. RBAC isolation test.`,
     inviteeSearchTerm: 'playwright',
     timeConfig: generateTimeConfig(),
-    ...overrides,
+    customFields: generateMeetingCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
@@ -132,6 +202,7 @@ export function generateAdminMeetingData(overrides: Partial<MeetingData> = {}): 
  */
 export function generateRestrictedMeetingData(overrides: Partial<MeetingData> = {}): MeetingData {
   const timestamp = Date.now().toString();
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     title: `RST${timestamp} Meeting`,
     status: 'scheduled',
@@ -140,7 +211,8 @@ export function generateRestrictedMeetingData(overrides: Partial<MeetingData> = 
     description: `Restricted user meeting created at ${timestamp}.`,
     inviteeSearchTerm: 'playwright',
     timeConfig: generateTimeConfig(),
-    ...overrides,
+    customFields: generateMeetingCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 // Re-exported here so MeetingsPage can import from one place

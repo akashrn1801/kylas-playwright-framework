@@ -47,9 +47,30 @@ async function logCallWithRetry(
       await restrictedDealsPage.waitForDealDetailsPage();
       const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
       await logACallButton.waitFor({ state: 'visible', timeout: 10000 });
-      await logACallButton.click();
       const callLogModal = restrictedPage.locator('#callLogModal');
-      await callLogModal.waitFor({ state: 'visible', timeout: 15000 });
+      // WHY a bounded inner retry on the click itself (2026-07-30, found via
+      // a real CI failure — TimeoutError waiting for #callLogModal after
+      // this exact click, both on the first attempt and the automatic
+      // retry): matches the same "click registers but nothing visibly
+      // happens" React-timing race already root-caused elsewhere in this
+      // codebase (DealsPage.cloneDeal()) — re-clicking once if the modal
+      // doesn't open within a short window recovers fast instead of always
+      // paying the full reload-and-retry cost of the outer loop.
+      await logACallButton.click();
+      let modalOpened = await callLogModal
+        .waitFor({ state: 'visible', timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!modalOpened) {
+        await logACallButton.click({ timeout: 5000 }).catch(() => {});
+        modalOpened = await callLogModal
+          .waitFor({ state: 'visible', timeout: 10000 })
+          .then(() => true)
+          .catch(() => false);
+      }
+      if (!modalOpened) {
+        throw new Error('Log a Call modal did not open after 2 click attempts on this outer attempt');
+      }
       await restrictedPage.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
       // WHY: Right after the modal becomes visible its content is still
       // skeleton placeholders — wait for those to clear before interacting.

@@ -20,7 +20,19 @@ feature/\* → dev → qa → stage → prod → main
 
 ---
 
-## Step 1 — Start New Work (Always from dev)
+## Step 1 — Reset Sandbox Environment
+
+Before starting new work, reset the sandbox environment to a clean state:
+
+\`\`\`bash
+npm run sandbox:reset
+\`\`\`
+
+This ensures no stale test data or configuration from previous runs interferes with CI.
+
+---
+
+## Step 2 — Start New Work (Always from dev)
 
 \`\`\`bash
 git checkout dev && git pull origin dev
@@ -29,7 +41,7 @@ git checkout -b feature/your-feature-name
 
 ---
 
-## Step 2 — Write Code and Test Locally
+## Step 3 — Write Code and Test Locally
 
 \`\`\`bash
 npx tsc --noEmit
@@ -38,7 +50,7 @@ npx playwright test tests/ui/your-module/ --project=chromium --headed --workers=
 
 ---
 
-## Step 3 — Commit and Push
+## Step 4 — Commit and Push
 
 \`\`\`bash
 git add .
@@ -48,18 +60,39 @@ git push origin feature/your-feature-name
 
 ---
 
-## Step 4 — Promote Through All Environments
+## Step 5 — Merge to Sandbox for CI Verification
 
-### feature → dev
+Merge your feature branch to sandbox to verify CI passes before opening a PR to dev:
 
 \`\`\`bash
-git checkout dev && git pull origin dev
-git checkout -b feature/promote-FEATURE-to-dev-YYYYMMDD
-git push origin feature/promote-FEATURE-to-dev-YYYYMMDD
+git checkout sandbox && git pull origin sandbox
+git merge feature/your-feature-name
+git push origin sandbox
 \`\`\`
-Open PR: https://github.com/akashrn1801/kylas-playwright-framework/compare/dev...feature/promote-FEATURE-to-dev-YYYYMMDD
 
-### dev → qa
+Wait for the sandbox CI pipeline (\`.github/workflows/sandbox.yml\`) to complete. Check the GitHub Actions results:
+- If CI passes: proceed to Step 6
+- If CI fails: fix the issues locally, commit, push to feature branch, and re-merge to sandbox
+
+---
+
+## Step 6 — Open PR to dev
+
+Once sandbox CI passes, open a pull request to merge your feature branch into dev:
+
+\`\`\`bash
+git checkout feature/your-feature-name && git pull origin feature/your-feature-name
+\`\`\`
+
+Open PR: https://github.com/akashrn1801/kylas-playwright-framework/compare/dev...feature/your-feature-name
+
+Wait for dev CI to pass before merging.
+
+---
+
+## Step 7 — Promote Through All Environments
+
+### dev → qa (first promotion after sandbox CI passes)
 
 \`\`\`bash
 git checkout dev && git pull origin dev
