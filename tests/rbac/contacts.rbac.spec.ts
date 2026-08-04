@@ -6,7 +6,6 @@ import {
   generateSharedContactData,
   generateRestrictedContactData,
 } from '../../src/data/factories/contactFactory';
-import { config } from '../../config/config';
 import { logger } from '../../src/utils/logger';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { generateTaskData } from '../../src/data/factories/taskFactory';

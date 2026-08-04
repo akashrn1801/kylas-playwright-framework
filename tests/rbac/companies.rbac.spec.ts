@@ -12,7 +12,6 @@ import { generateDealData } from '../../src/data/factories/dealFactory';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { generateTaskData } from '../../src/data/factories/taskFactory';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
-import { config } from '../../config/config';
 import { logger } from '../../src/utils/logger';
 
 test.describe('Companies RBAC', () => {

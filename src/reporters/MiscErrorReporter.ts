@@ -11,7 +11,7 @@ const OUTPUT_PATH = path.resolve(process.cwd(), 'reports', process.env.ENV || 'q
 const WORKER_FILE_PATTERN = /^misc-errors-worker-.+\.json$/;
 
 class MiscErrorReporter implements Reporter {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   onBegin(_config: FullConfig, _suite: Suite): void {
     try {
       const dir = path.dirname(OUTPUT_PATH);
@@ -37,7 +37,7 @@ class MiscErrorReporter implements Reporter {
     } catch {}
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   onEnd(_result: FullResult): void {
     this.mergeWorkerReports();
     this.printTerminalSummary();

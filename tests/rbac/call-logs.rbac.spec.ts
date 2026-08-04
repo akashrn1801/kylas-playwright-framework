@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { test, expect } from '../../src/fixtures/index';
 import { safeWaitForURL } from '../../src/utils/navigation';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
@@ -644,7 +645,7 @@ test.describe('Call Logs — RBAC', () => {
     async ({ restrictedPage }) => {
       test.setTimeout(480000);
       const callLogsPage = new CallLogsPage(restrictedPage);
-      const recordingPath = require('path').resolve('src/data/files/test-recording.mp3');
+      const recordingPath = path.resolve('src/data/files/test-recording.mp3');
       const data = generateRestrictedCallLogData({
         entityType: 'Lead',
         outcome: 'Connected',
