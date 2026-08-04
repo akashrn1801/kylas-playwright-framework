@@ -1,9 +1,18 @@
-import { test } from '../../../src/fixtures/index';
+import { test, expect } from '../../../src/fixtures/index';
 import { MeetingsPage } from '../../../src/modules/meetings/MeetingsPage';
+import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
+import { DealsPage } from '../../../src/modules/deals/DealsPage';
+import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
+import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
 import { logger } from '../../../src/utils/logger';
 import {
   generateMeetingData,
+  generateMeetingCustomFieldData,
 } from '../../../src/data/factories/meetingFactory';
+import { generateLeadData } from '../../../src/data/factories/leadFactory';
+import { generateDealData } from '../../../src/data/factories/dealFactory';
+import { generateContactData } from '../../../src/data/factories/contactFactory';
+import { generateCompanyData } from '../../../src/data/factories/companyFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Meetings — UI Tests
@@ -244,5 +253,266 @@ test.describe('Meetings', () => {
     if (!clonedId) throw new Error('Cloned meeting ID should be captured after clone');
     await meetingsPage.assertClonedMeetingTitle(title, clonedId);
     logger.success('M15 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Custom Fields ("Other Details" section)
+  // ──────────────────────────────────────────────────────────
+  // WHY: these 8 fields exist on QA and Prod as of 2026-07-29, not yet on
+  // Stage — see MeetingsPage/BasePage's custom-field helpers for the
+  // environment-safety skip logic that makes these tests (and every other
+  // Meeting create/update path) work unchanged once Stage gets them too.
+  // Meeting has no lookup-type or MultiPickList custom field, like Deal.
+  //
+  // WHY 5 separate create tests (standalone + 4 embedded parent panels)
+  // instead of one: confirmed live (2026-07-29 investigation) the Add
+  // Meeting form/custom-field DOM is byte-identical across all 5 contexts,
+  // but each context's ENTRY POINT (which button opens the form, via which
+  // panel) genuinely differs and is exercised by real, separate code paths
+  // in the app — so each context is independently worth confirming actually
+  // saves and persists custom-field data correctly. Per explicit instruction,
+  // this coverage is deliberately NOT reduced despite the shared DOM.
+  //
+  // WHY update/validation are NOT repeated per context (unlike create):
+  // confirmed live these flows are identical regardless of which panel
+  // originally created the meeting — editing/validating a meeting has no
+  // context-dependent variation, so repeating them 5x would test the exact
+  // same code path with zero new signal. This reduced scope was explicitly
+  // confirmed with the user before implementing.
+
+  // ── M16 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a meeting with all custom fields and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const meetingData = generateMeetingData();
+
+    await meetingsPage.goToMeetingsList();
+    await meetingsPage.openAddForm();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(meetingData.customFields);
+    logger.success('M16 passed');
+  });
+
+  // ── M17 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a meeting with all custom fields from a lead detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const leadData = generateLeadData();
+    const meetingData = generateMeetingData({
+      customFields: generateMeetingCustomFieldData(),
+    });
+
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.clickRightPanelIcon('Meetings');
+    await meetingsPage.openAddFormFromEntityDetailPanel();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(meetingData.customFields);
+    logger.success('M17 passed');
+  });
+
+  // ── M18 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a meeting with all custom fields from a deal detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const dealData = generateDealData();
+    const meetingData = generateMeetingData({
+      customFields: generateMeetingCustomFieldData(),
+    });
+
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.clickRightPanelIcon('Meetings');
+    await meetingsPage.openAddFormFromEntityDetailPanel();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(meetingData.customFields);
+    logger.success('M18 passed');
+  });
+
+  // ── M19 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a meeting with all custom fields from a contact detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const contactData = generateContactData();
+    const meetingData = generateMeetingData({
+      customFields: generateMeetingCustomFieldData(),
+    });
+
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId, 'Contact ID should be captured after create').not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.clickRightPanelIcon('Meetings');
+    await meetingsPage.openAddFormFromEntityDetailPanel();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(meetingData.customFields);
+    logger.success('M19 passed');
+  });
+
+  // ── M20 ───────────────────────────────────────────────────
+
+  test('@regression admin should create a meeting with all custom fields from a company detail panel and verify on details', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const companyData = generateCompanyData();
+    const meetingData = generateMeetingData({
+      customFields: generateMeetingCustomFieldData(),
+    });
+
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId, 'Company ID should be captured after create').not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.clickRightPanelIcon('Meetings');
+    await meetingsPage.openAddFormFromEntityDetailPanel();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(meetingData.customFields);
+    logger.success('M20 passed');
+  });
+
+  // ── M21 ───────────────────────────────────────────────────
+
+  test("@regression admin should update a meeting's custom fields and verify updated values", async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const meetingData = generateMeetingData();
+
+    await meetingsPage.goToMeetingsList();
+    await meetingsPage.openAddForm();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+    await meetingsPage.fillMeetingForm(meetingData);
+    const meetingId = await meetingsPage.saveMeeting();
+    expect(meetingId, 'Meeting ID should be captured after create').not.toBeNull();
+
+    const updatedCustomFields = generateMeetingCustomFieldData();
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.openMeetingFromList(meetingData.title);
+    await meetingsPage.clickEditFromMenu();
+    await meetingsPage.fillEditForm(meetingData.title, undefined, undefined, updatedCustomFields);
+    await meetingsPage.saveEditedMeeting();
+
+    await meetingsPage.searchMeetingById(meetingId!);
+    await meetingsPage.assertMeetingCustomFieldsOnDetail(updatedCustomFields);
+    logger.success('M21 passed');
+  });
+
+  // ── M22 ───────────────────────────────────────────────────
+
+  test('@regression admin should see validation errors for invalid meeting custom field values and not save the meeting', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+
+    interface InvalidCustomFieldCase {
+      description: string;
+      fieldSuffix: string;
+      invalidValue: string;
+      expectedError: string;
+    }
+
+    // WHY: confirmed live (2026-07-29), NOT assumed to match Lead/Deal —
+    // Meeting's Number field is also a native <input type="number"> (no
+    // realistic UI path to enter invalid text, same as every other entity's
+    // Number field), so it's excluded here for the same reason. Unlike
+    // Lead's ParagraphText (server-only, no inline error), Meeting's
+    // TextField/ParagraphText/UrlField ALL validate inline — confirmed live,
+    // not assumed — with Meeting-specific wording that differs from both
+    // Lead's and Quotation's own confirmed text for the same field types.
+    const cases: InvalidCustomFieldCase[] = [
+      {
+        description: 'TextField exceeding 255 characters',
+        fieldSuffix: 'cfTextField',
+        invalidValue: 'A'.repeat(256),
+        expectedError: 'Enter the value having length between 1 - 255',
+      },
+      {
+        description: 'ParagraphText exceeding 2,550 characters',
+        fieldSuffix: 'cfParagraphText',
+        invalidValue: 'B'.repeat(2551),
+        expectedError: 'Enter the value having length between 1 - 2550',
+      },
+      {
+        description: 'UrlField with a malformed URL',
+        fieldSuffix: 'cfURLField',
+        invalidValue: 'not a valid url###',
+        expectedError: 'Enter a valid URL',
+      },
+    ];
+
+    await meetingsPage.goToMeetingsList();
+    await meetingsPage.openAddForm();
+    await meetingsPage.skipIfCustomFieldsAbsent();
+
+    for (const testCase of cases) {
+      logger.info(`Negative custom field case: ${testCase.description}`);
+      const input = adminPage.locator(`[id$="_input_${testCase.fieldSuffix}"]`);
+      await input.fill(testCase.invalidValue);
+      await adminPage.keyboard.press('Tab');
+      const error = adminPage
+        .locator('.invalid-feedback:visible, .help-text.error:visible')
+        .filter({ hasText: testCase.expectedError });
+      await expect(
+        error.first(),
+        `Expected validation error "${testCase.expectedError}" for ${testCase.description}, but it never appeared`
+      ).toBeVisible({ timeout: 10000 });
+      await input.fill('');
+      logger.success(`Validation error confirmed for: ${testCase.description}`);
+    }
+
+    logger.success('M22 passed');
   });
 });

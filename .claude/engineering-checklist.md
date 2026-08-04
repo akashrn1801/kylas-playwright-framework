@@ -1,159 +1,30 @@
-# CLAUDE.md — Standing Engineering Instructions
+## Standing Engineering Checklist — Apply to Every Change
 
-This file contains the core, always-apply rules for working with this codebase.
-
-For all other guidance (tech stack, commands, conventions, architecture), see the `.claude/` documentation directory.
-
----
-
-## Quick Reference
-
-- **Branch strategy:** `feature/* → dev → qa → stage → prod → main`
-- **Never:** push/merge (user only), use `waitForTimeout()`, hardcode test data
-- **Always:** use real condition-based waits, create fresh test data, check for session expiry
-- **When in doubt:** verify with live evidence, not assumption
-
----
-
-## The 25 Standing Rules
-
-Apply these to **every change, every time, no exceptions.**
+A permanent, always-apply checklist distilled from real issues found and fixed across multiple sessions in this codebase — not a one-off task note. Apply this to ANY new code, fix, or change, every time, no exceptions.
 
 1. **Reuse before building.** Before writing any new interaction/assertion logic, check whether an existing BasePage helper or Lead/Contact pattern already does this. This codebase has repeatedly duplicated the same logic across modules instead of sharing it — don't add another instance of that anti-pattern. If something genuinely needs new logic, build it once, generically, in BasePage — not copy-pasted per module.
-
 2. **No unbounded clicks/actions.** Never write a raw `.click()`/`.fill()`/`.waitFor()` with no timeout and no retry. This exact "click registers but nothing visibly happens" React-timing race has already been found and fixed in Companies, Deals, Contacts, Quotations, and the Share-modal flow across 4 modules. Any new interaction must be bounded (a real timeout) and either retry-capable or fail loudly and fast — never hang silently for the full test timeout.
-
 3. **Session-expiry protection is mandatory.** Any new raw Playwright assertion (`expect().toBeVisible/toHaveText/toHaveURL`, etc.) written directly in a module file — not already wrapped by an existing BasePage helper — must be wrapped in `withSessionExpiryRecovery()`. This codebase has had this exact gap recur repeatedly (5+ times across different sessions) specifically because new code forgets this. Check this every single time, not just when told to.
-
 4. **No hardcoded dropdown options, ever.** Any picklist/multi-picklist/dropdown must read its real options live from the DOM at runtime. Never hardcode an option string, index, or assumed count — option lists can and do grow/shrink over time and differ across environments.
-
 5. **Test data must be genuinely fresh, never randomly reused.** Any test needing an isolated/controlled entity (for RBAC checks, permission boundaries, or anything where "this specific record has zero prior access/history" matters) must create that record fresh in the test itself — never rely on a randomly-selected pre-existing record. This exact mistake produced a false conclusion once already this session (the CR9 test-isolation bug).
-
 6. **Locators must be built on internal names, never display labels.** Custom field display labels can be renamed by account admins; internal field names cannot change. Any new locator must key off the internal name (confirmed via the field's settings screen), never the on-screen text.
-
 7. **Check field/feature presence before assuming it exists everywhere.** Anything environment-conditional (a custom field, a config value, a feature flag) must be presence-checked and gracefully skipped (with a clear log line) if absent — never assumed to exist identically across qa/stage/prod. Environments diverge, and this codebase has already been burned by assuming otherwise (e.g. an "environment scoping" conclusion from one investigation silently going stale once data changed).
-
 8. **Don't trust a single passing run.** Before calling anything "fixed" or "verified," re-run the specific test 3-5 times in isolation, zero flakiness accepted. A test passing once proves nothing on its own in this codebase's history.
-
 9. **Ripple-check any shared code change.** Before modifying any method used by more than one caller (BasePage helpers, `fillXForm()`/`fillEditForm()`, any shared factory function), grep every consumer and confirm the change is purely additive / doesn't alter behavior for callers that don't care about the new thing. Treat shared code as high blast radius by default.
-
 10. **Never patch a symptom without a confirmed root cause.** If a bug can be reproduced, root-cause it with real evidence before fixing. If it CANNOT be reproduced, don't just document and walk away — do a thorough code review to find plausible failure modes and apply a defensive hardening fix, clearly labeled as "hardened based on review, root cause of this specific occurrence not confirmed" rather than overstated as a proven fix.
-
 11. **No silent scope expansion or silent scope-narrowing.** If you find an unrelated bug while working, STOP and report it — don't fix it silently (scope creep) and don't ignore it silently either (leaving a known issue undocumented). Flag it, let the human decide whether it's in-scope now or a tracked follow-up.
-
 12. **Check real, live evidence over assumption — always.** Whether it's a DOM structure, a field's presence, an app's actual behavior, or whether a previous conclusion still holds — verify live/fresh rather than trusting an old investigation's conclusion or your own inference, especially if any real-world data (test data volume, environment config, account settings) could plausibly have changed since.
-
 13. **No commits, no pushes, ever, without explicit permission.** All git operations beyond creating a branch are performed by the user only.
-
 14. **Document with real evidence, not narrative.** Any CLAUDE.md/README.md update must include concrete evidence (exact error text, real IDs, actual pass counts, timestamps) — not a prose summary alone. Future readers (including future sessions) need to be able to verify the claim, not just trust it.
-
 15. **ID-capture from a network response must match a versioned, specific path — never a bare substring.** Found and fixed in 3 places (`DealsPage`/`CompaniesPage`/a Deals-to-Quotation flow) where `captureXxxIdFromResponse()` matched `.includes('/deals')`/`.includes('companies')` with no version prefix, occasionally matching an unrelated background request (e.g. `/v4/reports/deals`) that raced ahead with no `id` field — silently capturing `null` and throwing a false "save failed silently" error despite a real success toast. Any new response-capture predicate must require the real versioned path (`/v1/<module>/`) and explicitly exclude `/reports/`.
-
 16. **Session expiry has more than one symptom — protect against all of them, not just a signIn-URL redirect.** Confirmed manifestations in this codebase: a `/signIn` redirect (the common case), a distinct "Forbidden" bootstrap-time page with the URL left unchanged (a fresh-load auth-check path, different from mid-session expiry), and a `waitForResponse()`/ID-capture promise sitting after an already-covered click that can still silently time out — the click's own recovery check only covers the instant right after the click resolves, not everything awaited afterward. Being "downstream of a protected click" is not sufficient; any new awaited network-response promise needs its own explicit protection, and any new page-state check should use the shared `isSessionExpiryPage()`-style check, not a bare URL match.
-
 17. **A locator that is unique today can become ambiguous the moment a sibling field/button is added elsewhere in the DOM — this has happened at least twice.** Confirmed twice: a Company Phones field collision from an `[id*="..."]` substring match, and (this session) Deal's estimated-closure-date field breaking the instant Deal gained its own custom Date/DateTimePicker fields, since all three shared the same `getByPlaceholder('Pick a Date')` match. Prefer the narrowest reliable scope (a stable id suffix plus tag-name scoping, or a container-scoped locator) over a broad substring/placeholder/text match, and treat "currently unique" as temporary, not permanent — especially for any field whose sibling fields could grow later (custom fields are the clearest recurring example).
-
 18. **A bug class fixed in one place is not fixed everywhere — sweep the whole codebase for the same shape, and explicitly document any instance you deliberately leave unfixed.** The unbounded-click race (point 2) has been found and fixed in Companies/Deals/Contacts/Quotations/the Share-modal flow at different times, but a grep still confirms the identical shape exists, unfixed, in `QuotationsPage.fillOwner()` and parts of `LeadsPage.ts` — each explicitly flagged in README's Known Limitations rather than silently left to be rediscovered later. When you fix a bug class, grep for every other instance of the same shape in the same pass; anything you deliberately leave unfixed must be named explicitly, not left implicit.
-
 19. **Retry budgets and timeouts must be sized per real observed latency for that specific environment — never copied uniformly across qa/staging/prod, and a retry-exhaustion fallback must never silently guess.** `CallLogsPage.searchAndSelectEntity()`'s staging retry budget (3×5s) is thinner than qa's (5×3s)/prod's (5×5s), and a real run needed its full budget to recover from genuine search-index propagation lag; its exhaustion path also falls through to silently clicking the first option, which can pick the wrong entity instead of failing loudly. Size retry budgets from real measured latency per environment, and make any retry-exhaustion fallback fail loudly rather than silently guess.
-
 20. **Environment-scoping conclusions decay over time — a "qa/prod-only" or "small dataset" finding must be re-verified, not assumed permanent.** QA/staging data grows unboundedly (no module cleans up what it creates) — an earlier investigation concluded a bug was "qa/prod-specific, stage's option list is too small to trigger it," and that exact premise silently went stale once stage's data grew to the same scale weeks later. Any conclusion grounded in today's data volume/option count/list size is a snapshot, not a permanent fact — re-confirm it live before relying on it again, especially across a gap of days or weeks.
-
 21. **A single isolated, unloaded local repro run is not proof a flake doesn't exist — some bugs only manifest under real concurrent CI load.** Multiple flakes in this codebase's history reproduced 0/N times in single-worker local isolation but were confirmed real via CI's own logs/evidence (a genuine RBAC permission race in Meetings, a `tasks.rbac.spec.ts` edit-modal hang, a Deals edit-save transient error). In each case the correct response was defensive hardening based on code review (clearly labeled as such, per point 10) or accepting it as a genuinely uncertain, load-dependent flake — never dismissing it as "couldn't reproduce, so not real."
-
 22. **Never log a field's raw value without checking whether it's sensitive.** A generic `BasePage.fill()` used to log every filled value verbatim, including the real QA admin/restricted passwords, into every log file produced by any run touching `login.spec.ts` — a real, confirmed plaintext-credential leak across multiple historical log files (mitigated only by `logs/` being gitignored). Any new logging of a filled/typed value must check the field's purpose (a description/name pattern like `password|token|secret|api[_-]?key`) and redact — never assume a DOM attribute like `type="password"` will always be present to key off instead.
-
 23. **This repo's CI has genuinely divergent scope and safety nets per branch — verify which pipeline actually protects a given change before trusting "CI is green."** `main` has two CI paths covering different scope (the primary Jenkins pipeline runs the full suite; the GHA `main.yml` manual fallback filters to `@regression` only); `sandbox`'s GHA path uses a dynamic 1–2 worker count that its Jenkins fallback doesn't match; `stage.yml` (ordinary push CI) and `staging-promotion-gate.yml` (manual-only, auto-merges to prod on success) are easily confused by name; and multiple Jenkins pipelines have appended `|| true` at various points, which reports green regardless of actual test outcome. Don't assume "CI passed" means the same thing on every branch — check which specific pipeline ran and what its actual scope/exit-code behavior is.
-
 24. **Any generated report/log/evidence file that a later run can overwrite should be treated as ephemeral — capture it before running anything else if you need it.** `reports/<env>/misc-errors.json` (and even its per-worker source files) are overwritten by every subsequent Playwright invocation, including a single isolated test run in the same environment — not just the already-solved cross-process race. A full-suite run's own report was lost this way mid-session when a later isolated test run overwrote it before its data had been fully analyzed. Copy or rename anything you intend to reference later before running more tests against the same environment.
-
 25. **Before concluding local work is lost, uncommitted, or unmerged, verify actual git state — don't reason from memory or assumption.** Check `git reflog`/`git stash list` before treating uncommitted changes as gone, and `git fetch` before trusting a local branch's view of what's merged/ahead/behind — local state can silently lag the remote, and assuming otherwise has produced false "this is lost" or "this was never merged" conclusions before.
 
----
-
-## Reference Documentation
-
-For all other guidance, see:
-
-- **[`.claude/quickstart.md`](./.claude/quickstart.md)** — Project overview, tech stack, key commands, environment setup
-- **[`.claude/conventions.md`](./.claude/conventions.md)** — Key coding conventions (fixtures, factories, page objects, logging, test tags, timeouts)
-- **[`.claude/architecture.md`](./.claude/architecture.md)** — File layout, fixture structure, page object patterns, test data factories
-- **[`.claude/known-issues.md`](./.claude/known-issues.md)** — Bug investigations, root causes, unresolved issues, session-expiry gaps
-- **[`.claude/reference-patterns.md`](./.claude/reference-patterns.md)** — 10 canonical code patterns with examples
-- **[`.claude/cicd-reference.md`](./.claude/cicd-reference.md)** — CI/CD pipeline scope per branch
-- **[`.claude/module-status.md`](./.claude/module-status.md)** — Per-module test coverage and known limitations
-
----
-
-## Framework Reliability Overhaul (2026-08-01 onwards)
-
-A comprehensive multi-agent initiative to automate QA, testing, and investigation. See `FRAMEWORK_OVERHAUL_PROGRESS.md` for tracking.
-
-**13 Specialized Subagents** (in `.claude/agents/`):
-1. `flaky-test-auditor` — scans for `waitForTimeout()`, race conditions, unbounded actions
-2. `locator-reviewer` — validates locator stability and accessibility
-3. `self-healing-locator-scout` — finds correct element when a locator breaks live
-4. `resilience-architect` — designs adaptive wait strategies based on real timing
-5. `enterprise-code-reviewer` — enforces code quality and conventions
-6. `pipeline-guard` — verifies branch-promotion readiness
-7. `security-dependency-auditor` — audits dependencies and secrets
-8. `test-coverage-strategist` — writes tests for uncovered flows
-9. `failure-triage-investigator` — classifies failures as app bug vs. code bug
-10. `discovery-agent` — tracks new Playwright/TypeScript patterns
-11. `test-data-lifecycle-manager` — manages test data cleanup (QA/stage only, never prod)
-12. `release-readiness-summarizer` — pre-promotion checklist
-13. `accessibility-auditor` — WCAG compliance checks (if applicable)
-
-**Auto-delegation chains:**
-- New/edited spec → locator-reviewer → flaky-test-auditor → enterprise-code-reviewer → test-coverage-strategist
-- Test failure → failure-triage-investigator (first, always) → appropriate follow-up agent
-- Before promotion → pipeline-guard + release-readiness-summarizer
-
-**Hooks (REAL, installed to `.git/hooks/`, tracked in `scripts/hooks/`):**
-- Hard deny: `git push`, `git merge`, `gh pr merge` (Claude Code permission layer)
-- **Pre-commit hook (verified working):** Blocks commits containing `waitForTimeout()` anti-pattern. Exit code 1, clear error message with guidance.
-- **Pre-push hook (verified working):** Validates code quality before pushing (checks for `waitForTimeout()`, warns on hardcoded URLs).
-- **Post-file-edit hook (NOT Claude Code native):** Post-file-edit triggers are NOT a built-in Claude Code feature. Manual invocation required: ask `"locator-reviewer to scan X"` after editing Page Objects/specs. This is documented explicitly here to prevent leaving an undocumented gap.
-
-**How to invoke agents manually:**
-- After editing: `"Ask locator-reviewer to scan tests/ui/leads/leads.spec.ts"`
-- Before pushing: `"Ask enterprise-code-reviewer if this code is ready"`
-- After a test fails: `"Ask failure-triage-investigator why did D35 fail?"`
-- Full reference: See `.claude/AGENT_DELEGATION_GUIDE.md` and `.claude/agents/` for each agent's trigger conditions
-
----
-
-## Investigation Log
-
-All subagent findings logged to `INVESTIGATION_LOG.md`:
-- Date, what was investigated, ruled out, concluded
-- Confidence level (high/medium/low) and what would raise it
-- Evidence file paths (from `.claude/evidence/` directory structure)
-- Any tests added as a result
-
-This prevents re-investigating the same dead ends weeks later.
-
----
-
-## Playwright MCP (Live Browser Investigation)
-
-Installed 2026-08-01. Enables live app inspection for subagents. **Scope:**
-- Only agents 3, 4, 9, 13 have MCP access (gated behind approval)
-- Must follow evidence-directory protocol: `.claude/evidence/{agent-name}/{date-slug}/`
-- Evidence saved locally, never ephemeral
-- All findings must cite specific screenshots/snapshots, not speculation
-- Standard report template: environment, steps, evidence paths, observed behavior, conclusion, confidence
-
-**Disabled for:** Production (`app.kylas.io`). QA and stage only.
-
----
-
-## When You're Stuck
-
-1. **Flaky test?** → Ask `failure-triage-investigator` (classifies app bug vs. code bug first, always)
-2. **Broken locator?** → Ask `self-healing-locator-scout` (finds live correct element)
-3. **Slow flow?** → Ask `resilience-architect` (measures real timing, proposes wait strategy)
-4. **Code quality?** → Ask `enterprise-code-reviewer` (pre-push gate)
-5. **Before promoting?** → Ask `pipeline-guard` + `release-readiness-summarizer`
-
-Never silently patch a flaky test or hide a real bug — classify first, then fix.
