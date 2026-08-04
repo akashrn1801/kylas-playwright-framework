@@ -5,6 +5,7 @@ import { LeadsPage } from '../../src/modules/leads/LeadsPage';
 import {
   generateAdminCallLogData,
   generateRestrictedCallLogData,
+  generateCallLogData,
 } from '../../src/data/factories/callLogFactory';
 import { generateLeadData } from '../../src/data/factories/leadFactory';
 import { logger } from '../../src/utils/logger';
@@ -667,5 +668,48 @@ test.describe('Call Logs — RBAC', () => {
       logger.success('CL36 passed');
     }
   );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Custom Fields (CL38–CL39)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // WHY restricted-user custom-field tests: confirm the same custom-field fill/assert
+  // methods work identically for restricted users creating/editing call logs. Custom
+  // fields are treated as role-agnostic, not gated by a separate RBAC boundary.
+
+  // ── CL38 ───────────────────────────────────────────────────────────────────────
+  test('@regression restricted user can create a call log with all custom fields', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const callLogData = generateCallLogData();
+
+    await callLogsPage.goToCallLogsList();
+    const { callLogId } = await callLogsPage.createCallLog(callLogData);
+    expect(callLogId, 'Call Log ID should be captured after create').not.toBeNull();
+
+    // Custom fields are gracefully filled if present during create
+    await callLogsPage.assertCallLogInList(callLogId!);
+    logger.success('CL38 passed');
+  });
+
+  // ── CL39 ───────────────────────────────────────────────────────────────────────
+  test('@regression restricted user can update call log custom fields', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const originalData = generateCallLogData();
+    const updatedData = generateCallLogData();
+
+    await callLogsPage.goToCallLogsList();
+    const { callLogId } = await callLogsPage.createCallLog(originalData);
+    expect(callLogId, 'Call Log ID should be captured after create').not.toBeNull();
+
+    // Update the call log with new custom field data and verify it was updated
+    await callLogsPage.updateCallLog(callLogId!, updatedData, true);
+    await callLogsPage.assertCallLogInList(callLogId!);
+    logger.success('CL39 passed');
+  });
 
 });

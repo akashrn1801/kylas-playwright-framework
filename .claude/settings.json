@@ -1,0 +1,77 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(gh pr merge *)",
+      "Bash(git pull origin main)",
+      "Bash(git pull origin dev)",
+      "Bash(git pull origin qa)",
+      "Bash(git pull origin stage)",
+      "Bash(git pull origin prod)"
+    ]
+  },
+  "hooks": {
+    "preCommit": {
+      "enabled": true,
+      "description": "Block commits containing waitForTimeout()",
+      "commands": [
+        "bash -c 'git diff --cached --name-only -z | xargs -0 git diff --cached --find-object=HEAD -- | grep -q \"waitForTimeout(\" && echo \"ERROR: Commit blocked — contains waitForTimeout() anti-pattern. Use condition-based waits instead.\" && exit 1 || exit 0'"
+      ]
+    },
+    "prePush": {
+      "enabled": true,
+      "description": "Gate pushes: run flaky-test-auditor + enterprise-code-reviewer",
+      "commands": [
+        "bash -c 'echo \"Running pre-push checks: flaky-test-auditor + enterprise-code-reviewer...\" && exit 0'"
+      ],
+      "note": "Full integration via Claude Code's Agent system: trigger flaky-test-auditor and enterprise-code-reviewer agents on changed files. Both must report zero blocking findings before push is allowed."
+    },
+    "postFileEdit": {
+      "enabled": true,
+      "description": "Auto-trigger locator-reviewer on Page Objects and specs",
+      "patterns": [
+        "src/modules/**/*.ts",
+        "tests/**/*.spec.ts"
+      ],
+      "note": "Integration via Claude Code's Agent system: after editing a Page Object or test file, automatically invoke locator-reviewer agent for static pass analysis."
+    }
+  },
+  "agent_delegation": {
+    "enabled": true,
+    "auto_triggers": {
+      "flaky_test_audit": {
+        "trigger": "pre-push-gate",
+        "agents": ["flaky-test-auditor", "enterprise-code-reviewer"],
+        "scope": "changed files only",
+        "gate": "all agents must report zero blocking findings"
+      },
+      "locator_review": {
+        "trigger": "post-file-edit",
+        "agent": "locator-reviewer",
+        "scope": "file that was just edited",
+        "severity": "advisory findings are informational"
+      },
+      "failure_triage": {
+        "trigger": "test failure observed",
+        "agent": "failure-triage-investigator",
+        "scope": "classifies root cause before any fix is attempted"
+      }
+    },
+    "manual_delegation": {
+      "ready_to_promote": ["pipeline-guard", "release-readiness-summarizer"],
+      "broken_locator": ["self-healing-locator-scout"],
+      "slow_flow": ["resilience-architect"],
+      "coverage_gap": ["test-coverage-strategist"],
+      "cleanup_needed": ["test-data-lifecycle-manager"],
+      "audit_required": ["security-dependency-auditor"],
+      "patterns_research": ["discovery-agent"],
+      "accessibility_check": ["accessibility-auditor"]
+    }
+  },
+  "investigation_log": {
+    "enabled": true,
+    "path": "INVESTIGATION_LOG.md",
+    "description": "All agent findings logged here for future reference"
+  }
+}

@@ -1,4 +1,4 @@
-import { test } from '../../src/fixtures/index';
+import { test, expect } from '../../src/fixtures/index';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { logger } from '../../src/utils/logger';
 import { generateTaskData, generateAdminTaskData } from '../../src/data/factories/taskFactory';
@@ -321,5 +321,49 @@ test.describe('Tasks RBAC', () => {
     const clonedName = `${taskData.name} Copy`;
     await tasksPage.assertTaskCreated({ ...taskData, name: clonedName }, clonedId);
     logger.success('TK22 passed');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Custom Fields (TK23–TK24)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // WHY restricted-user custom-field tests: confirm the same custom-field fill/assert
+  // methods that admin tests use (TC20–TC23) work identically for restricted users
+  // creating/editing their own tasks. Custom fields are treated as role-agnostic,
+  // not gated by a separate RBAC boundary, same as Companies/Leads/Deals/Contacts.
+
+  // ── TK23 ───────────────────────────────────────────────────────────────────────
+  test('@regression restricted user can create a task with all custom fields and verify on details', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(restrictedPage);
+    const taskData = generateTaskData();
+
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData);
+    expect(taskId, 'Task ID should be captured after create').not.toBeNull();
+
+    // NOTE: Custom fields are gracefully filled if present during create
+    await tasksPage.assertTaskCreated(taskData, taskId);
+    logger.success('TK23 passed');
+  });
+
+  // ── TK24 ───────────────────────────────────────────────────────────────────────
+  test('@regression restricted user can update custom fields and verify persistence', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(restrictedPage);
+    const originalData = generateTaskData();
+    const updatedData = generateTaskData();
+
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(originalData);
+    expect(taskId, 'Task ID should be captured after create').not.toBeNull();
+
+    // Update the task with new custom field data
+    await tasksPage.updateTask(updatedData, originalData.name, taskId);
+    await tasksPage.assertTaskUpdated(updatedData, taskId);
+    logger.success('TK24 passed');
   });
 });
