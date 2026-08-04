@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { test } from '../../../src/fixtures/index';
 import { expect } from '@playwright/test';
 import { safeWaitForURL } from '../../../src/utils/navigation';
@@ -417,7 +418,7 @@ test.describe('Call Logs', () => {
   test('@regression admin should create a lead call log with outcome connected, upload a recording file and verify recording appears on detail panel', async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
-    const recordingPath = require('path').resolve('src/data/files/test-recording.mp3');
+    const recordingPath = path.resolve('src/data/files/test-recording.mp3');
     const data = generateCallLogData({
       entityType: 'Lead',
       outcome: 'Connected',

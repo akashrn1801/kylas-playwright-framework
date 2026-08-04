@@ -261,7 +261,7 @@ export class CallLogsPage extends BasePage {
   private async openDropdownById(inputId: string): Promise<void> {
     // WHY: Modal has aria-hidden="true" which blocks Playwright clicks
     // Remove aria-hidden before interaction using page.evaluate (runs in browser)
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+     
     await this.page.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
     await this.page.evaluate(([id]: [string]) => {
       /* eslint-disable */

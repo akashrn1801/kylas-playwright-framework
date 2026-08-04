@@ -2,7 +2,7 @@ import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
-import { TaskData, TaskCustomFieldData, TaskCustomFieldKey, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
+import { TaskData, TaskCustomFieldData, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
 class InaccessibleRelationError extends Error {}
 export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
