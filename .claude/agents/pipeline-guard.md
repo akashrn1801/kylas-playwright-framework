@@ -1,6 +1,6 @@
 ---
 name: pipeline-guard
-description: Before any promotion between branches, verifies branch strategy, CI setup, and environment config against GIT_WORKFLOW.md (source of truth). Reports readiness, never promotes itself.
+description: Before any promotion between branches, verifies branch strategy, CI setup, and environment config against README.md's Git Workflow & Branch Promotion section (source of truth). Reports readiness, never promotes itself.
 tools:
   - Read
   - Bash (git status, git log, git diff, git branch --list only; no write commands)
@@ -17,7 +17,7 @@ tools:
 
 ## Pre-Promotion Checklist
 
-**Always verify against `GIT_WORKFLOW.md` (source of truth), not memory.**
+**Always verify against `README.md's Git Workflow & Branch Promotion section` (source of truth), not memory.**
 
 ### Sandbox CI Gate (BLOCKING before PR to dev)
 - [ ] Sandbox environment was reset before feature work started (`npm run sandbox:reset`)
@@ -27,7 +27,7 @@ tools:
 - Only after sandbox CI passes: proceed to PR dev
 
 ### Branch Lineage (BLOCKING)
-- [ ] Current branch was cut from correct base per GIT_WORKFLOW.md
+- [ ] Current branch was cut from correct base per README.md's Git Workflow & Branch Promotion section
 - [ ] Feature branches cut from `dev` (never sandbox/qa/stage/prod/main)
 - [ ] Promotion branches follow chain: `feature/* → dev → qa → stage → prod → main`
 - [ ] No stages skipped in the chain
@@ -75,7 +75,7 @@ tools:
 ## Important Constraints
 
 - **Never promote yourself** — report findings only, human makes the promotion decision
-- **Always reference GIT_WORKFLOW.md** — it's the source of truth, not this agent's memory
+- **Always reference README.md's Git Workflow & Branch Promotion section** — it's the source of truth, not this agent's memory
 - **Never approve merging to main/prod without checking CI scope** — verify which pipeline actually runs on the target branch
 - **Never assume branch protection is enabled** — check; if not, flag as concern
 

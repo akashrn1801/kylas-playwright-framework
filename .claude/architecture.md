@@ -1,47 +1,68 @@
-## Architecture
+# Architecture (full detail)
+
+Imported from `CLAUDE.md`. See that file for the condensed summary and the rest of the standing rules.
 
 ### File Layout
+
 ```
 src/
   core/BasePage.ts          — Base class all page objects extend
   fixtures/index.ts         — Custom test fixtures (ALWAYS import from here)
   auth/
     globalSetup.ts          — Logs in both roles before suite, saves storage state
-    authManager.ts          — Session validation + re-login with 1-hr in-memory cache
-    storageStates/<env>/    — Saved Playwright browser storage states per role
+    authManager.ts          — Session validation + re-login with in-memory cache
+    storageStates/<env>/    — Saved Playwright browser storage states per role (gitignored)
   modules/<module>/
     <Module>Page.ts         — Page object class
-  data/factories/
-    <module>Factory.ts      — generateXxxData() / generateAdminXxxData() functions
+  data/
+    factories/<module>Factory.ts  — generateXxxData()/generateAdminXxxData()/generateSharedXxxData()
+    files/                  — Static fixture files (e.g. upload attachments)
   error-collector/
-    ErrorCollector.ts       — Singleton; captures pageerror / console-error / HTTP 4xx-5xx
-    errorFilters.ts         — Noise filter + expected RBAC error classifier
+    ErrorCollector.ts       — Singleton; captures pageerror/console-error/HTTP 4xx-5xx
+    errorFilters.ts         — Noise filter + expected-RBAC + known-background-noise classifiers
   reporters/
-    MiscErrorReporter.ts    — Playwright reporter that writes reports/misc-errors.json
-  notifications/            — Email notification service (post-run)
+    MiscErrorReporter.ts    — Playwright reporter; merges per-worker error files → reports/<env>/misc-errors.json
+  notifications/            — Email notification service (post-run) — see README §8 for full detail
   utils/logger.ts           — logger.info/warn/error/success (never use console.log)
 
 tests/
-  ui/<module>/              — Functional UI tests (adminPage fixture)
-  rbac/<module>.rbac.spec.ts — Permission tests (adminPage + restrictedPage fixtures)
+  ui/<module>/<module>.spec.ts       — Functional UI tests (adminPage fixture)
+  rbac/<module>.rbac.spec.ts         — Permission tests (adminPage + restrictedPage fixtures)
 
-config/config.ts            — Single source of truth for env vars, timeouts, retry config
+config/config.ts            — Single source of truth for env vars, timeouts, retry config, buildApiUrl()
 ```
 
 ### Fixtures (`src/fixtures/index.ts`)
-Two custom fixtures wrap authenticated browser contexts:
-- **`adminPage`** — full-access "Playwright Automation" user
-- **`restrictedPage`** — limited-access "User 1"
 
-Both fixtures: attach `ErrorCollector` listeners (pageerror, console-error, requestfailed, 4xx/5xx), dismiss startup popups, and validate/renew sessions via `AuthManager`. Always import `test` and `expect` from `src/fixtures/index.ts`, never from `@playwright/test`.
+Two custom fixtures wrap authenticated browser contexts — **always import `test`/`expect` from here, never from `@playwright/test` directly** (the one deliberate exception is `login.spec.ts`, which tests the login UI itself and must not depend on the auth machinery it's testing):
 
-### Auth Flow
-`globalSetup.ts` runs once before the suite: logs in both roles, saves `src/auth/storageStates/<env>/<role>.json`, and captures the user display name to `userNames.json`. `AuthManager.getContextForRole()` reuses cached state with a 1-hour in-memory TTL — skipping the browser validation overhead for every test in the suite.
+- **`adminPage`** — full-access "Playwright Automation" user.
+- **`restrictedPage`** — limited-access "User 1".
+
+Both fixtures, via a shared `createRolePage()` helper:
+1. Get a browser context via `AuthManager.getContextForRole(role)` instead of a raw `storageState`, so an expired session is transparently re-logged-in rather than failing the test.
+2. Attach `ErrorCollector` listeners (`pageerror`, `console-error`, `requestfailed`, response `>=400`) and a session-expiry listener (401 responses, or a mid-test redirect to `/signIn`) *before* the first navigation, so nothing from the very first page load is missed.
+3. Navigate to the app and race two outcomes — landing on `/sales/` vs. being redirected to sign-in — rather than a single blind `waitForURL`. On a signed-out landing it forces a fresh login and retries once (2 attempts total) before failing loudly with the last-seen URL in the error message.
+4. Dismiss the app's startup popup (`#cancel[data-dismiss="modal"]`) if present.
+5. On CI, stagger `restrictedPage` startup by a random 0–3s to avoid concurrent-session conflicts when multiple workers log in around the same moment.
+6. Call `AuthManager.ensureFreshSession(page, role)` (proactive token-expiry check — see `.claude/known-issues.md`), wrapped in try/catch so a failure here never fails the test outright.
+
+`adminContext`/`restrictedContext` are lighter-weight raw `BrowserContext` fixtures built directly from the saved `storageState` file, with none of the above error-listener/retry machinery — use only when a test genuinely doesn't need error capture or session-expiry handling.
+
+### Auth Flow and Session Caching
+
+`src/auth/globalSetup.ts` runs once before the whole suite: logs in both roles, saves `src/auth/storageStates/<env>/<role>.json`, and captures each role's display name to `userNames.json`. `src/auth/authManager.ts`'s `AuthManager`:
+- Caches session validity in-memory per role for 30 minutes (`SESSION_CACHE_MS`).
+- Uses `withFileLock()` (an `fs.mkdirSync`-based atomic lock) around storage-state writes, with the actual write itself rename-based (write-to-temp, then atomic rename) — so two CI workers racing a re-login don't corrupt each other's write.
+- Login is `PUT {apiBaseUrl}/users/login`, body `{email, password, rememberMe}`, response `{token}` — a JWT stored verbatim in `localStorage.token`. Every API call sends `Authorization: Bearer <accessToken>` from inside the decoded JWT payload (`payload.data.accessToken`). There is **no cookie-based session** — clearing `localStorage` alone immediately redirects to `/signIn`.
+- `buildApiUrl(path)` (`config/config.ts`) normalizes `config.apiBaseUrl` (strips trailing slashes, appends `/v1` only if not already present) — the canonical way to build any request URL. **Do not hand-roll another URL-normalization copy** — see the two real bugs this exact gap caused, in `.claude/known-issues.md`.
 
 ### Page Object Structure
-Every page object extends `BasePage` and follows this exact section order:
-1. `retryConfig` (reads from `config.searchRetry` or `config.meetingRetry`)
-2. Locators (private readonly arrow functions returning `Locator`)
+
+Every page object extends `BasePage` and follows this **exact section order**, top to bottom:
+
+1. `retryConfig` (reads `config.searchRetry` or `config.meetingRetry`)
+2. Locators (private `readonly` arrow functions returning `Locator`)
 3. Constructor (`super(page)`)
 4. Private Helpers
 5. Navigation
@@ -51,19 +72,34 @@ Every page object extends `BasePage` and follows this exact section order:
 9. Assertions
 10. Workflow Wrappers
 
-Locators are arrow functions (`private readonly foo = (): Locator => ...`) so they are lazily evaluated and not captured at construction time.
+**Why this matters in practice:** with 9 modules maintained by more than one person, the cost of "where do I even look" compounds fast. A fixed section order means anyone can jump into an unfamiliar page object already knowing that retry tuning is at the top and workflow wrappers are at the bottom. Locators are always lazily-evaluated arrow functions (`private readonly foo = (): Locator => ...`), never captured eagerly at construction time, because the DOM element a locator resolves to may not exist yet when the page object is instantiated.
 
 ### Test Data Factories
-Each factory exports `generateXxxData()` plus prefixed variants for RBAC isolation:
-- `generateAdminXxxData()` — prefix `ADM<timestamp>` — admin-only data, guaranteed invisible to restricted user
-- `generateSharedXxxData()` — prefix `SHR<timestamp>` — data admin creates then shares with restricted user
-- Restricted user creates data with plain `generateXxxData()`; its ownership is their own role
 
-Country defaults to `India` in all factories (CRM validation requirement).
+Each factory (`src/data/factories/<module>Factory.ts`) exports `generateXxxData()` plus RBAC-oriented variants:
+- `generateXxxData()` — plain Faker data, used when a restricted user creates their own record (ownership is inherently theirs).
+- `generateAdminXxxData()` — prefixed `ADM<timestamp>` — admin-only data.
+- `generateSharedXxxData()` — prefixed `SHR<timestamp>` — data the admin creates specifically to then share with the restricted user.
+
+**Why the prefix+timestamp convention exists:** an RBAC test's entire assertion is "restricted user provably cannot see this record unless it's shared with them." Two problems make a plain Faker name insufficient: (1) QA/staging never get cleaned up — every module's data accumulates indefinitely — so a search by a generic name can collide with old leftover records and produce a false pass; (2) without a distinguishing prefix, there's no cheap way to tell "genuinely admin-owned, never shared" data apart from "shared" data when both need to exist side-by-side in the same test. The `ADM`/`SHR` prefix plus a timestamp makes every run's records uniquely searchable and unambiguously classifiable.
+
+`Country` defaults to `India` in every factory — a hard CRM-side validation requirement, not a test choice.
+
+### Custom Fields and GPS Address Lookup
+
+Lead, Contact, Deal, and Company each have 9 admin-configured custom fields (Text, Paragraph, Number, PickList, MultiPickList, Checkbox, Date, DateTimePicker, URL) — environment-conditional, not guaranteed to exist identically on qa/stage/prod. `BasePage`'s "Custom Field Helpers" section holds every generic fill/select/assert method (parameterized by the raw Kylas field name, e.g. `"TextField"`); a module only needs its own `<MODULE>_CUSTOM_FIELD_NAMES` constant plus a thin `fill<Entity>CustomFields()`/`assert<Entity>CustomFieldsOnDetail()` wrapper. Full field-by-field mechanism (validation quirks per type, the DateTimePicker's two-widget split, the Internal-Name-vs-Label safety note) is in `.claude/reference-patterns.md` §9–10.
+
+Contact's address field and Meeting's location field also expose a "Get GPS Address" lookup — a live, Google-Places-style autocomplete, not browser geolocation. `BasePage.fillAddressViaGpsOrManual()` tries GPS search first and falls back to a manual address string if the trigger isn't present or no predictions return.
 
 ### Retry / Flake Mitigation
-`config.searchRetry` drives the retry loop in every `searchAndOpen*` method. Meetings use `config.meetingRetry` (more retries, longer wait) because the calendar aggregation is slower. Do not hardcode retry values in page objects — read from config.
 
-### ErrorCollector
-Captures browser-level errors passively during every test. Results are written to `reports/misc-errors.json`. RBAC permission errors (403s) are marked `expected: true` by `errorFilters.ts` so they don't pollute the unexpected-error count. Review `misc-errors.json` after a run to spot regressions independent of test assertions.
+`config.searchRetry` (per-env retry count + wait) drives every `searchAndOpen*`/`retryFind*` method across modules. Meetings use a separate, longer `config.meetingRetry` because calendar-data aggregation is measurably slower. **Never hardcode a retry count or a `waitForTimeout` loop** — always read from config, and size the budget per environment from real measured latency (rule 19 in `CLAUDE.md`).
 
+### Error Collection (`src/error-collector/`)
+
+`ErrorCollector` is a singleton attached by the fixtures to every `adminPage`/`restrictedPage`, passively capturing `pageerror`, `console-error` (type `error`), `requestfailed`, and any HTTP response `>=400` during every test — independent of whether the test itself asserts on anything. `errorFilters.ts` classifies each captured error into one of three buckets before it's written to `reports/<env>/misc-errors.json`:
+1. **Noise** (`isNoise()`) — dropped entirely: third-party scripts (Grammarly, Sentry, Stripe, font/CDN assets), HTTP 429 rate-limiting, and `ERR_ABORTED` on a large, individually-enumerated list of background/prefetch endpoints Playwright's own navigation legitimately cancels mid-flight.
+2. **Expected RBAC** (`isExpectedRbacError()`) — HTTP 422/errorCode `029003`, or specific "you don't have permission" patterns. The CRM correctly denying restricted-user access — expected, still counted and shown, never flagged as a regression.
+3. **Known background noise** (`isExpectedBackgroundNoise()`) — a deliberately narrow, individually-live-confirmed subset of endpoints (AI-workflow subscription checks, calendar-integration status, marketplace widgets, tenant usage/feature checks, dashboard summary polls) where a completed 4xx/5xx has been confirmed to never correlate with a test failure. Every entity CRUD/detail/search/layout endpoint is deliberately excluded — those are load-bearing, so a real failure there must keep surfacing. **Widening this list without the same live-evidence bar is exactly the kind of change that could quietly bury a real outage.**
+
+Anything not caught by one of these three buckets is unexpected and is what the end-of-run email and `misc-errors.json` treat as worth investigating.
