@@ -26,6 +26,18 @@ interface InaccessibleEntityRetryResult {
   lastErrorMessage: string;
 }
 
+// WHY: the shape of a quotation save's error response body — a dynamic API
+// response, not something Playwright/TypeScript can know statically. Captures
+// exactly the fields this file's error-classification methods actually read
+// (confirmed against real, live 029003/connection-reset response bodies), all
+// optional since different error paths populate different subsets.
+interface QuotationSaveErrorBody {
+  message?: string;
+  errorCode?: string;
+  errors?: Array<{ message?: string }>;
+  validationErrors?: Array<{ message?: string }>;
+}
+
 export class QuotationsPage extends BasePage {
   // ─── 1. Retry config ────────────────────────────────────────────────────────
   // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
@@ -1156,7 +1168,7 @@ export class QuotationsPage extends BasePage {
   // this decision.
   private classifyInaccessibleEntityError(
     status: number,
-    body: any
+    body: QuotationSaveErrorBody
   ): { isInaccessibleEntityError: boolean; entity: 'contact' | 'company' | null; rawMessage: string } {
     const message: string =
       body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
@@ -1197,7 +1209,7 @@ export class QuotationsPage extends BasePage {
   private static readonly TRANSIENT_CONNECTION_RESET_PATTERN =
     /Connection has been closed BEFORE response/i;
 
-  private isTransientConnectionResetError(body: any): boolean {
+  private isTransientConnectionResetError(body: QuotationSaveErrorBody): boolean {
     const message: string = body?.message || '';
     return QuotationsPage.TRANSIENT_CONNECTION_RESET_PATTERN.test(message);
   }
@@ -1268,7 +1280,7 @@ export class QuotationsPage extends BasePage {
         );
       }
 
-      const body = await response.json().catch(() => ({}));
+      const body = (await response.json().catch(() => ({}))) as QuotationSaveErrorBody;
 
       // WHY checked BEFORE isInaccessibleEntityError: a connection reset can
       // in principle share HTTP 400 with a real validation error, so this

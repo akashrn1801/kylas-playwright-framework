@@ -1494,7 +1494,7 @@ export class CallLogsPage extends BasePage {
     const iframeCount = await noteIframes.count();
     let found = false;
     for (let i = 0; i < iframeCount; i++) {
-      const iframeText = await noteIframes.nth(i).evaluate((el: any) => {
+      const iframeText = await noteIframes.nth(i).evaluate((el: HTMLIFrameElement) => {
         return el.contentDocument?.body?.textContent?.trim() ?? '';
       });
       logger.info(`Note ${i} text: "${iframeText.substring(0, 80)}"`);

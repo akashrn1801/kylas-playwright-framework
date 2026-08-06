@@ -1,6 +1,7 @@
 import type { Reporter, FullConfig, Suite, FullResult } from '@playwright/test/reporter';
 import * as fs from 'fs';
 import * as path from 'path';
+import { MiscError, MiscErrorReport } from '../error-collector/ErrorCollector';
 
 // WHY: Confirmed live (2026-07-07) — namespaced by env to match
 // ErrorCollector.ts's REPORTS_DIR, so two concurrent runs against different
@@ -52,11 +53,11 @@ class MiscErrorReporter implements Reporter {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const workerFiles = fs.readdirSync(dir).filter((f) => WORKER_FILE_PATTERN.test(f));
 
-      const mergedErrors: any[] = [];
+      const mergedErrors: MiscError[] = [];
       for (const file of workerFiles) {
         const filePath = path.join(dir, file);
         try {
-          const workerReport = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          const workerReport = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as MiscErrorReport;
           if (Array.isArray(workerReport.errors)) {
             mergedErrors.push(...workerReport.errors);
           }
@@ -110,7 +111,7 @@ class MiscErrorReporter implements Reporter {
         console.log('\n[MiscErrors] No misc-errors.json found.\n');
         return;
       }
-      const report = JSON.parse(fs.readFileSync(OUTPUT_PATH, 'utf-8'));
+      const report = JSON.parse(fs.readFileSync(OUTPUT_PATH, 'utf-8')) as MiscErrorReport;
       if (report.totalErrors === 0) {
         console.log('\n✅ [MiscErrors] No background errors captured during this run.\n');
         return;
@@ -146,7 +147,7 @@ class MiscErrorReporter implements Reporter {
           `   ${icons[type] || '❓'} ${type.padEnd(20)} ${count} error${count > 1 ? 's' : ''}`
         );
       }
-      const byTest = new Map<string, any[]>();
+      const byTest = new Map<string, MiscError[]>();
       for (const e of report.errors) {
         const key = e.testTitle || 'unknown';
         if (!byTest.has(key)) byTest.set(key, []);

@@ -4,6 +4,14 @@ import { logger } from '@utils/logger';
 import { config } from '@config/config';
 import { TaskData, TaskCustomFieldData, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
 class InaccessibleRelationError extends Error {}
+
+// WHY: the shape of a task-save error response body — a dynamic API response,
+// not something Playwright/TypeScript can know statically. Captures exactly
+// the one field this file's error-classification method reads (confirmed
+// against a real, live "<entity>.not.found" response body).
+interface TaskSaveErrorBody {
+  message?: string;
+}
 export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
   // Retry Config
@@ -715,7 +723,7 @@ export class TasksPage extends BasePage {
   }
   private classifyTaskInaccessibleEntityError(
     status: number,
-    body: any
+    body: TaskSaveErrorBody
   ): { isInaccessibleEntityError: boolean; rawMessage: string } {
     const message: string = body?.message || '';
     // WHY: matches company.not.found, lead.not.found, deal.not.found,
@@ -738,7 +746,7 @@ export class TasksPage extends BasePage {
     const response = await responsePromise;
 
     if (response && response.status() >= 400) {
-      const body = await response.json().catch(() => ({}));
+      const body = (await response.json().catch(() => ({}))) as TaskSaveErrorBody;
       const { isInaccessibleEntityError, rawMessage } = this.classifyTaskInaccessibleEntityError(
         response.status(),
         body
@@ -1191,7 +1199,7 @@ export class TasksPage extends BasePage {
     let found = false;
     for (let i = 0; i < count; i++) {
       const iframe = noteIframes.nth(i);
-      const noteText = await iframe.evaluate((el: any) => {
+      const noteText = await iframe.evaluate((el: HTMLIFrameElement) => {
         return el.contentDocument?.body?.textContent?.trim() ?? '';
       });
       logger.info(`Note ${i} text: "${noteText}"`);

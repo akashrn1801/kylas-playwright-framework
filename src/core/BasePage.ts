@@ -872,7 +872,9 @@ export class BasePage {
     // Field level errors
     const fieldErrors = await this.page
       .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
-      .evaluateAll((els: any[]) => els.map((el) => el.name || el.id || 'unknown'));
+      .evaluateAll((els: (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)[]) =>
+        els.map((el) => el.name || el.id || 'unknown')
+      );
 
     // Inline validation messages
     const inlineErrors = await this.page
