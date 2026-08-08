@@ -22,7 +22,8 @@ Core, always-apply rules for working on this codebase, kept lean on purpose — 
 8. [Framework Reliability Overhaul & Agent System](#framework-reliability-overhaul--agent-system) — full delegation detail in `.claude/AGENT_DELEGATION_GUIDE.md`
 9. [Known Issues — Critical / Do Not Touch](#known-issues--critical--do-not-touch) — full investigation history in `.claude/known-issues.md`
 10. [Dev-Branch Lint-Fix Drift](#dev-branch-lint-fix-drift)
-11. [When You're Stuck](#when-youre-stuck)
+11. [Concurrent-Worker Credential File Race](#concurrent-worker-credential-file-race)
+12. [When You're Stuck](#when-youre-stuck)
 
 ---
 
@@ -196,6 +197,22 @@ Full investigation history (every bug class, architectural overhaul, and inconcl
 **Why this lives here, not in `APPLICATION_BUGS.md`:** this is a repo/branch-hygiene gap in test-framework code (lint suppressions and an unused import), not a defect in the Kylas application itself — `APPLICATION_BUGS.md` is deliberately scoped to real product bugs only, and mixing in engineering-process issues would dilute that file's signal.
 
 **Action needed:** backport these 3 hunks into `dev` (cherry-pick the relevant commit from qa/stage/prod/main, or hand-apply the diff) so `dev` doesn't silently regress lint status the moment someone edits near these lines. Per rule 13, this requires the user to actually perform the git operation.
+
+---
+
+## Concurrent-Worker Credential File Race
+
+**Confirmed real, found 2026-08-07/08 during the Task custom-fields / multi-select-cap verification work — `AuthManager` has no locking around writes to the shared `storageStates/<env>/<role>.json` file.** Every worker process for a given role (`admin`/`restricted`) reads and writes the *same* credential file. If one worker detects a bad session mid-run and does a forced re-login (`Storage state cleared for role: admin` → fresh login → `Storage state saved: .../admin.json`), it can overwrite that file while a **different** worker's in-flight request still depends on the old session/token — producing a spurious ID-capture timeout with no connection to any real bug in the code under test.
+
+**Observed real occurrence:** `tests/ui/leads/leads.spec.ts:226` (L12, "admin should mark lead as Closed Unqualified via Close Lead dropdown select reason and verify stage") failed with `Error: Lead ID not captured after save — cannot proceed (save likely failed silently)`, traced to `Lead create response not captured (TimeoutError: page.waitForResponse: Timeout 60000ms exceeded while waiting for event "response")`. At almost the exact same timestamp, a **different concurrent worker** in the same run logged `admin page did not land on /sales/ ... forcing a fresh login and retrying`, cleared, and overwrote the shared `admin.json` — while the failing test's create-POST wait was still in flight, both workers acting as the same `admin` role. Run: full Lead UI+RBAC regression on QA, `--workers=2`, 2026-08-07 ~04:39 UTC. Re-ran the specific failing test 3x immediately after in single-worker isolation: 3/3 clean — consistent with, not disproof of, a concurrency-dependent root cause, since isolation removes the second worker needed to trigger the race in the first place (rule 21).
+
+**This is the same broader bug family as the already-documented Lead session-expiry/ID-capture issue (`leads.rbac.spec.ts:398`, see `.claude/known-issues.md`), but a distinct, more specific candidate mechanism** — a cross-worker shared-credential-file collision, not a single page's mid-test session expiry. Reported as a real, concrete correlation, not a proven-from-one-occurrence root cause.
+
+**Until this is fixed with proper file locking or per-worker isolated credential files, ALWAYS run with `--workers=1` — this is not just a convention, it's a correctness requirement given the current architecture.** Any `--workers>1` run's "all passed" result should be treated as **less trustworthy** than an equivalent `--workers=1` run — not because anything is necessarily broken by it, but because the test conditions weren't the safe, standard ones. (Concretely: the 2026-08-07/08 Lead/Deal/Contact/Company regression runs verifying the multi-select cap fix were run with `--workers=2` — their "all passed" results carry this same caveat, flagged honestly rather than left implicit.)
+
+**The ORIGINAL full regression run this same session — 3.3 hours, 308 tests, establishing that the `any`-type cleanup plus the docs/hooks consolidation work caused zero regressions — also ran under `--workers=2`, not just the smaller Lead/Deal/Contact/Company verification above.** This is recorded explicitly, not glossed over: **the human has reviewed this risk and made a conscious, informed decision to proceed with pushing despite it, rather than re-running under `--workers=1`, given the extensive additional verification already performed tonight** — individual live re-runs, isolated confirmations, and root-cause investigation of every discovered issue (including this exact race, caught and diagnosed the same night). This is a documented, deliberate risk-acceptance decision, not an unnoticed gap.
+
+**Not fixed tonight, deliberately** — implementing proper locking or per-worker isolated credential files is its own separate, potentially significant piece of work, not something to fold into an unrelated fix.
 
 ---
 
