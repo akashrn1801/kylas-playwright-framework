@@ -593,7 +593,12 @@ export class DealsPage extends BasePage {
     while (!found && attempts < 24) {
       logger.info(`Navigating forward to find date (attempt ${attempts + 1})`);
       await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
+      // WHY no blind wait here (2026-08-09, Task 1b date-time-picker audit):
+      // dayCell.waitFor() immediately below is already the real condition-
+      // based check — the removed 400ms was pure padding before it, same fix
+      // already proven in CallLogsPage.selectDateInPicker(). NOT the same as
+      // the Firefox calendar-open animation wait above, which is left as-is
+      // (browser-specific, unrelated to this per-navigation retry loop).
       try {
         await dayCell.waitFor({ state: 'visible', timeout: 1000 });
         found = true;
@@ -1499,6 +1504,23 @@ export class DealsPage extends BasePage {
     logger.info('Cloning deal via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     await this.editModal().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY this modal-title check (2026-08-09, root-caused via live staging
+    // repro of the deals.rbac.spec.ts:1174 sandbox failure): `#editEntityModal`
+    // is a SHARED container reused for Edit/Clone/Add Contact/Add Quotation —
+    // confirmed live (this session) its real title text is "Clone Deal" — and
+    // this method was the one sibling flow in this file that never verified
+    // it, unlike Add Contact (line ~1863: expects "Edit Deal") and Add
+    // Quotation (line ~2038: expects "Add Quotation"). Without this check, a
+    // stale/wrong modal variant reusing the same container ID would silently
+    // pass the visibility wait and only surface 10s later as a confusing
+    // "Name field not pre-filled" error — this fails immediately with a clear
+    // cause instead.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal().locator('.modal-title'), 'Clone modal should show "Clone Deal" title').toHaveText(
+        'Clone Deal',
+        { timeout: 10000 }
+      )
+    );
     // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
     // and there is no email/phone dedup needed (deal form has neither field, and the
     // app does not reject a duplicate deal name on save).
@@ -1521,9 +1543,20 @@ export class DealsPage extends BasePage {
     // rendering has committed its first bound field), not an arbitrary
     // duration — confirmed via 8/8 clean reproductions with this wait in
     // place vs. a mixed pass/fail rate without it.
-    await expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
-      /Copy/,
-      { timeout: 10000 }
+    //
+    // WHY the timeout was widened from 10000ms to 20000ms (2026-08-09): the
+    // sandbox failure this session root-caused occurred under CONFIRMED real
+    // `--workers=2` load (298 concurrent tests) — genuinely heavier than the
+    // conditions the original 8/8 clean reproduction was measured under. The
+    // modal-title check above now catches a wrong-modal scenario immediately,
+    // so this remaining timeout only needs to cover genuine pre-fill latency
+    // under real load, not a structural failure — widening it is a real,
+    // evidence-based safety margin (rule 19), not a blind guess.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
+        /Copy/,
+        { timeout: 20000 }
+      )
     );
 
     const dealIdPromise = this.captureDealIdFromResponse();

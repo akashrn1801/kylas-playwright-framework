@@ -872,7 +872,9 @@ export class BasePage {
     // Field level errors
     const fieldErrors = await this.page
       .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
-      .evaluateAll((els: any[]) => els.map((el) => el.name || el.id || 'unknown'));
+      .evaluateAll((els: (HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)[]) =>
+        els.map((el) => el.name || el.id || 'unknown')
+      );
 
     // Inline validation messages
     const inlineErrors = await this.page
@@ -1542,9 +1544,22 @@ export class BasePage {
         `${description}: multi-select opened but has zero live options — cannot select values`
       );
     }
+    // WHY capped at 5 (2026-08-07): confirmed live — with no upper bound
+    // beyond the live option count, this genuinely selected 45 of 50 live
+    // "Products or Services" options in one real QA run, taking ~38s of
+    // real, successful, one-chip-per-click selections (not a hang or a
+    // stuck retry loop — verified live via temporary instrumentation that
+    // the chip count and click count moved in perfect 1:1 lockstep the
+    // entire time, zero discrepancies). QA/staging Product/option data grows
+    // unboundedly (the same documented pattern as everywhere else in this
+    // codebase), so the uncapped range could keep growing indefinitely. A
+    // test only needs to prove "multi-select genuinely works," not exercise
+    // every live option — 5 is generous headroom above the existing
+    // minSelect=2 floor while bounding worst-case runtime.
+    const maxSelect = 5;
     const minSelect = Math.min(2, allOptionTexts.length);
-    const selectCount =
-      minSelect + Math.floor(Math.random() * (allOptionTexts.length - minSelect + 1));
+    const cappedMax = Math.min(maxSelect, allOptionTexts.length);
+    const selectCount = minSelect + Math.floor(Math.random() * (cappedMax - minSelect + 1));
     const toSelect = [...allOptionTexts].sort(() => Math.random() - 0.5).slice(0, selectCount);
 
     const selected: string[] = [];

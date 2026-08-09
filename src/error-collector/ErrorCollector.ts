@@ -98,7 +98,7 @@ class ErrorCollectorSingleton {
       // so these still show up in the report, just correctly labeled and out of the
       // "unexpected — go investigate" bucket.
       let expectedReason: MiscError['expectedReason'];
-      if (isExpectedRbacError(error.message, (error as any).apiErrorMessage)) {
+      if (isExpectedRbacError(error.message, error.apiErrorMessage)) {
         expectedReason = 'rbac';
       } else if (isExpectedBackgroundNoise(error.message, error.url, error.responseBody)) {
         expectedReason = 'background-noise';

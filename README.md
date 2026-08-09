@@ -17,9 +17,10 @@ This document is written so a new engineer — or any of us in six months — ca
 7. [CI/CD Pipeline](#cicd-pipeline)
 8. [Reporting and Notifications](#reporting-and-notifications)
 9. [RBAC Testing Philosophy](#rbac-testing-philosophy)
-10. [Known Limitations / Open Items](#known-limitations--open-items)
-11. [Contributing / Adding a New Module](#contributing--adding-a-new-module)
-12. [Troubleshooting](#troubleshooting)
+10. [Git Workflow & Branch Promotion](#git-workflow--branch-promotion)
+11. [Known Limitations / Open Items](#known-limitations--open-items)
+12. [Contributing / Adding a New Module](#contributing--adding-a-new-module)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -297,9 +298,8 @@ kylas-playwright-framework/
 ├── Jenkinsfile, Jenkinsfile.qa, Jenkinsfile.staging, Jenkinsfile.prod, Jenkinsfile.sandbox
 ├── playwright.config.ts
 ├── tsconfig.json
-├── CLAUDE.md            # Guidance for AI coding agents working in this repo — canonical code patterns, audit findings
-├── CONTRIBUTING.md       # Daily workflow, adding a module, test conventions
-├── GIT_WORKFLOW.md       # Branch promotion mechanics (PR chain, golden rules)
+├── CLAUDE.md            # Standing engineering rules, architecture/patterns/known-issues (imports .claude/*.md)
+├── APPLICATION_BUGS.md   # Confirmed, real Kylas application bugs (not test/framework bugs)
 └── package.json
 ```
 
@@ -681,6 +681,114 @@ RBAC-expected errors (403s, 422/`029003`) are captured by `ErrorCollector` like 
 
 ---
 
+## Git Workflow & Branch Promotion
+
+### Branch strategy
+
+```
+feature/* → dev → qa → stage → prod → main
+     ↑
+  sandbox (pre-PR smoke check, cut from dev)
+```
+
+| Branch    | Purpose             | Tests Run       |
+| --------- | ------------------- | --------------- |
+| `sandbox` | Pre-PR smoke check  | Selective (`detect-tests.sh`) |
+| `dev`     | Feature development | `@smoke`      |
+| `qa`      | QA regression       | `@regression` |
+| `stage`   | Full suite          | all tests |
+| `prod`    | Production safe     | `@prodSafe`   |
+| `main`    | Final validation    | `@regression` |
+
+**Golden rules:**
+1. Always cut feature branches from `dev`.
+2. Each promote branch cuts from the previous promote branch (not from `dev` again).
+3. Never push directly to `dev`/`qa`/`stage`/`prod`/`main`.
+4. Never skip environments.
+5. Wait for CI to pass before merging each PR.
+
+### Daily workflow
+
+```bash
+# 1. Reset sandbox before every new task
+npm run sandbox:reset
+
+# 2. Create a feature branch from dev
+git checkout dev && git pull origin dev
+git checkout -b feature/description-YYYYMMDD
+
+# 3. Make your changes, verify locally
+npx tsc --noEmit
+npx playwright test tests/ui/your-module/ --project=chromium --headed --workers=1
+
+# 4. Commit and push
+git add .
+git commit -m "feat: description of change"
+git push origin feature/description-YYYYMMDD
+```
+
+**Commit message format:** `feat: ...` / `fix: ...` / `chore: ...` / `ci: ...` / `refactor: ...`
+
+### Verify on sandbox before opening a PR to dev
+
+Merge your feature branch to sandbox first — `sandbox.yml`'s selective test detection runs only what your change plausibly affects, catching CI-breaking issues before they hit `dev`'s own pipeline:
+
+```bash
+git checkout sandbox && git pull origin sandbox
+git merge feature/description-YYYYMMDD
+git push origin sandbox
+```
+
+Wait for `.github/workflows/sandbox.yml` to complete. If it fails, fix locally, commit, push to the feature branch, and re-merge to sandbox. If it passes, open a PR from your feature branch into `dev` and wait for `dev`'s own CI before merging.
+
+### Promoting through qa → stage → prod → main
+
+Each hop cuts a **new** promote branch from the **previous promote branch** (not from `dev` again), opens a PR into the next environment branch, and waits for that branch's CI to pass before merging:
+
+```bash
+# dev → qa (first promotion, after sandbox CI + the dev PR have both passed)
+git checkout dev && git pull origin dev
+git checkout -b feature/promote-FEATURE-to-qa-YYYYMMDD
+git push origin feature/promote-FEATURE-to-qa-YYYYMMDD
+# Open PR: compare/qa...feature/promote-FEATURE-to-qa-YYYYMMDD
+
+# qa → stage — cut from the qa promote branch above, not from dev
+git checkout feature/promote-FEATURE-to-qa-YYYYMMDD && git pull origin feature/promote-FEATURE-to-qa-YYYYMMDD
+git checkout -b feature/promote-FEATURE-to-stage-YYYYMMDD
+git push origin feature/promote-FEATURE-to-stage-YYYYMMDD
+# Open PR: compare/stage...feature/promote-FEATURE-to-stage-YYYYMMDD
+
+# stage → prod — cut from the stage promote branch
+git checkout feature/promote-FEATURE-to-stage-YYYYMMDD && git pull origin feature/promote-FEATURE-to-stage-YYYYMMDD
+git checkout -b feature/promote-FEATURE-to-prod-YYYYMMDD
+git push origin feature/promote-FEATURE-to-prod-YYYYMMDD
+# Open PR: compare/prod...feature/promote-FEATURE-to-prod-YYYYMMDD
+
+# prod → main — cut from the prod promote branch
+git checkout feature/promote-FEATURE-to-prod-YYYYMMDD && git pull origin feature/promote-FEATURE-to-prod-YYYYMMDD
+git checkout -b feature/promote-FEATURE-to-main-YYYYMMDD
+git push origin feature/promote-FEATURE-to-main-YYYYMMDD
+# Open PR: compare/main...feature/promote-FEATURE-to-main-YYYYMMDD
+```
+
+Open each PR at `https://github.com/akashrn1801/kylas-playwright-framework/compare/<target-branch>...<promote-branch>`.
+
+### Clean up merged branches
+
+```bash
+git branch -r --merged origin/main | grep "feature/" | sed 's/origin\///' | while read b; do
+  git push origin --delete "$b"
+done
+```
+
+### Send notification after tests
+
+```bash
+npm run notify
+```
+
+---
+
 ## Known Limitations / Open Items
 
 Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes — this list reflects what's true **today**, not a stale carry-over.
@@ -711,9 +819,9 @@ Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes —
 
 ## Contributing / Adding a New Module
 
-Before making any change, read `CLAUDE.md`'s **Standing Engineering Checklist** — a permanent, always-apply 14-point list distilled from real issues found and fixed across multiple sessions in this codebase.
+Before making any change, read `CLAUDE.md`'s **25 Standing Rules** — a permanent, always-apply list distilled from real issues found and fixed across multiple sessions in this codebase.
 
-Full daily-workflow and branch-promotion mechanics live in `CONTRIBUTING.md` and `GIT_WORKFLOW.md` — this is the module-specific checklist:
+Full daily-workflow and branch-promotion mechanics are in [§10 Git Workflow & Branch Promotion](#git-workflow--branch-promotion) above — this is the module-specific checklist:
 
 1. **Factory** — add `src/data/factories/<module>Factory.ts` exporting `generateXxxData()`, `generateAdminXxxData()` (`ADM<timestamp>` prefix), and, if the module supports sharing, `generateSharedXxxData()` (`SHR<timestamp>` prefix). Default `country: 'India'` if the module has that field.
 2. **Page object** — add `src/modules/<module>/<Module>Page.ts` extending `BasePage`, following the fixed 10-section order from [§2](#architecture--how-its-built). Read the "Reference Patterns" section of `CLAUDE.md` first — the ellipsis-menu, share-modal, reassign-modal, and clone patterns are meant to be reused nearly verbatim, not reinvented per module.

@@ -565,7 +565,7 @@ test.describe('Call Logs', () => {
   // SKIPPED: Call Log custom fields do not yet enforce character-limit/format
   // validation on the backend (unlike Meeting/Quotation/Task which do enforce it).
   // This test will be re-enabled once backend validation is introduced for Call Log
-  // custom fields. See INVESTIGATION_LOG.md for details. (2026-08-03)
+  // custom fields. See CLAUDE.md's Known Issues section for details. (2026-08-03)
   test.skip('@regression admin should see validation errors for invalid call log custom field values and not save the call log', async ({
     adminPage,
   }) => {

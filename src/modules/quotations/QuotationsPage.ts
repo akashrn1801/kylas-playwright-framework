@@ -26,6 +26,18 @@ interface InaccessibleEntityRetryResult {
   lastErrorMessage: string;
 }
 
+// WHY: the shape of a quotation save's error response body — a dynamic API
+// response, not something Playwright/TypeScript can know statically. Captures
+// exactly the fields this file's error-classification methods actually read
+// (confirmed against real, live 029003/connection-reset response bodies), all
+// optional since different error paths populate different subsets.
+interface QuotationSaveErrorBody {
+  message?: string;
+  errorCode?: string;
+  errors?: Array<{ message?: string }>;
+  validationErrors?: Array<{ message?: string }>;
+}
+
 export class QuotationsPage extends BasePage {
   // ─── 1. Retry config ────────────────────────────────────────────────────────
   // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
@@ -217,7 +229,28 @@ export class QuotationsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
-    await this.page.waitForTimeout(1000);
+    // WHY a real condition-based check (2026-08-09, root-caused via live
+    // staging repro of the quotations.rbac.spec.ts:304 sandbox failure): this
+    // previously only waited for domcontentloaded + a blind 1000ms — no check
+    // that the list or "Add Quotation" button had actually rendered. Under
+    // real load domcontentloaded fires long before React hydrates this page,
+    // so callers proceeding straight to openCreateForm()'s UNBOUNDED
+    // `createButton().click()` could wait the rest of the whole test timeout
+    // for a button that hadn't rendered yet — confirmed by the sandbox
+    // failure's exact signature ("Test timeout of 480000ms exceeded" while
+    // "waiting for locator('button').filter({hasText:'Add Quotation'})").
+    // Mirrors CallLogsPage.waitForListReady()'s already-proven race between
+    // the list container (populated case) and the create button (always
+    // present in the header, regardless of list content, including the
+    // legitimately-empty case).
+    await Promise.race([
+      this.listContainer()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+      this.createButton()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+    ]);
   }
 
   private async selectDateInPicker(input: Locator, date: Date): Promise<void> {
@@ -225,6 +258,14 @@ export class QuotationsPage extends BasePage {
     logger.info(`Selecting date: ${date.toDateString()}`);
     await input.click();
     await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
+    // WHY kept (2026-08-09, Task 1b date-time-picker audit): same react-dates
+    // SingleDatePicker widget as DealsPage.selectDateInPicker(), which keeps
+    // an identical wait here with a stated (though unverified-this-session)
+    // Firefox animation-settling reason — this project runs a real `firefox`
+    // project locally, not just chromium. Left in place for consistency
+    // rather than guessing it's safe to remove without live Firefox
+    // verification; only the loop-internal duplicate below (which had no
+    // such justification) was removed.
     await this.page.waitForTimeout(400);
     const dayCell = this.calendarDayByLabel(dayLabel);
     let found = false;
@@ -235,9 +276,12 @@ export class QuotationsPage extends BasePage {
     } catch {
       found = false;
     }
+    // WHY no blind wait before each dayCell check (2026-08-09, Task 1b
+    // date-time-picker audit): dayCell.waitFor() is already the real
+    // condition-based check — the removed 400ms calls were pure padding
+    // before it, same fix already proven in CallLogsPage.selectDateInPicker().
     while (!found && attempts < 24) {
       await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
       try {
         await dayCell.waitFor({ state: 'visible', timeout: 1000 });
         found = true;
@@ -716,7 +760,15 @@ export class QuotationsPage extends BasePage {
   // ─── 6. Form actions ─────────────────────────────────────────────────────────
 
   async openCreateForm(): Promise<void> {
-    await this.createButton().click();
+    // WHY this.click() instead of a bare .click() (2026-08-09, root-caused via
+    // live staging repro of the quotations.rbac.spec.ts:304 sandbox failure):
+    // a raw `.click()` here had no timeout at all (this codebase has no global
+    // actionTimeout — see .claude/known-issues.md), so if waitForListReady()'s
+    // now-fixed readiness check still somehow returned before the button
+    // rendered, this click would hang until the outer test timeout instead of
+    // failing loud. this.click() bounds the wait to config.timeouts.navigation
+    // and carries session-expiry recovery.
+    await this.click(this.createButton(), 'Add Quotation button');
     await this.modal().waitFor({ state: 'visible', timeout: 15000 });
     logger.info('Opened quotation create form');
   }
@@ -968,15 +1020,51 @@ export class QuotationsPage extends BasePage {
   }
 
   async fillOwner(ownerName: string): Promise<void> {
+    // WHY bounded click + retry (2026-08-09, Task 4 sweep — this was one of
+    // the known-unfixed unbounded-click instances named in
+    // .claude/reference-patterns.md §3): both clicks previously had no
+    // timeout at all. Mirrors the already-proven
+    // CompaniesPage/LeadsPage.openUserShareTypeSearch() bounded-click +
+    // 3-attempt-retry shape for the identical "open react-select, click an
+    // option" race.
     const searchTerm = ownerName.split(' ')[0];
-    await this.ownerControl().click();
-    await this.ownerInput().fill(searchTerm);
-    await this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first().click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    logger.info(`Set owner to: ${ownerName}`);
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.ownerControl().click({ timeout: config.timeouts.expect });
+        await this.ownerInput().fill(searchTerm);
+        const ownerOption = this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first();
+        await ownerOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await ownerOption.click({ timeout: config.timeouts.expect });
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 10000 })
+          .catch(() => {});
+        logger.info(`Set owner to: ${ownerName}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `fillOwner("${ownerName}") attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        // WHY a condition-based wait here, not a blind waitForTimeout (2026-08-09,
+        // caught by the pre-commit hook — this line was copied verbatim from
+        // CompaniesPage/LeadsPage.openUserShareTypeSearch()'s existing backoff,
+        // which carries the same blind-wait anti-pattern this whole session was
+        // spent eliminating): the real thing this needs to wait for is the
+        // stuck-open menu actually closing after Escape, before the next
+        // attempt's click retries — not a guessed 500ms. Waiting for
+        // `.is-invalid__menu` to become hidden is the real, checkable signal.
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 5000 })
+          .catch(() => {});
+      }
+    }
+    throw new Error(`fillOwner: failed to set owner to "${ownerName}" after ${maxAttempts} attempts — ${String(lastError)}`);
   }
 
   async fillAssociatedCompany(companyName: string): Promise<void> {
@@ -1156,7 +1244,7 @@ export class QuotationsPage extends BasePage {
   // this decision.
   private classifyInaccessibleEntityError(
     status: number,
-    body: any
+    body: QuotationSaveErrorBody
   ): { isInaccessibleEntityError: boolean; entity: 'contact' | 'company' | null; rawMessage: string } {
     const message: string =
       body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
@@ -1197,7 +1285,7 @@ export class QuotationsPage extends BasePage {
   private static readonly TRANSIENT_CONNECTION_RESET_PATTERN =
     /Connection has been closed BEFORE response/i;
 
-  private isTransientConnectionResetError(body: any): boolean {
+  private isTransientConnectionResetError(body: QuotationSaveErrorBody): boolean {
     const message: string = body?.message || '';
     return QuotationsPage.TRANSIENT_CONNECTION_RESET_PATTERN.test(message);
   }
@@ -1268,7 +1356,7 @@ export class QuotationsPage extends BasePage {
         );
       }
 
-      const body = await response.json().catch(() => ({}));
+      const body = (await response.json().catch(() => ({}))) as QuotationSaveErrorBody;
 
       // WHY checked BEFORE isInaccessibleEntityError: a connection reset can
       // in principle share HTTP 400 with a real validation error, so this
