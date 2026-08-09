@@ -126,6 +126,31 @@ Correlatable identifiers for backend log lookup: **Meeting ID 98430**, **Contact
 
 ---
 
+## 5. Call Logs "Log a Call" modal throws a real client-side JS error under concurrent multi-session access
+
+**Status:** Confirmed live via direct evidence this session (2026-08-09); NOT yet proven to be the exact root cause of every "Log a Call form did not open after 5 attempts" occurrence, but strongly correlated and the leading candidate. **Environment:** Stage (confirmed); untested on QA/Prod.
+
+**Background:** sandbox CI run `31269450132` (2026-08-08, commit `95e602e`) failed `call-logs.rbac.spec.ts:508` and `:530` (both admin-role "Log a Call form did not open after 5 attempts" — `CallLogsPage.openLogACallForm()`'s 5-attempt reload-and-retry loop exhausted with no success) under **confirmed real `--workers=2`** CI conditions (298 concurrent tests — `sandbox.yml` dynamically sets `WORKERS=2` whenever the selected test count exceeds 50; this is not a hypothetical, it's what the failing run actually used). Both occurrences passed cleanly on Playwright's own automatic retry #1.
+
+**Investigation:** `openLogACallForm()`'s own logic was verified sound — reproduced CL32 ("should not see admin-owned call log when navigating directly via call log ID URL") cleanly 2/2 in true single-worker isolation on staging, both times opening the Log a Call form successfully on the first attempt. This ruled out a straightforward code-level bug in the retry loop itself.
+
+**Real evidence found instead:** deliberately re-running the full `call-logs.rbac.spec.ts` file with `--workers=2` on staging (matching the exact failing CI configuration) to attempt a genuine reproduction, `ErrorCollector` captured a live, real Kylas application-side JavaScript error at the exact moment a *different* test's `openLogACallForm()` retry fired:
+```
+[MiscError] [PAGEERROR] Cannot read properties of undefined (reading 'content')
+            URL: at S.openCallLogForm (https://app-stage.sling-dev.com/index.d542e823a1b4d6cf.bundle.js:1:1886996)
+            Test: @regression Restricted user should update all editable fields of their own call log and verify updated values persist on detail panel
+            Time: 2026-08-09T06:16:02.632Z
+```
+This is a `TypeError` thrown from inside the Kylas app's own minified `openCallLogForm` function — not a Playwright/test-framework error — occurring at the same moment two concurrent worker sessions were both interacting with the Log a Call flow. The affected test ("update all editable fields...") failed outright in this run; a separate worker's `openLogACallForm()` call logged "did not open on attempt 1 — reloading page and retrying" within the same second and recovered on its next attempt (the existing reload-and-retry design is architecturally the correct mitigation for this class of failure — a full page reload re-initializes the app's client-side JS state, which is presumably why retrying does eventually work most of the time).
+
+**Why this is the leading candidate for the original CL32/CL33 failures, not a proven identical cause:** it's the same broad failure family (the Kylas app's own Log-a-Call modal-open code path breaking under concurrent multi-session access on Stage) and the same CI conditions (confirmed real `--workers=2`), but this session's live reproduction hit a *different* specific test than the two that failed in the original CI run, and did not reproduce the exact "5 attempts exhausted" exit condition (the affected worker recovered on retry #2 here). Treat as strongly correlated, not conclusively identical.
+
+**Code-side response:** `openLogACallForm()`'s existing reload-and-retry design was not changed structurally (it already does the right thing for a transient client-side race). Added: the retry loop's catch block now captures and logs the real caught error plus the current page URL on every attempt, and the final "did not open after 5 attempts" error now includes the last captured error and points here — so a future occurrence is immediately diagnosable as "app-side race, not a mystery framework flake" instead of a bare unexplained failure.
+
+**Recommendation:** if this recurs, check whether `ErrorCollector`'s captured errors around the failure time include this same `openCallLogForm`/`Cannot read properties of undefined (reading 'content')` signature — if so, this is confirmed, not just correlated. Backend/frontend team should investigate why concurrent sessions triggering the Log-a-Call modal open path can race on a shared client-side object (`.content` on something `undefined` — likely a cached template/config object not properly scoped per session/tab). Outside what this client-side Playwright suite can fix directly.
+
+---
+
 ## Investigated but not confirmed — excluded from this list
 
 These were investigated as possible application bugs but never reached the "confirmed" bar this file requires, or were explicitly determined not to be bugs. Full detail lives in `CLAUDE.md`'s Known Issues / Investigation History section — listed here only so nothing looks silently dropped:

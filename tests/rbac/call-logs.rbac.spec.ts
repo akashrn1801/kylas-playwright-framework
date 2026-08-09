@@ -701,7 +701,20 @@ test.describe('Call Logs — RBAC', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(restrictedPage);
     const originalData = generateCallLogData();
-    const updatedData = generateCallLogData();
+    // WHY entityType is pinned to originalData's, not independently randomized
+    // (root-caused 2026-08-09, live-reproduced on staging): a call log's
+    // entity association cannot change on edit — fillEditForm() deliberately
+    // never touches entityType (see its own comment: "Only editable fields —
+    // Type, Outcome, Date, Time, Summary, Sentiment, Emotion"). callType's
+    // valid options are scoped to the ORIGINAL entity type ("I called the
+    // Lead"/"Lead called me" for a Lead, "I called the Contact"/"Contact
+    // called me" for Contact/Deal) — an independently-randomized updatedData
+    // had a real chance of generating a callType option that doesn't exist in
+    // this call log's dropdown at all, which selectFromDropdown()'s unbounded
+    // click then waited for until the full 480s test timeout. Confirmed via
+    // deterministic live reproduction (originalData: Lead, updatedData:
+    // Contact) — identical failure signature to the real CI failure.
+    const updatedData = generateCallLogData({ entityType: originalData.entityType });
 
     await callLogsPage.goToCallLogsList();
     const { callLogId } = await callLogsPage.createCallLog(originalData);

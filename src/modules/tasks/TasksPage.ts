@@ -1275,6 +1275,31 @@ export class TasksPage extends BasePage {
     // WHY: Clone opens modal with title "Clone Task" and name appended with " Copy"
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.taskNameInput().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY these two checks (2026-08-09, Task 3 sweep of the deals.rbac.spec.ts:1174
+    // sandbox failure's underlying bug class): `#editEntityModal` (here scoped
+    // `.tasks`) is a SHARED container reused for Edit/Change-Due-Date/Clone —
+    // same architecture as DealsPage's clone modal, which silently proceeded
+    // with a wrong/stale modal for 10s before failing with a confusing error.
+    // Confirmed live this session (temporary diagnostic, since removed): a
+    // genuine Clone flow shows title "Clone Task" and the name field already
+    // contains "Copy" synchronously (unlike Deals' async pre-fill) — so this
+    // is cheap insurance, not a new source of flakiness. Verifying BOTH before
+    // Save is safer than DealsPage's title-only check, since this method
+    // (unlike Deals' pre-fix version) previously had NO value check at all —
+    // a wrong/stale modal here would have silently cloned with the ORIGINAL
+    // name (no "Copy"), producing wrong saved data with zero error.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailedTaskModal().locator('.modal-title'), 'Clone modal should show "Clone Task" title').toHaveText(
+        'Clone Task',
+        { timeout: 10000 }
+      )
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskNameInput(), 'Clone modal Name field should be pre-filled with "Copy"').toHaveValue(
+        /Copy/,
+        { timeout: 10000 }
+      )
+    );
     logger.success('Clone Task modal opened');
     const idPromise = this.captureIdFromResponse();
     await this.click(this.detailedTaskSaveButton(), 'save button');
