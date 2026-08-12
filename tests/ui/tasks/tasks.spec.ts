@@ -237,6 +237,25 @@ test.describe('Tasks', () => {
   // same conclusion already reached for Meeting/Quotation/Call Log.
 
   // ── TC20 ──────────────────────────────────────────────────────────────────────
+  // WHY 2026-08-06: this test's own title has always claimed "verify on
+  // details" but its body never actually called assertTaskCustomFieldsOnDetail()
+  // — a genuine coverage gap that masked the suffixStyle/urlField-casing bug
+  // fixed the same day (fillTaskCustomFields() was silently no-op'ing on every
+  // field, on every environment including QA, since 2026-08-01, and nothing
+  // here ever caught it). Now wired in for real.
+  //
+  // WHY open+skip+fill+save inline here instead of createDetailedTask():
+  // skipIfCustomFieldsAbsent() must run while the create form is open (its
+  // presence check reads live form-input locators), matching the identical
+  // pattern already used by Lead/Contact/Company/Meeting/Call Log/Quotation's
+  // own dedicated "create with all custom fields" test. Trade-off, stated
+  // explicitly rather than left implicit: this bypasses createDetailedTask()'s
+  // InaccessibleRelationError auto-retry (a randomly-picked Relation entity
+  // turning out inaccessible), so this one test is narrowly less resilient to
+  // that specific rare flake than other Task tests — acceptable here since
+  // correct environment-safety (never hard-failing on an environment that
+  // genuinely lacks these fields, per CLAUDE.md rule 7) matters more for the
+  // dedicated custom-field test than that one retry does.
   test('@regression admin should create a task with all custom fields and verify on details', async ({
     adminPage,
   }) => {
@@ -245,11 +264,15 @@ test.describe('Tasks', () => {
     const data = generateTaskData();
 
     await tasksPage.goToTasksList();
-    const taskId = await tasksPage.createDetailedTask(data);
+    await tasksPage.openDetailedTaskForm();
+    await tasksPage.skipIfCustomFieldsAbsent();
+    await tasksPage.fillDetailedTaskForm(data);
+    const taskId = await tasksPage.saveDetailedTask();
     expect(taskId, 'Task ID should be captured after create').not.toBeNull();
 
-    // NOTE: Custom fields are gracefully filled if present; creation succeeds with or without them
     await tasksPage.assertTaskCreated(data, taskId);
+    await tasksPage.openTaskInDetailPanel(data.name, taskId);
+    await tasksPage.assertTaskCustomFieldsOnDetail(data.customFields);
     logger.success('TC20 passed');
   });
 

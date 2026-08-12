@@ -298,7 +298,10 @@ export class MeetingsPage extends BasePage {
     while (!found && attempts < 24) {
       logger.info(`Navigating forward attempt ${attempts + 1}`);
       await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
+      // WHY no blind wait here (2026-08-09, Task 1b date-time-picker audit):
+      // the dayCell.waitFor() immediately below is already the real
+      // condition-based check — the removed 400ms was pure padding before it,
+      // same fix already proven in CallLogsPage.selectDateInPicker().
       try {
         await dayCell.waitFor({ state: 'visible', timeout: 1000 });
         found = true;
@@ -327,19 +330,27 @@ export class MeetingsPage extends BasePage {
     }
     await this.page.waitForSelector('.rc-time-picker-panel', { timeout: 5000 });
 
+    // WHY no per-column wait between clicks (2026-08-09, Task 1b date-time-
+    // picker audit, same root cause and fix as CallLogsPage.selectTimeInPicker()):
+    // the hour/minute/am-pm columns are independent, simultaneously-rendered
+    // <li> lists — clicking one doesn't gate the next column's click on any
+    // async re-render. The blind 200ms waits here were pure padding, not a
+    // real readiness check — confirmed by BasePage.selectDateTimeCustomField()'s
+    // already-shipped (TC23, 2026-08-03) identical column-selection loop,
+    // which never used a per-column wait. The one genuine condition-based
+    // signal for this widget is at the END: whether `.rc-time-picker-panel`
+    // actually becomes hidden after Escape — that's the real proof the
+    // selection committed, kept below unchanged.
     const columns = this.page.locator('.rc-time-picker-panel:visible .rc-time-picker-panel-select');
     await columns
       .nth(0)
       .locator('li', { hasText: new RegExp(`^${hourStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns
       .nth(1)
       .locator('li', { hasText: new RegExp(`^${minuteStr}$`) })
       .click();
-    await this.page.waitForTimeout(200);
     await columns.nth(2).locator('li', { hasText: amPm }).click();
-    await this.page.waitForTimeout(200);
 
     await this.page.keyboard.press('Escape');
     await this.page
@@ -973,7 +984,6 @@ export class MeetingsPage extends BasePage {
     }
     while (!found2 && attempts < 24) {
       await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
       try {
         await dayCell.waitFor({ state: 'visible', timeout: 1000 });
         found2 = true;
