@@ -4,33 +4,14 @@ Imported from `CLAUDE.md`. See that file for the condensed summary and the rest 
 
 ### File Layout
 
-```
-src/
-  core/BasePage.ts          — Base class all page objects extend
-  fixtures/index.ts         — Custom test fixtures (ALWAYS import from here)
-  auth/
-    globalSetup.ts          — Logs in both roles before suite, saves storage state
-    authManager.ts          — Session validation + re-login with in-memory cache
-    storageStates/<env>/    — Saved Playwright browser storage states per role (gitignored)
-  modules/<module>/
-    <Module>Page.ts         — Page object class
-  data/
-    factories/<module>Factory.ts  — generateXxxData()/generateAdminXxxData()/generateSharedXxxData()
-    files/                  — Static fixture files (e.g. upload attachments)
-  error-collector/
-    ErrorCollector.ts       — Singleton; captures pageerror/console-error/HTTP 4xx-5xx
-    errorFilters.ts         — Noise filter + expected-RBAC + known-background-noise classifiers
-  reporters/
-    MiscErrorReporter.ts    — Playwright reporter; merges per-worker error files → reports/<env>/misc-errors.json
-  notifications/            — Email notification service (post-run) — see README §8 for full detail
-  utils/logger.ts           — logger.info/warn/error/success (never use console.log)
+Full, verified directory tree: see `README.md`'s [Project Structure](../README.md#project-structure) section — that's the single source of truth for the repo layout now (kept there since it's the more complete/current copy, and the file most sessions load by default alongside this one). Summarized below only for the handful of paths this architecture doc's own sections reference directly:
 
-tests/
-  ui/<module>/<module>.spec.ts       — Functional UI tests (adminPage fixture)
-  rbac/<module>.rbac.spec.ts         — Permission tests (adminPage + restrictedPage fixtures)
-
-config/config.ts            — Single source of truth for env vars, timeouts, retry config, buildApiUrl()
-```
+- `src/core/BasePage.ts` — base class all page objects extend
+- `src/fixtures/index.ts` — custom test fixtures (always import `test`/`expect` from here)
+- `src/auth/` — `globalSetup.ts`, `authManager.ts`, `storageStates/<env>/`
+- `src/modules/<module>/<Module>Page.ts` — page object per module
+- `src/data/factories/<module>Factory.ts` — `generateXxxData()`/`generateAdminXxxData()`/`generateSharedXxxData()`
+- `config/config.ts` — single source of truth for env vars, timeouts, retry config, `buildApiUrl()`
 
 ### Fixtures (`src/fixtures/index.ts`)
 
