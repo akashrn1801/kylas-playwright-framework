@@ -7,7 +7,6 @@ import {
 } from '../../../src/data/factories/companyFactory';
 import { generateContactData } from '../../../src/data/factories/contactFactory';
 import { generateDealData } from '../../../src/data/factories/dealFactory';
-import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 
 test.describe('Companies', () => {

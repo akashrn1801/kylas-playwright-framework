@@ -261,7 +261,7 @@ export class CallLogsPage extends BasePage {
   private async openDropdownById(inputId: string): Promise<void> {
     // WHY: Modal has aria-hidden="true" which blocks Playwright clicks
     // Remove aria-hidden before interaction using page.evaluate (runs in browser)
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+     
     await this.page.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
     await this.page.evaluate(([id]: [string]) => {
       /* eslint-disable */
@@ -286,8 +286,21 @@ export class CallLogsPage extends BasePage {
     await this.openDropdownById(inputId);
     const menu = this.page.locator('.is-invalid__menu');
     await menu.waitFor({ state: 'visible', timeout: 5000 });
+    const option = menu.locator('.is-invalid__option', { hasText: optionText }).first();
+    // WHY an explicit bound here (2026-08-09, root-caused via live staging
+    // repro of the CL39 sandbox failure): this had no timeout at all, so a
+    // caller ever passing an optionText not actually present in THIS
+    // dropdown's real option set (confirmed root cause: CL39 independently
+    // randomized entityType between create/update, and callType's valid
+    // options are scoped to the entity type — see the CL39 test's own
+    // comment) hung until the full test timeout, surfacing only as a
+    // confusing "browser has been closed" once Playwright tore down the
+    // context. Failing loudly and fast here — instead of the sandbox's
+    // observed 8-minute silent hang — makes any future instance of this
+    // same class of bug immediately diagnosable.
+    await option.waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Click option via JS to avoid aria-hidden blocking
-    await menu.locator('.is-invalid__option', { hasText: optionText }).first().click({ force: true });
+    await option.click({ force: true, timeout: 10000 });
     await this.page.waitForTimeout(300);
     logger.success(`Selected "${optionText}" from ${inputId}`);
   }
@@ -632,6 +645,21 @@ export class CallLogsPage extends BasePage {
     await this.page.waitForSelector('.rc-time-picker-panel', { timeout: 5000 });
     // WHY: Use page.evaluate to scroll and click li items inside the panel
     // avoids "outside viewport" error since panel renders outside modal scroll area
+    //
+    // WHY no per-column wait between clicks (2026-08-09, root-caused via the
+    // Task 1b date-time-picker audit): the 4 columns (hour/minute/second/
+    // am-pm) are independent, simultaneously-rendered <li> lists — selecting
+    // one doesn't trigger a re-render that the next column's click depends
+    // on, and item.click() inside page.evaluate() is a synchronous DOM call
+    // that fully completes (including React's event handling) before the
+    // evaluate() promise resolves back to Node. The blind 200ms/300ms waits
+    // here were pure padding, not a real readiness check — confirmed by
+    // BasePage.selectDateTimeCustomField()'s already-shipped (TC23, 2026-08-03)
+    // identical column-selection loop, which has never used a per-column wait
+    // and has run clean across every custom-field DateTimePicker test since.
+    // The one genuine condition-based signal for this widget is at the END:
+    // whether `.rc-time-picker-panel` actually becomes hidden after closing —
+    // that's the real proof the selection committed, kept below unchanged.
     const timeValues = [hourStr, minuteStr, secondStr, amPm];
     for (let colIdx = 0; colIdx < 4; colIdx++) {
       const val = timeValues[colIdx];
@@ -650,9 +678,7 @@ export class CallLogsPage extends BasePage {
         }
         /* eslint-enable */
       }, [colIdx, val] as [number, string]);
-      await this.page.waitForTimeout(200);
     }
-    await this.page.waitForTimeout(300);
     // WHY: Click outside to close picker and confirm
     await this.page.locator('#callLogModal').click({ force: true, position: { x: 10, y: 10 } });
     await this.page
@@ -783,6 +809,7 @@ export class CallLogsPage extends BasePage {
     const modal = this.page.locator('#callLogModal');
     const entityInput = this.page.locator('[id="1_11_input_entityType"]');
     let formOpened = false;
+    let lastError: unknown;
     for (let i = 0; i < 5; i++) {
       try {
         await modal.waitFor({ state: 'visible', timeout: 15000 });
@@ -791,8 +818,27 @@ export class CallLogsPage extends BasePage {
         await this.page.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
         formOpened = true;
         break;
-      } catch {
-        logger.warn(`Log a Call form did not open on attempt ${i + 1} — reloading page and retrying`);
+      } catch (error) {
+        // WHY capture and log this (2026-08-09, Task 2 investigation): live
+        // staging repro under real --workers=2 concurrent load caught this
+        // exact retry firing at the same moment ErrorCollector recorded a
+        // genuine Kylas app-side JS error — `Cannot read properties of
+        // undefined (reading 'content')` inside the app's own minified
+        // `openCallLogForm` function — suggesting this modal-open failure can
+        // be a real, transient CLIENT-SIDE APPLICATION race under concurrent
+        // multi-session access, not necessarily a test-code timing bug. The
+        // existing reload-and-retry already recovers from it (a full reload
+        // re-initializes the app's JS state), but the previous bare warning
+        // gave no way to tell "app race" apart from any other cause if the
+        // full 5-attempt budget is ever exhausted. Logging the real error and
+        // current URL here — and surfacing lastError in the final throw below
+        // — makes that distinction visible the next time this happens instead
+        // of the failure looking like an unexplained framework flake.
+        lastError = error;
+        logger.warn(
+          `Log a Call form did not open on attempt ${i + 1} (current URL: ${this.page.url()}) — ` +
+            `${String(error)} — reloading page and retrying`
+        );
         await this.reloadPage();
         // WHY: networkidle unreliable on prod due to background requests — use domcontentloaded
         await this.page.waitForLoadState('domcontentloaded');
@@ -801,7 +847,13 @@ export class CallLogsPage extends BasePage {
         await this.click(this.logACallButton(), 'Log a call button retry');
       }
     }
-    if (!formOpened) throw new Error('Log a Call form did not open after 5 attempts');
+    if (!formOpened) {
+      throw new Error(
+        `Log a Call form did not open after 5 attempts — last error: ${String(lastError)}. ` +
+          'If ErrorCollector recorded a concurrent PAGEERROR in openCallLogForm around this time, ' +
+          'this is likely a Kylas app-side race under concurrent multi-session access, not a test-code bug — see APPLICATION_BUGS.md.'
+      );
+    }
     logger.success('Log a Call form opened');
   }
 
@@ -899,7 +951,13 @@ export class CallLogsPage extends BasePage {
       await this.page.waitForTimeout(600);
     }
     await menu.waitFor({ state: 'visible', timeout: 8000 });
-    await menu.locator('.is-invalid__option', { hasText: entityType }).first().click();
+    // WHY bounded (2026-08-09, same sibling bug class as selectFromDropdown(),
+    // flagged by locator-reviewer during the CL39 root-cause fix): this click
+    // previously had no timeout at all, so a mismatched/missing entityType
+    // option would hang until the outer test timeout instead of failing loud.
+    const entityOption = menu.locator('.is-invalid__option', { hasText: entityType }).first();
+    await entityOption.waitFor({ state: 'visible', timeout: 10000 });
+    await entityOption.click({ timeout: 10000 });
     await this.page.waitForTimeout(500);
     logger.success(`Entity type selected: ${entityType}`);
   }
@@ -1339,7 +1397,29 @@ export class CallLogsPage extends BasePage {
 
   async clickEditButton(): Promise<void> {
     logger.info('Clicking Edit button on detail panel');
-    await this.detailEditButton().waitFor({ state: 'visible', timeout: 10000 });
+    try {
+      await this.detailEditButton().waitFor({ state: 'visible', timeout: 10000 });
+    } catch (error) {
+      // WHY the reload-and-retry (2026-08-09, hardened based on review after
+      // a real live staging failure under confirmed --workers=2 concurrent
+      // load — call-logs.rbac "update all editable fields" test; root cause
+      // NOT independently confirmed — two occurrences produced two different
+      // proximate symptoms, a real app-side PAGEERROR once and a plain
+      // timeout once, consistent with general concurrent-load degradation
+      // rather than one cleanly-identified mechanism): defensive hardening by
+      // analogy to LeadsPage/ContactsPage/CompaniesPage's
+      // assertRightPanelIconVisible(), the same shape already proven for a
+      // permission-gated element that can render later than the rest of the
+      // page under load, where a plain longer wait can't help if the
+      // underlying render pass was already stale. A reload forces a fresh
+      // mount instead of blindly extending the timeout.
+      logger.warn(
+        `Edit button not visible within 10000ms — reloading and retrying once: ${String(error)}`
+      );
+      await this.reloadPage();
+      await this.detailEntityHeading().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.detailEditButton().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    }
     await this.click(this.detailEditButton(), 'Edit button');
     // WHY: Edit form reuses same form as create — wait for call type to be visible
     await this.callTypeControl().waitFor({ state: 'visible', timeout: 15000 });
@@ -1494,7 +1574,7 @@ export class CallLogsPage extends BasePage {
     const iframeCount = await noteIframes.count();
     let found = false;
     for (let i = 0; i < iframeCount; i++) {
-      const iframeText = await noteIframes.nth(i).evaluate((el: any) => {
+      const iframeText = await noteIframes.nth(i).evaluate((el: HTMLIFrameElement) => {
         return el.contentDocument?.body?.textContent?.trim() ?? '';
       });
       logger.info(`Note ${i} text: "${iframeText.substring(0, 80)}"`);

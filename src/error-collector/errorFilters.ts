@@ -236,11 +236,48 @@ export function isNoise(message: string, url?: string): boolean {
 // They are NOT noise (we want to know they happened) but they are EXPECTED behaviour
 // Use isExpectedRbacError() to classify them separately in the error collector
 // WHY: 422 with errorCode 029003 = expected RBAC behaviour, not a bug
-export const RBAC_EXPECTED_STATUS_CODES: number[] = [422];
-export const RBAC_EXPECTED_ERROR_CODES: string[] = ['029003'];
+// WHY 403/00902001 added (2026-08-11): Products & Services' own RBAC-denial
+// shape — a restricted user editing an admin-owned product fixture gets
+// HTTP 403 with errorCode "00902001", a Products-specific code on a
+// different status than every other module's 422/029003 RBAC pattern.
+// Without this, a correctly-passing Products RBAC test still shows up as an
+// "unexpected background error" in misc-errors.json — see
+// .claude/architecture.md's Products & Services deviations section (item 4).
+//
+// WHY these arrays are now actually load-bearing (fixed 2026-08-11 — found
+// while adding the 403/00902001 entry): confirmed these were declared and
+// exported but never READ anywhere — isExpectedRbacError() below hardcoded
+// '422'/'029003' as inline string checks instead, and even that hardcoded
+// '029003' check was itself dead in practice, since the raw error code was
+// never captured into any string it could match against (only the
+// human-readable `message` field was — see fixtures/index.ts's
+// apiErrorCode capture, added in the same fix). Simply adding an entry to
+// these arrays would have changed nothing without this.
+export const RBAC_EXPECTED_STATUS_CODES: number[] = [422, 403];
+export const RBAC_EXPECTED_ERROR_CODES: string[] = ['029003', '00902001'];
 
-export function isExpectedRbacError(message: string, apiErrorMessage?: string): boolean {
-  // WHY: HTTP 422 with errorCode 029003 = Kylas RBAC enforcement — expected behaviour
+export function isExpectedRbacError(
+  message: string,
+  apiErrorMessage?: string,
+  statusCode?: number,
+  apiErrorCode?: string
+): boolean {
+  // WHY this precise check comes first (2026-08-11): a real status+errorCode
+  // match is unambiguous — no need to fall through to fuzzy text matching
+  // when we have the actual machine-readable values.
+  if (
+    statusCode !== undefined &&
+    apiErrorCode !== undefined &&
+    RBAC_EXPECTED_STATUS_CODES.includes(statusCode) &&
+    RBAC_EXPECTED_ERROR_CODES.includes(apiErrorCode)
+  ) {
+    return true;
+  }
+  // WHY kept as a fallback, not removed: older/other call sites (or a
+  // response whose body couldn't be parsed into apiErrorCode for some
+  // reason) still only have `message`/`apiErrorMessage` text to go on —
+  // this is exactly how the 029003/"Invalid company"/"Invalid contact"
+  // case has always actually worked in practice.
   if (
     message.includes('422') &&
     (message.includes('029003') ||

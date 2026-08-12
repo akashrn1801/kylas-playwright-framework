@@ -2,8 +2,16 @@ import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
-import { TaskData, TaskCustomFieldData, TaskCustomFieldKey, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
+import { TaskData, TaskCustomFieldData, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
 class InaccessibleRelationError extends Error {}
+
+// WHY: the shape of a task-save error response body — a dynamic API response,
+// not something Playwright/TypeScript can know statically. Captures exactly
+// the one field this file's error-classification method reads (confirmed
+// against a real, live "<entity>.not.found" response body).
+interface TaskSaveErrorBody {
+  message?: string;
+}
 export class TasksPage extends BasePage {
   // ──────────────────────────────────────────────────────────
   // Retry Config
@@ -715,7 +723,7 @@ export class TasksPage extends BasePage {
   }
   private classifyTaskInaccessibleEntityError(
     status: number,
-    body: any
+    body: TaskSaveErrorBody
   ): { isInaccessibleEntityError: boolean; rawMessage: string } {
     const message: string = body?.message || '';
     // WHY: matches company.not.found, lead.not.found, deal.not.found,
@@ -738,7 +746,7 @@ export class TasksPage extends BasePage {
     const response = await responsePromise;
 
     if (response && response.status() >= 400) {
-      const body = await response.json().catch(() => ({}));
+      const body = (await response.json().catch(() => ({}))) as TaskSaveErrorBody;
       const { isInaccessibleEntityError, rawMessage } = this.classifyTaskInaccessibleEntityError(
         response.status(),
         body
@@ -929,48 +937,58 @@ export class TasksPage extends BasePage {
   private async fillTaskCustomFields(cf: TaskCustomFieldData): Promise<void> {
     logger.info('Filling Task custom fields');
 
-    // WHY: Task uses 'plain' suffix convention (_input_cf<Name>, not _input_customFieldValues.cf<Name>)
-    // matching Meeting/Call Log, confirmed live 2026-08-01
+    // WHY 'legacy' (default, no suffixStyle passed) — CORRECTED 2026-08-06,
+    // real evidence contradicts the previous claim below. Live DOM inspection
+    // of the actual Detailed Task create form on staging (after custom
+    // fields were added there) showed every field id as
+    // "1_11_input_customFieldValues.cfTextField" etc. — the "customFieldValues."
+    // segment IS present, matching Lead/Deal/Contact/Company/Quotation, NOT
+    // Meeting/Call Log's shorter convention. The previous comment ("Task uses
+    // 'plain' suffix convention... matching Meeting/Call Log, confirmed live
+    // 2026-08-01") was never actually true for Task — it silently caused every
+    // Task custom field to be reported "not found" on every environment,
+    // including QA, from that date onward (see the dedicated re-verification
+    // this correction was based on for whether QA was actually affected too).
 
     // TextField
     if (cf.textField) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField', 'plain');
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField');
     }
 
     // ParagraphText
     if (cf.paragraphText) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText', 'plain');
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText');
     }
 
     // Number
     if (cf.number !== undefined) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number', 'plain');
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number');
     }
 
     // PickList
-    const pickListSelected = await this.selectPicklistCustomField(TASK_CUSTOM_FIELD_NAMES.pickList, 'Task custom field: pickList', 'plain');
+    const pickListSelected = await this.selectPicklistCustomField(TASK_CUSTOM_FIELD_NAMES.pickList, 'Task custom field: pickList');
     if (pickListSelected) {
       cf.pickList = pickListSelected;
     }
 
     // Checkbox
     if (cf.checkbox !== undefined) {
-      await this.setCheckboxCustomField(TASK_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Task custom field: checkbox', 'plain');
+      await this.setCheckboxCustomField(TASK_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Task custom field: checkbox');
     }
 
     // Date
     if (cf.date) {
-      await this.selectDateCustomField(TASK_CUSTOM_FIELD_NAMES.date, cf.date, 'Task custom field: date', 'plain');
+      await this.selectDateCustomField(TASK_CUSTOM_FIELD_NAMES.date, cf.date, 'Task custom field: date');
     }
 
     // DateTimePicker
     if (cf.dateTimePicker) {
-      await this.selectDateTimeCustomField(TASK_CUSTOM_FIELD_NAMES.dateTimePicker, cf.dateTimePicker, 'Task custom field: dateTimePicker', 'plain');
+      await this.selectDateTimeCustomField(TASK_CUSTOM_FIELD_NAMES.dateTimePicker, cf.dateTimePicker, 'Task custom field: dateTimePicker');
     }
 
     // URLField
     if (cf.urlField) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'Task custom field: urlField', 'plain');
+      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'Task custom field: urlField');
     }
 
     logger.success('Task custom fields filled');
@@ -1047,9 +1065,12 @@ export class TasksPage extends BasePage {
   }
 
   async skipIfCustomFieldsAbsent(): Promise<void> {
-    // WHY: Custom fields are QA-only (not yet on Stage/Prod) — gracefully skip if absent
-    // matching Meeting/Call Log/Quotation's pattern (calls test.skip() automatically)
-    await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(TASK_CUSTOM_FIELD_NAMES), 'Task', 'plain');
+    // WHY 'legacy' (default, no suffixStyle passed) — CORRECTED 2026-08-06, see
+    // the matching WHY comment on fillTaskCustomFields() above for the live
+    // DOM evidence. Gracefully calls test.skip() if genuinely absent in this
+    // environment, matching Lead/Deal/Contact/Company/Quotation's pattern —
+    // NOT Meeting/Call Log, which really do use the shorter 'plain' convention.
+    await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(TASK_CUSTOM_FIELD_NAMES), 'Task');
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1191,7 +1212,7 @@ export class TasksPage extends BasePage {
     let found = false;
     for (let i = 0; i < count; i++) {
       const iframe = noteIframes.nth(i);
-      const noteText = await iframe.evaluate((el: any) => {
+      const noteText = await iframe.evaluate((el: HTMLIFrameElement) => {
         return el.contentDocument?.body?.textContent?.trim() ?? '';
       });
       logger.info(`Note ${i} text: "${noteText}"`);
@@ -1254,6 +1275,31 @@ export class TasksPage extends BasePage {
     // WHY: Clone opens modal with title "Clone Task" and name appended with " Copy"
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.taskNameInput().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY these two checks (2026-08-09, Task 3 sweep of the deals.rbac.spec.ts:1174
+    // sandbox failure's underlying bug class): `#editEntityModal` (here scoped
+    // `.tasks`) is a SHARED container reused for Edit/Change-Due-Date/Clone —
+    // same architecture as DealsPage's clone modal, which silently proceeded
+    // with a wrong/stale modal for 10s before failing with a confusing error.
+    // Confirmed live this session (temporary diagnostic, since removed): a
+    // genuine Clone flow shows title "Clone Task" and the name field already
+    // contains "Copy" synchronously (unlike Deals' async pre-fill) — so this
+    // is cheap insurance, not a new source of flakiness. Verifying BOTH before
+    // Save is safer than DealsPage's title-only check, since this method
+    // (unlike Deals' pre-fix version) previously had NO value check at all —
+    // a wrong/stale modal here would have silently cloned with the ORIGINAL
+    // name (no "Copy"), producing wrong saved data with zero error.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailedTaskModal().locator('.modal-title'), 'Clone modal should show "Clone Task" title').toHaveText(
+        'Clone Task',
+        { timeout: 10000 }
+      )
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskNameInput(), 'Clone modal Name field should be pre-filled with "Copy"').toHaveValue(
+        /Copy/,
+        { timeout: 10000 }
+      )
+    );
     logger.success('Clone Task modal opened');
     const idPromise = this.captureIdFromResponse();
     await this.click(this.detailedTaskSaveButton(), 'save button');

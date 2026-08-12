@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { test } from '../../../src/fixtures/index';
 import { expect } from '@playwright/test';
 import { safeWaitForURL } from '../../../src/utils/navigation';
@@ -417,7 +418,7 @@ test.describe('Call Logs', () => {
   test('@regression admin should create a lead call log with outcome connected, upload a recording file and verify recording appears on detail panel', async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
-    const recordingPath = require('path').resolve('src/data/files/test-recording.mp3');
+    const recordingPath = path.resolve('src/data/files/test-recording.mp3');
     const data = generateCallLogData({
       entityType: 'Lead',
       outcome: 'Connected',
@@ -564,7 +565,7 @@ test.describe('Call Logs', () => {
   // SKIPPED: Call Log custom fields do not yet enforce character-limit/format
   // validation on the backend (unlike Meeting/Quotation/Task which do enforce it).
   // This test will be re-enabled once backend validation is introduced for Call Log
-  // custom fields. See INVESTIGATION_LOG.md for details. (2026-08-03)
+  // custom fields. See CLAUDE.md's Known Issues section for details. (2026-08-03)
   test.skip('@regression admin should see validation errors for invalid call log custom field values and not save the call log', async ({
     adminPage,
   }) => {

@@ -12,30 +12,18 @@
     ]
   },
   "hooks": {
-    "preCommit": {
-      "enabled": true,
-      "description": "Block commits containing waitForTimeout()",
-      "commands": [
-        "bash -c 'git diff --cached --name-only -z | xargs -0 git diff --cached --find-object=HEAD -- | grep -q \"waitForTimeout(\" && echo \"ERROR: Commit blocked — contains waitForTimeout() anti-pattern. Use condition-based waits instead.\" && exit 1 || exit 0'"
-      ]
-    },
-    "prePush": {
-      "enabled": true,
-      "description": "Gate pushes: run flaky-test-auditor + enterprise-code-reviewer",
-      "commands": [
-        "bash -c 'echo \"Running pre-push checks: flaky-test-auditor + enterprise-code-reviewer...\" && exit 0'"
-      ],
-      "note": "Full integration via Claude Code's Agent system: trigger flaky-test-auditor and enterprise-code-reviewer agents on changed files. Both must report zero blocking findings before push is allowed."
-    },
-    "postFileEdit": {
-      "enabled": true,
-      "description": "Auto-trigger locator-reviewer on Page Objects and specs",
-      "patterns": [
-        "src/modules/**/*.ts",
-        "tests/**/*.spec.ts"
-      ],
-      "note": "Integration via Claude Code's Agent system: after editing a Page Object or test file, automatically invoke locator-reviewer agent for static pass analysis."
-    }
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/scripts/hooks/post-file-edit-locator-reminder.sh\"",
+            "statusMessage": "Checking whether locator-reviewer should be invoked..."
+          }
+        ]
+      }
+    ]
   },
   "agent_delegation": {
     "enabled": true,
