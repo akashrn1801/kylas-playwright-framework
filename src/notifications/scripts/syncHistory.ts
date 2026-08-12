@@ -14,7 +14,7 @@
  * same graceful-absence pattern already used for misc-errors.json in
  * NotificationService.ts. This script must exit 0 in every case.
  */
-import { execSync } from 'child_process';
+import { execSync, ExecException } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -101,8 +101,9 @@ function sh(cmd: string, cwd: string): string {
 function shSafe(cmd: string, cwd: string): { ok: boolean; output: string } {
   try {
     return { ok: true, output: sh(cmd, cwd) };
-  } catch (err: any) {
-    return { ok: false, output: err?.stderr?.toString() || err?.message || String(err) };
+  } catch (err) {
+    const e = err as ExecException;
+    return { ok: false, output: e?.stderr?.toString() || e?.message || String(err) };
   }
 }
 

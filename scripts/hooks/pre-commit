@@ -1,5 +1,7 @@
 #!/bin/bash
-# Pre-commit hook: block waitForTimeout() anti-pattern
+# Pre-commit hook: block waitForTimeout() anti-pattern, and block ESLint
+# errors (including @typescript-eslint/no-explicit-any, upgraded from warn to
+# error 2026-08-06) in staged TypeScript files.
 
 echo "🔍 Checking for waitForTimeout() anti-pattern..."
 
@@ -27,6 +29,28 @@ if [ -n "$VIOLATIONS" ]; then
     echo "$VIOLATIONS"
     echo ""
     exit 1
+fi
+
+# WHY: eslint.config.js only defines rules for **/*.ts — scope the lint gate to
+# staged .ts files specifically, not the broader .tsx/.js/.jsx set used above,
+# to avoid "no configuration matching" errors on files outside that glob.
+STAGED_TS_FILES=$(echo "$STAGED_FILES" | grep -E '\.ts$' || true)
+
+if [ -n "$STAGED_TS_FILES" ]; then
+    echo "🔍 Running ESLint on staged TypeScript files..."
+    npx eslint $STAGED_TS_FILES
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "❌ COMMIT BLOCKED: ESLint found errors in staged files (see above)."
+        echo ""
+        echo "This includes @typescript-eslint/no-explicit-any (upgraded from warn to"
+        echo "error 2026-08-06) — find or define the real, specific type instead of"
+        echo "using 'any'. See CLAUDE.md's standing rules."
+        echo ""
+        echo "Run 'npm run lint' locally to see the full picture."
+        echo ""
+        exit 1
+    fi
 fi
 
 exit 0

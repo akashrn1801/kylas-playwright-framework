@@ -101,12 +101,83 @@ export interface ParsedReport {
   projects: string[];
 }
 
+// WHY: Playwright exports types for its live Reporter API (@playwright/test/reporter's
+// Suite/TestCase/TestResult), but NOT for the on-disk JSON reporter file format this
+// class actually parses — that's a separate serialization with its own shape. These
+// interfaces capture exactly the fields this file reads (confirmed against real report
+// output), so `any` isn't needed to walk the tree.
+interface PlaywrightJsonProject {
+  name?: string;
+}
+
+interface PlaywrightJsonReportConfig {
+  projects?: PlaywrightJsonProject[];
+  version?: string;
+  workers?: number;
+}
+
+interface PlaywrightJsonReportStats {
+  duration?: number;
+  startTime?: string;
+}
+
+interface PlaywrightJsonErrorLocation {
+  file: string;
+  line: number;
+  column: number;
+}
+
+interface PlaywrightJsonError {
+  message?: string;
+  value?: string;
+  stack?: string;
+  location?: PlaywrightJsonErrorLocation;
+}
+
+interface PlaywrightJsonAttachment {
+  name: string;
+  path?: string;
+}
+
+interface PlaywrightJsonTestResult {
+  status?: 'passed' | 'failed' | 'timedOut' | 'skipped' | 'interrupted';
+  duration?: number;
+  error?: PlaywrightJsonError;
+  attachments?: PlaywrightJsonAttachment[];
+}
+
+interface PlaywrightJsonTest {
+  // WHY: required, not optional — Playwright's JSON reporter always emits a status
+  // for every test entry; the pre-existing call site (mapStatus below) never
+  // defensively handled an absent value, confirming this was always assumed present.
+  status: 'expected' | 'unexpected' | 'flaky' | 'skipped';
+  results?: PlaywrightJsonTestResult[];
+}
+
+interface PlaywrightJsonSpec {
+  title: string;
+  tests?: PlaywrightJsonTest[];
+}
+
+interface PlaywrightJsonSuite {
+  file?: string;
+  specs?: PlaywrightJsonSpec[];
+  suites?: PlaywrightJsonSuite[];
+}
+
+interface PlaywrightJsonReport {
+  config?: PlaywrightJsonReportConfig;
+  stats?: PlaywrightJsonReportStats;
+  startTime?: string;
+  suites?: PlaywrightJsonSuite[];
+}
+
 export class ReportParser {
   parse(jsonReportPath: string): ParsedReport {
     if (!fs.existsSync(jsonReportPath)) {
       throw new Error(`Report not found: ${jsonReportPath}`);
     }
-    const raw = JSON.parse(fs.readFileSync(jsonReportPath, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(jsonReportPath, 'utf-8')) as PlaywrightJsonReport;
     const results = this.extractResults(raw);
     const total = results.length;
     const passed = results.filter((r) => r.status === 'passed').length;
@@ -175,7 +246,7 @@ export class ReportParser {
     const rbacCount = results.filter((r) => r.file?.includes('rbac')).length;
     const totalRetries = results.reduce((sum, r) => sum + r.retries, 0);
     const projects: string[] = Array.isArray(raw.config?.projects)
-      ? raw.config.projects.map((p: any) => p.name).filter(Boolean)
+      ? raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name))
       : [];
     return {
       total,
@@ -202,9 +273,9 @@ export class ReportParser {
     };
   }
 
-  private extractResults(raw: any): TestResult[] {
+  private extractResults(raw: PlaywrightJsonReport): TestResult[] {
     const results: TestResult[] = [];
-    const walkSuite = (suite: any, file = '') => {
+    const walkSuite = (suite: PlaywrightJsonSuite, file = '') => {
       const currentFile = suite.file || file;
       if (suite.specs) {
         for (const spec of suite.specs) {
@@ -266,9 +337,8 @@ export class ReportParser {
   // it should match what a reader finds inside the downloaded/extracted
   // test-results artifact zip, not a path that only ever existed on a machine
   // nobody can access anymore.
-  private extractTracePath(result: any): string | undefined {
-    const attachments = result?.attachments as Array<{ name: string; path?: string }> | undefined;
-    const trace = attachments?.find((a) => a.name === 'trace' && a.path);
+  private extractTracePath(result: PlaywrightJsonTestResult | undefined): string | undefined {
+    const trace = result?.attachments?.find((a) => a.name === 'trace' && a.path);
     if (!trace?.path) return undefined;
     return path.relative(process.cwd(), trace.path).split(path.sep).join('/');
   }

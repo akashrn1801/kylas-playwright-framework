@@ -4,22 +4,23 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // ──────────────────────────────────────────────────────────────────────────
 // Task Custom Fields
 // ──────────────────────────────────────────────────────────────────────────
-// WHY: confirmed live (2026-08-01) — Task has the same 8 custom fields as
-// Meeting (Text, Paragraph, Number, PickList, Checkbox, Date, DateTimePicker,
-// URLField — no MultiPickList; child entities never get one). Live on QA today.
-// TASK_CUSTOM_FIELD_NAMES is its own single source of truth, per CLAUDE.md's
-// Custom Fields pattern — never import MEETING_CUSTOM_FIELD_NAMES here even
-// where values happen to coincide.
+// WHY: Task has the same 8 custom fields as Meeting (Text, Paragraph, Number,
+// PickList, Checkbox, Date, DateTimePicker, UrlField — no MultiPickList;
+// child entities never get one). TASK_CUSTOM_FIELD_NAMES is its own single
+// source of truth, per CLAUDE.md's Custom Fields pattern — never import
+// MEETING_CUSTOM_FIELD_NAMES here even where values happen to coincide.
 //
-// WHY 'URLField' (capital URL), matching Meeting: confirmed live via DOM
-// inspection of the real input id (`..._input_cfURLField`) — Task uses the
-// same naming as Meeting, different from the `cfUrlField` in
-// Lead/Deal/Contact/Company/Call Log.
-//
-// WHY the PLAIN suffix convention (`_input_cf<Name>`), matching Meeting:
-// confirmed live — Task's custom-field ids have no "customFieldValues."
-// segment (e.g. "2_41_input_cfTextField"), matching Meeting/Call Log's
-// documented shorter convention.
+// CORRECTED 2026-08-06, real live evidence, not the 2026-08-01 claim this
+// replaces: after custom fields were added to Staging, live DOM inspection of
+// the real Detailed Task create form there showed every field id as
+// "1_11_input_customFieldValues.cf<Name>" (e.g. "...cfUrlField", lowercase
+// "rl") — i.e. Task actually matches Lead/Deal/Contact/Company/Quotation's
+// convention on BOTH counts: the "customFieldValues." suffix segment IS
+// present (see the suffixStyle fix in TasksPage.ts), and the URL field's
+// internal name is 'UrlField', not 'URLField'. The previous comment's claim
+// that Task matches Meeting on both points was never actually verified live
+// for Task and was wrong — it silently caused every Task custom field to be
+// reported "not found" regardless of environment.
 export const TASK_CUSTOM_FIELD_NAMES = {
   textField: 'TextField',
   paragraphText: 'ParagraphText',
@@ -28,7 +29,7 @@ export const TASK_CUSTOM_FIELD_NAMES = {
   checkbox: 'Checkbox',
   date: 'Date',
   dateTimePicker: 'DateTimePicker',
-  urlField: 'URLField',
+  urlField: 'UrlField',
 } as const;
 
 export type TaskCustomFieldKey = keyof typeof TASK_CUSTOM_FIELD_NAMES;
