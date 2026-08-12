@@ -194,27 +194,47 @@ test.describe('Quotations — RBAC', () => {
       // clearAssociatedCompany()/clearAssociatedContacts() only dismiss the
       // menu conditionally (a 500ms visibility check that can miss a
       // slower-to-render portal), so this unconditional Escape is needed
-      // here too, before the next save click.
+      // here too, before the next save click. WHY a condition-based wait,
+      // not a flat timeout (fixed per CLAUDE.md rule #2): waits for the
+      // real signal — the menu actually closing — same
+      // `.is-invalid__menu`-hidden check already proven in
+      // QuotationsPage.fillOwner()'s retry backoff.
       await restrictedPage.keyboard.press('Escape');
-      await restrictedPage.waitForTimeout(500);
+      await restrictedPage
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: 5000 })
+        .catch(() => {});
 
       if (attempt < maxRetries) {
-        await qp.saveQuotationExpectingError();
-        stillFailing = await qp.assertErrorToast();
         // WHY: A stale error toast from the PREVIOUS failed attempt can
-        // still be visible/matching when assertErrorToast() checks here,
+        // still be visible/matching when assertErrorToast() checks below,
         // even though THIS attempt's save actually succeeded — confirmed
         // live (2026-08-11): assertErrorToast() returned true in ~170ms,
         // too fast to reflect THIS attempt's real response, and the actual
-        // POST response (with quotationId) only arrived ~600ms later —
-        // after that check already ran, so an immediate quotationId check
-        // right here still missed it (a second confirmed-live failure).
-        // Give the response listener a moment to catch up before trusting
-        // either signal, same 500ms settle convention already used
-        // elsewhere in this file (e.g. after the Escape dismissal above).
-        await restrictedPage.waitForTimeout(500);
-        if (quotationId) {
-          logger.info(`Quotation ID already captured (${quotationId}) — save succeeded despite toast state`);
+        // POST response (with quotationId) only arrived ~600ms later. A
+        // flat delay to "let the response listener catch up" was a guess,
+        // not a real wait — fixed per CLAUDE.md rule #2 by registering a
+        // page.waitForResponse() on the actual save POST/PATCH/PUT BEFORE
+        // the triggering click (same URL/method matching convention as
+        // QuotationsPage.saveQuotationHandlingInaccessibleEntities()'s own
+        // create/update response interception), then awaiting the real
+        // response instead of guessing how long it takes to arrive.
+        const retryResponsePromise = restrictedPage
+          .waitForResponse(
+            (res) =>
+              /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
+              ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
+            { timeout: 20000 }
+          )
+          .catch(() => null);
+        await qp.saveQuotationExpectingError();
+        stillFailing = await qp.assertErrorToast();
+        const retryResponse = await retryResponsePromise;
+        if (retryResponse && retryResponse.status() < 400) {
+          const body = await retryResponse.json().catch(() => ({}));
+          const id = body?.id ?? body?.data?.id ?? null;
+          if (id) quotationId = id;
+          logger.info(`Retry save response confirms success (id: ${quotationId}) despite toast state`);
           stillFailing = false;
         }
         logger.info(`Retry ${attempt} error message captured: "${errorMessage}"`);
