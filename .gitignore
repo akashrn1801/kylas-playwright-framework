@@ -5,6 +5,8 @@ playwright-report/
 allure-results/
 src/auth/storageStates/
 src/auth/storageStates/*.json
+src/data/productFixtures/
+src/data/productFixtures/*.json
 .env
 *.json.bak
 .DS_Store

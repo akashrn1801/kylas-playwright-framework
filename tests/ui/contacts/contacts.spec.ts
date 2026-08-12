@@ -242,7 +242,6 @@ test.describe('Contacts', () => {
   }) => {
     test.setTimeout(480000);
     const contactsPage = new ContactsPage(adminPage);
-    const dealsPage = new DealsPage(adminPage);
     const contactData = generateContactData();
     await contactsPage.goToContactsList();
     const contactId = await contactsPage.createContact(contactData);

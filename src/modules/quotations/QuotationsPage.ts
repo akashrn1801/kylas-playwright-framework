@@ -26,6 +26,18 @@ interface InaccessibleEntityRetryResult {
   lastErrorMessage: string;
 }
 
+// WHY: the shape of a quotation save's error response body — a dynamic API
+// response, not something Playwright/TypeScript can know statically. Captures
+// exactly the fields this file's error-classification methods actually read
+// (confirmed against real, live 029003/connection-reset response bodies), all
+// optional since different error paths populate different subsets.
+interface QuotationSaveErrorBody {
+  message?: string;
+  errorCode?: string;
+  errors?: Array<{ message?: string }>;
+  validationErrors?: Array<{ message?: string }>;
+}
+
 export class QuotationsPage extends BasePage {
   // ─── 1. Retry config ────────────────────────────────────────────────────────
   // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
@@ -74,6 +86,15 @@ export class QuotationsPage extends BasePage {
     this.page.locator(
       `[id="1_${row === 0 ? '01' : row === 1 ? '11' : '21'}_input_products.${row}.id"]`
     );
+  // WHY a separate, generic locator (not just reusing productIdInput(row) in
+  // a loop) for COUNTING existing rows: `productIdInput(row)`'s own
+  // hardcoded per-row prefix means each row index is a genuinely different
+  // selector string — counting requires matching ANY row's id field
+  // regardless of its row number, which this substring-plus-suffix match
+  // does. Used only to determine the next fresh row's index in
+  // `addFreshProductByName()` below.
+  private readonly anyProductIdInput = (): Locator =>
+    this.modal().locator('[id*="_input_products."][id$=".id"]');
   private readonly selectedDealName = (): Locator =>
     this.page
       .locator('[id="0_41_input_associatedDeal"]')
@@ -217,7 +238,28 @@ export class QuotationsPage extends BasePage {
 
   private async waitForListReady(): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
-    await this.page.waitForTimeout(1000);
+    // WHY a real condition-based check (2026-08-09, root-caused via live
+    // staging repro of the quotations.rbac.spec.ts:304 sandbox failure): this
+    // previously only waited for domcontentloaded + a blind 1000ms — no check
+    // that the list or "Add Quotation" button had actually rendered. Under
+    // real load domcontentloaded fires long before React hydrates this page,
+    // so callers proceeding straight to openCreateForm()'s UNBOUNDED
+    // `createButton().click()` could wait the rest of the whole test timeout
+    // for a button that hadn't rendered yet — confirmed by the sandbox
+    // failure's exact signature ("Test timeout of 480000ms exceeded" while
+    // "waiting for locator('button').filter({hasText:'Add Quotation'})").
+    // Mirrors CallLogsPage.waitForListReady()'s already-proven race between
+    // the list container (populated case) and the create button (always
+    // present in the header, regardless of list content, including the
+    // legitimately-empty case).
+    await Promise.race([
+      this.listContainer()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+      this.createButton()
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
+    ]);
   }
 
   private async selectDateInPicker(input: Locator, date: Date): Promise<void> {
@@ -225,6 +267,14 @@ export class QuotationsPage extends BasePage {
     logger.info(`Selecting date: ${date.toDateString()}`);
     await input.click();
     await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
+    // WHY kept (2026-08-09, Task 1b date-time-picker audit): same react-dates
+    // SingleDatePicker widget as DealsPage.selectDateInPicker(), which keeps
+    // an identical wait here with a stated (though unverified-this-session)
+    // Firefox animation-settling reason — this project runs a real `firefox`
+    // project locally, not just chromium. Left in place for consistency
+    // rather than guessing it's safe to remove without live Firefox
+    // verification; only the loop-internal duplicate below (which had no
+    // such justification) was removed.
     await this.page.waitForTimeout(400);
     const dayCell = this.calendarDayByLabel(dayLabel);
     let found = false;
@@ -235,9 +285,12 @@ export class QuotationsPage extends BasePage {
     } catch {
       found = false;
     }
+    // WHY no blind wait before each dayCell check (2026-08-09, Task 1b
+    // date-time-picker audit): dayCell.waitFor() is already the real
+    // condition-based check — the removed 400ms calls were pure padding
+    // before it, same fix already proven in CallLogsPage.selectDateInPicker().
     while (!found && attempts < 24) {
       await this.calendarForwardButton().click();
-      await this.page.waitForTimeout(400);
       try {
         await dayCell.waitFor({ state: 'visible', timeout: 1000 });
         found = true;
@@ -297,12 +350,35 @@ export class QuotationsPage extends BasePage {
     );
   }
 
+  // WHY the post-click Escape check was added (2026-08-11) — HARDENED BASED
+  // ON CODE REVIEW, ROOT CAUSE NOT YET INDEPENDENTLY LIVE-CONFIRMED (per
+  // CLAUDE.md rule 10): a headed-mode observation on Q7 reported the
+  // Company dropdown's options menu staying visibly open after this
+  // method's clear-indicator click, before the retry-save fires. This
+  // exact react-select behavior — clicking a control's own remove/clear
+  // icon also bubbling into the control's click handler and popping the
+  // options menu open — is already confirmed live elsewhere in this exact
+  // codebase (see BasePage.clearAllChipsFromMultiSelect()'s own comment on
+  // chip-removal triggering the identical side effect). Reusing that
+  // already-proven fix here rather than inventing a new approach: check
+  // whether the menu opened after the clear click, and press Escape if so.
+  // Not yet independently re-verified live for the specific Company/
+  // Contact fields calling this method — flagged in known-issues.md
+  // pending that confirmation.
   private async clearIsInvalidField(control: Locator): Promise<void> {
     const clearButton = control.locator('[class*="__clear-indicator"], [aria-label="Clear"]');
     const hasClear = await clearButton.isVisible().catch(() => false);
     if (hasClear) {
       await clearButton.click();
       logger.info('Clear indicator found and clicked — field value removed');
+      const menuOpen = await this.page
+        .locator('.is-invalid__menu')
+        .isVisible({ timeout: 500 })
+        .catch(() => false);
+      if (menuOpen) {
+        await this.page.keyboard.press('Escape');
+        logger.info('Options menu opened after clear — closed via Escape');
+      }
     } else {
       logger.warn('Clear indicator not found — field may already be empty or selector mismatch');
     }
@@ -715,8 +791,56 @@ export class QuotationsPage extends BasePage {
 
   // ─── 6. Form actions ─────────────────────────────────────────────────────────
 
+  /**
+   * Adds a NEW, FRESH product row and searches for a product by exact name —
+   * additive alongside whatever a linked Deal already auto-populated (that
+   * existing behavior, and `addRandomProduct()`/`ensureProductRowExists()`,
+   * are completely untouched by this method).
+   *
+   * WHY the row index is computed from a live count, not hardcoded: this
+   * form supports at most 3 product rows (`productIdInput(row)`'s own
+   * hardcoded 0/1/2 prefix mapping, pre-existing) — a Deal linkage may
+   * already occupy row 0 (or more), so the next FRESH row's real index
+   * depends on how many rows already exist at call time, not a fixed
+   * assumption. Throws if all 3 rows are already occupied, rather than
+   * silently reusing an already-filled row.
+   *
+   * @param name Exact product name to search for (e.g. a Products & Services
+   *             fixture's name).
+   * @param expectFound `true` → select it, assert it lands; `false` → assert
+   *             absence only, then stop (per
+   *             `BasePage.addProductRowAndSearchByName()`'s own contract —
+   *             caller must not proceed to save with an intentionally
+   *             incomplete row).
+   * @throws Error if all 3 product row slots are already occupied.
+   */
+  async addFreshProductByName(name: string, expectFound: boolean): Promise<void> {
+    const existingRowCount = await this.anyProductIdInput().count();
+    if (existingRowCount >= 3) {
+      throw new Error(
+        'addFreshProductByName: Quotation product rows already at max capacity (3) — cannot add another fresh row'
+      );
+    }
+    const newRowIndex = existingRowCount;
+    await this.addProductRowAndSearchByName(
+      this.addNewProductButton(),
+      this.productIdInput(newRowIndex),
+      this.page.locator('.is-invalid__menu .is-invalid__option'),
+      name,
+      expectFound
+    );
+  }
+
   async openCreateForm(): Promise<void> {
-    await this.createButton().click();
+    // WHY this.click() instead of a bare .click() (2026-08-09, root-caused via
+    // live staging repro of the quotations.rbac.spec.ts:304 sandbox failure):
+    // a raw `.click()` here had no timeout at all (this codebase has no global
+    // actionTimeout — see .claude/known-issues.md), so if waitForListReady()'s
+    // now-fixed readiness check still somehow returned before the button
+    // rendered, this click would hang until the outer test timeout instead of
+    // failing loud. this.click() bounds the wait to config.timeouts.navigation
+    // and carries session-expiry recovery.
+    await this.click(this.createButton(), 'Add Quotation button');
     await this.modal().waitFor({ state: 'visible', timeout: 15000 });
     logger.info('Opened quotation create form');
   }
@@ -968,15 +1092,51 @@ export class QuotationsPage extends BasePage {
   }
 
   async fillOwner(ownerName: string): Promise<void> {
+    // WHY bounded click + retry (2026-08-09, Task 4 sweep — this was one of
+    // the known-unfixed unbounded-click instances named in
+    // .claude/reference-patterns.md §3): both clicks previously had no
+    // timeout at all. Mirrors the already-proven
+    // CompaniesPage/LeadsPage.openUserShareTypeSearch() bounded-click +
+    // 3-attempt-retry shape for the identical "open react-select, click an
+    // option" race.
     const searchTerm = ownerName.split(' ')[0];
-    await this.ownerControl().click();
-    await this.ownerInput().fill(searchTerm);
-    await this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first().click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    logger.info(`Set owner to: ${ownerName}`);
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.ownerControl().click({ timeout: config.timeouts.expect });
+        await this.ownerInput().fill(searchTerm);
+        const ownerOption = this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first();
+        await ownerOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await ownerOption.click({ timeout: config.timeouts.expect });
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 10000 })
+          .catch(() => {});
+        logger.info(`Set owner to: ${ownerName}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `fillOwner("${ownerName}") attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
+            'closing any stuck menu and retrying'
+        );
+        // WHY a condition-based wait here, not a blind waitForTimeout (2026-08-09,
+        // caught by the pre-commit hook — this line was copied verbatim from
+        // CompaniesPage/LeadsPage.openUserShareTypeSearch()'s existing backoff,
+        // which carries the same blind-wait anti-pattern this whole session was
+        // spent eliminating): the real thing this needs to wait for is the
+        // stuck-open menu actually closing after Escape, before the next
+        // attempt's click retries — not a guessed 500ms. Waiting for
+        // `.is-invalid__menu` to become hidden is the real, checkable signal.
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page
+          .locator('.is-invalid__menu')
+          .waitFor({ state: 'hidden', timeout: 5000 })
+          .catch(() => {});
+      }
+    }
+    throw new Error(`fillOwner: failed to set owner to "${ownerName}" after ${maxAttempts} attempts — ${String(lastError)}`);
   }
 
   async fillAssociatedCompany(companyName: string): Promise<void> {
@@ -1156,7 +1316,7 @@ export class QuotationsPage extends BasePage {
   // this decision.
   private classifyInaccessibleEntityError(
     status: number,
-    body: any
+    body: QuotationSaveErrorBody
   ): { isInaccessibleEntityError: boolean; entity: 'contact' | 'company' | null; rawMessage: string } {
     const message: string =
       body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
@@ -1197,7 +1357,7 @@ export class QuotationsPage extends BasePage {
   private static readonly TRANSIENT_CONNECTION_RESET_PATTERN =
     /Connection has been closed BEFORE response/i;
 
-  private isTransientConnectionResetError(body: any): boolean {
+  private isTransientConnectionResetError(body: QuotationSaveErrorBody): boolean {
     const message: string = body?.message || '';
     return QuotationsPage.TRANSIENT_CONNECTION_RESET_PATTERN.test(message);
   }
@@ -1268,7 +1428,7 @@ export class QuotationsPage extends BasePage {
         );
       }
 
-      const body = await response.json().catch(() => ({}));
+      const body = (await response.json().catch(() => ({}))) as QuotationSaveErrorBody;
 
       // WHY checked BEFORE isInaccessibleEntityError: a connection reset can
       // in principle share HTTP 400 with a real validation error, so this
@@ -1538,7 +1698,16 @@ export class QuotationsPage extends BasePage {
     }
   }
 
-  async assertErrorToast(): Promise<void> {
+  // WHY returns boolean, not void (fixed 2026-08-11 — Q7's dead retry-logic
+  // investigation): this method already computes exactly the signal a
+  // caller needs to know "did the first save actually fail or succeed" —
+  // it just never surfaced it. Q7 (the only caller) was instead trying to
+  // infer this from the current URL, which is always the same in an
+  // in-place modal regardless of outcome (identical root cause already
+  // fixed in saveQuotation() itself — see that method's own comment).
+  // Confirmed only 1 caller exists in the whole codebase before widening
+  // this signature — safe, no ripple.
+  async assertErrorToast(): Promise<boolean> {
     // WHY: Error toast only fires when deal has inaccessible linked entities.
     // Non-fatal: if no toast, save succeeded on first attempt.
     const appeared = await this.errorToast()
@@ -1547,10 +1716,11 @@ export class QuotationsPage extends BasePage {
       .catch(() => false);
     if (!appeared) {
       logger.warn('No error toast — save succeeded (deal has no inaccessible entities)');
-      return;
+      return false;
     }
     const text = await this.errorToast().innerText();
     logger.warn(`Error toast appeared: ${text}`);
+    return true;
   }
 
   async assertDetailPageFields(data: QuotationData): Promise<void> {

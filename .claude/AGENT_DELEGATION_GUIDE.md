@@ -1,15 +1,15 @@
-# Agent Delegation Guide
+# Agent Delegation Guide (full detail)
+
+Imported from `CLAUDE.md`. See that file for the condensed agent list and the rest of the standing rules.
 
 ## Auto-Triggered Delegation Chains
-
-This framework uses a series of automatic chains to ensure no bad code lands and no real bugs get masked.
 
 ### Chain 1: New/Edited Code File
 
 When you edit a Page Object (`src/modules/**/*.ts`) or test spec (`tests/**/*.spec.ts`):
 
 1. **Post-file-edit hook** → `locator-reviewer` (static pass, fast)
-2. If zero blocking findings → flow continues  
+2. If zero blocking findings → flow continues
 3. If blocking findings → file flagged for review
 4. User re-runs after fixing
 
@@ -29,7 +29,7 @@ When a test fails (reported or observed mid-run):
 1. **Automatic trigger** → `failure-triage-investigator` (runs first, always)
 2. Classifies root cause: app bug vs code bug
 3. Based on classification, hands off:
-   - App bug → report filed (do not mask)
+   - App bug → report filed (do not mask) — see `APPLICATION_BUGS.md`
    - Locator broken → `self-healing-locator-scout`
    - Timing issue → `resilience-architect`
    - Coverage gap → `test-coverage-strategist`
@@ -105,8 +105,26 @@ No action needed — hooks and test-failure detection run automatically.
 
 ## Not an Agent? Do It Yourself
 
-- **Need to understand the codebase?** Read `.claude/` reference files (architecture, patterns, known issues)
-- **Need to check if something's already been done?** Search `INVESTIGATION_LOG.md` for prior investigations
-- **Need to know branch strategy?** See `GIT_WORKFLOW.md` (not memory/assumption)
-- **Need to understand why something was built this way?** Check `git blame` + commit message for that line
+- **Need to understand the codebase?** Read `CLAUDE.md` and its imported `.claude/` reference files (architecture, patterns, known issues).
+- **Need to check if something's already been done?** Search `.claude/known-issues.md` for prior investigations.
+- **Need to know branch strategy?** See `README.md` (not memory/assumption).
+- **Need to understand why something was built this way?** Check `git blame` + commit message for that line.
 
+---
+
+## Hooks (real, installed to `.git/hooks/`, tracked in `scripts/hooks/`)
+
+- **Hard deny** (Claude Code permission layer): `git push`, `git merge`, `gh pr merge`.
+- **Pre-commit hook (verified working):** blocks commits containing the `waitForTimeout()` anti-pattern. Exit code 1, clear error message.
+- **Pre-push hook (verified working):** validates code quality before pushing (checks for `waitForTimeout()`, warns on hardcoded URLs).
+- **Post-file-edit auto-trigger for `locator-reviewer`:** implemented as a real Claude Code `PostToolUse` hook (`.claude/settings.json`, matcher `Write|Edit`, calling `scripts/hooks/post-file-edit-locator-reminder.sh`) that injects a reminder to invoke `locator-reviewer` when a Page Object or spec file is touched.
+
+## Playwright MCP (Live Browser Investigation)
+
+Installed 2026-08-01. Enables live app inspection for subagents. **Scope:**
+- Only agents 3 (`self-healing-locator-scout`), 4 (`resilience-architect`), 9 (`failure-triage-investigator`), 13 (`accessibility-auditor`) have MCP access (gated behind approval).
+- Must follow the evidence-directory protocol: `.claude/evidence/{agent-name}/{date-slug}/`.
+- Evidence saved locally, never ephemeral (kept out of git via `.gitignore`, but never deleted casually).
+- All findings must cite specific screenshots/snapshots, not speculation.
+- Standard report template: environment, steps, evidence paths, observed behavior, conclusion, confidence.
+- **Disabled for Production** (`app.kylas.io`). QA and stage only.

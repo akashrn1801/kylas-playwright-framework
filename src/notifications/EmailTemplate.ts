@@ -9,7 +9,7 @@ import {
 } from './RunHistory';
 import { HealthScore } from './AutomationHealth';
 import { FailureCluster } from './FailureAnalyzer';
-import { MiscErrorReport } from '../error-collector/ErrorCollector';
+import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -832,8 +832,8 @@ ${body}
       )
       .join('');
 
-    const byTest = new Map<string, any[]>();
-    for (const e of miscErrors.errors as any[]) {
+    const byTest = new Map<string, MiscError[]>();
+    for (const e of miscErrors.errors) {
       const key = e.testTitle || 'unknown';
       if (!byTest.has(key)) byTest.set(key, []);
       byTest.get(key)!.push(e);
@@ -866,7 +866,7 @@ ${body}
       })
       .join('');
 
-    const unexpectedInfra = (miscErrors.errors as any[]).filter(
+    const unexpectedInfra = miscErrors.errors.filter(
       (e) => !e.expectedReason && (e.statusCode ?? 0) >= 500
     ).length;
     const unexpectedApp = Math.max(0, miscErrors.unexpectedErrors - unexpectedInfra);
