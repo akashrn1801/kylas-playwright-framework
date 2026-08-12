@@ -86,6 +86,15 @@ export class QuotationsPage extends BasePage {
     this.page.locator(
       `[id="1_${row === 0 ? '01' : row === 1 ? '11' : '21'}_input_products.${row}.id"]`
     );
+  // WHY a separate, generic locator (not just reusing productIdInput(row) in
+  // a loop) for COUNTING existing rows: `productIdInput(row)`'s own
+  // hardcoded per-row prefix means each row index is a genuinely different
+  // selector string — counting requires matching ANY row's id field
+  // regardless of its row number, which this substring-plus-suffix match
+  // does. Used only to determine the next fresh row's index in
+  // `addFreshProductByName()` below.
+  private readonly anyProductIdInput = (): Locator =>
+    this.modal().locator('[id*="_input_products."][id$=".id"]');
   private readonly selectedDealName = (): Locator =>
     this.page
       .locator('[id="0_41_input_associatedDeal"]')
@@ -341,12 +350,35 @@ export class QuotationsPage extends BasePage {
     );
   }
 
+  // WHY the post-click Escape check was added (2026-08-11) — HARDENED BASED
+  // ON CODE REVIEW, ROOT CAUSE NOT YET INDEPENDENTLY LIVE-CONFIRMED (per
+  // CLAUDE.md rule 10): a headed-mode observation on Q7 reported the
+  // Company dropdown's options menu staying visibly open after this
+  // method's clear-indicator click, before the retry-save fires. This
+  // exact react-select behavior — clicking a control's own remove/clear
+  // icon also bubbling into the control's click handler and popping the
+  // options menu open — is already confirmed live elsewhere in this exact
+  // codebase (see BasePage.clearAllChipsFromMultiSelect()'s own comment on
+  // chip-removal triggering the identical side effect). Reusing that
+  // already-proven fix here rather than inventing a new approach: check
+  // whether the menu opened after the clear click, and press Escape if so.
+  // Not yet independently re-verified live for the specific Company/
+  // Contact fields calling this method — flagged in known-issues.md
+  // pending that confirmation.
   private async clearIsInvalidField(control: Locator): Promise<void> {
     const clearButton = control.locator('[class*="__clear-indicator"], [aria-label="Clear"]');
     const hasClear = await clearButton.isVisible().catch(() => false);
     if (hasClear) {
       await clearButton.click();
       logger.info('Clear indicator found and clicked — field value removed');
+      const menuOpen = await this.page
+        .locator('.is-invalid__menu')
+        .isVisible({ timeout: 500 })
+        .catch(() => false);
+      if (menuOpen) {
+        await this.page.keyboard.press('Escape');
+        logger.info('Options menu opened after clear — closed via Escape');
+      }
     } else {
       logger.warn('Clear indicator not found — field may already be empty or selector mismatch');
     }
@@ -758,6 +790,46 @@ export class QuotationsPage extends BasePage {
   }
 
   // ─── 6. Form actions ─────────────────────────────────────────────────────────
+
+  /**
+   * Adds a NEW, FRESH product row and searches for a product by exact name —
+   * additive alongside whatever a linked Deal already auto-populated (that
+   * existing behavior, and `addRandomProduct()`/`ensureProductRowExists()`,
+   * are completely untouched by this method).
+   *
+   * WHY the row index is computed from a live count, not hardcoded: this
+   * form supports at most 3 product rows (`productIdInput(row)`'s own
+   * hardcoded 0/1/2 prefix mapping, pre-existing) — a Deal linkage may
+   * already occupy row 0 (or more), so the next FRESH row's real index
+   * depends on how many rows already exist at call time, not a fixed
+   * assumption. Throws if all 3 rows are already occupied, rather than
+   * silently reusing an already-filled row.
+   *
+   * @param name Exact product name to search for (e.g. a Products & Services
+   *             fixture's name).
+   * @param expectFound `true` → select it, assert it lands; `false` → assert
+   *             absence only, then stop (per
+   *             `BasePage.addProductRowAndSearchByName()`'s own contract —
+   *             caller must not proceed to save with an intentionally
+   *             incomplete row).
+   * @throws Error if all 3 product row slots are already occupied.
+   */
+  async addFreshProductByName(name: string, expectFound: boolean): Promise<void> {
+    const existingRowCount = await this.anyProductIdInput().count();
+    if (existingRowCount >= 3) {
+      throw new Error(
+        'addFreshProductByName: Quotation product rows already at max capacity (3) — cannot add another fresh row'
+      );
+    }
+    const newRowIndex = existingRowCount;
+    await this.addProductRowAndSearchByName(
+      this.addNewProductButton(),
+      this.productIdInput(newRowIndex),
+      this.page.locator('.is-invalid__menu .is-invalid__option'),
+      name,
+      expectFound
+    );
+  }
 
   async openCreateForm(): Promise<void> {
     // WHY this.click() instead of a bare .click() (2026-08-09, root-caused via
@@ -1626,7 +1698,16 @@ export class QuotationsPage extends BasePage {
     }
   }
 
-  async assertErrorToast(): Promise<void> {
+  // WHY returns boolean, not void (fixed 2026-08-11 — Q7's dead retry-logic
+  // investigation): this method already computes exactly the signal a
+  // caller needs to know "did the first save actually fail or succeed" —
+  // it just never surfaced it. Q7 (the only caller) was instead trying to
+  // infer this from the current URL, which is always the same in an
+  // in-place modal regardless of outcome (identical root cause already
+  // fixed in saveQuotation() itself — see that method's own comment).
+  // Confirmed only 1 caller exists in the whole codebase before widening
+  // this signature — safe, no ripple.
+  async assertErrorToast(): Promise<boolean> {
     // WHY: Error toast only fires when deal has inaccessible linked entities.
     // Non-fatal: if no toast, save succeeded on first attempt.
     const appeared = await this.errorToast()
@@ -1635,10 +1716,11 @@ export class QuotationsPage extends BasePage {
       .catch(() => false);
     if (!appeared) {
       logger.warn('No error toast — save succeeded (deal has no inaccessible entities)');
-      return;
+      return false;
     }
     const text = await this.errorToast().innerText();
     logger.warn(`Error toast appeared: ${text}`);
+    return true;
   }
 
   async assertDetailPageFields(data: QuotationData): Promise<void> {

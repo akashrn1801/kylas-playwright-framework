@@ -99,6 +99,7 @@ function attachErrorListeners(page: Page): void {
       const method = response.request().method();
       let responseBody: string | undefined;
       let apiErrorMessage: string | undefined;
+      let apiErrorCode: string | undefined;
       try {
         const text = await response.text();
         responseBody = text.substring(0, 500);
@@ -109,6 +110,17 @@ function attachErrorListeners(page: Page): void {
           apiErrorMessage =
             json?.message || json?.error || json?.errorMessage || json?.details || undefined;
           if (apiErrorMessage) apiErrorMessage = String(apiErrorMessage).substring(0, 300);
+          // WHY captured separately from apiErrorMessage (2026-08-11): Kylas's
+          // own error-code field is inconsistently named across modules
+          // (`errorCode` on most, but literally `code` on Products &
+          // Services's 403 RBAC response — confirmed live via
+          // assertForbiddenOnRestrictedEdit()'s own body.code check) and was
+          // never captured into anything before this — isExpectedRbacError()
+          // could only ever pattern-match the human-readable message text,
+          // never the actual machine-readable code, no matter how the
+          // RBAC_EXPECTED_ERROR_CODES allowlist was configured.
+          apiErrorCode = json?.errorCode || json?.code || undefined;
+          if (apiErrorCode) apiErrorCode = String(apiErrorCode);
         } catch {
           // not JSON — use raw text as error message if short
           if (text.length < 200) apiErrorMessage = text;
@@ -124,6 +136,7 @@ function attachErrorListeners(page: Page): void {
         statusCode: status,
         responseBody,
         apiErrorMessage,
+        apiErrorCode,
       });
     }
   });

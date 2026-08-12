@@ -109,7 +109,7 @@ test.describe('Leads', () => {
     logger.success('L5 passed');
   });
 
-  // ── L6 ────────────────────────────────────────────────────
+  // ── L32 ────────────────────────────────────────────────────
 
   test('@regression admin should search lead by name and verify in list', async ({ adminPage }) => {
     test.setTimeout(480000);
@@ -120,10 +120,10 @@ test.describe('Leads', () => {
     expect(leadId).not.toBeNull();
     await leadsPage.goToLeadsList();
     await leadsPage.assertLeadExistsInList(leadData.firstName);
-    logger.success('L6 passed');
+    logger.success('L32 passed');
   });
 
-  // ── L7 ────────────────────────────────────────────────────
+  // ── L33 ────────────────────────────────────────────────────
 
   test('@regression admin should verify all detail fields after creating a lead', async ({
     adminPage,
@@ -148,10 +148,10 @@ test.describe('Leads', () => {
       leadData.department,
       leadData.designation,
     ]);
-    logger.success('L7 passed');
+    logger.success('L33 passed');
   });
 
-  // ── L8 ────────────────────────────────────────────────────
+  // ── L34 ────────────────────────────────────────────────────
 
   test('@regression admin should delete a lead and verify it is removed from list', async ({
     adminPage,
@@ -166,10 +166,10 @@ test.describe('Leads', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
     await leadsPage.assertLeadNotInList(leadData.firstName);
-    logger.success('L8 passed');
+    logger.success('L34 passed');
   });
 
-  // ── L9 ────────────────────────────────────────────────────
+  // ── L35 ────────────────────────────────────────────────────
 
   test('@regression admin should clone a lead and verify new lead has Copy in lastName', async ({
     adminPage,
@@ -184,10 +184,10 @@ test.describe('Leads', () => {
     const clonedId = await leadsPage.cloneLead();
     expect(clonedId).not.toBeNull();
     await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
-    logger.success('L9 passed');
+    logger.success('L35 passed');
   });
 
-  // ── L10 ───────────────────────────────────────────────────
+  // ── L36 ───────────────────────────────────────────────────
 
   test('@regression admin should mark lead as Won via Close Lead dropdown and verify stage', async ({
     adminPage,
@@ -201,10 +201,10 @@ test.describe('Leads', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.markLeadAsStage('Won');
     await leadsPage.assertLeadStageOnDetail('Won');
-    logger.success('L10 passed');
+    logger.success('L36 passed');
   });
 
-  // ── L11 ───────────────────────────────────────────────────
+  // ── L37 ───────────────────────────────────────────────────
 
   test('@regression admin should mark lead as Closed Lost via Close Lead dropdown select reason and verify stage', async ({
     adminPage,
@@ -218,10 +218,10 @@ test.describe('Leads', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.markLeadAsStage('Closed Lost');
     await leadsPage.assertLeadStageOnDetail('Closed Lost');
-    logger.success('L11 passed');
+    logger.success('L37 passed');
   });
 
-  // ── L12 ───────────────────────────────────────────────────
+  // ── L38 ───────────────────────────────────────────────────
 
   test('@regression admin should mark lead as Closed Unqualified via Close Lead dropdown select reason and verify stage', async ({
     adminPage,
@@ -235,10 +235,10 @@ test.describe('Leads', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.markLeadAsStage('Closed Unqualified');
     await leadsPage.assertLeadStageOnDetail('Closed Unqualified');
-    logger.success('L12 passed');
+    logger.success('L38 passed');
   });
 
-  // ── L13 ───────────────────────────────────────────────────
+  // ── L39 ───────────────────────────────────────────────────
 
   test('@regression admin should convert lead to Deal Contact and Company and verify Lead Converted badge', async ({
     adminPage,
@@ -253,10 +253,10 @@ test.describe('Leads', () => {
     const dealName = `Deal-${Date.now()}`;
     await leadsPage.convertLeadToAll(dealName);
     await leadsPage.assertLeadConvertedBadge();
-    logger.success('L13 passed');
+    logger.success('L39 passed');
   });
 
-  // ── L14 ───────────────────────────────────────────────────
+  // ── L40 ───────────────────────────────────────────────────
 
   test('@regression admin should reassign lead to restricted user and verify owner changed', async ({
     adminPage,
@@ -271,10 +271,10 @@ test.describe('Leads', () => {
     const restrictedUserName = await leadsPage.getLoggedInUserName('restricted');
     await leadsPage.reassignLead(restrictedUserName);
     await leadsPage.assertOwnerOnDetail(restrictedUserName);
-    logger.success('L14 passed');
+    logger.success('L40 passed');
   });
 
-  // ── L15 ───────────────────────────────────────────────────
+  // ── L41 ───────────────────────────────────────────────────
 
   test('@regression admin should get validation error when saving lead without lastName', async ({
     adminPage,
@@ -288,10 +288,10 @@ test.describe('Leads', () => {
     // WHY: saveLead() clicks save button and checks for form errors
     await adminPage.locator('button[type="submit"].save-button').click();
     await leadsPage.assertValidationError('required');
-    logger.success('L15 passed');
+    logger.success('L41 passed');
   });
 
-  // ── L16 ───────────────────────────────────────────────────
+  // ── L42 ───────────────────────────────────────────────────
 
   test('@prodSafe admin should navigate to leads list page on production', async ({
     adminPage,
@@ -299,7 +299,7 @@ test.describe('Leads', () => {
     const leadsPage = new LeadsPage(adminPage);
     await leadsPage.goToLeadsList();
     await leadsPage.assertOnLeadsListPage();
-    logger.success('L16 passed');
+    logger.success('L42 passed');
   });
 
   // ──────────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ test.describe('Leads', () => {
   // these tests (and every other Lead create/update path) work unchanged
   // once that happens.
 
-  // ── L17 ───────────────────────────────────────────────────
+  // ── L43 ───────────────────────────────────────────────────
 
   test('@regression admin should create a lead with all custom fields and verify on details', async ({
     adminPage,
@@ -330,10 +330,10 @@ test.describe('Leads', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.assertLeadCustomFieldsOnDetail(leadData);
     await leadsPage.assertLeadStandardFieldsOnDetail(leadData);
-    logger.success('L17 passed');
+    logger.success('L43 passed');
   });
 
-  // ── L18 ───────────────────────────────────────────────────
+  // ── L44 ───────────────────────────────────────────────────
 
   test("@regression admin should update a lead's custom fields and verify updated values", async ({
     adminPage,
@@ -361,10 +361,10 @@ test.describe('Leads', () => {
     // (see assertLeadStandardFieldsOnDetail's own comment). Salutation,
     // Requirement, Products/Currency/Budget ARE updated and still asserted.
     await leadsPage.assertLeadStandardFieldsOnDetail(updatedData, false);
-    logger.success('L18 passed');
+    logger.success('L44 passed');
   });
 
-  // ── L19 ───────────────────────────────────────────────────
+  // ── L45 ───────────────────────────────────────────────────
 
   test('@regression admin should see validation errors for invalid custom field values and not save the lead', async ({
     adminPage,
@@ -446,7 +446,7 @@ test.describe('Leads', () => {
       logger.success(`Validation error confirmed for: ${testCase.description}`);
     }
 
-    logger.success('L19 passed');
+    logger.success('L45 passed');
   });
 
   // ──────────────────────────────────────────────────────────
@@ -458,7 +458,7 @@ test.describe('Leads', () => {
   // whole test). Unlike the 9 text/picklist custom fields these are live,
   // server-side, RBAC-scoped searches.
 
-  // ── L20 ──────────────────────────────────────────────────
+  // ── L46 ──────────────────────────────────────────────────
 
   test('@regression admin creates a lead selecting Company Lookup and Contact Lookup and verifies both on the detail page', async ({
     adminPage,
@@ -530,10 +530,10 @@ test.describe('Leads', () => {
       );
     }
 
-    logger.success('L20 passed');
+    logger.success('L46 passed');
   });
 
-  // ── L21 ──────────────────────────────────────────────────
+  // ── L47 ──────────────────────────────────────────────────
 
   test('@regression admin edits a lead to add Company Lookup and Contact Lookup and verifies both on the detail page', async ({
     adminPage,
@@ -599,6 +599,6 @@ test.describe('Leads', () => {
       );
     }
 
-    logger.success('L21 passed');
+    logger.success('L47 passed');
   });
 });

@@ -15,12 +15,21 @@ import { config } from '../../config/config';
 // WHY: Helper to create a fresh lead owned by restricted user
 // Used by call log tests that need a Lead entity — avoids SHR/ADM leads
 // which restricted user may not have call log permission on
-async function createOwnedLead(restrictedPage: import('@playwright/test').Page): Promise<string> {
+//
+// WHY the id is now returned alongside the name (fixed 2026-08-11, staging
+// run failure — Group C): previously this discarded createLead()'s
+// returned id entirely, forcing every caller into a name-based lookup even
+// though an id was available the whole time. The id is exposed here for
+// any future/current caller that wants an ID-first path; existing callers
+// that only destructure `.name` keep byte-for-byte identical behavior.
+async function createOwnedLead(
+  restrictedPage: import('@playwright/test').Page
+): Promise<{ id: number | null; name: string }> {
   const leadsPage = new LeadsPage(restrictedPage);
   const leadData = generateLeadData();
   await leadsPage.goToLeadsList();
-  await leadsPage.createLead(leadData);
-  return `${leadData.firstName} ${leadData.lastName}`;
+  const id = await leadsPage.createLead(leadData);
+  return { id, name: `${leadData.firstName} ${leadData.lastName}` };
 }
 
 test.describe('Call Logs — RBAC', () => {
@@ -150,7 +159,7 @@ test.describe('Call Logs — RBAC', () => {
       const callLogsPage = new CallLogsPage(restrictedPage);
       const data = generateRestrictedCallLogData({ entityType: 'Lead', outcome: 'Missed Call' });
       // WHY: Create own lead first — dropdown may only show SHR leads causing 403
-      const ownLeadName = await createOwnedLead(restrictedPage);
+      const { name: ownLeadName } = await createOwnedLead(restrictedPage);
       await callLogsPage.goToCallLogsList();
       const { callLogId } = await callLogsPage.createCallLog(data, { selectedEntityName: ownLeadName });
       expect(callLogId).not.toBeNull();
@@ -288,7 +297,7 @@ test.describe('Call Logs — RBAC', () => {
       // WHY: Same root cause and fix as CL21/CL23/CL24 — pre-create an owned
       // lead instead of letting fillCreateForm's no-searchTerm path fall back
       // to a possibly-inaccessible admin-owned lead on save.
-      const ownedLeadName = await createOwnedLead(restrictedPage);
+      const { name: ownedLeadName } = await createOwnedLead(restrictedPage);
       await callLogsPage.goToCallLogsList();
       await callLogsPage.openLogACallForm();
       await callLogsPage.fillCreateForm(data, ownedLeadName);

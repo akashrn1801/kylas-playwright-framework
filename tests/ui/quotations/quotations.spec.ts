@@ -19,16 +19,16 @@ import { logger } from '../../../src/utils/logger';
 test.describe('Quotations — UI', () => {
   test.describe.configure({ mode: 'serial' });
 
-  // ─── T1 ───────────────────────────────────────────────────────────────────
+  // ─── Q1 ───────────────────────────────────────────────────────────────────
   test('@smoke @regression @prodSafe admin should navigate to quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
 
     await quotationsPage.goToQuotationsList();
     await quotationsPage.assertOnListPage();
-    logger.success('T1 passed');
+    logger.success('Q1 passed');
   });
 
-  // ─── T2 ───────────────────────────────────────────────────────────────────
+  // ─── Q2 ───────────────────────────────────────────────────────────────────
   test('@regression admin should create a quotation', async ({ adminPage }) => {
     test.setTimeout(480000);
 
@@ -53,10 +53,10 @@ test.describe('Quotations — UI', () => {
       logger.success(`Entity chips visible: ${chipCount}`);
     }
 
-    logger.success('T2 passed');
+    logger.success('Q2 passed');
   });
 
-  // ─── T3 ───────────────────────────────────────────────────────────────────
+  // ─── Q3 ───────────────────────────────────────────────────────────────────
   test('@regression admin should update a quotation', async ({ adminPage }) => {
     test.setTimeout(480000);
 
@@ -83,10 +83,10 @@ test.describe('Quotations — UI', () => {
     expect(bodyText).toContain(data.quotationNumber);
     await quotationsPage.assertStatusOnDetailPage(QuotationStatus.Negotiation);
 
-    logger.success('T3 passed');
+    logger.success('Q3 passed');
   });
 
-  // ─── T4 ───────────────────────────────────────────────────────────────────
+  // ─── Q4 ───────────────────────────────────────────────────────────────────
   test('@prodSafe admin should view quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
 
@@ -97,10 +97,10 @@ test.describe('Quotations — UI', () => {
     const errorVisible = await errorToast.isVisible().catch(() => false);
     expect(errorVisible).toBe(false);
 
-    logger.success('T4 passed');
+    logger.success('Q4 passed');
   });
 
-  // ─── T11 ──────────────────────────────────────────────────────────────────
+  // ─── Q11 ──────────────────────────────────────────────────────────────────
   test('@regression admin should verify grand total math after editing discount and tax', async ({
     adminPage,
   }) => {
@@ -131,10 +131,10 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
 
-    logger.success('T11 passed');
+    logger.success('Q11 passed');
   });
 
-  // ─── T12 ──────────────────────────────────────────────────────────────────
+  // ─── Q12 ──────────────────────────────────────────────────────────────────
   test('@smoke @regression admin should verify all field values on detail page after create', async ({
     adminPage,
   }) => {
@@ -161,10 +161,10 @@ test.describe('Quotations — UI', () => {
     const chips = adminPage.locator('.related-entity-container');
     const chipCount = await chips.count();
     if (chipCount === 0) throw new Error('No entity chips found on detail page');
-    logger.success(`T12 passed — entity chips: ${chipCount}`);
+    logger.success(`Q12 passed — entity chips: ${chipCount}`);
   });
 
-  // ─── T13 ──────────────────────────────────────────────────────────────────
+  // ─── Q13 ──────────────────────────────────────────────────────────────────
   test('@regression admin should verify all updated field values on detail page after edit', async ({
     adminPage,
   }) => {
@@ -195,10 +195,10 @@ test.describe('Quotations — UI', () => {
     expect(bodyText).toContain(data.quotationNumber);
     await quotationsPage.assertStatusOnDetailPage(QuotationStatus.Delivered);
 
-    logger.success('T13 passed');
+    logger.success('Q13 passed');
   });
 
-  // ─── T14 ──────────────────────────────────────────────────────────────────
+  // ─── Q14 ──────────────────────────────────────────────────────────────────
   test('@regression admin should verify owner field on detail page after create', async ({
     adminPage,
   }) => {
@@ -219,10 +219,10 @@ test.describe('Quotations — UI', () => {
     const adminName = await quotationsPage.getLoggedInUserName('admin');
     await quotationsPage.assertOwnerOnDetailPage(adminName);
 
-    logger.success('T14 passed');
+    logger.success('Q14 passed');
   });
 
-  // ─── T15 ──────────────────────────────────────────────────────────────────
+  // ─── Q15 ──────────────────────────────────────────────────────────────────
   test('@regression admin should change owner during edit and verify on detail page', async ({
     adminPage,
     restrictedPage,
@@ -247,10 +247,10 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
 
-    logger.success('T15 passed');
+    logger.success('Q15 passed');
   });
 
-  // ─── T16 ──────────────────────────────────────────────────────────────────
+  // ─── Q16 ──────────────────────────────────────────────────────────────────
   test('@smoke @regression admin should verify quotation status is Draft after create', async ({
     adminPage,
   }) => {
@@ -270,10 +270,10 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.assertOnDetailPage();
     await quotationsPage.assertStatusOnDetailPage(QuotationStatus.Draft);
 
-    logger.success('T16 passed');
+    logger.success('Q16 passed');
   });
 
-  // ─── T17 ──────────────────────────────────────────────────────────────────
+  // ─── Q17 ──────────────────────────────────────────────────────────────────
   test('@regression admin should verify status changes correctly through all transitions', async ({
     adminPage,
   }) => {
@@ -296,10 +296,10 @@ test.describe('Quotations — UI', () => {
       logger.info(`Status transition verified: ${status}`);
     }
 
-    logger.success('T17 passed');
+    logger.success('Q17 passed');
   });
 
-  // ─── T18 ──────────────────────────────────────────────────────────────────
+  // ─── Q18 ──────────────────────────────────────────────────────────────────
   test('@regression admin should download quotation and verify file', async ({ adminPage }) => {
     test.setTimeout(480000);
 
@@ -320,10 +320,10 @@ test.describe('Quotations — UI', () => {
     expect(filename).toContain('Quotation_');
     expect(size).toBeGreaterThan(0);
 
-    logger.success(`T18 passed — downloaded: ${filename} (${size} bytes)`);
+    logger.success(`Q18 passed — downloaded: ${filename} (${size} bytes)`);
   });
 
-  // ─── T19 ──────────────────────────────────────────────────────────────────
+  // ─── Q19 ──────────────────────────────────────────────────────────────────
   test('@regression admin should verify separate shipping address when toggle is off', async ({
     adminPage,
   }) => {
@@ -346,9 +346,9 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
     await quotationsPage.assertOnListPage();
-    logger.success('T19 passed');
+    logger.success('Q19 passed');
   });
-  // ─── T20 ──────────────────────────────────────────────────────────────────
+  // ─── Q20 ──────────────────────────────────────────────────────────────────
   test('@smoke @regression admin should verify shipping copies billing address when toggle is on', async ({
     adminPage,
   }) => {
@@ -370,11 +370,23 @@ test.describe('Quotations — UI', () => {
     const _id = await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
 
-    logger.success('T20 passed');
+    logger.success('Q20 passed');
   });
 
-  // ─── T21 ──────────────────────────────────────────────────────────────────
-  test('@regression admin should add multiple contacts to a quotation', async ({ adminPage }) => {
+  // ─── Q21 ──────────────────────────────────────────────────────────────────
+  // WHY renamed 2026-08-11 (staging run investigation, Group D): this test's
+  // name previously claimed "add multiple contacts to a quotation," but its
+  // actual multi-contact logic (see the commented-out fillAssociatedContacts
+  // calls below) was never implemented — this test creates and saves a plain
+  // quotation with zero contacts attached. Renamed to describe what it
+  // actually does; real multi-contact coverage remains unbuilt (a separate,
+  // larger piece of work, not attempted here — deliberately not scope-crept
+  // into this fix). The flaky generic "Uh-oh, something didn't work as
+  // expected" backend error observed on this test in the 2026-08-11 staging
+  // run is tracked separately in .claude/known-issues.md as ordinary
+  // transient staging-load flakiness, confirmed NOT tied to contact count
+  // (there is no contact-count logic currently executing at all).
+  test('@regression admin should create and save a basic quotation with no contacts attached', async ({ adminPage }) => {
     test.setTimeout(480000);
 
     const quotationsPage = new QuotationsPage(adminPage);
@@ -384,14 +396,16 @@ test.describe('Quotations — UI', () => {
     await quotationsPage.openCreateForm();
     await quotationsPage.fillQuotationForm(data);
 
-    // Add contacts — use names available in QA env
-    // These should be configured or known contacts
+    // WHY still commented out: real multi-contact selection (live-searched
+    // real contact names, not these placeholder strings) was never built —
+    // see this test's own rename comment above. Left here, unremoved, as a
+    // marker for that future work rather than deleted silently.
     // await quotationsPage.fillAssociatedContacts(['Contact One', 'Contact Two']);
     // await quotationsPage.fillAssociatedContacts(['Contact One', 'Contact Two']);
     await quotationsPage.saveQuotation();
     await quotationsPage.assertSuccessToast();
     await quotationsPage.assertOnListPage();
-    logger.success('T21 passed');
+    logger.success('Q21 passed');
   });
 
   // ──────────────────────────────────────────────────────────
@@ -418,7 +432,7 @@ test.describe('Quotations — UI', () => {
   // created it; there is no context-dependent variation to test, same
   // conclusion already reached for Meeting.
 
-  // ─── T22 ──────────────────────────────────────────────────────────────────
+  // ─── Q29 ──────────────────────────────────────────────────────────────────
   test('@regression admin should create a quotation with all custom fields and verify on details', async ({
     adminPage,
   }) => {
@@ -431,10 +445,10 @@ test.describe('Quotations — UI', () => {
 
     await quotationsPage.goToQuotationDetail(id!);
     await quotationsPage.assertQuotationCustomFieldsOnDetail(data.customFields);
-    logger.success('T22 passed');
+    logger.success('Q29 passed');
   });
 
-  // ─── T23 ──────────────────────────────────────────────────────────────────
+  // ─── Q30 ──────────────────────────────────────────────────────────────────
   test('@regression admin should create a quotation with all custom fields from a deal detail panel and verify on details', async ({
     adminPage,
   }) => {
@@ -454,10 +468,10 @@ test.describe('Quotations — UI', () => {
 
     await quotationsPage.goToQuotationDetail(quotationId!);
     await quotationsPage.assertQuotationCustomFieldsOnDetail(customFields);
-    logger.success('T23 passed');
+    logger.success('Q30 passed');
   });
 
-  // ─── T24 ──────────────────────────────────────────────────────────────────
+  // ─── Q31 ──────────────────────────────────────────────────────────────────
   test('@regression admin should create a quotation with all custom fields from a contact detail panel and verify on details', async ({
     adminPage,
   }) => {
@@ -477,10 +491,10 @@ test.describe('Quotations — UI', () => {
 
     await quotationsPage.goToQuotationDetail(quotationId!);
     await quotationsPage.assertQuotationCustomFieldsOnDetail(customFields);
-    logger.success('T24 passed');
+    logger.success('Q31 passed');
   });
 
-  // ─── T25 ──────────────────────────────────────────────────────────────────
+  // ─── Q32 ──────────────────────────────────────────────────────────────────
   test('@regression admin should create a quotation with all custom fields from a company detail panel and verify on details', async ({
     adminPage,
   }) => {
@@ -500,10 +514,10 @@ test.describe('Quotations — UI', () => {
 
     await quotationsPage.goToQuotationDetail(quotationId!);
     await quotationsPage.assertQuotationCustomFieldsOnDetail(customFields);
-    logger.success('T25 passed');
+    logger.success('Q32 passed');
   });
 
-  // ─── T26 ──────────────────────────────────────────────────────────────────
+  // ─── Q33 ──────────────────────────────────────────────────────────────────
   test("@regression admin should update a quotation's custom fields and verify updated values", async ({
     adminPage,
   }) => {
@@ -523,10 +537,10 @@ test.describe('Quotations — UI', () => {
 
     await quotationsPage.goToQuotationDetail(id!);
     await quotationsPage.assertQuotationCustomFieldsOnDetail(updatedCustomFields);
-    logger.success('T26 passed');
+    logger.success('Q33 passed');
   });
 
-  // ─── T27 ──────────────────────────────────────────────────────────────────
+  // ─── Q34 ──────────────────────────────────────────────────────────────────
   test('@regression admin should see validation errors for invalid quotation custom field values and not save the quotation', async ({
     adminPage,
   }) => {
@@ -585,6 +599,6 @@ test.describe('Quotations — UI', () => {
       logger.success(`Validation error confirmed for: ${testCase.description}`);
     }
 
-    logger.success('T27 passed');
+    logger.success('Q34 passed');
   });
 });

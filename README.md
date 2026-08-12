@@ -52,7 +52,7 @@ This document is written so a new engineer — or any of us in six months — ca
 | Tasks | 11 | 11 | 22 |
 | **Total** | **137** | **148** | **285** |
 
-Leads gained 4 tests on 2026-07-21/22: L20/L21 (UI) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
+Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
 ---
 

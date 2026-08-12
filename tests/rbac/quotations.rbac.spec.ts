@@ -10,6 +10,8 @@ import { logger } from '../../src/utils/logger';
 import { config } from '../../config/config';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
+import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
+import { generateCompanyData } from '../../src/data/factories/companyFactory';
 
 test.describe('Quotations — RBAC', () => {
   // WHY: serial mode removed (2026-07-24) — this file used to force
@@ -25,17 +27,17 @@ test.describe('Quotations — RBAC', () => {
   // point to genuine session/auth contention between concurrent
   // restrictedPage instances — investigate before just reverting blindly.
 
-  // ─── T5 ───────────────────────────────────────────────────────────────────
+  // ─── Q5 ───────────────────────────────────────────────────────────────────
   test('@smoke @regression @prodSafe restricted user should navigate to quotations list', async ({
     restrictedPage,
   }) => {
     const qp = new QuotationsPage(restrictedPage);
     await qp.goToQuotationsList();
     await qp.assertOnListPage();
-    logger.success('T5 passed');
+    logger.success('Q5 passed');
   });
 
-  // ─── T6 ───────────────────────────────────────────────────────────────────
+  // ─── Q6 ───────────────────────────────────────────────────────────────────
   test('@regression restricted user should create a quotation with accessible deal', async ({
     restrictedPage,
   }) => {
@@ -48,32 +50,82 @@ test.describe('Quotations — RBAC', () => {
       await qp.goToQuotationDetail(id);
       await qp.assertOnDetailPage(id);
     }
-    logger.success('T6 passed');
+    logger.success('Q6 passed');
   });
 
-  // ─── T7 ───────────────────────────────────────────────────────────────────
+  // ─── Q7 ───────────────────────────────────────────────────────────────────
+  // WHY a freshly-created, EXPLICITLY-SHARED deal with a deliberately fresh,
+  // never-shared associated company (fixed 2026-08-11, corrected twice):
+  // (1) the original static `config.deals.adminDealName` went stale; (2) a
+  // first live fix (mirroring Q8's `skipAssociatedEntities: true`) was
+  // wrong for this test — confirmed live: a restricted user's "Associated
+  // Deal" search is scoped to deals they can access (owned/shared), not a
+  // bare text search — an unshared deal returned ZERO results after 80s,
+  // while explicitly sharing it (even with zero permissions) made it
+  // instantly searchable; (3) sharing the deal alone was live-verified to
+  // work (run 1: real 422 correctly triggered, deal found and selected) —
+  // but non-deterministic (run 2: the deal's RANDOMLY-PICKED associated
+  // company happened to already be accessible in this long-lived, never-
+  // cleaned QA environment, so no 422 occurred at all). Fix: create a
+  // dedicated, fresh, never-shared Company and pass it explicitly via
+  // `associatedCompanyName` — guaranteeing the deal's associated company is
+  // both real (something for the error-handling logic below to clear) and
+  // genuinely inaccessible (deterministic, not a random pre-existing
+  // record that might already be shared from an unrelated prior test).
   test('@regression restricted user should handle inaccessible entity error and retry successfully', async ({
+    adminPage,
     restrictedPage,
   }) => {
     test.setTimeout(480000);
+    const adminCompaniesPage = new CompaniesPage(adminPage);
+    const companyData = generateCompanyData();
+    await adminCompaniesPage.goToCompaniesList();
+    const companyId = await adminCompaniesPage.createCompany(companyData);
+    if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
+    logger.info(`Fresh, never-shared company created: "${companyData.name}"`);
+
+    const adminDealsPage = new DealsPage(adminPage);
+    const adminDealData = generateDealData({ associatedCompanyName: companyData.name });
+    await adminDealsPage.goToDealsList();
+    const adminDealId = await adminDealsPage.createDeal(adminDealData);
+    if (!adminDealId) throw new Error('Admin deal ID not captured — cannot share');
+    await adminDealsPage.goToDealDetailsById(adminDealId);
+    const restrictedUserName = await adminDealsPage.getLoggedInUserName('restricted');
+    await adminDealsPage.shareDeal(restrictedUserName, []);
+    logger.info(
+      `Admin deal shared with ${restrictedUserName} (deal itself visible; its fresh associated company deliberately left unshared): "${adminDealData.name}"`
+    );
+
     const qp = new QuotationsPage(restrictedPage);
     const data = generateRestrictedQuotationData({
-      dealName: config.deals.adminDealName,
+      dealName: adminDealData.name,
     });
 
-    // WHY: Register listener BEFORE navigation — 422 fires during save
+    // WHY: Register listener BEFORE navigation — 422 fires during save.
+    // Also captures the id from a successful (< 400) create response, so the
+    // final verification below can navigate directly by ID instead of
+    // relying on list search-index lag.
     let errorMessage = '';
+    let quotationId: number | null = null;
     restrictedPage.on('response', async (response) => {
       if (
         response.url().includes('/quotations') &&
-        response.request().method() === 'POST' &&
-        response.status() >= 400
+        response.request().method() === 'POST'
       ) {
-        const body = await response.json().catch(() => ({}));
-        // WHY: Kylas 029003 returns top-level message, not inside errors[]
-        errorMessage =
-          body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
-        logger.warn(`API error — code: ${body?.errorCode}, message: ${errorMessage}`);
+        if (response.status() >= 400) {
+          const body = await response.json().catch(() => ({}));
+          // WHY: Kylas 029003 returns top-level message, not inside errors[]
+          errorMessage =
+            body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
+          logger.warn(`API error — code: ${body?.errorCode}, message: ${errorMessage}`);
+        } else {
+          const body = await response.json().catch(() => ({}));
+          const id = body?.id ?? body?.data?.id ?? null;
+          if (id) {
+            quotationId = id;
+            logger.success(`Captured quotation ID from save response: ${id}`);
+          }
+        }
       }
     });
 
@@ -83,36 +135,122 @@ test.describe('Quotations — RBAC', () => {
 
     // Step 1 — first save, expect 422 due to inaccessible company
     await qp.saveQuotationExpectingError();
-    await qp.assertErrorToast();
+    // WHY `saveFailed` drives the retry decision, not a URL check (fixed
+    // 2026-08-11): the Quotation create form is an in-place modal — the
+    // URL never changes on success OR failure (same root cause already
+    // fixed in saveQuotation() itself), so the old `alreadySaved` check
+    // was always true regardless of outcome, making the retry branch
+    // below permanently unreachable. `assertErrorToast()` already computed
+    // the real signal internally; it just never returned it — now it does.
+    const saveFailed = await qp.assertErrorToast();
     logger.info(`Error message captured: "${errorMessage}"`);
 
-    // Step 2 — still on form, clear inaccessible entity and retry
-    const currentUrl = restrictedPage.url();
-    const alreadySaved =
-      currentUrl.includes('/quotations/list') || currentUrl.includes('/quotations/details/');
-
-    if (!alreadySaved) {
-      if (errorMessage.toLowerCase().includes('company')) {
-        logger.info('Clearing inaccessible company');
+    // Step 2 — still on form, clear inaccessible entity(ies) and retry.
+    // WHY a bounded loop, not a single if/else (fixed 2026-08-11 —
+    // HARDENED BASED ON CODE REVIEW, ROOT CAUSE NOT YET INDEPENDENTLY
+    // LIVE-CONFIRMED, per CLAUDE.md rule 10): a headed-mode observation
+    // reported a SECOND inaccessible-entity error after the first retry —
+    // plausible because `adminDealData` above only pins the deal's
+    // Company (`associatedCompanyName`), never its Contact, and
+    // DealsPage.fillDealForm()'s own associated-contact pick is
+    // deliberately randomized when not pinned (a separate, already-
+    // documented behavior) — so there's a real, non-zero chance the
+    // randomly-picked contact is ALSO inaccessible to the restricted user,
+    // independent of the deliberately-unshared company. The old code only
+    // ever inspected the FIRST error message and cleared exactly one
+    // field, then assumed success — with no handling for a second,
+    // different failure. This loop tries at most 2 clears (Company and
+    // Contact are the only 2 possible inaccessible entities here), using
+    // the same expecting-error path for every attempt except the final
+    // allowed one, so a second distinct failure is caught and handled
+    // instead of silently assumed away.
+    const cleared = new Set<'company' | 'contact'>();
+    const maxRetries = 2;
+    let attempt = 0;
+    let stillFailing = saveFailed;
+    while (stillFailing && attempt < maxRetries) {
+      attempt++;
+      const entity: 'company' | 'contact' = errorMessage.toLowerCase().includes('company')
+        ? 'company'
+        : 'contact';
+      if (cleared.has(entity)) {
+        // Already cleared this exact entity once — a repeat means something
+        // genuinely unexpected is happening (not just "the other entity is
+        // also inaccessible"). Stop looping rather than risk getting stuck.
+        break;
+      }
+      logger.info(`Clearing inaccessible ${entity}`);
+      if (entity === 'company') {
         await qp.clearAssociatedCompany();
       } else {
-        logger.info('Clearing inaccessible contact');
         await qp.clearAssociatedContacts();
       }
-      await qp.saveQuotation();
+      cleared.add(entity);
+      errorMessage = ''; // reset so a fresh failure (if any) isn't confused with the last one
+      // WHY: Clearing a react-select field's clear indicator can leave its
+      // dropdown/menu portal open, intercepting clicks on Save — same
+      // confirmed-live issue and fix already used in
+      // saveQuotationHandlingInaccessibleEntities() (QuotationsPage.ts).
+      // clearAssociatedCompany()/clearAssociatedContacts() only dismiss the
+      // menu conditionally (a 500ms visibility check that can miss a
+      // slower-to-render portal), so this unconditional Escape is needed
+      // here too, before the next save click.
+      await restrictedPage.keyboard.press('Escape');
+      await restrictedPage.waitForTimeout(500);
+
+      if (attempt < maxRetries) {
+        await qp.saveQuotationExpectingError();
+        stillFailing = await qp.assertErrorToast();
+        // WHY: A stale error toast from the PREVIOUS failed attempt can
+        // still be visible/matching when assertErrorToast() checks here,
+        // even though THIS attempt's save actually succeeded — confirmed
+        // live (2026-08-11): assertErrorToast() returned true in ~170ms,
+        // too fast to reflect THIS attempt's real response, and the actual
+        // POST response (with quotationId) only arrived ~600ms later —
+        // after that check already ran, so an immediate quotationId check
+        // right here still missed it (a second confirmed-live failure).
+        // Give the response listener a moment to catch up before trusting
+        // either signal, same 500ms settle convention already used
+        // elsewhere in this file (e.g. after the Escape dismissal above).
+        await restrictedPage.waitForTimeout(500);
+        if (quotationId) {
+          logger.info(`Quotation ID already captured (${quotationId}) — save succeeded despite toast state`);
+          stillFailing = false;
+        }
+        logger.info(`Retry ${attempt} error message captured: "${errorMessage}"`);
+      } else {
+        // Final allowed attempt — require success; saveQuotation() itself
+        // throws a clear error if this genuinely doesn't succeed.
+        await qp.saveQuotation();
+        stillFailing = false;
+      }
+    }
+
+    if (stillFailing) {
+      throw new Error(
+        `Quotation save still failing after clearing ${[...cleared].join(' and ')} — last error: "${errorMessage}"`
+      );
+    }
+    if (cleared.size > 0) {
       await qp.assertSuccessToast();
       await qp.assertOnListPage();
     } else {
       logger.warn('Save already succeeded on first attempt — skipping retry');
     }
 
-    // WHY: Search by summary — list rows show system IDs not RES... prefix
-    await qp.assertQuotationInList(data.summary);
-    logger.success('T7 passed — inaccessible entity handled, quotation created on retry');
+    // WHY: Verify by ID captured from the save response instead of list
+    // search-by-summary — the response body's id is authoritative and
+    // immediate, avoiding any list search-index lag.
+    if (!quotationId) {
+      throw new Error('Quotation ID not captured from save response — cannot verify by ID');
+    }
+    await qp.goToQuotationDetail(String(quotationId));
+    await qp.assertDetailPageFields(data);
+    logger.success(`Q7 passed — inaccessible entity handled, quotation created on retry (id: ${quotationId})`);
   });
 
   // ─── T7b ──────────────────────────────────────────────────────────────────
-  // WHY: Distinct from T7 — T7 exercises the deal itself being inaccessible
+  // WHY: Distinct from Q7 — Q7 exercises the deal itself being inaccessible
   // via a manual inline retry. This exercises saveQuotationHandlingInaccessibleEntities()
   // directly: a deal that IS selectable, but whose auto-populated Associated
   // Contact and/or Associated Company the restricted user cannot access —
@@ -168,7 +306,7 @@ test.describe('Quotations — RBAC', () => {
     );
   });
 
-  // ─── T8 ───────────────────────────────────────────────────────────────────
+  // ─── Q8 ───────────────────────────────────────────────────────────────────
   test('@regression restricted user should not see admin-owned quotation in list', async ({
     adminPage,
     restrictedPage,
@@ -193,10 +331,10 @@ test.describe('Quotations — RBAC', () => {
     await adminQP.assertQuotationInList(adminData.summary);
 
     await restrictedQP.assertQuotationNotInList(adminData.summary);
-    logger.success('T8 passed — restricted user cannot see admin-owned quotation');
+    logger.success('Q8 passed — restricted user cannot see admin-owned quotation');
   });
 
-  // ─── T9 ───────────────────────────────────────────────────────────────────
+  // ─── Q9 ───────────────────────────────────────────────────────────────────
   test('@regression restricted user should update own quotation', async ({ restrictedPage }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
@@ -217,10 +355,10 @@ test.describe('Quotations — RBAC', () => {
     // WHY: Summary update not asserted — field is disabled in edit mode on this CRM version
     logger.warn('Summary update skipped — field is disabled in edit mode on this CRM version');
     await qp.assertStatusOnDetailPage(QuotationStatus.Negotiation);
-    logger.success('T9 passed');
+    logger.success('Q9 passed');
   });
 
-  // ─── T10 ──────────────────────────────────────────────────────────────────
+  // ─── Q10 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should see and edit quotation when set as owner by admin', async ({
     adminPage,
     restrictedPage,
@@ -297,10 +435,10 @@ test.describe('Quotations — RBAC', () => {
     await restrictedPage.waitForTimeout(2000);
     const bodyText = await restrictedPage.locator('body').innerText();
     expect(bodyText.toLowerCase()).toContain(updatedSummary.toLowerCase());
-    logger.success('T10 passed — restricted user saw and edited quotation as owner');
+    logger.success('Q10 passed — restricted user saw and edited quotation as owner');
   });
 
-  // ─── T22 ──────────────────────────────────────────────────────────────────
+  // ─── Q22 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should verify all field values on detail page after create', async ({
     restrictedPage,
   }) => {
@@ -322,10 +460,10 @@ test.describe('Quotations — RBAC', () => {
     const bodyText = await restrictedPage.locator('body').innerText();
     // WHY: quotationNumber (RES prefix) may not show on detail — assert summary only
     expect(bodyText.toLowerCase()).toContain(data.summary.toLowerCase());
-    logger.success('T22 passed');
+    logger.success('Q22 passed');
   });
 
-  // ─── T23 ──────────────────────────────────────────────────────────────────
+  // ─── Q23 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should verify grand total math', async ({ restrictedPage }) => {
     test.setTimeout(480000);
     const qp = new QuotationsPage(restrictedPage);
@@ -336,7 +474,7 @@ test.describe('Quotations — RBAC', () => {
     // risked landing on a deal whose linked contact/company the restricted user
     // can't fully access, tripping the "required permissions on associated
     // entities" (029003) error on save — this test has no strip-and-retry
-    // handling for that, unlike T7/T7b. A self-created deal with NO associated
+    // handling for that, unlike Q7/T7b. A self-created deal with NO associated
     // entities (skipAssociatedEntities) removes that failure class entirely
     // rather than just narrowing its odds.
     const restrictedDealsPage = new DealsPage(restrictedPage);
@@ -362,10 +500,10 @@ test.describe('Quotations — RBAC', () => {
     logger.info(`Grand Total: ${totals.grandTotal}`);
     await qp.saveQuotation();
     await qp.assertSuccessToast();
-    logger.success('T23 passed');
+    logger.success('Q23 passed');
   });
 
-  // ─── T24 ──────────────────────────────────────────────────────────────────
+  // ─── Q24 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should download own quotation and verify file', async ({
     restrictedPage,
   }) => {
@@ -384,10 +522,10 @@ test.describe('Quotations — RBAC', () => {
     expect(filename).toContain('.pdf');
     expect(filename).toContain('Quotation_');
     expect(size).toBeGreaterThan(0);
-    logger.success(`T24 passed — downloaded: ${filename} (${size} bytes)`);
+    logger.success(`Q24 passed — downloaded: ${filename} (${size} bytes)`);
   });
 
-  // ─── T25 ──────────────────────────────────────────────────────────────────
+  // ─── Q25 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should see entity chip on detail page of shared quotation', async ({
     adminPage,
     restrictedPage,
@@ -416,10 +554,10 @@ test.describe('Quotations — RBAC', () => {
 
     const chipCount = await restrictedPage.locator('.related-entity-container').count();
     expect(chipCount).toBeGreaterThan(0);
-    logger.success('T25 passed');
+    logger.success('Q25 passed');
   });
 
-  // ─── T26 ──────────────────────────────────────────────────────────────────
+  // ─── Q26 ──────────────────────────────────────────────────────────────────
   // WHY: Linking an admin-owned company causes a white-screen crash (app bug —
   // TypeError: e is not iterable in componentDidUpdate) when restricted user
   // opens the detail page. Fix: restricted user creates their own deal first.
@@ -499,7 +637,7 @@ test.describe('Quotations — RBAC', () => {
     logger.info('Fields are editable');
 
     // Step 7 — edit and save
-    const updatedSummary = `T26 Edit ${Date.now()}`;
+    const updatedSummary = `Q26 Edit ${Date.now()}`;
     await restrictedQP.fillEditForm({ summary: updatedSummary });
     await restrictedQP.saveQuotation();
     await restrictedQP.assertSuccessToast();
@@ -509,10 +647,10 @@ test.describe('Quotations — RBAC', () => {
     await restrictedPage.waitForTimeout(2000);
     const updatedBody = await restrictedPage.locator('body').innerText();
     expect(updatedBody).toContain(updatedSummary);
-    logger.success('T26 passed — restricted user edited shared quotation with accessible deal');
+    logger.success('Q26 passed — restricted user edited shared quotation with accessible deal');
   });
 
-  // ─── T27 ──────────────────────────────────────────────────────────────────
+  // ─── Q27 ──────────────────────────────────────────────────────────────────
   test('@regression restricted user should not be able to find quotation owned by admin', async ({
     adminPage,
     restrictedPage,
@@ -536,16 +674,16 @@ test.describe('Quotations — RBAC', () => {
     await adminQP.assertQuotationInList(adminData.summary);
 
     await restrictedQP.assertQuotationNotInList(adminData.summary);
-    logger.success('T27 passed — restricted user cannot find admin-owned quotation');
+    logger.success('Q27 passed — restricted user cannot find admin-owned quotation');
   });
 
-  // ─── T28 ──────────────────────────────────────────────────────────────────
+  // ─── Q28 ──────────────────────────────────────────────────────────────────
   test('@prodSafe restricted user should navigate to quotations list on production', async ({
     restrictedPage,
   }) => {
     const qp = new QuotationsPage(restrictedPage);
     await qp.goToQuotationsList();
     await qp.assertOnListPage();
-    logger.success('T28 passed');
+    logger.success('Q28 passed');
   });
 });
