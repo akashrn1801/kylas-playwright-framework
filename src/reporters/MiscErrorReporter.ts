@@ -170,6 +170,7 @@ class MiscErrorReporter implements Reporter {
           if (e.method) console.log(`            Method: ${e.method}`);
           if (e.statusCode) console.log(`            HTTP ${e.statusCode}`);
           if (e.apiErrorMessage) console.log(`            Error: ${e.apiErrorMessage}`);
+          if (e.apiErrorCode) console.log(`            Error Code: ${e.apiErrorCode}`);
           if (e.responseBody)
             console.log(`            Response: ${e.responseBody.substring(0, 150)}`);
         }

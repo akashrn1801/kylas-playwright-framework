@@ -91,6 +91,32 @@ export class DealsPage extends BasePage {
   private readonly productDropdownIndicator = (): Locator =>
     this.page.locator('.look-up.col-3 .is-invalid__indicator').first();
 
+  // WHY `.last()`, not indexed by row number: mirrors `addProductRow()`'s own
+  // existing `allIndicators.last()` convention just above — a newly-added
+  // row is always appended, so the last matching element is always the
+  // newest one. Confirmed live (2026-08-10) this input's real id follows
+  // the identical `products.{row}.id` convention already proven on
+  // QuotationsPage's own `productIdInput(row)`, and that its "Search ..."
+  // placeholder genuinely triggers a live server search when typed into
+  // (not just a decorative/disabled field) — see
+  // PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 6 investigation for the full
+  // evidence. This is the `searchInput` BasePage.addProductRowAndSearchByName()
+  // needs — Locators are lazily re-evaluated at action time, so `.last()`
+  // correctly resolves to whichever row was just added, even though this
+  // locator is defined once, statically, like every other locator in this
+  // file.
+  //
+  // WHY anchored with `[id$=".id"]` too, not just the `_input_products.`
+  // substring (flagged by locator-reviewer, 2026-08-10): QuotationsPage.ts
+  // reuses this exact `products.{row}.xxx` id family for `.quantity`/
+  // `.price`/`.discount`/`.tax`/`.total` sub-fields, not just `.id` — Deal's
+  // product row is confirmed today to have none of those sub-fields, so no
+  // collision exists yet, but anchoring the suffix explicitly removes the
+  // risk entirely rather than relying on that absence staying true forever
+  // (rule 17 — never trust "currently unique" as permanent).
+  private readonly latestProductRowInput = (): Locator =>
+    this.page.locator('.look-up.col-3 input[id*="_input_products."][id$=".id"]').last();
+
   private readonly estimatedValueInput = (): Locator =>
     this.page.locator('[id="1_21_input_estimatedValue"]');
 
@@ -114,6 +140,39 @@ export class DealsPage extends BasePage {
 
   private readonly partPaymentSummaryRemainingBalance = (): Locator =>
     this.page.locator('.part-payments-summary .summary-row').nth(2).locator('.summary-value');
+
+  // WHY confirmed live (2026-08-10, real root cause behind the T11 Batch 7
+  // failure — see PRODUCTS_AND_SERVICES_PROGRESS.md): adding a product row
+  // to a deal that already has part-payment installments configured makes
+  // the installments no longer sum to the new Total — the app surfaces this
+  // as an "unallocated amount" banner + a "Distribute Equally" button, and
+  // silently no-ops the Save click's own handler until it's resolved (no
+  // network request is even attempted — confirmed via full request/response
+  // capture). This is a real, working app feature our automation was
+  // missing a step for, NOT an app bug. `.distribute-modal` (a MORE
+  // specific class alongside the shared `.installments-modal` base class
+  // `installmentsModal()` above already uses for the "Add Payment" modal)
+  // distinguishes this from that other, unrelated modal.
+  private readonly distributeUnallocatedButton = (): Locator =>
+    this.editModal().locator('button.distribute-unallocated-btn');
+
+  // WHY unscoped (page-wide), not scoped to editModal() like the button
+  // above: confirmed live (2026-08-10) — this modal renders via a portal
+  // directly under `<body>` (`div.installments-modal-overlay` → `body`),
+  // genuinely NOT a descendant of `#editEntityModal` in the real DOM,
+  // unlike the trigger button itself which IS correctly nested inside it.
+  // An earlier version of this locator scoped it to editModal() per a
+  // locator-reviewer defense-in-depth advisory — reasonable in principle,
+  // but disproven live: it made this locator never match anything, causing
+  // a real regression, caught by re-running the actual test rather than
+  // trusting the advisory without verification.
+  private readonly distributeModal = (): Locator =>
+    this.page.locator('.installments-modal.distribute-modal');
+
+  private readonly distributeProceedButton = (): Locator =>
+    this.distributeModal()
+      .locator('button.btn-primary')
+      .filter({ hasText: /^\s*Yes, Proceed\s*$/ });
 
   private readonly campaignControl = (): Locator =>
     this.page
@@ -1126,7 +1185,21 @@ export class DealsPage extends BasePage {
     }
   }
 
-  async assertPaymentReceivedAfterEdit(): Promise<void> {
+  /**
+   * @param skipTotalMathCheck Skips ONLY the final Total-Received=Remaining
+   *        check (fixed 2026-08-10 — see PRODUCTS_AND_SERVICES_PROGRESS.md).
+   *        Status/received/remaining-vs-total checks above it still run
+   *        unconditionally. Set when the caller just added a product row
+   *        mid-edit (`updateDeal()`'s `productNameToAttach`) — that
+   *        legitimately changes the deal's Total, but the pre-existing
+   *        part-payment installments were split against the OLD total and
+   *        never auto-redistribute, so this one specific check no longer
+   *        applies; it doesn't mean payment status itself is unverified.
+   *        Defaults to `false` — every pre-existing caller (5 direct calls
+   *        in `deals.spec.ts`, plus `updateDeal()`'s own non-product-attach
+   *        path) is unaffected.
+   */
+  async assertPaymentReceivedAfterEdit(skipTotalMathCheck = false): Promise<void> {
     logger.info('Asserting payment status and summary after edit');
 
     // Assert first installment status is Received
@@ -1184,12 +1257,142 @@ export class DealsPage extends BasePage {
     expect(remaining).toBeLessThan(total);
     logger.success(`Remaining ${remaining} < Total ${total}`);
 
+    if (skipTotalMathCheck) {
+      logger.info(
+        'Skipping Total-Received=Remaining check — Total was just legitimately changed by a mid-edit product attach'
+      );
+      return;
+    }
+
     // WHY: Core math verification — Total - Received must equal Remaining.
     // Allows ±1 tolerance for rounding (e.g. INR 200,000 / 9 installments).
     const calculatedRemaining = total - received;
     const difference = Math.abs(calculatedRemaining - remaining);
     expect(difference).toBeLessThanOrEqual(1);
     logger.success(`Math verified: ${total} - ${received} = ${remaining} (diff: ${difference})`);
+  }
+
+  /**
+   * Resolves the "unallocated amount" state a deal enters when a product is
+   * added/changed after its part-payment installments were already
+   * configured — confirmed live (2026-08-10): the app shows a "Distribute
+   * Equally" banner and silently blocks Save (no network request even
+   * attempted) until this is resolved. Deliberately conditional — most
+   * deals have no part-payments configured at all, so this banner never
+   * appears for them, and this method must be a clean no-op in that case,
+   * not assume it's always present.
+   */
+  private async handleDistributeUnallocatedAmountIfPresent(): Promise<void> {
+    // WHY waitFor(), not isVisible({timeout}): confirmed via Playwright's own
+    // type definitions — isVisible()'s timeout option is documented as
+    // ignored, resolving instantly against current DOM state regardless of
+    // the value passed (flagged by locator-reviewer, 2026-08-10). This
+    // banner appears after an async total-recalculation following the
+    // product-row add — the exact class of race this codebase has
+    // repeatedly hit elsewhere (rule 2) — so a real wait is required, not
+    // an instant check disguised as one.
+    const bannerPresent = await this.distributeUnallocatedButton()
+      .waitFor({ state: 'visible', timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!bannerPresent) {
+      return;
+    }
+    logger.info('Unallocated amount banner present — distributing equally before save');
+    await this.click(this.distributeUnallocatedButton(), 'Distribute Equally banner');
+    await this.distributeModal().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(this.distributeProceedButton(), 'Distribute Equally: Yes, Proceed');
+    await this.distributeModal()
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* modal may already be fully detached rather than merely hidden */
+      });
+    logger.success('Unallocated amount distributed equally');
+  }
+
+  /**
+   * Asserts the "unallocated amount" banner is visible — the real signal
+   * that the app correctly detected a Total/installment-split mismatch
+   * after a mid-edit product/total change. Public, granular counterpart to
+   * `handleDistributeUnallocatedAmountIfPresent()` (which silently clicks
+   * through with no exposed assertion) — for a dedicated test that needs to
+   * verify the app's own detection, not just get past it.
+   */
+  async assertDistributeUnallocatedBannerVisible(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.distributeUnallocatedButton(),
+        'Distribute Equally banner should be visible after a mid-edit total change'
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    logger.success('Confirmed: Distribute Equally banner is visible');
+  }
+
+  /**
+   * Opens the Distribute Unallocated Amount modal and reads its real,
+   * live-confirmed content (2026-08-10): `.distribute-modal__unallocated-value`
+   * for the headline unallocated amount, and one `.distribute-modal__new-value`
+   * cell per installment row in `.distribute-modal__table`. Does NOT click
+   * "Yes, Proceed" — see `proceedDistributeEqually()` for that, kept as a
+   * separate step so a test can assert on the modal's own content first.
+   */
+  async openDistributeModalAndReadDetails(): Promise<{
+    unallocatedText: string;
+    newAmounts: string[];
+  }> {
+    await this.click(this.distributeUnallocatedButton(), 'Distribute Equally banner');
+    await this.distributeModal().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    const unallocatedValueEl = this.distributeModal().locator('.distribute-modal__unallocated-value');
+    // WHY wait for real (non-empty) text, not just container-visible
+    // (flagged by locator-reviewer, 2026-08-10): the modal container can
+    // become visible before its own values finish an async recalculation —
+    // the same class of race already documented on the sibling banner-
+    // detection method above.
+    await expect
+      .poll(async () => (await unallocatedValueEl.textContent())?.trim() ?? '', {
+        timeout: config.timeouts.expect,
+      })
+      .not.toBe('');
+    const unallocatedText = (await unallocatedValueEl.textContent()) ?? '';
+    const newAmounts = await this.distributeModal()
+      .locator('.distribute-modal__table .distribute-modal__new-value')
+      .allTextContents();
+    logger.info(
+      `Distribute modal: unallocated=${unallocatedText}, ${newAmounts.length} installment new-values read`
+    );
+    return { unallocatedText, newAmounts };
+  }
+
+  /**
+   * Clicks "Yes, Proceed" on an already-open Distribute Unallocated Amount
+   * modal (see `openDistributeModalAndReadDetails()`) and waits for it to
+   * close.
+   */
+  async proceedDistributeEqually(): Promise<void> {
+    await this.click(this.distributeProceedButton(), 'Distribute Equally: Yes, Proceed');
+    await this.distributeModal()
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* modal may already be fully detached rather than merely hidden */
+      });
+    logger.success('Distribute Equally: proceeded');
+  }
+
+  /**
+   * Asserts the "unallocated amount" banner is gone — the real signal that
+   * proceeding with Distribute Equally actually resolved the mismatch.
+   * Public counterpart to `assertDistributeUnallocatedBannerVisible()`, so
+   * a test never needs its own raw locator duplicate (CLAUDE.md: "NEVER put
+   * locators in test files").
+   */
+  async assertDistributeUnallocatedBannerHidden(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.distributeUnallocatedButton(),
+        'Distribute Equally banner should be gone after proceeding'
+      ).toBeHidden({ timeout: config.timeouts.expect })
+    );
+    logger.success('Confirmed: Distribute Equally banner is gone');
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1246,15 +1449,75 @@ export class DealsPage extends BasePage {
     }, 'createDealWithPayments');
   }
 
-  async updateDeal(newData: DealData, originalName?: string, dealId?: number): Promise<void> {
+  // WHY `productNameToAttach` is a new, OPTIONAL 4th parameter, not a change
+  // to any existing behavior: `updateDeal()` never touched products at all
+  // before this — confirmed by reading its own pre-existing body plus
+  // `fillEditForm()`'s (see PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 6
+  // investigation). Every existing caller that doesn't pass this 4th arg
+  // gets byte-for-byte identical behavior (the `if` block below is simply
+  // never reached). Only a dedicated Products & Services integration test
+  // supplies it.
+  //
+  // WHY `addProductRowAndSearchByName()` (Batch 2's shared BasePage helper)
+  // rather than a Deal-specific implementation: confirmed live (2026-08-10)
+  // Deal's product-row control is the SAME react-select search component as
+  // Quotation's (identical `products.{row}.id` id convention, identical
+  // "Search ..." placeholder, identical live-search behavior, identical
+  // inactive-product exclusion at the search-endpoint level) — see Entry 25
+  // in the progress log for the full investigation. `addProductRow()` above
+  // is left completely untouched — still create-flow-only, still random.
+  async updateDeal(
+    newData: DealData,
+    originalName?: string,
+    dealId?: number,
+    productNameToAttach?: string
+  ): Promise<void> {
     return this.withSessionExpiryRetry(async () => {
       const searchName = originalName ?? newData.name;
       await this.searchAndOpenDeal(searchName, dealId);
       await this.clickEditIcon();
       await this.fillEditForm(newData);
+      if (productNameToAttach) {
+        await this.addProductRowAndSearchByName(
+          this.addNewProductButton(),
+          this.latestProductRowInput(),
+          this.page.locator('.is-invalid__menu .is-invalid__option'),
+          productNameToAttach,
+          true
+        );
+        // WHY here, right after the product attach and before any
+        // save/payment-assertion step: confirmed live (2026-08-10) this is
+        // the exact point the "unallocated amount" banner appears when the
+        // deal already has part-payment installments configured — Save
+        // silently no-ops (no network request attempted) until this is
+        // resolved. Conditional and safe for deals with no installments at
+        // all — see the method's own doc comment.
+        await this.handleDistributeUnallocatedAmountIfPresent();
+      }
       // WHY: Assert payment status and summary BEFORE saving —
       // verifies the UI reflects the Received status change in the edit modal.
-      await this.assertPaymentReceivedAfterEdit();
+      //
+      // WHY only the total-math sub-check is skipped, not the whole
+      // assertion, when `productNameToAttach` was just used (fixed
+      // 2026-08-10, real failure found via a genuinely new Batch 7 test —
+      // see PRODUCTS_AND_SERVICES_PROGRESS.md): adding a NEW product row
+      // legitimately increases the deal's Total (auto-calculated from
+      // products), but the existing part-payment installments were split
+      // against the OLD, smaller total set at create time and don't
+      // auto-redistribute — Total no longer equals Received + Remaining.
+      // That mismatch is an EXPECTED consequence of adding a product
+      // during edit, not a bug. The status/received/remaining-vs-total
+      // checks have nothing to do with the total change though, so they
+      // still run unconditionally — only `skipTotalMathCheck` narrows what
+      // gets skipped, per `locator-reviewer`'s advisory (2026-08-10): the
+      // first version of this fix skipped the entire method, silently
+      // losing real coverage (the "mark first installment Received"
+      // click's own UI verification) that has nothing to do with the
+      // product-total interaction. Of `updateDeal()`'s 9 real call sites
+      // (grep-confirmed), 8 are pre-existing and never pass
+      // `productNameToAttach` — unaffected, `skipTotalMathCheck` stays
+      // `false` for them; the 9th is this fix's own T11 caller.
+      await this.assertPaymentReceivedAfterEdit(Boolean(productNameToAttach));
       await this.saveEditedDeal();
     }, 'updateDeal');
   }
@@ -1767,7 +2030,14 @@ export class DealsPage extends BasePage {
   // future occurrence of this bug class (or any other request failure)
   // surfaces immediately instead of silently masquerading as "no contact
   // associated."
-  private async fetchCurrentDealApiData(): Promise<Record<string, unknown> | null> {
+  // WHY public (widened from private, 2026-08-10): a new dedicated test
+  // (D39, part-payment reconciliation after a mid-edit product add) needs
+  // to independently re-fetch the deal's real, persisted state after save —
+  // matching this session's own standing "prove it, don't infer it"
+  // standard — rather than trusting the UI alone. Zero behavior change:
+  // the method body and its one existing internal caller
+  // (`getAssociatedContacts()`) are unchanged.
+  async fetchCurrentDealApiData(): Promise<Record<string, unknown> | null> {
     const match = this.page.url().match(/\/deals\/details\/(\d+)/);
     if (!match) return null;
     const dealId = match[1];

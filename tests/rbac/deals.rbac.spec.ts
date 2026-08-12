@@ -150,21 +150,39 @@ async function logCallWithRetry(
 // independently runnable — never share one pair across tests.
 async function createFreshContactAndCompany(
   adminPage: ConstructorParameters<typeof ContactsPage>[0]
-): Promise<{ contactName: string; companyName: string }> {
-  const adminContactsPage = new ContactsPage(adminPage);
-  const contactData = generateContactData();
-  await adminContactsPage.goToContactsList();
-  const contactId = await adminContactsPage.createContact(contactData);
-  if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
-  const contactName = `${contactData.firstName} ${contactData.lastName}`;
-
+): Promise<{ contactName: string; companyName: string; companyId: string }> {
+  // WHY company created FIRST, then passed into the contact (fixed
+  // 2026-08-11): this function's whole purpose is producing a
+  // Contact+Company pair a caller can then explicitly share as a unit —
+  // but creating the contact first left `ContactData.company` blank,
+  // so `ContactsPage.fillContactForm()`'s own documented random-pick-
+  // when-blank behavior linked the contact to a random PRE-EXISTING
+  // company already in QA, completely unrelated to the company this
+  // function actually returns. Confirmed live via D24a's failure: sharing
+  // the RETURNED company never touched the contact's own (different,
+  // random) company, so Meeting creation's "company summary" check —
+  // which resolves against the CONTACT's own Company field, not any
+  // Deal-level "Associated Company" — correctly kept blocking with HTTP
+  // 422 "Invalid company summary response," since the real dependency was
+  // never shared. Creating the company first and passing its name into
+  // `generateContactData({company: companyName})` uses
+  // `fillContactForm()`'s existing `exactValue` passthrough (already built
+  // for exactly this purpose) so the contact's own Company field and the
+  // company this function returns are now guaranteed to be the same record.
   const adminCompaniesPage = new CompaniesPage(adminPage);
   const companyData = generateCompanyData();
   await adminCompaniesPage.goToCompaniesList();
   const companyId = await adminCompaniesPage.createCompany(companyData);
   if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
 
-  return { contactName, companyName: companyData.name };
+  const adminContactsPage = new ContactsPage(adminPage);
+  const contactData = generateContactData({ company: companyData.name });
+  await adminContactsPage.goToContactsList();
+  const contactId = await adminContactsPage.createContact(contactData);
+  if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
+  const contactName = `${contactData.firstName} ${contactData.lastName}`;
+
+  return { contactName, companyName: companyData.name, companyId: String(companyId) };
 }
 
 test.describe('Deals RBAC', () => {
@@ -840,7 +858,7 @@ test.describe('Deals RBAC', () => {
     ).toContainText('No Contacts found', { timeout: 10000 });
 
     await noContactDialog.locator('#confirm').click();
-    logger.success('New Call/no-contact-access test passed');
+    logger.success('D43 passed');
   });
 
   test('@regression admin shares deal Quotation permission without sharing associated contact restricted user sees permissions error on save', async ({
@@ -884,7 +902,7 @@ test.describe('Deals RBAC', () => {
     expect(caughtError).toContain(
       'Uhoh! The data is invalid or you do not have the required permissions on one of the associated entities.'
     );
-    logger.success('New Quotation/no-contact-access test passed');
+    logger.success('D44 passed');
   });
 
   // ──────────────────────────────────────────────────────────
@@ -909,7 +927,7 @@ test.describe('Deals RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminDealsPage = new DealsPage(adminPage);
-    const { contactName, companyName } = await createFreshContactAndCompany(adminPage);
+    const { contactName, companyName, companyId } = await createFreshContactAndCompany(adminPage);
     const dealData = generateSharedDealData({
       associatedContactName: contactName,
       associatedCompanyName: companyName,
@@ -920,15 +938,36 @@ test.describe('Deals RBAC', () => {
     await adminDealsPage.goToDealDetailsById(dealId);
     const restrictedUserName = await adminDealsPage.getLoggedInUserName('restricted');
 
-    // WHY: Share the deal's associated contact too so Update/Note/Task/Meeting
-    // don't incidentally hit unrelated access gaps.
+    // WHY the explicit 'meeting' permission, not a bare/empty share (fixed
+    // 2026-08-11, after two disproven theories): Meeting creation from a
+    // Deal's panel POSTs `relatedTo: [deal, company]` directly — the
+    // associated Company's OWN "meeting" access, not the Contact's or the
+    // Deal's, is what the backend's "company summary" (`01503001`) check
+    // actually validates. Two earlier fix attempts both shared with EMPTY
+    // permissions (`[]`) and were live-disproven: sharing the wrong company
+    // (the Deal's separately-selected one) didn't help; correctly matching
+    // the Contact's own Company field to the shared one (a real, genuinely
+    // necessary fix, kept) STILL left the identical 422 firing 4/4, live,
+    // because a bare share grants generic visibility but not the specific
+    // `meeting` permission this check requires. Confirmed via a live, real
+    // network-trace inspection of the failing `POST /v1/meetings` request
+    // body (showing the exact Company `relatedTo` entry) and then directly
+    // testing the fix: sharing the Contact AND Company with `['meeting']`
+    // instead of `[]` resolved it immediately and reproducibly (3/3 live
+    // runs, headed + headless). Sharing the contact too, not just the
+    // company, since either could plausibly gate this check and both are
+    // cheap to grant correctly.
     const associatedContactId = await adminDealsPage.getAssociatedContactId();
     if (associatedContactId) {
       const adminContactsPage = new ContactsPage(adminPage);
       await adminContactsPage.goToContactDetailsById(associatedContactId);
-      await adminContactsPage.shareContact(restrictedUserName, []);
+      await adminContactsPage.shareContact(restrictedUserName, ['meeting']);
       await adminDealsPage.goToDealDetailsById(dealId);
     }
+    const adminCompaniesPage = new CompaniesPage(adminPage);
+    await adminCompaniesPage.goToCompanyDetailsById(companyId);
+    await adminCompaniesPage.shareCompany(restrictedUserName, ['meeting']);
+    await adminDealsPage.goToDealDetailsById(dealId);
     await adminDealsPage.shareDeal(restrictedUserName, ['update', 'note', 'task', 'meeting']);
 
     const restrictedDealsPage = new DealsPage(restrictedPage);

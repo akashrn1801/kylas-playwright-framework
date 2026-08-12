@@ -258,6 +258,8 @@ export class LeadsPage extends BasePage {
       .locator('[id="5_21_input_products"]')
       .locator('xpath=ancestor::div[contains(@class,"__control")]');
 
+  private readonly productsInput = (): Locator => this.page.locator('[id="5_21_input_products"]');
+
   private readonly currencyControl = (): Locator =>
     this.page
       .locator('[id="5_22_input_requirementCurrency"]')
@@ -510,7 +512,14 @@ export class LeadsPage extends BasePage {
     }
   }
 
-  private async disableRequiredFieldsToggle(): Promise<void> {
+  // WHY public (widened from private, 2026-08-10, Batch 7 of the Products &
+  // Services work): a caller reaching the Requirement section's Products
+  // field WITHOUT filling the whole form (e.g. a standalone inactive-fixture
+  // absence check) still needs this toggle disabled first — the field is
+  // unreachable behind it otherwise (confirmed live). Purely a visibility
+  // change — the method's own body, and both of its existing internal call
+  // sites (fillLeadForm()/fillEditForm()), are completely unchanged.
+  async disableRequiredFieldsToggle(): Promise<void> {
     try {
       const toggle = this.showRequiredToggle();
 
@@ -647,6 +656,91 @@ export class LeadsPage extends BasePage {
     await this.fill(this.budgetInput(), String(req.budget), 'budget');
 
     logger.success('Requirement fields filled');
+  }
+
+  /**
+   * Attaches (or asserts the absence of) a specific product/service by exact
+   * name in the Requirement section's "Products or Services" field, via the
+   * shared, generic `BasePage.searchAndSelectByName()` (deterministic-by-name
+   * lookup, not this codebase's existing random pick).
+   *
+   * WHY this sits ALONGSIDE `fillLeadRequirement()` rather than replacing it:
+   * `fillLeadRequirement()`'s existing `selectRandomFromMultiValueReactSelect()`
+   * call is untouched — every pre-existing Lead test's random-pick behavior
+   * is unaffected. This is an additional, deterministic call path for tests
+   * that need to attach (or confirm the absence of) one specific, named
+   * product — e.g. a Products & Services fixture — not a replacement.
+   *
+   * WHY the "Show Required & Important Fields" toggle isn't handled here:
+   * the Requirement section (and this field within it) is only reachable
+   * after `disableRequiredFieldsToggle()` has already run — every caller of
+   * this method reaches it via `fillLeadForm()`/`fillEditForm()`'s existing
+   * sequence, which already calls that toggle first (confirmed live,
+   * 2026-08-10). A standalone caller bypassing that sequence would need to
+   * disable the toggle itself first.
+   *
+   * @param name Exact product/service name (e.g. a Products & Services
+   *             fixture's name).
+   * @param expectFound `true` → select it, assert it lands; `false` → assert
+   *             absence only, then stop (per
+   *             `BasePage.searchAndSelectByName()`'s own contract).
+   */
+  async attachProductByName(name: string, expectFound: boolean): Promise<void> {
+    // WHY check for an already-selected chip FIRST, only on the
+    // expectFound:true path (fixed 2026-08-10 — real, root-caused via live
+    // investigation, not a Kylas bug): the Requirement section's Products
+    // field is filled with a RANDOM 2-5-item pick during createLead()
+    // (fillLeadRequirement()'s own deliberate, untouched design) — that
+    // random pick can coincidentally already include the exact fixture this
+    // method is asked to attach. react-select correctly excludes an
+    // ALREADY-selected option from its own search results (confirmed live:
+    // a lead whose random pick already included "AutoFixture Admin
+    // Product" showed zero search results for it, while a DIFFERENT
+    // not-yet-selected fixture searched fine) — that's normal, working
+    // behavior, not an absence. The goal this method exists to prove
+    // ("this product IS attached to the lead") is already satisfied in that
+    // case, so search for it and fail would be wrong. Deliberately NOT
+    // applied to the expectFound:false (absence-check) path — an inactive
+    // fixture being unexpectedly already-selected there would be a real,
+    // separate problem worth surfacing, not something to paper over.
+    if (expectFound) {
+      const control = this.productsInput().locator(
+        'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+      );
+      const alreadySelected = await control
+        .locator('.is-invalid__multi-value__label')
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`) })
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false);
+      if (alreadySelected) {
+        logger.success(`Product already attached (from the existing random pick): "${name}"`);
+        return;
+      }
+    }
+    await this.searchAndSelectByName(
+      this.productsInput(),
+      this.page.locator('.is-invalid__menu .is-invalid__option'),
+      name,
+      expectFound
+    );
+  }
+
+  // WHY this exists (2026-08-11, PS10 fix — Group B staging-run
+  // investigation): `attachProductByName(expectFound: true)`'s own
+  // already-selected check only protects against ONE specific name
+  // colliding with `fillLeadRequirement()`'s random create-time pick — it
+  // can't help a caller that wants a deterministic guarantee the field is
+  // completely empty before attaching. `fillLeadRequirement()` itself
+  // can't be parameterized to skip its random pick without touching shared
+  // logic every Lead test depends on (ripple-check risk not worth taking
+  // for one test's needs) — clearing the field afterward, during the
+  // update step, achieves the same deterministic end state without
+  // touching the create flow at all. Thin wrapper around the shared
+  // BasePage.clearAllChipsFromMultiSelect() — no new interaction logic.
+  async clearAllProducts(): Promise<void> {
+    await this.clearAllChipsFromMultiSelect(this.productsControl(), 'Products or Services');
+    logger.success('Cleared all products from Requirement section');
   }
 
   // WHY: single choke point for filling all 9 Lead custom fields — called
@@ -924,8 +1018,23 @@ export class LeadsPage extends BasePage {
       );
       return { id: null, transient };
     } catch (error) {
-      logger.debug(`Lead create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false };
+      // WHY reclassified from non-transient to transient (fixed 2026-08-11,
+      // staging run failure — Group C, call-logs.rbac.spec.ts via
+      // createOwnedLead()): this catch fires when armResponseWaitWithRecovery
+      // never observed a matching POST /v1/leads response at all (most
+      // plausibly a real, if rare, response-wait timeout under staging's
+      // real --workers=2 concurrent load) — a fundamentally different
+      // situation from a definitively-received non-2xx response body. The
+      // old `transient: false` here meant saveLead()'s own already-existing
+      // bounded 3-attempt retry (proven for genuine transient backend
+      // errors — see createLead()) never got a chance to run for this case,
+      // so a single slow/missed response permanently failed the whole
+      // create with "Lead ID not captured after save." Treating "we never
+      // observed a response" as retryable, same as a confirmed transient
+      // backend error, lets the existing retry mechanism attempt recovery
+      // instead of failing immediately on what may just be a timing miss.
+      logger.warn(`Lead create response not captured (${String(error)}) — treating as TRANSIENT (will retry whole create)`);
+      return { id: null, transient: true };
     }
   }
 

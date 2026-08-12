@@ -1134,6 +1134,65 @@ export class BasePage {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  // WHY this exists (2026-08-11, found via a real test failure): a Products
+  // & Services test hand-rolled `page.request.get(buildApiUrl(...))` to
+  // verify persisted data — this app has NO cookie-based session at all
+  // (confirmed repeatedly elsewhere in this codebase), so Playwright's
+  // `APIRequestContext` (which only carries browser-context cookies) never
+  // attaches the required `Authorization: Bearer <token>` header, and every
+  // such call gets a 403 regardless of whether the underlying data is
+  // correct — live-confirmed via a full network trace. `DealsPage`'s own
+  // `fetchCurrentDealApiData()` already solved this correctly (extract the
+  // JWT from `localStorage` inside the page context, decode it, `fetch()`
+  // with the real bearer token attached) but was Deal-specific and private.
+  // Generalized here so any module needing an authenticated read-only API
+  // check can reuse this instead of a third hand-rolled copy — per rule 1
+  // (reuse/generalize before building a new instance of the same shape).
+  async fetchAuthenticatedApiData(url: string): Promise<Record<string, unknown> | null> {
+    const result = await this.page.evaluate(async (fetchUrl) => {
+      try {
+        const raw = localStorage.getItem('token');
+        if (!raw) return { ok: false as const, reason: 'no-token-in-localStorage' };
+        const payload = JSON.parse(atob(raw.split('.')[1]));
+        const accessToken = payload?.data?.accessToken;
+        if (!accessToken) return { ok: false as const, reason: 'no-accessToken-in-decoded-token' };
+        const res = await fetch(fetchUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const bodyText = await res.text().catch(() => '');
+        if (!res.ok) {
+          return {
+            ok: false as const,
+            reason: 'http-error',
+            status: res.status,
+            body: bodyText.slice(0, 500),
+          };
+        }
+        let json: Record<string, unknown> | null = null;
+        try {
+          json = JSON.parse(bodyText);
+        } catch {
+          /* leave json null — reported as a distinct reason below */
+        }
+        return { ok: true as const, data: json };
+      } catch (e) {
+        return { ok: false as const, reason: 'exception', message: String(e) };
+      }
+    }, url);
+
+    if (!result.ok) {
+      const detail =
+        result.reason === 'http-error'
+          ? `HTTP ${result.status}${result.body ? ` — ${result.body}` : ''}`
+          : result.reason === 'exception'
+            ? result.message
+            : result.reason;
+      logger.warn(`fetchAuthenticatedApiData: GET ${url} did not return usable data (${detail})`);
+      return null;
+    }
+    return result.data;
+  }
+
   // WHY this exists (2026-07-30, found via a real CI failure): every
   // share/reassign flow across Lead/Deal/Contact/Company independently
   // duplicated the same shape — fill a user-search input, wait up to 5-10s
@@ -1469,17 +1528,19 @@ export class BasePage {
   //
   // Selects a RANDOM COUNT between 2 and however many options actually
   // exist live — computed from the live option count, never a fixed number.
-  async selectRandomFromMultiValueReactSelect(
-    control: Locator,
-    description: string
-  ): Promise<string[]> {
-    // WHY: confirmed live (2026-07-08 update-path investigation) — on edit,
-    // this field already has chips selected from create. Without clearing
-    // them first, newly-clicked options ADD to the existing selection
-    // instead of replacing it (confirmed by the math: an edit that selected
-    // 4 new options produced 8 total selected — the union of the old 4 and
-    // the new 4). An update must replace, not accumulate, so remove every
-    // existing chip before selecting the new set.
+  // WHY extracted into its own standalone method (2026-08-11, PS10 fix —
+  // Group B staging-run investigation): originally inline only inside
+  // selectRandomFromMultiValueReactSelect() below. Needed standalone so a
+  // caller can guarantee a multi-select field starts genuinely empty
+  // WITHOUT also picking a new random set immediately after — e.g. clearing
+  // a Lead's "Products or Services" field of whatever fillLeadRequirement()'s
+  // own random create-time pick happened to attach, before then attaching
+  // one specific, named fixture product deterministically. Pure
+  // extract-method refactor — the loop body, bounds, and error messages are
+  // byte-for-byte unchanged; selectRandomFromMultiValueReactSelect() below
+  // now calls this instead of running the same loop inline, with zero
+  // behavior change to that method's own callers.
+  async clearAllChipsFromMultiSelect(control: Locator, description: string): Promise<void> {
     // WHY: bounded — confirmed live (2026-07-08) that an unbounded version of
     // this loop can hang for the entire test timeout if a chip's remove
     // button doesn't detach the chip on click (stale reference/re-render
@@ -1527,6 +1588,20 @@ export class BasePage {
         `${description}: ${remainingChips} chip(s) still present after the clear loop reported done — clearing is unreliable`
       );
     }
+  }
+
+  async selectRandomFromMultiValueReactSelect(
+    control: Locator,
+    description: string
+  ): Promise<string[]> {
+    // WHY: confirmed live (2026-07-08 update-path investigation) — on edit,
+    // this field already has chips selected from create. Without clearing
+    // them first, newly-clicked options ADD to the existing selection
+    // instead of replacing it (confirmed by the math: an edit that selected
+    // 4 new options produced 8 total selected — the union of the old 4 and
+    // the new 4). An update must replace, not accumulate, so remove every
+    // existing chip before selecting the new set.
+    await this.clearAllChipsFromMultiSelect(control, description);
 
     // WHY: this very first open always happens with zero chips selected
     // (the chip-clearing block above guarantees it) — clicking the control
@@ -1702,26 +1777,30 @@ export class BasePage {
   }
 
   // WHY: matches the react-dates SingleDatePicker pattern already proven in
-  // QuotationsPage.selectDateInPicker() — confirmed live (2026-07-08) that
-  // Lead's "Date" custom field uses the identical widget.
+  // QuotationsPage.selectDateInPicker()/DealsPage.selectDateInPicker() —
+  // confirmed live (2026-08-10) that custom Date/DateTimePicker fields use
+  // the IDENTICAL widget (same `.SingleDatePicker td[aria-label]` cell
+  // structure, same aria-label format via the byte-identical
+  // formatDateForCalendarLabel()/formatCustomFieldDateLabel() functions,
+  // same forward-navigation button text) — not a different component.
   //
-  // WHY read-the-calendar instead of guess-a-direction: an earlier version
-  // of this method tried "search forward N months, then reset and search
-  // backward N months" — this failed live in a case where the target date
-  // exactly equaled the field's current value (zero navigation should have
-  // been needed) yet the calendar had opened on a month 6 months away in
-  // EITHER direction from that value, disproving the assumption that the
-  // calendar always starts on the field's current value's month. Guessing
-  // a starting position and a search direction is fundamentally the wrong
-  // approach when the starting position isn't reliably knowable in advance.
-  // CallLogsPage.selectDateInPicker() (proven across 43 passing tests)
-  // solves this correctly: read the aria-labels of whatever day cells are
-  // ACTUALLY rendered right now, parse their real month/year, and navigate
-  // toward the target relative to that — no assumption about the starting
-  // point required, because the direction is recomputed from reality on
-  // every iteration. Ported here with a fallback identical to CallLogsPage's:
-  // if 24 navigations still don't find it, type the date directly into the
-  // input as MM/DD/YYYY rather than continuing to click blindly.
+  // WHY the simple forward-only loop, replacing an earlier, more elaborate
+  // bidirectional-navigation version (fixed 2026-08-10 — see
+  // PRODUCTS_AND_SERVICES_PROGRESS.md): that version computed the
+  // currently-visible month range via a bounding-rect-filtered DOM read and
+  // decided forward-vs-backward from it, specifically to handle a
+  // once-observed edge case (target date === field's already-set value, yet
+  // the calendar opened months away). Live evidence this session showed
+  // that elaborate version failing 100% of the time in real custom-field
+  // test runs (always exhausting 24 attempts, always falling back to typing
+  // the date as text) — while this exact simple shape, used unmodified in
+  // Quotations/Deals for years of real runs, never fails. Per this
+  // codebase's own rule 12 (live evidence over assumption/inference), the
+  // proven-in-practice simple shape wins over the theoretically-more-robust
+  // but actually-broken one. The typing-fallback is KEPT (not deleted) as a
+  // defensive safety net in case a custom field's calendar ever opens
+  // further than 24 months from the target — never observed live, but a
+  // real fallback for an untested edge case is safer than none.
   async selectDateCustomField(
     fieldName: string,
     date: Date,
@@ -1737,94 +1816,103 @@ export class BasePage {
     const label = this.formatCustomFieldDateLabel(date);
     const dayCell = this.page.locator(`.SingleDatePicker td[aria-label="${label}"]`);
     const forwardButton = this.page.getByLabel('Move forward to switch to the next month.');
-    const backwardButton = this.page.getByLabel('Move backward to switch to the previous month.');
+    await forwardButton.waitFor({ state: 'visible', timeout: config.timeouts.expect });
 
-    let found = await dayCell.isVisible({ timeout: 1500 }).catch(() => false);
-    const targetMonthKey = date.getFullYear() * 12 + date.getMonth();
+    // WHY 400ms, not the 1000ms this shape uses in Quotations/Deals' own
+    // separate, untouched native date-pickers (fixed 2026-08-10, per the
+    // user's own speed investigation — see PRODUCTS_AND_SERVICES_PROGRESS.md):
+    // custom-field dates are always generated 0-30 days out and the
+    // calendar always opens on the current month, so at most ONE forward
+    // click is ever needed — the real cost was an unconditional ~1000ms
+    // wasted wait on the FIRST (usually-failing, when a click IS needed)
+    // check, timed out on the FULL budget every time since a failed
+    // `waitFor` can't resolve early. Real observed render time for a
+    // genuinely-visible cell is well under 100ms (measured live this
+    // session) — 400ms keeps a real ~4x safety margin over that while
+    // roughly halving the worst-case (one-navigation) total time. Scoped to
+    // only this method's own two checks — does not touch the
+    // 1000ms value the sibling native-field methods still use.
+    let found = false;
+    try {
+      await dayCell.waitFor({ state: 'visible', timeout: 400 });
+      found = true;
+    } catch {
+      found = false;
+    }
     let attempts = 0;
     while (!found && attempts < 24) {
-      // WHY: confirmed live (2026-07-16 root-cause pass) — react-dates keeps
-      // THREE months' worth of `td[aria-label]` cells in the DOM
-      // simultaneously (the visible month(s) plus a pre-rendered buffer
-      // month for smooth forward/backward transitions), but only the ones
-      // actually within the picker's own clipped, visible bounds are real —
-      // the buffer month's cells are still real DOM nodes with a valid
-      // aria-label, just off-screen. The previous version queried ALL cells
-      // with no visibility filtering at all, so minVisibleMonth/
-      // maxVisibleMonth were computed from a range up to a full month wider
-      // than what was actually clickable — causing the direction decision
-      // below to be wrong (or a false "already in range" conclusion) exactly
-      // often enough to exhaust all 24 attempts without ever converging,
-      // reproduced live as a consistent, slow fallback-to-typing on nearly
-      // every custom-field date fill. Filtering to cells whose own bounding
-      // rect falls inside the picker container's rect (confirmed live this
-      // correctly excludes the buffer month while keeping the genuinely
-      // visible one(s)) fixes the root cause instead of retrying around it.
-      const visibleMonthKeys: number[] = await this.page.evaluate(() => {
-        const container = document.querySelector(
-          '[class*="SingleDatePicker_picker"]'
-        ) as HTMLElement | null;
-        const containerRect = container?.getBoundingClientRect() ?? null;
-        return Array.from(document.querySelectorAll('.SingleDatePicker td[aria-label]'))
-          .filter((cell) => {
-            if (!containerRect) return true;
-            const r = cell.getBoundingClientRect();
-            return (
-              r.width > 0 &&
-              r.height > 0 &&
-              r.left >= containerRect.left - 5 &&
-              r.right <= containerRect.right + 5
-            );
-          })
-          .map((cell) => {
-            // WHY: strip status prefixes like "Selected. "/"Not available. "
-            // before parsing — otherwise those cells are silently dropped.
-            const cellLabel =
-              cell.getAttribute('aria-label')?.replace(/^[A-Za-z ]+\.\s*/, '') ?? null;
-            const parsed = cellLabel ? new Date(cellLabel) : null;
-            return parsed && !isNaN(parsed.getTime())
-              ? parsed.getFullYear() * 12 + parsed.getMonth()
-              : null;
-          })
-          .filter((v): v is number => v !== null);
-      });
-      const backVisible = await backwardButton.isVisible().catch(() => false);
-      const forwardVisible = await forwardButton.isVisible().catch(() => false);
-      const minVisibleMonth = visibleMonthKeys.length ? Math.min(...visibleMonthKeys) : null;
-      const maxVisibleMonth = visibleMonthKeys.length ? Math.max(...visibleMonthKeys) : null;
-      const shouldGoBack =
-        minVisibleMonth !== null && targetMonthKey < minVisibleMonth
-          ? true
-          : maxVisibleMonth !== null && targetMonthKey > maxVisibleMonth
-            ? false
-            : backVisible;
-      if (shouldGoBack && backVisible) {
-        await backwardButton.click();
-      } else if (forwardVisible) {
-        await forwardButton.click();
-      } else if (backVisible) {
-        await backwardButton.click();
+      await forwardButton.click();
+      try {
+        await dayCell.waitFor({ state: 'visible', timeout: 400 });
+        found = true;
+      } catch {
+        attempts++;
       }
-      found = await dayCell
-        .waitFor({ state: 'visible', timeout: 400 })
-        .then(() => true)
-        .catch(() => false);
-      attempts++;
     }
+    // WHY this retry-with-reopen exists (found live, 2026-08-10, during the
+    // user's own navigation-speed investigation — see
+    // PRODUCTS_AND_SERVICES_PROGRESS.md's CRITICAL entry): a real,
+    // intermittent (~30-50% of real create+edit cycles observed) failure
+    // where `dayCell.click()` throws "element was detached from the DOM"
+    // after the cell was correctly found — always on the EDIT flow's FIRST
+    // calendar-driven interaction (Date or DateTimePicker), never on
+    // create. Live DOM instrumentation DISPROVED the original suspected
+    // mechanism ("previous field's calendar didn't finish closing before
+    // this one opened"): all of a Deal's SingleDatePicker widgets (13-16+
+    // observed live, one per part-payment row plus the two custom fields)
+    // are PERMANENTLY mounted and merely CSS-hidden — they never add/remove
+    // from the DOM as "open"/"closed", so there is no calendar-closing race
+    // to wait out. A 6-second idle-window mutation-observer probe
+    // immediately after the payment-status-change step (fillEditForm()'s
+    // step right before custom fields) also showed ZERO DOM mutations,
+    // ruling out a simple "wait longer" fix.
+    //
+    // WHY only ONE retry attempt, not several: a first version of this fix
+    // tried 3 reopen-and-retry attempts before falling back to typing.
+    // Real verification (12 real create+edit cycles, 7 of which hit this
+    // condition) showed the retry never once helped — 0 of 21 individual
+    // click attempts (7 occurrences × 3 attempts each) succeeded; every
+    // single occurrence exhausted all 3 attempts and fell through to
+    // typing regardless. This is real evidence the condition, once
+    // triggered, is SUSTAINED across the whole multi-second retry window
+    // for that field — not a one-moment blip a quick re-click can dodge.
+    // (The exact trigger is still not pinned down with full certainty;
+    // the leading theory is fillEditForm()'s preceding rapid-fire field
+    // fills — name, utm, 4 text-like custom fields, all ~60-120ms apart,
+    // far faster than a real user — leaving a React re-render lagging
+    // behind into the edit session's first calendar interaction.) Given
+    // retries provably added ~8s of pure waste with zero observed benefit,
+    // this keeps exactly one cheap attempt (in case a future occurrence
+    // ever is transient) then defers immediately to the already-proven
+    // typing fallback, rather than wasting time repeating an approach the
+    // real data says doesn't work.
+    const clickDayCellOnce = async (): Promise<boolean> => {
+      try {
+        await dayCell.click({ timeout: 5000 });
+        return true;
+      } catch {
+        logger.warn(
+          `Custom field "${description}" (cf${fieldName}): day cell click failed (likely a detached/re-rendered cell, confirmed sustained rather than momentary — see BasePage's selectDateCustomField comment) — falling back to typing the date directly`
+        );
+        return false;
+      }
+    };
+
     if (!found) {
       logger.warn(
         `Custom field "${description}" (cf${fieldName}): day cell not found after ${attempts} calendar navigations — falling back to typing the date directly`
       );
-      await this.page.keyboard.press('Escape');
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
-      const yyyy = date.getFullYear();
-      await input.click({ clickCount: 3 });
-      await input.fill(`${mm}/${dd}/${yyyy}`);
-      await this.page.keyboard.press('Tab');
-    } else {
-      await dayCell.click();
+    } else if (await clickDayCellOnce()) {
+      logger.success(`Custom field "${description}" date set to: ${date.toDateString()}`);
+      return;
     }
+    await this.page.keyboard.press('Escape');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    await input.click({ clickCount: 3 });
+    await input.fill(`${mm}/${dd}/${yyyy}`);
+    await this.page.keyboard.press('Tab');
     logger.success(`Custom field "${description}" date set to: ${date.toDateString()}`);
   }
 
@@ -2283,6 +2371,271 @@ export class BasePage {
     await this.fill(addressInput, manualAddress, description);
     logger.info(`Manual ${description} entered: ${manualAddress}`);
     return manualAddress;
+  }
+
+  // ─── Product/Lookup Row Helpers (generic — reusable across entities/modules) ─────
+  // WHY these live here rather than in ProductsAndServicesPage/DealsPage/
+  // QuotationsPage: the design explicitly calls for generalized, locator-
+  // parameterized helpers (not hardcoded to "the product field") so the next
+  // module that needs the same interaction shape reuses these unchanged — the
+  // same reuse reasoning already applied to selectLookupCustomField() and
+  // selectRandomFromMultiValueReactSelect() above. Deals' and Quotations'
+  // product-row "Add New" trigger is confirmed to share the identical
+  // `span.add-new-product` selector; the row-search-then-select mechanic is
+  // confirmed identical on both (Deals differs only in lacking Quotations'
+  // row-indexed quantity/price/discount inputs, which is irrelevant to these
+  // generic helpers — they only ever touch the product-id search control).
+
+  /**
+   * Adds a new product row to a Deal/Quotation form and searches for a
+   * product by exact name.
+   *
+   * @param addRowTrigger The module's "Add New" product-row button (e.g.
+   *                       `span.add-new-product`).
+   * @param searchInput   The newly-added row's product search `<input>` —
+   *                       NOT its ancestor control. This method derives the
+   *                       control internally via the same
+   *                       `xpath=ancestor::div[contains(@class,"is-invalid__control")]`
+   *                       pattern already used by selectLookupCustomField().
+   * @param optionList    The menu-scoped options locator (e.g.
+   *                       `.is-invalid__menu .is-invalid__option`) — never the
+   *                       page-wide `.is-invalid__option` (the documented
+   *                       Issue-1 flake source).
+   * @param name          Exact product name to search for and select.
+   * @param expectFound
+   *   `true`  → search, click the matching option, assert it renders as the
+   *             row's selected value.
+   *   `false` → search, assert NO matching option renders, then STOP. Caller
+   *             must NOT proceed to save — the row is left intentionally
+   *             incomplete, and saving an empty product row triggers an
+   *             unrelated validation error. This method's contract for
+   *             `expectFound: false` is "assert absence only," nothing more.
+   */
+  async addProductRowAndSearchByName(
+    addRowTrigger: Locator,
+    searchInput: Locator,
+    optionList: Locator,
+    name: string,
+    expectFound: boolean
+  ): Promise<void> {
+    await this.click(addRowTrigger, 'Add New product row');
+    const control = searchInput.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
+    // WHY click the control div, not the input: the "Search ..." placeholder
+    // overlays the input and intercepts pointer events on first open — the
+    // same confirmed race as selectLookupCustomField() and this app's own
+    // Category/Units controls (live-confirmed 2026-08-10 on the Products &
+    // Services create form).
+    await this.click(control, `product row search control: ${name}`);
+
+    if (expectFound) {
+      await this.fillSearchAndWaitForOptions(
+        searchInput,
+        optionList,
+        name,
+        `Product row search: ${name}`
+      );
+      const exactOption = optionList
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`) })
+        .first();
+      await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await exactOption.click();
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+        .catch(() => {
+          /* menu may already be gone */
+        });
+      await expect(
+        control,
+        `Product row: expected "${name}" to render as the selected value after selection`
+      ).toContainText(name, { timeout: config.timeouts.expect });
+      logger.success(`Product row: selected "${name}"`);
+      return;
+    }
+
+    // expectFound === false: assert absence, then stop.
+    //
+    // WHY arm a response wait BEFORE typing (mirrors
+    // assertLookupCustomFieldOptionAbsent()'s identical reasoning): a
+    // Playwright `toBeHidden()` check against a locator with ZERO current DOM
+    // matches resolves TRUE INSTANTLY — "no elements matching = hidden" is
+    // trivially satisfied the moment we check, with no polling wait at all,
+    // regardless of the timeout passed in. Without first confirming the async
+    // search actually returned, we'd get a false pass the instant we check —
+    // before the (possibly slower) live lookup has had any chance to reveal
+    // the option. Arm the wait before typing so the response event can't be
+    // missed.
+    //
+    // WHY this specific URL pattern (`/v1/products/(search|lookup)`): the
+    // Products module's OWN list/create/duplicate-check flows are confirmed
+    // live to use `/v1/products/search` (POST) and `/v1/products/lookup`
+    // (GET) — see PRODUCTS_AND_SERVICES_PROGRESS.md's live-investigation
+    // entry. This module's own async product search is a strong, but NOT
+    // independently network-captured, inference that the embedded row search
+    // reuses one of these same two endpoints (Kylas's own convention is one
+    // shared lookup endpoint per entity, reused across every embedding
+    // context — the same convention selectLookupCustomField()/
+    // selectRandomFromSearchableReactSelect() already rely on for Company/
+    // Contact lookups). Flagged here as inferred hardening, not a proven
+    // fact — verify live the first time this `expectFound: false` path
+    // actually runs (Batch 8's inactive-product-absence tests), and widen/
+    // correct this pattern then if the real embedded search hits something
+    // else. Scoped to the real versioned path per rule 15 — never a bare
+    // substring, and this pattern cannot match an unrelated `/reports/` call.
+    const searchReturned = this.page
+      .waitForResponse((res) => /\/v1\/products\/(search|lookup)(\?|$)/i.test(res.url()), {
+        timeout: config.timeouts.expect,
+      })
+      .catch(() => null);
+    await searchInput.fill(name);
+    await searchReturned;
+    const namedOption = optionList.filter({
+      hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`),
+    });
+    await expect(
+      namedOption,
+      `Product row: "${name}" should NOT be selectable (expected inactive/excluded)`
+    ).toBeHidden({ timeout: config.timeouts.expect });
+    logger.success(`Product row: confirmed "${name}" is not selectable, as expected`);
+  }
+
+  /**
+   * Removes a product row from a Deal/Quotation form.
+   *
+   * WHY not called by any test written so far: per the design, this exists
+   * for any FUTURE test that needs to check-absence-then-continue-with-the-
+   * rest-of-the-form (the current inactive-product-absence tests deliberately
+   * stop after asserting absence — see addProductRowAndSearchByName()'s own
+   * `expectFound: false` contract — because continuing to save with an empty
+   * row triggers an unrelated validation error).
+   *
+   * WHY this exact selector: confirmed live (2026-08-10) against a real
+   * Deal's product row — the remove trigger is a bare FontAwesome icon,
+   * `<i class="fas fa-times pr-2 pt-2 cursor-pointer">`, a sibling of the
+   * row's Total field, NOT a `<button>`/`<svg>` and with no
+   * "remove"/"delete" wording anywhere in its class or attributes — the
+   * original guessed selector (button/aria-label/class-name-based) would
+   * never have matched this real element. Scoped to `i.fa-times` within the
+   * given row (not page-wide) since react-select's own clear-indicator
+   * icons elsewhere in the row are real `<svg>` elements, not `<i>`, so
+   * there's no collision risk from broadening slightly to any `fa-times`
+   * icon inside this specific row.
+   *
+   * @param rowLocator The specific row to remove (e.g. a row wrapper `div`/`tr`
+   *                    scoped to one product line item).
+   */
+  async removeProductRow(rowLocator: Locator): Promise<void> {
+    const removeTrigger = rowLocator.locator('i.fa-times.cursor-pointer').first();
+    const triggerCount = await removeTrigger.count();
+    if (triggerCount === 0) {
+      throw new Error(
+        'removeProductRow: no remove/delete trigger found within the given row locator — ' +
+          'this selector is unverified against the live DOM (see method comment); confirm the ' +
+          'real element live before relying on this method.'
+      );
+    }
+    await this.click(removeTrigger, 'remove product row');
+    await rowLocator.waitFor({ state: 'hidden', timeout: config.timeouts.expect }).catch(() => {
+      /* row may already be fully detached rather than merely hidden */
+    });
+    logger.success('Product row removed');
+  }
+
+  /**
+   * Generic async-search-then-select, for lookup fields that filter as you
+   * type (e.g. Lead's Requirement-section "Products or Services" field).
+   * Different mechanic from addProductRowAndSearchByName() above — this is a
+   * single lookup input with its own options menu, not a row-based list.
+   *
+   * WHY this takes raw locators rather than a field-name string (unlike
+   * selectLookupCustomField()): this is the non-custom-field counterpart —
+   * it must work for a plain, always-present control like Lead's Products
+   * field, which has no `cf<Name>` custom-field id to key off. Any future
+   * module's own plain lookup field reuses this unchanged.
+   *
+   * WHY the search term is the first word of `name`, not the full string:
+   * mirrors LeadsPage.fillLeadLookupCustomFields()'s own
+   * `name.trim().split(/\s+/)[0]` pattern exactly — the live server search
+   * matches a single token, and typing a full multi-word name can return
+   * zero results even though an exact-text option match on the full name
+   * would otherwise succeed once results are showing.
+   *
+   * WHY `expectFound` (added 2026-08-10, for Lead's Products-field
+   * inactive-fixture-absence check): mirrors
+   * addProductRowAndSearchByName()'s identical contract — `false` types the
+   * FULL name (not just the first token, unlike the found path) and asserts
+   * it never becomes selectable, then stops; it never proceeds to select
+   * anything, since a caller checking absence has nothing valid to select.
+   * The absence-path's response-wait URL pattern
+   * (`/v1/products/(search|lookup)`) is confirmed live (2026-08-10, via a
+   * real network capture on Lead's own Products field:
+   * `GET /v1/products/lookup?q=name:...`) to be the same endpoint
+   * addProductRowAndSearchByName() already targets — not a fresh guess.
+   *
+   * @param lookupInput The lookup field's own `<input>` (its ancestor control
+   *                     is derived internally, same as
+   *                     addProductRowAndSearchByName()).
+   * @param optionList  The menu-scoped options locator.
+   * @param name        Exact option text to select (or to assert absent).
+   * @param expectFound `true` → search+select+assert-selected; `false` →
+   *                     assert absence only, then stop.
+   */
+  async searchAndSelectByName(
+    lookupInput: Locator,
+    optionList: Locator,
+    name: string,
+    expectFound: boolean
+  ): Promise<void> {
+    const control = lookupInput.locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
+    // WHY click the control div, not the input: identical confirmed race as
+    // selectLookupCustomField() and addProductRowAndSearchByName() above.
+    await this.click(control, `lookup control: ${name}`);
+
+    if (expectFound) {
+      const searchToken = name.trim().split(/\s+/)[0];
+      await this.fillSearchAndWaitForOptions(
+        lookupInput,
+        optionList,
+        searchToken,
+        `Search and select: ${name}`
+      );
+      const exactOption = optionList
+        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`) })
+        .first();
+      await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await exactOption.click();
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+        .catch(() => {
+          /* menu may already be gone */
+        });
+      logger.success(`Search and select: selected "${name}"`);
+      return;
+    }
+
+    // expectFound === false: assert absence, then stop. See
+    // addProductRowAndSearchByName()'s identical branch for the full
+    // reasoning on arming the response wait BEFORE typing.
+    const searchReturned = this.page
+      .waitForResponse((res) => /\/v1\/products\/(search|lookup)(\?|$)/i.test(res.url()), {
+        timeout: config.timeouts.expect,
+      })
+      .catch(() => null);
+    await lookupInput.fill(name);
+    await searchReturned;
+    const namedOption = optionList.filter({
+      hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`),
+    });
+    await expect(
+      namedOption,
+      `Lookup: "${name}" should NOT be selectable (expected inactive/excluded)`
+    ).toBeHidden({ timeout: config.timeouts.expect });
+    logger.success(`Lookup: confirmed "${name}" is not selectable, as expected`);
   }
 
   async getLoggedInUserName(role: 'admin' | 'restricted' = 'restricted'): Promise<string> {

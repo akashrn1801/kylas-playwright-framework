@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 285 tests across 9 modules (17 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 329 tests across 10 modules (19 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -35,197 +35,35 @@ This document is written so a new engineer — or any of us in six months — ca
 | **CI** | GitHub Actions (primary for most branches) + Jenkins (primary for `prod`/`main`, manual fallback elsewhere) |
 | **Runtime** | Node `>=20.0.0`, npm `>=10.0.0` |
 
-**Modules covered** (9): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
+**Modules covered** (10): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-07-27, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-08-12, do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
-| Call Logs | 21 | 22 | 43 |
+| Call Logs | 26 | 24 | 50 |
 | Companies | 19 | 22 | 41 |
 | Contacts | 19 | 19 | 38 |
 | Dashboard/Login | 4 | — | 4 |
-| Deals | 19 | 25 | 44 |
+| Deals | 21 | 25 | 46 |
 | Leads | 21 | 27 | 48 |
-| Meetings | 8 | 8 | 16 |
-| Quotations | 15 | 14 | 29 |
-| Tasks | 11 | 11 | 22 |
-| **Total** | **137** | **148** | **285** |
+| Meetings | 15 | 8 | 23 |
+| Products & Services | 9 | 7 | 16 |
+| Quotations | 21 | 14 | 35 |
+| Tasks | 15 | 13 | 28 |
+| **Total** | **170** | **159** | **329** |
 
-Leads gained 4 tests on 2026-07-21/22: L20/L21 (UI) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
+Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
 ---
 
 ## Architecture — How It's Built
 
-### Page Object Model, anchored on `BasePage`
+Every page object (`src/modules/<module>/<Module>Page.ts`) extends `src/core/BasePage.ts` and follows a fixed 10-section structure (retry config → locators → constructor → private helpers → navigation → form actions → search & open → edit actions → assertions → workflow wrappers); locators are always lazily-evaluated arrow functions, never captured eagerly. Tests import `test`/`expect` from the custom fixture system (`src/fixtures/index.ts`) — never from `@playwright/test` directly — which wraps every test in session-expiry protection, error collection, and automatic re-login before the first navigation. Authentication runs once per suite via `src/auth/globalSetup.ts`, with `AuthManager` caching session validity in-memory and locking concurrent storage-state writes so parallel CI workers can't corrupt each other's re-login. Each module owns a data factory (`src/data/factories/<module>Factory.ts`) exporting `generateXxxData()` / `generateAdminXxxData()` (`ADM<timestamp>` prefix) / `generateSharedXxxData()` (`SHR<timestamp>` prefix) — the prefix convention exists because QA/staging data is never cleaned up, so a distinguishing prefix is the only reliable way to make an RBAC negative assertion ("restricted user provably cannot see this record") trustworthy. Lead, Contact, Deal, and Company each carry 9 environment-conditional custom fields, handled by generic, presence-checked `BasePage` helpers so a module only needs a thin per-entity wrapper. `ErrorCollector` passively captures `pageerror`/`console-error`/`requestfailed`/HTTP `>=400` on every test, classified into Noise / Expected-RBAC / Known-background-noise before anything is reported as unexpected.
 
-Every page object (`src/modules/<module>/<Module>Page.ts`) extends `src/core/BasePage.ts`, which supplies the primitives every module reuses: `click`, `fill`, `selectOption`, `waitForVisible`/`waitForHidden`, `waitForUrl`, `assertVisible`/`assertText`/`assertUrl`, `assertNoFormErrors`, `takeScreenshot`, `isVisible`, `getText`, `navigateTo`, `reloadPage`, `getPageTitle`, `getCurrentUrl`, and `getLoggedInUserName`. Nothing module-specific lives in `BasePage` — it stays a thin, shared toolbox so a change to a wait helper doesn't require touching nine page objects.
+**Full architecture detail** (complete fixture/auth-flow mechanics, the page object's exact 10-section contract, custom-fields/GPS-lookup mechanism, retry tuning, error-collection classification rules, and Products & Services' deliberate deviations from this whole pattern): see `.claude/architecture.md`.
 
-Every page object follows the **same 10-section order**, top to bottom:
-
-1. `retryConfig` (reads `config.searchRetry` or `config.meetingRetry`)
-2. Locators (private `readonly` arrow functions returning `Locator`)
-3. Constructor (`super(page)`)
-4. Private Helpers
-5. Navigation
-6. Form Actions
-7. Search & Open
-8. Edit Actions
-9. Assertions
-10. Workflow Wrappers
-
-**Why this matters in practice:** with 9 modules maintained by more than one person, the cost of "where do I even look" compounds fast. A fixed section order means anyone can jump into an unfamiliar page object already knowing that retry tuning is at the top and workflow wrappers are at the bottom — no per-file archaeology. Locators are also always lazily-evaluated arrow functions (`private readonly foo = (): Locator => ...`), never captured eagerly at construction time, because the DOM element a locator resolves to may not exist yet when the page object is instantiated.
-
-### Custom fixture system (`src/fixtures/index.ts`)
-
-Never import `test`/`expect` from `@playwright/test` directly in a spec file — always from `src/fixtures/index.ts`. It exports:
-
-- **`adminPage`** / **`restrictedPage`** — the two fixtures nearly every test uses. Both call a shared `createRolePage()` helper that:
-  1. Gets a browser context via `AuthManager.getContextForRole(role)` (see below) instead of a raw `storageState`, so an expired session is transparently re-logged-in rather than failing the test.
-  2. Attaches `ErrorCollector` listeners (`pageerror`, `console-error`, `requestfailed`, response `>=400`) and a session-expiry listener (401 responses, or a mid-test redirect to `/signIn`) *before* the first navigation, so nothing from the very first page load is missed.
-  3. Navigates to the app and races two outcomes — landing on `/sales/` vs. being redirected to sign-in — rather than a single blind `waitForURL`. On a signed-out landing it forces a fresh login and retries once (2 attempts total) before failing loudly with the last-seen URL in the error message.
-  4. Dismisses the app's startup popup (`#cancel[data-dismiss="modal"]`) if present.
-  5. On CI, staggers `restrictedPage` startup by a random 0–3s to avoid concurrent-session conflicts when multiple workers log in around the same moment.
-- **`adminContext`** / **`restrictedContext`** — lighter-weight raw `BrowserContext` fixtures built directly from the saved `storageState` file, with none of the above error-listener/retry machinery. Use these only when a test genuinely doesn't need error capture or session-expiry handling.
-
-### Auth flow and session caching
-
-`src/auth/globalSetup.ts` runs once before the whole suite: logs in both roles, saves `src/auth/storageStates/<env>/<role>.json`, and captures each role's display name to `userNames.json`. During the run, `src/auth/authManager.ts`'s `AuthManager` class:
-
-- Caches session validity **in-memory per role for 30 minutes** (`SESSION_CACHE_MS`), so most tests skip the overhead of re-validating a session that was just checked.
-- Uses `withFileLock()` (an `fs.mkdirSync`-based atomic lock) around storage-state writes, so two CI workers racing a re-login don't corrupt each other's write — the actual file write itself is also rename-based (write-to-temp, then atomic rename) rather than a direct in-place overwrite.
-
-### Data factory pattern (`src/data/factories/`)
-
-One factory per module (`leadFactory.ts`, `contactFactory.ts`, `companyFactory.ts`, `dealFactory.ts`, `meetingFactory.ts`, `taskFactory.ts`, `quotationFactory.ts`, `callLogFactory.ts`), each exporting `generateXxxData()` plus RBAC-oriented variants:
-
-- `generateXxxData()` — plain Faker-generated data, used when a restricted user creates their own record (ownership is inherently theirs).
-- `generateAdminXxxData()` — prefixed `ADM<timestamp>` — admin-only data.
-- `generateSharedXxxData()` — prefixed `SHR<timestamp>` — data the admin creates specifically to then share with the restricted user.
-
-**Why the prefix+timestamp convention exists:** an RBAC test's entire assertion is "restricted user provably cannot see this record unless it's shared with them." Two problems make a plain Faker name insufficient for that: (1) the QA/staging environments never get cleaned up — every module's data accumulates indefinitely — so a search by a generic name can collide with old leftover records from a previous run and produce a false pass; (2) without a distinguishing prefix, there's no cheap way to tell "genuinely admin-owned, never shared" data apart from "shared" data when both need to exist side-by-side in the same test. The `ADM`/`SHR` prefix plus a timestamp makes every run's records uniquely searchable and unambiguously classifiable, which is what makes the negative assertion ("restricted user does NOT see this") trustworthy rather than accidental.
-
-`Country` defaults to `India` in every factory — a hard CRM-side validation requirement, not a test choice.
-
-### Custom fields and GPS address lookup
-
-Lead, Contact, Deal, and Company each have 9 admin-configured custom fields (Text, Paragraph, Number, PickList, MultiPickList, Checkbox, Date, DateTimePicker, URL) added by hand on QA today — they are environment-conditional, not guaranteed to exist on Stage/Prod yet (confirmed live 2026-07-28: Company's fields exist on QA, and gracefully skip via `test.skip()` on both Stage and Prod). `BasePage`'s "Custom Field Helpers" section holds every generic fill/select/assert method (parameterized by the raw Kylas field name, e.g. `"TextField"`), so a module only needs its own `<MODULE>_CUSTOM_FIELD_NAMES` constant (in its own factory) plus a thin `fill<Entity>CustomFields()`/`assert<Entity>CustomFieldsOnDetail()` wrapper — never a full reimplementation. Each generic method checks DOM presence first and skips gracefully (logging why) when a field doesn't exist in the current environment, so the exact same call site starts working unchanged the moment a field is added elsewhere. Company has no lookup-type custom field, same as Deal.
-
-Contact's address field (and Meeting's location field) also expose a "Get GPS Address" lookup — a live, Google-Places-style autocomplete search, not browser geolocation. `BasePage.fillAddressViaGpsOrManual()` (generalized out of `MeetingsPage.ts`, which had this logic private to itself until Contact needed it too) tries the GPS search first and falls back to the manual address string if the trigger isn't present or no predictions come back — returning whichever value was actually entered, since a live third-party lookup's result can't be hardcoded or assumed.
-
-Building Contact's custom-field support (2026-07-14/15) surfaced three real, pre-existing `ContactsPage.ts` bugs, fixed along the way rather than worked around: (1) `disableRequiredFieldsToggle()` clicked unconditionally, which could flip an already-off toggle back on and hide the fields it was meant to reveal; (2) `fillEditForm()` never called that toggle at all, so custom fields were unreachable on update; (3) `modalCancelButton()` was an unscoped, page-wide locator that could resolve to the wrong (hidden, 0×0) modal's close button and hang for the full test timeout — reproduced live as an 805-retry, 8-minute stall before being scoped to the actual open modal. All three mirror bugs already fixed in `LeadsPage.ts` at some point, just never triggered in Contact until a test exercised the exact code path that exposed them.
-
-Building Company's custom-field support (2026-07-28) was a mechanical port of the already-proven Lead/Contact/Deal pattern (`COMPANY_CUSTOM_FIELD_NAMES` in `companyFactory.ts`, `fillCompanyCustomFields()`/`assertCompanyCustomFieldsOnDetail()`/`skipIfCustomFieldsAbsent()` in `CompaniesPage.ts`, wired into both `fillCompanyForm()` and `fillEditForm()`), confirmed live before writing any code: same 9 field internal names (`cfTextField`...`cfUrlField`), same single-scroll modal structure as Contact (no tab-click needed), and a detail-page "Other Details" tab at `#nav-tab3-tab` (shifting the pre-existing "Internals" tab from index 3 to 4 — the identical drift already documented for Deal). Two pre-existing bugs found and fixed along the way while porting, not carried forward blindly: (1) same shape as Contact's bug (2) above — `CompaniesPage.disableRequiredFieldsToggle()` had the identical unconditional-click race already fixed in Contact/Lead (flips an already-off toggle back on) and `fillEditForm()` never called it at all; (2) the DealsPage reference implementation's `assertDealCustomFieldsOnDetail()` uses a raw, unwrapped `tab.click()` with no bounded timeout or session-expiry recovery — Company's port uses the existing `this.click()` helper instead, so the new code introduces zero unprotected raw Playwright calls (Deal's own copy was left as-is — flagged, not silently fixed, since touching `DealsPage.ts` was out of this task's scope).
-
-UI tests: CO18 (create with all 9 fields), CO19 (edit all 9 fields). RBAC gap closed alongside: Deal had zero restricted-user custom-field coverage despite Lead (L29) and Contact (CR20) both having it since their own custom-field work — added D39 (create) and D40 (update) to `deals.rbac.spec.ts`, and COR21 (create)/COR22 (update) to `companies.rbac.spec.ts`, all four mirroring the existing L29/CR20 create-only pattern but extended to cover update too, per explicit request. All 6 new tests (CO18/CO19/COR21/COR22/D39/D40) verified 5/5 clean in isolation on QA each; CO18/CO19 confirmed graceful `test.skip()` on both Stage and Prod (fields not yet present there).
-
-**Final regression gate, real evidence (2026-07-28):** all 10 UI+RBAC spec files touched this session (Companies, Contacts, Deals, Leads, Tasks — 193 tests) run in full on Stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (CO18/CO19 + COR21/COR22, Company custom fields not yet on Stage). Zero regressions anywhere from the `fillCompanyForm()`/`fillEditForm()` changes or the session-expiry fix below. Verification survived two unrelated network-connectivity drops and one memory-pressure process kill mid-run (each confirmed via direct `curl`/`free -h` checks, not assumed) — every affected batch was discarded and cleanly re-run rather than folded into the final numbers.
-
-### Session-expiry "zombie listener" race — found, root-caused, fixed (2026-07-28)
-
-A real full-suite regression run surfaced a genuinely reproducible-looking flake: `deals.rbac.spec.ts`'s Quotation-permission test failed on attempt 1, passed on Playwright's automatic retry. Root-caused via the run's own log (not assumption): a session expiry mid-test triggered TWO unrelated, stale session-expiry-recovery attempts from `goToContactsList()`/`goToCompaniesList()` calls that had already returned 27-54 seconds earlier in the same test — proof something from those finished calls was still alive and reacting. Mechanism: `BasePage.waitForEntityListPage()` (shared by Companies/Contacts/Deals/Leads) and `TasksPage.waitForListReady()` both raced `armResponseWaitWithRecovery(...)` (which arms real `page.on('response'/'framenavigated')` listeners) against a plain `tableLocator.waitFor(...)` — `Promise.race` never cancels its losing branch, so the abandoned listener-arming promise can keep listening for up to 60s after the calling method returns, ready to fire a wrongly-targeted recovery if a real expiry lands in that window. Fixed by swapping in a plain, listener-free `page.waitForResponse()` for the race's response branch in both places — zero functional change to list-readiness detection, only the dangerous side-channel removed. Verified 5/5 clean on QA (`--retries=0`) plus 3 further clean occurrences across Stage runs, zero retries, zero regressions in the full 193-test Stage regression above. See `CLAUDE.md`'s Known Issues for the full evidence trail, including the one honest limitation (the exact rare trigger timing wasn't cleanly reproduced synthetically, though the structural fix eliminates the mechanism regardless).
-
-See `CLAUDE.md`'s "Custom Fields pattern" and "Reference Patterns" sections for the full field-by-field mechanism breakdown (validation quirks per field type, the DateTimePicker's two-widget split, the Internal-Name-vs-Label rename safety note, etc.) — this README section is intentionally just the map, not the territory.
-
-### Lead's Professional/Location fields, Timezone, Country, and GPS address (2026-07-16)
-
-`LeadsPage.fillLeadForm()` now also fills: Timezone (same react-select field/id as Contact's), the Professional section's Company Industry / Business Type / Company Employees (react-select picklists), Company Annual Revenue (a plain number input — same pattern as the Requirement section's existing Budget field, not a react-select), Company Website (a plain text input that, despite having no native `type="url"` attribute, was confirmed live to show the identical "Enter a valid URL" inline validation as the custom UrlField), a GPS-address lookup for Lead's own address (Location section), and Country (a react-select picklist). Country was confirmed live to auto-populate from a successful GPS selection for free — selecting a real address prediction fills it with no extra interaction — but not from the manual-fallback path (which never calls the Places API), so an explicit random pick still fires in that case specifically. (Company Phones was also built, then deliberately removed — see the fixed-bug note below.)
-
-One hardening fix came out of this work, reusable enough to flag before reusing it elsewhere:
-
-- **GPS trigger is section-scoped, not page-wide.** Lead's form has TWO "Get GPS Address" triggers with identical visible text — one for its own address, one for Professional's Company Address — confirmed live this breaks an unscoped `page.getByText(...)` with a Playwright strict-mode violation the moment Lead is in play (Contact only ever had one trigger, so this never surfaced there). `BasePage.getFormSectionContainer(sectionHeading)` locates a section by filtering `#editEntityModal`'s `div.data-container` elements for the one containing that section's own `<h2>` — confirmed live each section renders its own container wrapping both its heading and all its fields; the container's own numeric `id` is random per render and is never matched on directly. `BasePage.getGpsAddressTrigger(sectionContainer)` plus a new optional 4th parameter on `fillAddressViaGpsOrManual()` use this to scope the click, and now throw a clear error if more than one trigger resolves within the given scope instead of silently falling back to `.first()`. Contact's existing GPS call sites (previously an unscoped `page.getByText('Get GPS Address')`) were refactored onto this same helper — Lead and Contact share one mechanism now. **Re-verified post-refactor (2026-07-17)** — the PART B verification below predates this section-scoping change (the method's own signature changed again after that verification ran), so it didn't actually cover the current code. Re-ran Contact's dedicated GPS test plus the full Contacts UI suite fresh against the current code: 19/19 passed. **Also confirmed on Staging** (not just QA, 2026-07-17): logged in directly and inspected the DOM live — the same `div.data-container`/`<h2>` structure and the same 2 "Get GPS Address" triggers (Location + Professional) exist identically on Staging.
-
-### Fixed: primary-phone locator collided with a since-removed Company Phones field (2026-07-16)
-
-Company Phones was briefly implemented for Lead (a repeatable "Add Phone" field, container-scoped off its stable `<label id="companyPhones">` rather than a loose id substring) but surfaced a real, more fundamental bug: `LeadsPage`'s own primary-phone locator — `phoneInput = () => page.locator('input[id*="input_phone_0"]')` — is a loose substring match that ALSO matched Company Phones' first entry (`4_52_input_phone_0`), since both ids happen to contain that substring. Once a lead had a saved Company Phones value, both inputs coexisted in the DOM simultaneously on any form that pre-fills existing data (Edit, Clone) — confirmed live via a real Playwright strict-mode violation ("resolved to 2 elements"), which silently broke `cloneLead()`'s phone-uniqueness-fix step and made every clone fail against the CRM's duplicate-phone validation.
-
-Company Phones itself was removed rather than kept alongside a workaround, but the actual fix — switching `phoneInput()` from the substring match to the exact `name="phoneNumbers[0]"` attribute (the real bound form field, confirmed live never to collide with a repeatable field's own naming) — was kept and applied to **all three** modules that had the identical fragile pattern (`LeadsPage.ts`, `ContactsPage.ts`, `CompaniesPage.ts`), not just Lead, since it's strictly safer at zero cost and removes a latent risk for whenever any of those modules grows a similar repeatable field in the future.
-
-### Contact's Timezone and Company fields (2026-07-16)
-
-`ContactsPage.fillContactForm()`/`fillEditForm()` now also fill Timezone (same field as Lead's) and Company — a live async lookup against real Company records (`input#4_11_input_company`, requires 3+ typed characters — confirmed live via the app's own "Type atleast 3 characters..." message below that threshold). Company selection is inherently role-scoped with no explicit branching required: `BasePage.selectRandomFromSearchableReactSelect()` searches and picks randomly from whatever the *current* page's own live session returns, and admin vs. the restricted user were confirmed live to see genuinely different, non-empty result sets for the identical search term — so a random pick never assumes one role's list applies to the other.
-
-### Fixed: dynamic-import factory-function pattern in `leads.spec.ts` (2026-07-16)
-
-`tests/ui/leads/leads.spec.ts`'s "admin should delete a lead" test used to import `generateAdminLeadData` via a runtime `await import(...)` + destructure, instead of a normal static top-of-file import like every other factory function in that same file. This made it uniquely vulnerable to a transient module-resolution race — confirmed live it threw `generateAdminLeadData is not a function` while `leadFactory.ts` was genuinely being concurrently edited elsewhere in an unrelated change, even though the function itself was never broken (`git show` on the merge that reorganized `leadFactory.ts` around this time confirms its export was untouched). Fixed by switching to a static import; a codebase-wide grep confirmed this was the only factory function anywhere using the dynamic-import pattern, so nothing else needed the same fix.
-
-### Lead's Requirement text field (2026-07-16)
-
-`LeadsPage.fillLeadRequirement()` (called from both `fillLeadForm()` and `fillEditForm()`, so this works on create and update alike) now also fills a field literally labeled "Requirement" — confirmed live to be a genuine, separate plain text input (internal name `requirementName`, id `5_11_input_requirementName`), distinct from both the section's own "Requirement" `<h2>` heading and from the pre-existing Products or Services / Currency / Budget fields. It's actually the *first* field in the section by DOM order, not fourth — filled first to match. No maxlength or client-side validation was observed on it. Contact has no equivalent field; this is Lead-only.
-
-### Detail-page assertions for the new Lead/Contact fields (2026-07-17)
-
-All the Lead/Contact fields added on 2026-07-16 above are now genuinely verified on the detail page after save, not just accepted by the form. Each field's detail-page container id and rendering format was confirmed via **direct live DOM inspection** (not guessed) before writing the assertion. Lead's `assertLeadStandardFieldsOnDetail()` now checks Timezone (`#timezone`, Communication tab), Country (`#country`, Location tab), all 5 Professional fields (`#companyIndustry`/`#companyBusinessType`/`#companyEmployees`/`#companyAnnualRevenue`/`#companyWebsite`, Professional tab — Company Annual Revenue confirmed to render as a plain number with no currency formatting, so `String(value)` matches directly), and Requirement (`#requirementName`). Contact's `assertContactDetailFields()` now checks Timezone and Company. Verified 3× each with fresh random data per run (which stress-tests the assertions across differing field values): Lead create + update 6/6, Contact create + update 6/6, Lead RBAC create 1/1. Lead's create-only fields (Timezone/Country/Professional — see the edit-form asymmetry note in [Known Limitations](#known-limitations--open-items)) are asserted on the create path only, via an `assertCreateOnlyFields` flag the update caller sets to `false`; Requirement and the pre-existing Salutation/Products/Currency/Budget are asserted on both paths.
-
-### Fixed: `escapeRegExp()` duplicated privately across 5 page objects (2026-07-16)
-
-Found while adding exact-match support to Contact's Company lookup: `escapeRegExp()` (the anchored-regex helper used to select an exact option from a search dropdown by name, avoiding a substring false-match against a similarly-named entity) existed as a **private, byte-for-byte identical** method in `DealsPage.ts`, `CompaniesPage.ts`, `ContactsPage.ts`, `LeadsPage.ts`, and `TasksPage.ts` — five separate copies of the same 2-line function, none aware of the others. Moved to one shared `protected BasePage.escapeRegExp()`; all five call sites now inherit it, with the private duplicates removed.
-
-### `BasePage.selectRandomFromSearchableReactSelect()` gained an `exactValue` option (2026-07-16)
-
-Same reasoning as `DealsPage.selectFirstOptionFromDropdown()`'s existing `exactName` parameter: for a test where the selected entity's specific identity matters (e.g. a Contact needs to be associated with a *freshly-created, known* Company so that company can also be independently shared and verified), picking randomly from whatever exists live is unsafe. Passing `exactValue` searches for and selects that exact option instead of a random one; passing neither preserves the original random-pick behavior unchanged.
-
-### Fixed: Deals' `selectFirstOptionFromDropdown()` could hang for the full test timeout (2026-07-16, superseded 2026-07-17)
-
-Root-caused a real, reproducible failure (`tests/rbac/deals.rbac.spec.ts` and `tests/ui/deals/deals.spec.ts`, both hitting an 8-minute test timeout inside this method while selecting a randomly-picked option from a large, unfiltered Associated Contact/Company lookup list): `playwright.config.ts` sets no `actionTimeout` at all, and this method's final `selectedOption.click()` was a raw, un-timed Playwright action — bypassing the shared `BasePage.click()` helper, which already carries an explicit 15s timeout specifically to prevent this class of bug (see that method's own comment). A transient detach/re-render of the options list (confirmed live via Playwright's own "element was detached from the DOM, retrying" message) then retried silently with no independent timeout, consuming the entire test budget instead of failing fast. The original fix (2026-07-16) was a bounded-timeout (15s), 3-attempt retry loop that retried the *same* `allOptions.nth(randomIndex)`. Re-verified 3× back-to-back with `--retries=0` on both originally-failing tests (6/6 passed), then re-confirmed at full-module scale: 3 complete `deals.spec.ts` + `deals.rbac.spec.ts` runs (117 total test executions across all Associated Contact/Company selections in the module) — zero dropdown-related failures across all 3 runs.
-
-**Superseded 2026-07-17** by a second, more general failure mode found during the overnight run: one specific option *index* can be persistently non-actionable while other indices in the same list work fine, making a same-index retry futile. The fix was generalized into a single shared `BasePage.selectRandomOptionWithRetry(options, description, opts?)` — same 15s-bounded read+click, 3 attempts, but each attempt **re-rolls a fresh random index** instead of re-trying the one that just failed. `DealsPage.selectFirstOptionFromDropdown()`'s random-pick branch now delegates to it (`DealsPage.ts:495`), and the same shared method replaced 6 other identical unbounded random-option-pick call sites across `DealsPage.ts` (product row, associated contact), `TasksPage.ts`, `CallLogsPage.ts`, and `MeetingsPage.ts` — the same bug class existed in all of them, just never surfaced as an 8-minute hang there yet.
-
-### `BasePage.fillSearchAndWaitForOptions()` — retry a react-select search on a transient network blip (2026-07-17)
-
-Found during the overnight 272-test run: a company-lookup search (`Contact`'s Company field, via `selectRandomFromSearchableReactSelect()`) failed a whole test attempt because its underlying `/v1/companies/lookup` request hit `ERR_NAME_NOT_RESOLVED` — a brief DNS blip, not an application or test-logic problem, only recovered by Playwright's own outer test-level retry. `BasePage.ts` gained two pieces to target exactly this, and nothing broader:
-
-- `TRANSIENT_NETWORK_ERROR_PATTERNS` (`BasePage.ts:172`) — a deliberately narrow allowlist of connection-layer error signatures that mean "no response was ever produced" (`ERR_NAME_NOT_RESOLVED`, `ERR_INTERNET_DISCONNECTED`, `ERR_NETWORK_CHANGED`, `ERR_CONNECTION_RESET`/`REFUSED`/`TIMED_OUT`, `ERR_ADDRESS_UNREACHABLE`). Deliberately excludes real HTTP 4xx/5xx responses (the server DID answer) and `ERR_ABORTED` (a routine navigation cancel) — widening this list requires the same live-evidence bar, since a false inclusion would silently retry a genuine failure.
-- `fillSearchAndWaitForOptions()` (`BasePage.ts:213`) — fills the search input, arms a scoped `requestfailed` listener before the fill (so the failure can't be missed), and waits for options to appear. If they don't appear **and** a transient error was actually observed on a backend (`/v1../v9..`) request during that attempt, it clears the input, waits 1.5s (sized to the observed blip duration, not guessed), and retries — up to 3 attempts total. A non-transient failure (zero real results, or a real 4xx/5xx) is never retried; it falls straight through to a loud throw. `selectRandomFromSearchableReactSelect()` (`BasePage.ts:599`) now calls this instead of a single unretried fill.
-
-This was implemented and left undocumented here until now — a real gap in the overnight work's own Step 5 (README/CLAUDE.md write-up), found and closed 2026-07-18 while reconciling this session's actual code against its own history.
-
-### Overnight full-suite investigation (2026-07-16/17) — a confirmed ID-capture bug class, a real race condition, one genuine efficiency fix, and one disproven hypothesis
-
-A full 272-test suite run (6.5h) surfaced 1 terminal failure + 5 flaky tests. Each was root-caused individually — see `CLAUDE.md`'s audit section for full per-item evidence; this is the map.
-
-**Confirmed ID-capture false-positive bug, found in 3 places.** `DealsPage.captureDealIdFromResponse()`, `CompaniesPage.captureCompanyIdFromResponse()`, and a third instance in `DealsPage`'s "add quotation from deal panel" flow all used a bare `.includes('/deals')`/`.includes('companies')`/`.includes('/quotations')` substring match with no version prefix — each could match an unrelated background analytics/reports POST (`/v4/reports/deals`, confirmed live) that raced ahead of the real create/clone response, silently capturing `null` and throwing "save likely failed silently" even though the save had genuinely succeeded (confirmed via the exact toast text, e.g. "Quotation created (Quotation ID: 8794)"). Fixed all three by requiring the real, confirmed `/v1/<module>/` path and excluding `/reports/`; the Quotations instance also gained a toast-text fallback (reusing `QuotationsPage.captureIdFromToast()`'s already-proven parse) as defense-in-depth.
-
-**Real race condition in `DealsPage.cloneDeal()`, root-caused with direct evidence, not assumed.** Even after the ID-capture fix, the clone test still failed intermittently. Direct request/response instrumentation showed the Save click sometimes produces **zero network activity for 60+ seconds** — not a slow response, no request at all — while the button itself stayed visible/enabled/unchanged the whole time. This rules out a detached/replaced element, a slow backend, and rate-limiting (all would show *some* network signal). Most likely cause: the click landed only ~80ms after the Clone modal became visible, while its own async pre-fill (name/owner/pipeline/contacts/company/products/campaign fields) was still committing — a React click-handler-not-yet-attached race. Fixed with a real DOM-readiness check (`await expect(nameInput).toHaveValue(/Copy/)` before clicking Save — confirms the modal's own pre-fill has actually committed) instead of a guessed delay. A first fix attempt (click-then-retry-on-no-request) was tried, made things measurably **worse** (0/5 clean, new hang), and was reverted before landing on the working fix. Verified 13/13 clean (8 isolated reproductions + 5 real test runs).
-
-**Confirmed real, fixed, cross-environment-verified: a per-row DOM-read loop in `QuotationsPage.ts`.** Three methods (`retryFindInList()`, `assertQuotationNotInList()`, the create-quotation toast-fallback path) looped through every list row with an individual `.innerText()` call (one round-trip each) to find/check non-empty rows — the exact same *shape* of waste as the date-picker fix below (doing more round-trips than necessary for an identical result). Replaced with a single batched `allTextContents()` call. Verified with real timing across all 3 environments, 3 runs each: batched was faster in all 9 runs — QA 6.4×-33.8×, Staging 1.4×-31.1×, Prod 11.5×-38.2× (magnitude varies with each environment's real latency, which is expected; the fix itself is a pure round-trip reduction, not tuned to any one environment's timing). Functional re-verify: 3/3 clean on QA. Staging/Prod's full functional Quotations suite could not be run — both are missing the `*_ADMIN_DEAL_NAME` config the suite needs (a pre-existing environment gap, not new) — flagged as an open verification gap rather than assumed to generalize.
-
-**Deals' dropdown-click bounded-timeout fix (already documented below) — now verified across the FULL Deals module, not just the 2 originally-failing tests.** 3 full `deals.spec.ts` + `deals.rbac.spec.ts` runs (117 total test executions): 0 dropdown-related failures across all 3. One unrelated flaky test appeared twice in these runs — the Quotation-from-deal-panel bug above, found and fixed as a direct result of this verification work.
-
-**Investigated and DISPROVEN, not fixed: a hypothesis about the suite's single biggest time cost.** Profiling the overnight log found 2.4 hours (37% of the run's 6.5h) sitting in the gap after every "Creating authenticated browser context" call (100% of 351 instances took ≥8.7s, mean 24.4s). Hypothesized `page.goto(..., {waitUntil: 'domcontentloaded', timeout: 60000})` was an unnecessarily strict wait. Tested live: isolated timing showed the entire goto+landing sequence takes 3.8-5.2s regardless of `waitUntil` value — nowhere near 22-25s, and `commit` wasn't measurably faster than `domcontentloaded`. This disproves the client-side-inefficiency theory. The real cause is very likely genuine QA-environment load accumulating over a long, continuously-running suite (consistent with the already-documented "QA data grows unboundedly" limitation, and with the host's own swap being 100% full during the same run) — **not something to fix by touching `waitUntil`, the 60s timeout, or any retry count.** Documented here specifically so nobody re-attempts this exact hypothesis without re-deriving why it doesn't hold.
-
-**CR13** (`tests/rbac/contacts.rbac.spec.ts`, "admin shares contact with Note Task Meeting Call permissions...") **title corrected** — it previously claimed "Quotation permissions"/"all five" but only ever tested 4 (Quotation is genuinely inapplicable to Contacts' restricted-user view, not just skipped — see the existing CR11-removal note in the same file).
-
-### Contact + Meeting/Company RBAC — corrected premise, not a bug (2026-07-16)
-
-Initial investigation suspected a Contact-side instance of the confirmed Lead+Meeting backend bug documented below (same errorCode `01503001`, same "Invalid company summary response." message) when creating a Meeting from a Contact that has an associated Company, if that company was never independently shared. **Corrected**: this is genuine, correct RBAC enforcement, not a bug — sharing a Contact without also sharing its associated Company means the restricted user truly cannot access that company, so any action requiring the company's data (Meeting creation) should correctly fail.
-
-`tests/rbac/contacts.rbac.spec.ts`'s single-Meeting-permission test was reframed as a negative assertion (asserts the `422`/`01503001` denial via the network response itself, not just "the save threw"), and a new positive counterpart was added: a fresh Contact associated with a fresh, known Company (via the `exactValue` support above), with **both** the contact and the company shared — including the company sharing the same `meeting` permission granted on the contact, not a bare/empty-permissions share, which is what actually made the positive case pass. The combined multi-permission test (`admin shares contact with Note Task Meeting Call permissions...` — see the CR13 title correction above, this test's title used to also claim Quotation) was updated the same way, since its own Meeting portion needed the company shared too. Confirmed via already-collected pass data (not re-guessed) that Note/Task/Call do **not** have this company-dependency — only Meeting does; Quotation was already excluded from this suite for an unrelated, pre-existing reason. All three affected tests reconfirmed 3× back-to-back (9/9 passed).
-
-As defense-in-depth against the same transient propagation-lag class documented for Lead below, the positive Contact case also uses the existing retry wrapper — renamed from `saveMeetingRetryOnLeadSummaryLag()` to `saveMeetingRetryOnEntitySummaryLag()` since its errorCode-only check was already generic, just the name implied Lead-only.
-
-### Two more `net::ERR_ABORTED` endpoints added to the known-noise list (2026-07-16)
-
-`/v1/meetings/layout?view=edit` and `/v1/tasks/relation` (the query-param form, distinct from the already-covered numeric-id `/v1/tasks/\d+/relation`) confirmed live, directly, in real otherwise-fully-passing runs to abort on navigation with zero test impact — added to `ABORT_ON_NAVIGATE_PATTERNS` in `errorFilters.ts`. Two further endpoints (`/v1/deals/layout`, `/v1/products/layout`) were also added on the strength of a user-reported CI run showing the identical pattern, but were **not** independently reproduced in this session's own runs — flagged in the source comment as second-hand evidence, not personally confirmed, in case either needs revisiting if a real failure ever correlates with it.
-
-### 13 more error-classification entries, each individually evidence-checked (2026-07-17)
-
-From the overnight full-suite run's 91 background errors: added `has-duplicates` to `BACKGROUND_WIDGET_NOISE_PATTERNS` — a background duplicate-check that 400s with "doesn't seem to exist or you don't have enough permissions" whenever the record is either correctly RBAC-inaccessible or was just deleted (4 confirmed instances, each individually explained, zero test-outcome correlation). Added 12 more endpoints to `ABORT_ON_NAVIGATE_PATTERNS` (`/v1/search/deal`, `/v1/search/lead`, `/v1/search/company`, `/v1/layouts/lead/edit`, `/v1/layouts/lead/detail`, `/v1/layouts/task/create`, `/v1/leads/layout/list`, `/v1/deals/layout/list` [singular — distinct from the existing plural `layouts/list` entry], `/v2/email-threads/search`, `/v1/oauth/{gmail,outlook}/authorization-url`, bare `/v1/contacts`/`/v1/leads/`) — each cross-checked against the run's own final pass/fail list before its raw report was lost to a later run overwriting the shared `misc-errors.json` file (see the open item below). **Deliberately NOT added**, despite being the single largest category (60 of 91 entries): the recurring `net::ERR_ABORTED` on the app's own JS bundles (`vendors.*`/`index.*`) — unlike every other noise entry, this one directly correlated with a real (if self-healing) test failure tonight, so it does not meet the "zero test-outcome impact" bar this list requires. It's a recurring, low-grade environmental characteristic (present from 25 minutes into the run onward, not a late-run resource-exhaustion pattern), not something to silently filter.
-
-### Retry / flake mitigation
-
-`config.searchRetry` (per-env retry count + wait) drives every `searchAndOpen*`/`retryFind*` method across modules. Meetings use a separate, longer `config.meetingRetry` because calendar-data aggregation is measurably slower than a plain list search. Page objects must read from these config values — hardcoding a retry count or a `waitForTimeout` loop bypasses the one place retry behavior is tuned per environment.
-
-### Error collection (`src/error-collector/`)
-
-`ErrorCollector` is a singleton attached by the fixtures to every `adminPage`/`restrictedPage`, passively capturing `pageerror`, `console-error` (type `error`), `requestfailed`, and any HTTP response `>= 400` during every test — independent of whether the test itself asserts on anything. `errorFilters.ts` then classifies each captured error into one of three buckets before it's written out:
-
-1. **Noise** — dropped entirely (`isNoise()`): third-party scripts (Grammarly, Sentry, Stripe, font/CDN assets), `HTTP 429` rate-limiting, and `ERR_ABORTED` on a large, individually-enumerated list of background/prefetch endpoints that Playwright's own navigation legitimately cancels mid-flight.
-2. **Expected RBAC** (`isExpectedRbacError()`) — HTTP `422`/errorCode `029003`, or specific "you don't have permission" message patterns. This is the CRM correctly denying restricted-user access — expected, but still counted and shown, just not flagged as a regression.
-3. **Known background noise** (`isExpectedBackgroundNoise()`) — a **deliberately narrow** subset of endpoints (AI-workflow subscription checks, calendar-integration status, marketplace widgets, tenant usage/feature checks, dashboard summary-card polls, etc.) where a *completed* `4xx`/`5xx` response (not just an aborted one) has been individually confirmed, live, to never correlate with a test failure. Every entity CRUD/detail/search/layout endpoint is deliberately **excluded** from this list — those are load-bearing (page objects wait on their responses), so a real failure there must keep surfacing as unexpected. Widening this list without the same live-evidence bar is exactly the kind of change that could quietly bury a real outage.
-
-Anything not caught by one of the three buckets above is **unexpected** and is what the end-of-run email and `misc-errors.json` report treat as worth investigating.
+**Full fix-by-fix investigation history behind this architecture** (every bug found and fixed while building it — locator collisions, ID-capture false positives, race conditions, session-expiry recovery's 5-phase history, and more, each with real evidence): see `.claude/known-issues.md`.
 
 ---
 
@@ -233,34 +71,50 @@ Anything not caught by one of the three buckets above is **unexpected** and is w
 
 ```
 kylas-playwright-framework/
+├── .claude/                              # Reference docs imported by CLAUDE.md + subagent definitions
+│   ├── agents/                           # 13 specialized subagent definitions (.md) — named individually in CLAUDE.md
+│   ├── AGENT_DELEGATION_GUIDE.md
+│   ├── architecture.md
+│   ├── known-issues.md
+│   ├── reference-patterns.md
+│   └── settings.json                     # PostToolUse hook config (locator-reviewer reminder on Page Object/spec edits)
+├── config/
+│   └── config.ts                         # Single source of truth: env URLs/creds, timeouts, retry config
 ├── .github/
 │   ├── scripts/
-│   │   └── detect-tests.sh              # Selective test detection for sandbox CI
+│   │   └── detect-tests.sh               # Selective test detection for sandbox CI
 │   └── workflows/
-│       ├── dev.yml                      # push→dev — @smoke, primary for dev
-│       ├── qa.yml                       # push→qa — @regression, primary for qa
-│       ├── stage.yml                    # push→stage — full suite, primary for stage
-│       ├── prod.yml                     # workflow_dispatch only — @prodSafe, manual/emergency (Jenkins.prod is primary)
-│       ├── main.yml                     # workflow_dispatch only — @regression, manual/emergency (Jenkins is primary)
-│       ├── sandbox.yml                  # push→sandbox — selective, via detect-tests.sh
-│       └── staging-promotion-gate.yml   # workflow_dispatch only — gates staging→prod auto-merge
-├── config/
-│   └── config.ts                        # Single source of truth: env URLs/creds, timeouts, retry config
+│       ├── dev.yml                       # push→dev — @smoke, primary for dev
+│       ├── main.yml                      # workflow_dispatch only — full suite, manual/emergency (base Jenkinsfile is primary)
+│       ├── prod.yml                      # workflow_dispatch only — @prodSafe, manual/emergency (base Jenkinsfile is primary)
+│       ├── qa.yml                        # push→qa — @regression, primary for qa
+│       ├── sandbox.yml                   # push→sandbox — selective, via detect-tests.sh
+│       ├── stage.yml                     # push→stage — full suite, primary for stage
+│       └── staging-promotion-gate.yml    # workflow_dispatch only — gates staging→prod auto-merge
+├── scripts/
+│   ├── hooks/
+│   │   ├── post-file-edit-locator-reminder.sh   # PostToolUse hook body — reminds to invoke locator-reviewer
+│   │   ├── pre-commit                    # Blocks commits containing waitForTimeout()
+│   │   └── pre-push                      # Blocks pushes with waitForTimeout()/hardcoded URLs
+│   ├── reset-sandbox.sh
+│   ├── rotate-reports.sh                 # Rotates reports/<env>/latest → previous before a local run
+│   └── sandbox-deploy.sh                 # Resets sandbox branch to dev, merges feature branch, pushes once
 ├── src/
 │   ├── auth/
-│   │   ├── globalSetup.ts               # Logs in both roles once before the suite
-│   │   ├── authManager.ts               # Session cache, cross-process file lock, re-login
-│   │   └── storageStates/<env>/         # Saved browser storage states per role (gitignored)
+│   │   ├── authManager.ts                # Session cache, cross-process file lock, re-login
+│   │   └── globalSetup.ts                # Logs in both roles once before the suite
 │   ├── core/
-│   │   └── BasePage.ts                  # Base class every page object extends
+│   │   └── BasePage.ts                   # Base class every page object extends
 │   ├── data/
-│   │   ├── factories/                   # generateXxxData() per module (8 factories)
-│   │   └── files/                       # Static fixture files (e.g. upload attachments)
+│   │   ├── factories/                    # generateXxxData() per module (9 factories)
+│   │   ├── files/
+│   │   │   └── test-recording.mp3        # Real, non-empty audio fixture for Call Log recording upload
+│   │   └── productFixtureAccessor.ts     # Reads src/data/productFixtures/<env>.json (gitignored, generated per run)
 │   ├── error-collector/
-│   │   ├── ErrorCollector.ts            # Per-worker singleton — captures + classifies runtime errors
-│   │   └── errorFilters.ts              # Noise / RBAC-expected / background-noise pattern lists
+│   │   ├── ErrorCollector.ts             # Per-worker singleton — captures + classifies runtime errors
+│   │   └── errorFilters.ts               # Noise / RBAC-expected / background-noise pattern lists
 │   ├── fixtures/
-│   │   └── index.ts                     # adminPage, restrictedPage, adminContext, restrictedContext
+│   │   └── index.ts                      # adminPage, restrictedPage, adminContext, restrictedContext
 │   ├── modules/
 │   │   ├── call-logs/CallLogsPage.ts
 │   │   ├── companies/CompaniesPage.ts
@@ -269,38 +123,48 @@ kylas-playwright-framework/
 │   │   ├── deals/DealsPage.ts
 │   │   ├── leads/LeadsPage.ts
 │   │   ├── meetings/MeetingsPage.ts
+│   │   ├── productsAndServices/ProductsAndServicesPage.ts   # Lives under /setup/, not /sales/ — see .claude/architecture.md
 │   │   ├── quotations/QuotationsPage.ts
 │   │   └── tasks/TasksPage.ts
 │   ├── notifications/
 │   │   ├── adapters/EmailAdapter.ts
-│   │   ├── config/notificationConfig.ts # SMTP settings + per-env/per-branch recipient lists
+│   │   ├── config/notificationConfig.ts  # SMTP settings + per-env/per-branch recipient lists
 │   │   ├── scripts/
 │   │   │   ├── loadDotEnv.ts
-│   │   │   ├── notify.ts                # `npm run notify` — sends the run-summary email
-│   │   │   └── syncHistory.ts           # `npm run history:sync` — appends to ci/reporting-history
-│   │   ├── EmailTemplate.ts             # HTML email renderer — orchestrator + one buildXxx() per section
-│   │   ├── NotificationService.ts       # Orchestrates parse → history → analysis → email
-│   │   ├── RunHistory.ts                # Pure logic: append/prune, delta, recurring-flaky/-failing, module trend, slow-test trend, suite drift, pass-rate series
-│   │   ├── FailureAnalyzer.ts           # Pure logic: classifies + clusters failures on real matching signal only
-│   │   └── AutomationHealth.ts          # Pure logic: weighted 0-100 health score + label + factors
+│   │   │   ├── notify.ts                 # `npm run notify` — sends the run-summary email
+│   │   │   └── syncHistory.ts            # `npm run history:sync` — appends to ci/reporting-history
+│   │   ├── AutomationHealth.ts           # Pure logic: weighted 0-100 health score + label + factors
+│   │   ├── EmailTemplate.ts              # HTML email renderer — orchestrator + one buildXxx() per section
+│   │   ├── FailureAnalyzer.ts            # Pure logic: classifies + clusters failures on real matching signal only
+│   │   ├── NotificationService.ts        # Orchestrates parse → history → analysis → email
+│   │   ├── ReportParser.ts               # Parses the Playwright JSON report into the shapes the email/history need
+│   │   └── RunHistory.ts                 # Pure logic: append/prune, delta, recurring-flaky/-failing, module trend, slow-test trend, suite drift, pass-rate series
 │   ├── reporters/
-│   │   └── MiscErrorReporter.ts         # Merges per-worker error files → reports/<env>/misc-errors.json
+│   │   └── MiscErrorReporter.ts          # Merges per-worker error files → reports/<env>/misc-errors.json
 │   └── utils/
-│       └── logger.ts                    # logger.info/warn/error/success — never console.log
+│       ├── dateHelpers.ts
+│       ├── logger.ts                     # logger.info/warn/error/success — never console.log
+│       └── navigation.ts                 # safeWaitForURL() — shared bare-waitForURL() consolidation
 ├── tests/
-│   ├── ui/<module>/<module>.spec.ts     # Functional UI tests (adminPage)
-│   └── rbac/<module>.rbac.spec.ts       # Permission tests (adminPage + restrictedPage)
-├── scripts/
-│   ├── reset-sandbox.sh
-│   ├── rotate-reports.sh                # Rotates reports/<env>/latest → previous before a local run
-│   └── sandbox-deploy.sh                # Resets sandbox branch to dev, merges feature branch, pushes once
-├── reports/<env>/{latest,previous}/     # Namespaced Playwright HTML/JSON + Allure output, per environment
-├── Jenkinsfile, Jenkinsfile.qa, Jenkinsfile.staging, Jenkinsfile.prod, Jenkinsfile.sandbox
+│   ├── rbac/<module>.rbac.spec.ts        # Permission tests (adminPage + restrictedPage)
+│   └── ui/<module>/<module>.spec.ts      # Functional UI tests (adminPage)
+├── APPLICATION_BUGS.md                   # Confirmed, real Kylas application bugs (not test/framework bugs)
+├── CLAUDE.md                             # Standing engineering rules, architecture/patterns/known-issues (imports .claude/*.md)
+├── eslint.config.js                      # Active flat config (ESLint ^10.4.0 reads this exclusively)
+├── .eslintrc.json                        # Legacy config — never read by `npm run lint` today; possible cleanup candidate, not removed here
+├── .gitignore
+├── Jenkinsfile
+├── Jenkinsfile.prod
+├── Jenkinsfile.qa
+├── Jenkinsfile.sandbox
+├── Jenkinsfile.staging
+├── package.json
 ├── playwright.config.ts
-├── tsconfig.json
-├── CLAUDE.md            # Standing engineering rules, architecture/patterns/known-issues (imports .claude/*.md)
-├── APPLICATION_BUGS.md   # Confirmed, real Kylas application bugs (not test/framework bugs)
-└── package.json
+├── .prettierignore
+├── .prettierrc.json
+├── PRODUCTS_AND_SERVICES_PROGRESS.md     # Full build/investigation history for the Products & Services module
+├── README.md
+└── tsconfig.json
 ```
 
 ---
@@ -334,9 +198,10 @@ ENV=qa npm run test:leads      # run one module end-to-end to confirm the setup 
 | `<PREFIX>_ADMIN_EMAIL` / `_ADMIN_PASSWORD` | Yes | Full-access "Playwright Automation" user |
 | `<PREFIX>_RESTRICTED_EMAIL` / `_RESTRICTED_PASSWORD` | Yes | Limited-access "User 1", used by every RBAC test |
 | `<PREFIX>_API_BASE_URL` | No | Read but not enforced — defaults to `''` if unset |
-| `<PREFIX>_ADMIN_DEAL_NAME` / `_RESTRICTED_DEAL_NAME` | Only for some Quotations tests | Quotations are created against a pre-existing deal in the DB; read via `config.deals` |
 
-**Note:** the checked-in `.env.example` currently only lists the `*_DEAL_NAME` variables — it does **not** list `APP_URL`/`API_BASE_URL`/`ADMIN_EMAIL`/etc. for any environment. Don't assume `cp .env.example .env` gives you a complete file; you need to add the credential variables above yourself. (Flagged again in [Known Limitations](#known-limitations--open-items).)
+**`<PREFIX>_ADMIN_DEAL_NAME` / `_RESTRICTED_DEAL_NAME` are dead — do not set these.** They're still listed in the checked-in `.env.example`, but `config.deals` (the only code that ever read them) was removed from `config/config.ts` on 2026-08-11 once Quotations' RBAC tests were fixed to create their own fresh, known deal/company instead of depending on a static pre-existing one (see `.claude/known-issues.md`). Nothing in the codebase reads them today.
+
+**Note:** the checked-in `.env.example` currently only lists those now-dead `*_DEAL_NAME` variables — it does **not** list `APP_URL`/`API_BASE_URL`/`ADMIN_EMAIL`/etc. for any environment. Don't assume `cp .env.example .env` gives you a complete file; you need to add the credential variables above yourself. (Flagged again in [Known Limitations](#known-limitations--open-items).)
 
 ```bash
 # Reset auth if sessions look stale (QA sessions expire after ~1 hour)
@@ -359,6 +224,7 @@ ENV=qa npm run test:deals
 ENV=qa npm run test:tasks
 ENV=qa npm run test:meetings
 ENV=qa npm run test:call-logs
+ENV=qa npm run test:productsAndServices
 ENV=qa npm run test:quotations          # UI only
 ENV=qa npm run test:quotations:rbac     # RBAC only, separately
 ```
@@ -403,7 +269,7 @@ Locally, 4 browser projects are configured (`chromium`, `firefox`, `webkit`, `mo
 
 ```bash
 npm run report:playwright         # opens reports/playwright-report
-npm run report:allure             # generates + opens the Allure report
+npm run report:allure             # generates + opens the Allure report (runs report:allure:generate, then report:allure:open)
 npm run clean                     # rm -rf test-results reports/ allure-results
 ```
 
@@ -420,15 +286,15 @@ npm run format         # prettier --write .
 
 ## Test Tags
 
-Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 272-test suite (tags overlap, so these don't sum to 272):
+Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 329-test suite (tags overlap, so these don't sum to 329):
 
 | Tag | Count | Meaning | Runs on |
 |---|---:|---|---|
-| `@smoke` | 23 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
-| `@regression` | 259 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
-| `@prodSafe` | 31 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
+| `@smoke` | 25 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
+| `@regression` | 316 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
+| `@prodSafe` | 33 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
 
-`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 272-test suite.
+`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 329-test suite.
 
 ---
 
@@ -442,7 +308,7 @@ feature/* → dev → qa → stage → prod → main
   sandbox (pre-PR smoke check, cut from dev)
 ```
 
-Feature branches are cut from `dev`. Before opening a PR into `dev`, push to `sandbox` (`sandbox.yml` selectively runs only what your change plausibly affects). From there, each promotion (`dev→qa→stage→prod→main`) is its own PR — see `GIT_WORKFLOW.md` for the exact branch-cutting/push sequence per hop.
+Feature branches are cut from `dev`. Before opening a PR into `dev`, push to `sandbox` (`sandbox.yml` selectively runs only what your change plausibly affects). From there, each promotion (`dev→qa→stage→prod→main`) is its own PR — see [Git Workflow & Branch Promotion](#git-workflow--branch-promotion) below for the exact branch-cutting/push sequence per hop.
 
 ### Per-branch matrix (verified directly against every workflow/Jenkinsfile — CLI `--workers`/`--grep` flags always win over `playwright.config.ts` and any `WORKERS` env var)
 
@@ -452,8 +318,8 @@ Feature branches are cut from `dev`. Before opening a PR into `dev`, push to `sa
 | `dev` | GitHub Actions (`dev.yml`) | push | `@smoke` | 1 |
 | `qa` | GitHub Actions (`qa.yml`) | push | `@regression` | 2 (`Jenkinsfile.qa` is explicitly commented "NOT the primary CI for qa branch" — kept only for manual runs, also `--workers=2`) |
 | `stage` | GitHub Actions (`stage.yml`) | push (+ manual) | Full suite, no `--grep` | 2 (`Jenkinsfile.staging` is explicitly commented "NOT the primary CI for stage branch" — manual only, also `--workers=2`) |
-| `prod` | **Jenkins** (`Jenkinsfile.prod`) | Jenkins: branch push. `prod.yml`: manual only | `@prodSafe` | 2 |
-| `main` | **Jenkins** (base `Jenkinsfile`, commented "primary CI for prod and main only") | Jenkins: branch push/manual. `main.yml`: manual only | Full suite (Jenkinsfile) / `@regression` (`main.yml`) | 2 |
+| `prod` | **Jenkins** (base `Jenkinsfile` — its own `branch 'prod'` condition is what actually triggers; `Jenkinsfile.prod` has no branch trigger of its own and is a manual-only fallback, consistent with `CLAUDE.md`) | Jenkins: branch push (via the base `Jenkinsfile`). `prod.yml`/`Jenkinsfile.prod`: manual only | `@prodSafe` | 2 |
+| `main` | **Jenkins** (base `Jenkinsfile`, its own `branch 'main'` condition — commented "primary CI for prod and main only") | Jenkins: branch push/manual. `main.yml`: manual only | Full suite — both the base `Jenkinsfile` and `main.yml` run with no `--grep` at all; they're equivalent in scope today, not divergent | 2 |
 | — | `staging-promotion-gate.yml` | manual only (`workflow_dispatch`) | Full suite against **`STAGING_*`** secrets, then gates an approval-based auto-merge of `staging`→`prod` | 2 (this is the one CI path where the `WORKERS` env var is actually read by `playwright.config.ts`, since no `--workers` CLI flag is passed) |
 
 **Two similarly-named files, deliberately disambiguated in their own headers (added 2026-07-07):**
@@ -791,29 +657,24 @@ npm run notify
 
 ## Known Limitations / Open Items
 
-Cross-checked against `CLAUDE.md`'s own audit notes and this session's fixes — this list reflects what's true **today**, not a stale carry-over.
+Cross-checked against `CLAUDE.md`'s own audit notes and re-verified directly against source on 2026-08-12 — this list reflects what's true **today**, not a stale carry-over.
 
-- **`.env.example` is incomplete.** It currently only ships the Quotations `*_DEAL_NAME` variables — no `APP_URL`/`API_BASE_URL`/`ADMIN_EMAIL`/etc. for any environment. A first-time `cp .env.example .env` will not produce a working file; see [Getting Started](#getting-started) for the actual required variable list.
+- **`.env.example` is incomplete, and its only contents are now dead.** It currently only ships the Quotations `*_DEAL_NAME` variables — no `APP_URL`/`API_BASE_URL`/`ADMIN_EMAIL`/etc. for any environment — and even those are no longer read by any code (`config.deals` was removed from `config/config.ts` on 2026-08-11; see [Getting Started](#getting-started)). A first-time `cp .env.example .env` will not produce a working file; see [Getting Started](#getting-started) for the actual required variable list.
 - **No cross-browser coverage in CI.** `firefox`/`webkit`/`mobile-chrome` are configured for local runs only; every CI pipeline runs `chromium` exclusively.
 - **`Jenkinsfile.sandbox`'s worker count (always 1) diverges from `sandbox.yml`'s dynamic 1–2** — a minor, currently-harmless inconsistency between the GHA path (primary) and the Jenkins manual fallback for the same branch.
-- **Two CI paths cover different scope for `main`:** the base `Jenkinsfile` (primary, branch-triggered) runs the full suite with no `--grep`; `main.yml` (manual-only fallback) filters to `@regression` only. They are not equivalent runs.
 - **No scheduled/nightly runs exist anywhere** — every pipeline is push- or manually-triggered only.
 - **No cross-environment (QA/staging/prod) data-parity check exists.**
 - **QA/staging data grows unboundedly** — no module cleans up the records it creates, so search/list operations get measurably slower over the life of the environment. Retry budgets in `config.searchRetry` account for this, but it's a standing tax on every run, not a one-time cost.
-- **A confirmed, unresolved app-level flake in Deals** (investigated 2026-07-06, no confirmed mechanism found across six controlled experiments): logging a Call on a deal shared with the restricted user intermittently fails with a permission error even when contact/company sharing is verified correct via screenshots. Two later-discovered client-side bugs (a substring-match contact-selector bug, and `DealsPage.fillDealForm()`'s random associated-contact/company picker) could have contaminated the original six experiments without being visible at the time, so the "no consistent mechanism" conclusion is downgraded to uncertain, not disproven. Full history and every experiment's evidence: see `CLAUDE.md`'s "Known Issues" section. Real fix requires backend/network-level access this suite doesn't have — do not re-attempt a client-side isolation without it.
-- **`DealsPage.fillDealForm()`'s associated contact/company selection is intentionally randomized**, as a deliberate 2026-07-05 fix for a CI-hang/timeout problem in that picker — not a bug. For any new Deals test where the associated contact/company's *specific identity* matters (sharing, reassigning, ownership-dependent actions), pass `associatedContactName`/`associatedCompanyName` on `DealData` to select a known, freshly-created entity by exact name instead. Passing neither preserves the original random-pick behavior.
+- **Several additional known flakiness/open-code items are tracked in detail in `.claude/known-issues.md` rather than duplicated here** — including the unresolved Deals Call-permission-on-shared-deal flake, `DealsPage.fillDealForm()`'s intentional associated-contact/company randomization (pass `associatedContactName`/`associatedCompanyName` on `DealData` when a new Deals test needs a known, not-random, associated entity instead), and `CallLogsPage.searchAndSelectEntity()`'s thinner staging retry margin (plus its silent fallback-to-first-option on exhaustion). See that file's relevant sections for full evidence and current status.
 - **Recently built, not yet proven under a real live CI run at the time of writing:** the P0–P5 reporting overhaul (tiered error classification, run-history/trend tracking, trace-linking fixes, the `staging-promotion-gate.yml` rename) and the two sandbox-CI bug fixes (`tsconfig.json`'s `"types": ["node"]` fix for `ts-node`'s intermittent `@types/node` resolution failure; the `createRolePage()` browser-context leak fix) were all verified via isolated local execution and real (non-push) script runs, but not yet exercised end-to-end by an actual CI pipeline run against real GitHub/Jenkins infrastructure. Treat the very first live CI run after this work lands as still partially a verification step, not a routine run.
 - **The 2026-07-14 email/reporting redesign** (restrained-enterprise `EmailTemplate.ts` rewrite, `FailureAnalyzer.ts`, `AutomationHealth.ts`, the extended `RunHistory.ts` schema, the freshness check, the local-git fallback) compiles cleanly (`tsc --noEmit`, `eslint`, zero errors) and has now been run end-to-end multiple times: a combined pass exercising every feature at once (real Playwright execution, real failure clusters, real recurring-issue and freshness penalties stacking together, real git-derived branch/commit) against a throwaway `ci/reporting-history` ledger, plus one real send via the actual SMTP path (recipient temporarily scoped to one address for that test, reverted immediately after — confirmed via empty `git diff`). What's genuinely still open: **the real `ci/reporting-history` branch itself has never been touched by any of this verification** (by design, to avoid polluting it) — the first real CI run after this ships is effectively run #1 for that branch. The automation-health weights, the 4-hour staleness threshold, and the slow-test 20%-regression threshold are all documented in source as starting heuristics, not statistically-tuned constants — expect to revisit them once real multi-run data accumulates. Real Outlook desktop rendering was verified structurally (literal HTML `width` attributes, solid non-`rgba()` colors — the specific things Word's engine is documented to require) but never captured from an actual Outlook client; likewise, email dark-mode support is best-effort CSS (`prefers-color-scheme`) never verified against a real Gmail/Outlook dark-mode render.
 - **A related, deliberately unresolved architectural question:** whether long CI jobs (`qa`/`stage`, ~220+ tests on 2 workers) should be split into parallel shards is flagged but intentionally not implemented — it was raised while investigating a browser-context resource-exhaustion incident, but splitting job topology is a bigger, separate decision than the incident's actual fix warranted.
-- **`SETUP.md` is legacy and describes an older, now-superseded version of this framework** (a single `playwright.yml`, a `develop`/`main`-only branch model, one `leadFactory.ts`, no error-collector or reporting system). It predates the current `dev→qa→stage→prod→main` pipeline and the multi-module suite described in this README. Prefer this README, `GIT_WORKFLOW.md`, and `CLAUDE.md` over `SETUP.md` for anything current.
-- **Lead's edit form (`fillEditForm()`) does NOT update Timezone, Country, or the 5 Professional fields — Contact's edit form DOES update its Timezone/Company.** This is a real, pre-existing asymmetry (confirmed 2026-07-17): Lead's `fillEditForm()` was deliberately scoped to fill only firstName/lastName/Salutation/Requirement/custom-fields, so those 7 fields are create-only on Lead; Contact's `fillEditForm()` re-fills its Timezone/Company. The detail-page assertions added 2026-07-17 (see below) accommodate this — Lead's create-only fields are asserted on create only (`assertLeadStandardFieldsOnDetail(data, assertCreateOnlyFields)`, the update caller passes `false`). **Open decision for a maintainer:** either extend Lead's `fillEditForm()` to also update these fields (fuller update coverage, but a riskier change to a heavily-used shared method — react-select re-selection on a pre-filled edit form is exactly where subtle bugs live), or accept them as create-only. Left as create-only as the lower-risk choice, flagged rather than silently changed.
-- **The same unbounded-click dropdown risk fixed in `DealsPage.selectFirstOptionFromDropdown()` (below) is still present, unfixed, in `LeadsPage.ts` (close-reason radio selection, convert-to-deal product selection) and `QuotationsPage.ts` (several random-option pickers)** — confirmed via grep, not yet verified as actually broken in either module, but the identical shape (a raw, unbounded `.click()` on a randomly-indexed option in a list that can still be populating) is present.
-- **The `[id*="..."]` substring-locator pattern that caused the Company Phones collision (below) also appears, in a narrower/lower-risk form, in `CompaniesPage.ts`, `DealsPage.ts`, `ContactsPage.ts` (`[id*="input_products.0.id"]`, each already scoped with `.first()`) and `QuotationsPage.ts` (`[id*="input_products"][id*="quantity"]`, a compound match).** None confirmed broken — flagged as the same risk shape, worth a look before any of these modules grows a second field with a colliding id suffix.
-- **Company Website field's validation behavior (documented above as "confirmed live to show the identical 'Enter a valid URL' inline validation") has no dedicated negative-validation test** — unlike the custom UrlField, which has `generateLeadCustomFieldInvalidUrl`. The claim was verified ad-hoc at implementation time per its own note, but has not been independently re-confirmed since, and there's no regression test guarding it.
-- **`reports/<env>/misc-errors.json` (and its per-worker files) are overwritten by every subsequent test invocation, including a single isolated test run** — this is a same-process problem, not just the already-documented cross-process race. A full-suite run's own 91-entry report was lost this way during this session's own follow-up work (a later isolated test run overwrote it before its data was fully analyzed) — worth considering a timestamped/run-scoped output path for full-suite runs specifically.
-- **`QuotationsPage.fillOwner()` has the identical unbounded-click race already found and fixed (2026-07-22) in `selectFromContactDropdown`/`selectFromIsInvalidControl`/the 4 modules' Share-modal helper** — confirmed via code read, not yet fixed (explicitly out of scope for that session's work). Same shape: a raw, unbounded `control.click()`/`option.click()` with no timeout. Apply the identical bounded-click + 3-attempt-retry pattern if this ever surfaces as a real hang.
-- **`CallLogsPage.searchAndSelectEntity()`'s search-index-propagation-lag retry has a thin margin on staging specifically** — `config.searchRetry.staging` (3 retries × 5s) is smaller than qa's (5×3s) and prod's (5×5s); a real run needed its full budget (succeeded only on the 3rd/last attempt) to recover from genuine indexing lag. If exhausted, the method's `if (term) {...}` branch falls through to a silent "click first option" fallback, which could pick the wrong entity rather than fail loudly. Two independent proposed fixes not yet applied (deferred, per explicit instruction): (1) bump `staging`'s retry budget to match prod's; (2) make the fallback-to-first-option path throw instead of silently guessing.
-- **`companies.spec.ts` CO4 ("verify all field values on detail page after create") — rare flaky generic-error toast on save, root cause NOT confirmed (2026-07-22).** Original failure: a generic, non-field-specific error toast appeared on `saveCompany()` right after the phone field was filled, ~1.2s after the app's own background "has-duplicates" phone-check lookup (`GET /v1/companies/has-duplicates?fieldName=phoneNumbers`) returned an HTTP 400 — a real, evidence-based correlation, but **not proven causal** (no error was ever captured on the actual company-create save POST itself). 5/5 reproduction attempts in isolation (single worker, retries=0) passed cleanly — this flake needs concurrent multi-worker load to surface, consistent with this codebase's documented "QA degrades under load" pattern. Confirmed via code read on this branch: `saveCompany()` has no retry/network-awareness of any kind today. (Note: a same-shaped `createLead`/`createContact`/`createCompany` creation-POST transient-retry fix was built 2026-07-21/22, but on a separate, not-yet-merged branch — `saveCompany()` on this branch has zero protection of any kind, so this isn't a gap in that fix, there's simply no fix here yet.) **Do not fix on this correlation alone** — needs either a multi-worker reproduction or more captured instances to confirm root cause before any retry/defensive-fix logic is added.
+- **Lead's edit form (`fillEditForm()`) does NOT update Timezone, Country, or the 5 Professional fields — Contact's edit form DOES update its Timezone/Company.** This is a real, pre-existing asymmetry: Lead's `fillEditForm()` was deliberately scoped to fill only firstName/lastName/Salutation/Requirement/custom-fields, so those 7 fields are create-only on Lead; Contact's `fillEditForm()` re-fills its Timezone/Company. The detail-page assertions accommodate this — Lead's create-only fields are asserted on create only. **Open decision for a maintainer:** either extend Lead's `fillEditForm()` to also update these fields (fuller update coverage, but a riskier change to a heavily-used shared method — react-select re-selection on a pre-filled edit form is exactly where subtle bugs live), or accept them as create-only. Left as create-only as the lower-risk choice, flagged rather than silently changed.
+- **The same unbounded-click dropdown risk fixed elsewhere in this codebase is still present, unfixed, in `LeadsPage.ts` (close-reason radio selection, convert-to-deal product selection) and `QuotationsPage.ts` (several random-option pickers)** — confirmed via code read, not yet verified as actually broken in either module, but the identical shape (a raw, unbounded `.click()` on a randomly-indexed option in a list that can still be populating) is present.
+- **A `[id*="..."]` substring-locator pattern — the same shape that caused the (fixed) Company Phones collision — still appears in `QuotationsPage.ts` (`[id*="input_products"][id*="quantity"]`, a compound match).** Not confirmed broken. (Re-verified 2026-08-12: this bullet previously also named `CompaniesPage.ts`/`DealsPage.ts`/`ContactsPage.ts` — Companies and Contacts have no such locator at all, and Deals' own copy was already hardened on 2026-08-10 specifically to eliminate this exact risk, so only the Quotations instance remains today.)
+- **Company Website field's validation behavior (confirmed live to show the identical "Enter a valid URL" inline validation as the custom UrlField) has no dedicated negative-validation test** — unlike the custom UrlField, which has `generateLeadCustomFieldInvalidUrl`. The claim was verified ad-hoc at implementation time per its own note, but has not been independently re-confirmed since, and there's no regression test guarding it.
+- **`reports/<env>/misc-errors.json` (and its per-worker files) are overwritten by every subsequent test invocation, including a single isolated test run** — this is a same-process problem, not just the already-documented cross-process race. A full-suite run's own 91-entry report was lost this way during a follow-up session's own work (a later isolated test run overwrote it before its data was fully analyzed) — worth considering a timestamped/run-scoped output path for full-suite runs specifically.
+- **`companies.spec.ts` CO4's rare flaky generic-error toast on save (2026-07-22) is now mitigated, not just observed.** `saveCompany()`/`createCompany()` gained a 3-attempt transient-backend-error retry classifier on 2026-07-21 that covers this exact shape (a generic, non-field-specific error with no session-expiry cause) — re-verified 2026-08-12 directly against `CompaniesPage.ts`. The original correlation with a background duplicate-check 400 was never proven causal, and the fix wasn't built specifically for this bullet, but it does now cover the observed symptom. Not re-confirmed under fresh concurrent load since the fix landed.
 
 ---
 
@@ -843,7 +704,7 @@ Full daily-workflow and branch-promotion mechanics are in [§10 Git Workflow & B
 ```bash
 rm -rf src/auth/storageStates/qa/
 ```
-The fixtures already attempt one automatic re-login on a detected sign-in redirect before failing — if you're seeing this, it's a genuine second failure, not the first.
+The fixtures already attempt one automatic re-login on a detected sign-in redirect before failing — if you're seeing this, it's a genuine second failure, not the first. For the full 5-phase session-expiry recovery architecture (why a second failure can still happen despite this, and every mechanism already in place to prevent it), see `.claude/known-issues.md`.
 
 **`Target page, context or browser has been closed`** — investigated as part of a real sandbox CI incident. A confirmed resource leak in `createRolePage()` (a throw-before-`use()` path that skipped context/page cleanup) was found and fixed, but was *not* proven to be the direct cause of any single reported incident — only proven to be a real leak that could contribute over a long run. If you see this consistently (not once in a long run), it's worth re-opening the investigation with real evidence, not assuming the existing fix already covers it.
 
@@ -857,7 +718,7 @@ The fixtures already attempt one automatic re-login on a detected sign-in redire
 
 **Clone lead/contact form shows validation errors on save** — clone pre-fills the form with the original's email/phone; you must change at least one before saving to avoid a duplicate-value rejection. See the Clone pattern in `CLAUDE.md`'s Reference Patterns.
 
-**`saveQuickTask()` hangs or times out when called from within a Lead/Contact detail panel** — use `saveQuickTaskFromEntityDetail()` instead; `saveQuickTask()` waits for the standalone task list view, which never appears from that context. (The specific `tests/rbac/leads.rbac.spec.ts` call site previously flagged as a live instance of this bug already correctly calls `saveQuickTaskFromEntityDetail()` — confirmed 2026-07-17, this note is now purely a "watch for this pattern" guide, not an open bug.)
+**`saveQuickTask()` hangs or times out when called from within a Lead/Contact detail panel** — use `saveQuickTaskFromEntityDetail()` instead; `saveQuickTask()` waits for the standalone task list view, which never appears from that context.
 
 **Push rejected (`fetch first` / `non-fast-forward`)**
 ```bash
@@ -865,4 +726,4 @@ git pull origin <branch-name> --rebase
 git push origin <branch-name>
 ```
 
-For anything not covered here, `CLAUDE.md`'s "Audit Findings Summary" has a much deeper per-module list of known flakiness root causes and the locator/wait patterns proven to fix them — read it before touching any page object, fixture, or CI file.
+For anything not covered here, `CLAUDE.md`'s "Known Issues — Critical / Do Not Touch" section (and its full detail in `.claude/known-issues.md`) has a much deeper per-module list of known flakiness root causes and the locator/wait patterns proven to fix them — read it before touching any page object, fixture, or CI file.

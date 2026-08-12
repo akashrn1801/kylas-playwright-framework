@@ -61,7 +61,14 @@ test.describe('Deals', () => {
 
     const updatedData = generateDealData();
     await dealsPage.updateDeal(updatedData, dealData.name, dealId ?? undefined);
-    await dealsPage.assertDealUpdated(updatedData);
+    // WHY dealId passed here (fixed 2026-08-11, staging run failure): this
+    // was previously omitted despite being in scope, forcing
+    // assertDealUpdated() down its slow list-search fallback instead of its
+    // already-implemented ID-first fast path — the exact mechanism behind
+    // this test's "save failed silently" timeout under real --workers=2
+    // staging load (a single-worker headed repro passed because the
+    // fallback had no concurrent contention to time out against).
+    await dealsPage.assertDealUpdated(updatedData, dealId ?? undefined);
     logger.success('D3 passed');
   });
 
@@ -466,6 +473,177 @@ test.describe('Deals', () => {
     // (edit is an in-place modal, not a route change) — no re-navigation needed.
     await dealsPage.assertDealCustomFieldsOnDetail(updatedData);
     logger.success('D38 passed');
+  });
+
+  // ── D41 ───────────────────────────────────────────────────
+  // WHY this test exists as its own dedicated case, not folded into T11's
+  // (Products & Services) fix: this is genuinely Deal-specific behavior —
+  // adding a product to a deal that already has part-payment installments
+  // configured — not a Products & Services concern at all. Root-caused and
+  // fixed 2026-08-10 (see PRODUCTS_AND_SERVICES_PROGRESS.md): the app
+  // correctly detects the resulting Total/installment mismatch and blocks
+  // Save until "Distribute Equally" is resolved — a real, working app
+  // feature, not a bug. This test verifies the app's OWN detection and the
+  // real persisted result, not just that automation can click through it.
+
+  test('@regression admin should distribute unallocated amount equally after adding a product to a deal with part payments', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    // WHY no separate fixture/arrange step is needed: fillDealForm() always
+    // adds 1-3 random products AND always calls
+    // addPartPayments(dealData.numberOfInstallments) — confirmed live,
+    // 2026-08-10 — so a freshly-created deal already has both prerequisites
+    // (at least one product, part-payments already configured) by the time
+    // create finishes.
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.fillDealForm(dealData);
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal ID should be captured after create').not.toBeNull();
+
+    await dealsPage.goToDealDetailsById(dealId!);
+    await dealsPage.clickEditIcon();
+
+    // WHY a real field change first: Save starts disabled until the form is
+    // dirtied (confirmed live) — a genuinely different name change achieves
+    // this, matching every other edit test's own pattern.
+    const updatedData = generateDealData();
+    await dealsPage.fillEditForm(updatedData);
+
+    // Add a NEW product row — this is what legitimately changes the deal's
+    // Total after installments were already split against the old total.
+    await dealsPage.addProductRow();
+
+    // Step 3 (the real assertion that matters): the app must correctly
+    // detect the resulting mismatch and surface the CTA — not just clicking
+    // through it blindly.
+    await dealsPage.assertDistributeUnallocatedBannerVisible();
+
+    // Step 4: open the modal, assert it shows a real unallocated amount and
+    // at least one new-value cell.
+    //
+    // WHY not asserting newAmounts.length === dealData.numberOfInstallments
+    // (real, confirmed finding, 2026-08-10): a real run showed the modal's
+    // table listing FEWER rows (6) than the deal's actual installment count
+    // (7) — the app apparently only lists installments whose amount
+    // actually changes, not every installment unconditionally. Asserting
+    // exact equality was an unverified assumption that turned out wrong;
+    // bounding by <= the real installment count is what's actually
+    // confirmed true.
+    const { unallocatedText, newAmounts } = await dealsPage.openDistributeModalAndReadDetails();
+    expect(unallocatedText.length, 'Unallocated amount text should be non-empty').toBeGreaterThan(
+      0
+    );
+    expect(newAmounts.length, 'Should show at least one new-value cell').toBeGreaterThan(0);
+    expect(
+      newAmounts.length,
+      'Modal row count should never exceed the deal’s actual installment count'
+    ).toBeLessThanOrEqual(dealData.numberOfInstallments);
+
+    // Step 5: proceed, assert the modal closes and the banner clears.
+    await dealsPage.proceedDistributeEqually();
+    await dealsPage.assertDistributeUnallocatedBannerHidden();
+
+    // Step 6: save.
+    await dealsPage.saveEditedDeal();
+
+    // Step 7: re-fetch the real, persisted record (not just trust the UI) —
+    // assert the installments actually sum to the deal's new total.
+    await dealsPage.goToDealDetailsById(dealId!);
+    const savedDeal = await dealsPage.fetchCurrentDealApiData();
+    expect(savedDeal, 'Fresh GET on the saved deal should succeed').not.toBeNull();
+    const partPayments = (savedDeal?.partPayments ?? []) as Array<{
+      amount?: { value?: number };
+    }>;
+    expect(partPayments.length, 'Persisted installment count should match').toBe(
+      dealData.numberOfInstallments
+    );
+    const persistedSum = partPayments.reduce((sum, p) => sum + (p.amount?.value ?? 0), 0);
+    const persistedTotal = (savedDeal?.actualValue as { value: number } | undefined)?.value ?? 0;
+    // WHY ±1 tolerance: matches assertPaymentReceivedAfterEdit()'s own
+    // established rounding allowance for the identical "sum of installments
+    // vs total" comparison (e.g. an odd total split across many
+    // installments always leaves a few paise of rounding remainder).
+    expect(
+      Math.abs(persistedSum - persistedTotal),
+      `Persisted installments (sum: ${persistedSum}) should sum to the deal's new total (${persistedTotal})`
+    ).toBeLessThanOrEqual(1);
+
+    logger.success('D41 passed');
+  });
+
+  // WHY this test exists: BasePage.removeProductRow() had no real test
+  // exercising it (its selector was a defensive, unverified guess — see the
+  // method's own comment history). Live investigation (2026-08-10) found the
+  // real remove trigger is `i.fa-times.cursor-pointer`, not the originally-
+  // guessed button/aria-label/class-name shape; the method was corrected and
+  // this test proves it against a real Deal.
+  test('@regression admin should remove a product row from a deal and save successfully', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+
+    await dealsPage.goToDealsList();
+    await dealsPage.clickAddDeal();
+    await dealsPage.fillDealForm(dealData);
+
+    // fillDealForm() already added 1-3 random products — add one more to
+    // guarantee at least 2 rows exist, so removal has something real to
+    // remove without leaving zero product rows behind.
+    await dealsPage.addProductRow();
+
+    const rows = adminPage.locator('.products-input__row');
+    const countBefore = await rows.count();
+    expect(countBefore, 'Should have at least 2 product rows before removal').toBeGreaterThanOrEqual(2);
+    const removedRowName = await rows
+      .last()
+      .locator('.is-invalid__single-value')
+      .first()
+      .textContent();
+    // WHY count occurrences BEFORE removal, not just check the name exists:
+    // fillDealForm()'s random product picker can independently select the
+    // SAME product for two different rows in one deal (confirmed live,
+    // real, non-rare — see PRODUCTS_AND_SERVICES_PROGRESS.md Entry 37's
+    // "3 BHK" picked twice example) — so a removed row's name can still
+    // legitimately appear in a surviving row. Found live via this exact
+    // test: an earlier version asserted zero remaining occurrences and
+    // failed on a real, correct removal specifically because of this
+    // duplicate-pick scenario. Asserting "count decreased by exactly 1" is
+    // correct regardless of whether the name is otherwise unique or
+    // duplicated.
+    let countMatchingBefore = 0;
+    if (removedRowName) {
+      const escaped = removedRowName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      countMatchingBefore = await rows
+        .locator('.is-invalid__single-value', { hasText: new RegExp(`^${escaped}$`) })
+        .count();
+    }
+
+    await dealsPage.removeProductRow(rows.last());
+
+    const countAfter = await rows.count();
+    expect(countAfter, 'Row count should decrease by exactly 1').toBe(countBefore - 1);
+    if (removedRowName) {
+      const escaped = removedRowName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const countMatchingAfter = await rows
+        .locator('.is-invalid__single-value', { hasText: new RegExp(`^${escaped}$`) })
+        .count();
+      expect(
+        countMatchingAfter,
+        `Occurrences of the removed product name should decrease by exactly 1 (was ${countMatchingBefore} before removal — may legitimately be duplicated across rows)`
+      ).toBe(countMatchingBefore - 1);
+    }
+
+    const dealId = await dealsPage.saveDeal();
+    expect(dealId, 'Deal should still save successfully after a row removal').not.toBeNull();
+
+    logger.success('D42 passed');
   });
 
   // ──────────────────────────────────────────────────────────
