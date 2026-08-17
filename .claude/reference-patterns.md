@@ -263,6 +263,8 @@ This means the exact same call site starts working the moment fields exist in a 
 
 **Locator strategy — match by suffix, not the numeric prefix:** ids look like `7_11_input_customFieldValues.cfTextField`. The numeric prefix (`7_11`) is a static per-render wrapper index, confirmed identical across fresh-create/reload/edit. `customFieldInputLocator()` matches the **suffix** (`_input_customFieldValues.cf<Name>`), scoped to `input[id$=...], textarea[id$=...]` — strictly safer at zero cost, and avoids a real collision: react-dates renders an accessibility `<p id="DateInput__screen-reader-message-<the real input's id>">` next to every Date/DateTimePicker field, which — being built by prefixing the real input's own id — *also* ends with the same suffix and breaks an unscoped `[id$=...]` match. Don't drop the tag-name scoping when reusing this pattern.
 
+**Two different suffix conventions exist across modules — confirmed live, not assumed identical.** Lead/Deal/Contact/Company/Quotation/Task use the "legacy" suffix shown above (`_input_customFieldValues.cf<Name>`). Products & Services, Meeting, and Call Log use a "plain" suffix instead (`_input_cf<Name>`, no `customFieldValues.` segment) — confirmed via direct DOM inspection of Products & Services' live create form. Getting this wrong doesn't error — it silently no-ops (the presence check just finds nothing and skips), so it's easy to miss. `BasePage`'s custom-field helpers take a `suffixStyle: 'legacy' | 'plain'` parameter (a strict string-literal union, so a typo is a `tsc` compile error, not a silent runtime no-op) — pass the right one for the module you're working on rather than assuming the legacy form.
+
 **DateTimePicker is two independent widgets:** a `SingleDatePicker` (react-dates) for the date half, plus a **separate** `rc-time-picker` for time — the time input starts `disabled` and only becomes enabled once a date is picked. Don't assume a combined widget just because the field name suggests it.
 
 **Validation mechanisms differ per field — don't assume one applies to all:**
@@ -279,3 +281,38 @@ Confirmed live by inspecting the actual field edit dialog at `/setup/fields/lead
 - **Internal Name** (e.g. `cfTextField`) — set once at creation, architecturally impossible to change afterward (the Edit dialog exposes only a "Display Name" input; there is no Internal Name field anywhere in that form).
 
 All locators/factory constants in this codebase are built on the Internal Name, matching the app's own API (`customFieldValues.cfTextField`) — **renaming a field's display label in the app is always safe and requires zero code changes.** The one real exception: a field *deleted and recreated* with a different internal name breaks every locator built on the old name — that's a re-creation, not a rename, and a separate, rarer risk.
+
+### 11. CKEditor 5 description field — must reach the internal data model directly, never the DOM
+
+CKEditor 5 (used by Products & Services' description field, `div[id="0_22_input_description"]`) maintains its own internal virtual data model, separate from the rendered DOM. A plain `.fill()`/`.type()` against the contenteditable region only mutates the visible DOM — it never touches the model that actually gets serialized into the save payload. The live editor instance is attached directly to the `.ck-editor__editable` DOM node as `.ckeditorInstance`; reach it and call `.setData()` on it directly:
+
+```typescript
+async setDescriptionViaCkEditor(text: string): Promise<void> {
+  await this.page.evaluate((text) => {
+    const wrapper = document.getElementById('0_22_input_description');
+    const editable = wrapper?.querySelector('.ck-editor__editable') as any;
+    if (editable?.ckeditorInstance) {
+      editable.ckeditorInstance.setData(text);
+    }
+  }, text);
+}
+```
+Confirmed live: the API wraps the saved content in a `<div>`, not a `<p>` — assertions checking the persisted value should account for this wrapper rather than expect the raw text verbatim.
+
+### 12. Deal's product-row control is the same underlying component as Quotation's — confirmed live, not assumed
+
+Before building a Deal-specific variant of any product-row search/attach helper, know that `DealsPage.addProductRow()`'s product-row react-select and `QuotationsPage`'s product-row react-select are **the same component** — confirmed live via direct DOM inspection: identical `is-invalid__*` class family, identical `"Search ..."` placeholder, identical `products.{row}.id` id convention, identical live-search behavior (typing filters to real, matching results), identical inactive-product exclusion rule. `DealsPage.addProductRow()` simply never exercises the search/type path because it only ever needs *a* random product — it opens the menu (which shows a default list with no typing required) and picks randomly from whatever's shown. That's a property of that one method's narrow purpose, not a limitation of the underlying component. Any new deterministic "attach this exact product by name" flow on Deals can reuse the same generic `BasePage.addProductRowAndSearchByName()` helper already proven on Quotations — no Deal-specific rework needed.
+
+### 13. Test label naming convention — per-module letter prefix
+
+Test titles in this codebase carry a literal, sequential label as a bracketed/inline prefix inside a code comment or `logger.success()` call (not part of the Playwright title string itself) — e.g. `L38`, `D28`, `Q29`, `PS1`, `CO12`. One letter (or two-letter) prefix per module, numbers sequential within each file:
+
+| Module | Prefix | Module | Prefix |
+|---|---|---|---|
+| Leads | `L` | Quotations | `Q` |
+| Deals | `D` | Products & Services | `PS` |
+| Contacts | `C` | Tasks | `TK` |
+| Companies | `CO` | Call Logs | `CL` |
+| Meetings | `M` | | |
+
+UI and RBAC spec files for the same module are numbered independently unless a cross-file collision forces a renumber — this has happened 3 times historically (Quotations' `Q22`–`Q27` → `Q29`–`Q34`; Leads' `L6`–`L21` → `L32`–`L47`; a self-inflicted `D39`/`D40` collision between new Deals UI tests and pre-existing Deals RBAC tests → renumbered to `D41`/`D42`) — see `.claude/known-issues.md`'s Products & Services consolidated-items list for the full resolution history of each. Before adding a new label to any file, grep the file (and its UI/RBAC sibling) for the next free number in sequence rather than assuming a gap-free run.
