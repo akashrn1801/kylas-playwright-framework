@@ -135,6 +135,15 @@ Full code + evidence for all 10 in `.claude/reference-patterns.md` (imported abo
 8. Add contact from modal — exact field IDs from live DOM
 9. Custom Fields pattern (generic helpers + per-module constants + environment safety contract)
 10. Custom field Internal Name vs. Label — renaming a display label is always safe
+11. CKEditor 5 description field — must reach the internal data model directly, never the DOM
+12. Deal's product-row control is the same underlying component as Quotation's — confirmed live
+13. Test label naming convention — per-module letter prefix
+14. react-beautiful-dnd draggable single-select row pattern (Reports' Dimensions/Metrics)
+15. Dual react-select class family on one form — don't assume one family applies uniformly
+16. Three-separate-full-page-routes pattern — an alternative to the modal-over-detail-page convention
+17. Paginated validation-error carousel banner — distinct from a single toast/inline error
+18. Stability-window fix pattern — for a third-party-widget-triggered react-select race (repo-wide risk, not module-specific — see Known Issues below)
+19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
 
 ---
 
@@ -149,7 +158,7 @@ Full code + evidence for all 10 in `.claude/reference-patterns.md` (imported abo
 
 ## Module Status
 
-Verified fresh via `npx playwright test --project=chromium --list` as of 2026-07-28: **285 tests across 17 spec files, 9 modules.** Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
+Verified fresh via `npx playwright test --project=chromium --list` as of 2026-08-22: **393 tests across 21 spec files, 10 modules** (Reports added since the 2026-07-28 count — 37 UI + 27 RBAC). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
 
 **Last full regression evidence (2026-07-28):** all 10 UI+RBAC spec files touched by that session's work (Companies, Contacts, Deals, Leads, Tasks) run in full on stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (193 total). Two unrelated network-connectivity drops and one memory-pressure process kill occurred mid-verification (confirmed via direct `curl`/`free -h` evidence) — each discarded its own polluted partial data and was re-run clean.
 
@@ -183,6 +192,8 @@ Full investigation history (every bug class, architectural overhaul, and inconcl
 - **Custom-field methods must presence-check and never throw on absence** — the environment-safety contract (`.claude/reference-patterns.md` §9). Fields get added to qa/stage/prod weeks apart, by hand.
 - **Several investigated flakes are formally INCONCLUSIVE, not resolved** — do not re-close them without new evidence: `quotations.rbac.spec.ts:380`, `call-logs.spec.ts:391`, `meetings.spec.ts:120`, `tasks.rbac.spec.ts:69`, the 2026-08-03 HTTP-500-on-meeting-creation and Deals-RBAC-Task-permission-timeout pair, and the original 2026-07-06 unexplained Deals Call-permission flake. Full detail and evidence-gap analysis for each in `.claude/known-issues.md`.
 - **Confirmed real Kylas application bugs** (not code bugs) live in `APPLICATION_BUGS.md`, not here.
+- **A third-party-widget-triggered react-select race is a repo-wide risk, confirmed and fixed once (Reports), documented for reuse everywhere.** The `viasocket.com` chatbot widget embedded on every page can tear down a just-opened react-select menu 20–160ms after it opens — any react-select interaction anywhere in this codebase is theoretically exposed, not just where it was found. Blocking the widget's domain via `page.route().abort()` is confirmed unsafe (hung the whole browser session 30 minutes); waiting for the widget's own network response first is confirmed insufficient (the re-render lands 130–160ms after the response). The proven fix — a stability-window retry — is `.claude/reference-patterns.md` §18; full incident detail in `.claude/known-issues.md`.
+- **Playwright's `dependencies` project feature is confirmed unsafe for this repo's CI shape — do not reach for it to make one project run "after everything else."** Confirmed live via a disposable scratch project: a dependency project silently bypasses `--grep` filtering for the whole dependency, even when that dependency is also explicitly co-selected on the same command line — and invoking it in a separate command instead re-runs the entire dependency suite a second time (no cross-invocation dedup). Full evidence and the self-contained-per-test alternative that was chosen instead (for Reports' run-count verification) are in `.claude/known-issues.md`'s "Reports module" section.
 - **5 sandbox failures root-caused and fixed 2026-08-09** (CL39, CL32/CL33, D28, Quotations detail-verify — sandbox run `31269450132`, confirmed real `--workers=2`): a test-data `entityType`-mismatch bug (not the initially-suspected "date-time picker hang" — CL39's real failure was in the Call Type dropdown, verified via live deterministic reproduction), a shared-`#editEntityModal`-reuse gap in `DealsPage.cloneDeal()`/`TasksPage.cloneTaskViaEllipsis()` (now both check `.modal-title` before trusting the modal, matching sibling flows that already did), `QuotationsPage.waitForListReady()` never actually checking readiness (fixed to race the list container against the create button, mirroring `CallLogsPage`'s proven pattern), and a genuine **Kylas application-side JS race** in the Log-a-Call modal under concurrent multi-session access (live-captured `TypeError` in the app's own `openCallLogForm` — see `APPLICATION_BUGS.md` #1). Full evidence and fix detail in `.claude/known-issues.md`.
 - **`CompaniesPage`/`LeadsPage.openUserShareTypeSearch()` still has a `waitForTimeout(500)` after the `Escape` keypress in its catch/retry backoff** — the pre-commit hook caught this exact anti-pattern in `QuotationsPage.fillOwner()` (2026-08-09) because `fillOwner()` was written by copying this method's pattern verbatim, blind wait included; `fillOwner()` was fixed to wait for `.is-invalid__menu` to become hidden instead, but the **original source of the copied pattern in Companies/Leads was left untouched** (outside this session's diff) and is now the one remaining known instance of this exact anti-pattern in the codebase. Apply the identical condition-based fix there in a future session.
 

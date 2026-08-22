@@ -251,7 +251,8 @@ export class DealsPage extends BasePage {
 
   // ── Delete ─────────────────────────────────────────────────
 
-  private readonly deleteConfirmButton = (): Locator => this.page.locator('button#confirm.btn-danger');
+  private readonly deleteConfirmButton = (): Locator =>
+    this.page.locator('button#confirm.btn-danger');
 
   // ── Share ──────────────────────────────────────────────────
 
@@ -316,7 +317,8 @@ export class DealsPage extends BasePage {
   // (responsive duplicate layout), causing a strict-mode violation without it.
   private readonly ownerFieldValue = (): Locator => this.page.locator('#ownedBy .title').first();
   private readonly companyFieldValue = (): Locator => this.page.locator('#company .title').first();
-  private readonly productsFieldValue = (): Locator => this.page.locator('#products .title').first();
+  private readonly productsFieldValue = (): Locator =>
+    this.page.locator('#products .title').first();
   private readonly estimatedValueFieldValue = (): Locator =>
     this.page.locator('#estimatedValue .title').first();
   private readonly actualValueFieldValue = (): Locator =>
@@ -331,7 +333,8 @@ export class DealsPage extends BasePage {
   // ── Closed pipeline stage (Won / Closed Lost / Closed Unqualified) ──
   // WHY: Confirmed live — closed stages replace the in-progress stage bar
   // entirely with this element instead of updating .in-progress-stage.
-  private readonly closedPipelineStageEl = (): Locator => this.page.locator('.closed-pipeline-stage');
+  private readonly closedPipelineStageEl = (): Locator =>
+    this.page.locator('.closed-pipeline-stage');
 
   // WHY: confirmed live (2026-07-24) — Deal's detail page has 4 tabs (Basic
   // Information, Campaign Information, Other Details, Internals), so "Other
@@ -922,7 +925,9 @@ export class DealsPage extends BasePage {
     // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
     // convention already used elsewhere in this codebase.
     if (!dealId) {
-      throw new Error('Deal ID not captured after save — cannot proceed (save likely failed silently)');
+      throw new Error(
+        'Deal ID not captured after save — cannot proceed (save likely failed silently)'
+      );
     }
     await this.waitForDealListPage();
     logger.success('Deal saved successfully');
@@ -1125,7 +1130,8 @@ export class DealsPage extends BasePage {
       const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
       const transient =
         !hasFieldErrors &&
-        (status >= 500 || /unexpected error occurred|internal server error|something went wrong/i.test(message));
+        (status >= 500 ||
+          /unexpected error occurred|internal server error|something went wrong/i.test(message));
       logger.warn(
         `Deal update returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
@@ -1133,7 +1139,9 @@ export class DealsPage extends BasePage {
       );
       return { success: false, transient };
     } catch (error) {
-      logger.debug(`Deal update response not captured (${String(error)}) — treating as non-transient`);
+      logger.debug(
+        `Deal update response not captured (${String(error)}) — treating as non-transient`
+      );
       return { success: false, transient: false };
     }
   }
@@ -1342,7 +1350,9 @@ export class DealsPage extends BasePage {
   }> {
     await this.click(this.distributeUnallocatedButton(), 'Distribute Equally banner');
     await this.distributeModal().waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    const unallocatedValueEl = this.distributeModal().locator('.distribute-modal__unallocated-value');
+    const unallocatedValueEl = this.distributeModal().locator(
+      '.distribute-modal__unallocated-value'
+    );
     // WHY wait for real (non-empty) text, not just container-visible
     // (flagged by locator-reviewer, 2026-08-10): the modal container can
     // become visible before its own values finish an async recalculation —
@@ -1743,7 +1753,9 @@ export class DealsPage extends BasePage {
     logger.info(`Asserting deal ${dealId} is deleted`);
     await this.navigateTo(`${config.appUrl}/sales/deals/details/${dealId}`);
     const detailUrlPattern = new RegExp(`/deals/details/${dealId}$`);
-    const errorToast = this.page.locator('.toastr.rrt-error, .alert-danger, [class*="error-toast"]').first();
+    const errorToast = this.page
+      .locator('.toastr.rrt-error, .alert-danger, [class*="error-toast"]')
+      .first();
     // WHY: Wait for one of the two real terminal signals — redirected away or
     // an error toast shown — instead of a blind sleep before checking.
     await Promise.race([
@@ -1779,10 +1791,10 @@ export class DealsPage extends BasePage {
     // "Name field not pre-filled" error — this fails immediately with a clear
     // cause instead.
     await this.withSessionExpiryRecovery(() =>
-      expect(this.editModal().locator('.modal-title'), 'Clone modal should show "Clone Deal" title').toHaveText(
-        'Clone Deal',
-        { timeout: 10000 }
-      )
+      expect(
+        this.editModal().locator('.modal-title'),
+        'Clone modal should show "Clone Deal" title'
+      ).toHaveText('Clone Deal', { timeout: 10000 })
     );
     // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
     // and there is no email/phone dedup needed (deal form has neither field, and the
@@ -1816,10 +1828,10 @@ export class DealsPage extends BasePage {
     // under real load, not a structural failure — widening it is a real,
     // evidence-based safety margin (rule 19), not a blind guess.
     await this.withSessionExpiryRecovery(() =>
-      expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
-        /Copy/,
-        { timeout: 20000 }
-      )
+      expect(
+        this.nameInput(),
+        'Clone modal Name field should be pre-filled before Save is clicked'
+      ).toHaveValue(/Copy/, { timeout: 20000 })
     );
 
     const dealIdPromise = this.captureDealIdFromResponse();
@@ -1828,9 +1840,13 @@ export class DealsPage extends BasePage {
     const clonedId = await dealIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above.
     if (!clonedId) {
-      throw new Error('Cloned deal ID not captured after save — cannot proceed (save likely failed silently)');
+      throw new Error(
+        'Cloned deal ID not captured after save — cannot proceed (save likely failed silently)'
+      );
     }
-    await this.editModal().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
+    await this.editModal()
+      .waitFor({ state: 'hidden', timeout: 15000 })
+      .catch(() => null);
     logger.success(`Deal cloned — new ID: ${clonedId}`);
     return clonedId;
   }
@@ -1890,10 +1906,16 @@ export class DealsPage extends BasePage {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        const userOption = this.page
+          .locator('.is-invalid__option')
+          .filter({ hasText: 'User' })
+          .first();
         await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
         await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({
+          state: 'visible',
+          timeout: config.timeouts.expect,
+        });
         return;
       } catch (error) {
         lastError = error;
@@ -1941,7 +1963,10 @@ export class DealsPage extends BasePage {
           const input = document.querySelector(`#inp_${perm}`) as HTMLElement;
           (input?.parentElement?.querySelector('label') as HTMLElement)?.click();
         }, permission);
-        await expect(toggle, `Permission "${permission}" should be checked after toggling`).toBeChecked({
+        await expect(
+          toggle,
+          `Permission "${permission}" should be checked after toggling`
+        ).toBeChecked({
           timeout: 3000,
         });
       }
@@ -1958,7 +1983,9 @@ export class DealsPage extends BasePage {
     ).catch(() => null);
     await this.shareConfirmButton().click();
     await shareResponsePromise;
-    await this.shareModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+    await this.shareModal()
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => null);
     logger.success(`Deal shared with: ${restrictedUserName}`);
   }
 
@@ -1989,7 +2016,9 @@ export class DealsPage extends BasePage {
     ).catch(() => null);
     await this.reassignConfirmButton().click();
     await reassignResponsePromise;
-    await this.reassignUserInput().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+    await this.reassignUserInput()
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => null);
     logger.success(`Deal reassigned to: ${userName}`);
   }
 
@@ -2049,7 +2078,8 @@ export class DealsPage extends BasePage {
           if (!raw) return { ok: false as const, reason: 'no-token-in-localStorage' };
           const payload = JSON.parse(atob(raw.split('.')[1]));
           const accessToken = payload?.data?.accessToken;
-          if (!accessToken) return { ok: false as const, reason: 'no-accessToken-in-decoded-token' };
+          if (!accessToken)
+            return { ok: false as const, reason: 'no-accessToken-in-decoded-token' };
           const res = await fetch(url, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
@@ -2133,9 +2163,36 @@ export class DealsPage extends BasePage {
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Associated Contacts' }) })
       .first();
-    const headerText = await card.locator('h2').textContent().catch(() => '');
+    const headerText = await card
+      .locator('h2')
+      .textContent()
+      .catch(() => '');
     const match = headerText?.match(/\((\d+)\)/);
     return match ? parseInt(match[1], 10) : 0;
+  }
+
+  // WHY a bounded reload-and-retry, not a single reload+read (fixed
+  // 2026-08-22, real flake investigated on D27/D35): getDisplayedAssociated
+  // ContactsCount() does one immediate, unretried read of the card's own
+  // header text right after navigation — no wait for that card's own async
+  // data fetch to resolve. A single reload narrows this but doesn't close
+  // it: the read can still fire before the freshly-reloaded page's own
+  // Associated Contacts card has finished loading, showing a stale count
+  // even though the real data is already correct moments later. Re-
+  // navigating (not sleeping) on every attempt gives the page a genuine
+  // fresh mount each time — the same "real re-navigation over a blind wait"
+  // idiom already proven in ReportsPage.verifyRunCountForEntity().
+  async waitForDisplayedAssociatedContactsCount(
+    dealId: string | number,
+    expectedCount: number
+  ): Promise<number> {
+    const { retries } = this.retryConfig;
+    let count = -1;
+    for (let attempt = 1; attempt <= retries && count !== expectedCount; attempt++) {
+      await this.goToDealDetailsById(dealId);
+      count = await this.getDisplayedAssociatedContactsCount();
+    }
+    return count;
   }
 
   async getAssociatedCompanyName(): Promise<string | null> {
@@ -2143,9 +2200,11 @@ export class DealsPage extends BasePage {
     // so there's no ID to read directly (unlike the contact link) — name-based
     // lookup is the practical option here, not a shortcut around ID-first.
     return (
-      (await this.companyFieldValue()
-        .textContent({ timeout: config.timeouts.expect })
-        .catch(() => null))?.trim() ?? null
+      (
+        await this.companyFieldValue()
+          .textContent({ timeout: config.timeouts.expect })
+          .catch(() => null)
+      )?.trim() ?? null
     );
   }
 
@@ -2244,9 +2303,11 @@ export class DealsPage extends BasePage {
   async assertRightPanelIconNotVisible(title: string): Promise<void> {
     logger.info(`Asserting right panel icon NOT visible: ${title}`);
     await this.withSessionExpiryRecovery(() =>
-      expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be hidden`).toBeHidden({
-        timeout: 5000,
-      })
+      expect(this.rightPanelIcon(title), `Right panel icon "${title}" should be hidden`).toBeHidden(
+        {
+          timeout: 5000,
+        }
+      )
     );
     logger.success(`Right panel icon not visible: ${title}`);
   }
@@ -2263,7 +2324,10 @@ export class DealsPage extends BasePage {
     const addButton = this.page.getByText('Add', { exact: true });
     await addButton.waitFor({ state: 'visible', timeout: 5000 });
     await addButton.click();
-    await this.page.locator('div.row.pt-2.pl-2.pr-2').first().waitFor({ state: 'visible', timeout: 10000 });
+    await this.page
+      .locator('div.row.pt-2.pl-2.pr-2')
+      .first()
+      .waitFor({ state: 'visible', timeout: 10000 });
     logger.success(`Note added: "${noteText}"`);
   }
 
@@ -2290,11 +2354,16 @@ export class DealsPage extends BasePage {
     // WHY: Save directly without meetingsPage.saveMeeting() — that method
     // navigates to the meeting's own detail page via a post-save popup, which
     // would strand us away from the deal detail page mid-flow.
-    const saveBtn = this.page.locator('button.save-button, #editEntityModal button[type="submit"]').first();
+    const saveBtn = this.page
+      .locator('button.save-button, #editEntityModal button[type="submit"]')
+      .first();
     await saveBtn.waitFor({ state: 'visible', timeout: 10000 });
     await saveBtn.click();
     await this.assertNoFormErrors('meeting create form (from deal panel)');
-    await this.page.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
+    await this.page
+      .locator('#editEntityModal')
+      .waitFor({ state: 'hidden', timeout: 15000 })
+      .catch(() => null);
     if (!this.page.url().includes(dealUrl.split('/details/')[1] ?? '___never___')) {
       await this.navigateTo(dealUrl);
       await this.waitForDealDetailsPage();
@@ -2333,11 +2402,16 @@ export class DealsPage extends BasePage {
     await quotationCardAdd.click();
     await this.editModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.withSessionExpiryRecovery(() =>
-      expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', { timeout: 10000 })
+      expect(this.editModal().locator('.modal-title')).toHaveText('Add Quotation', {
+        timeout: 10000,
+      })
     );
 
     const quotationsPage = new QuotationsPage(this.page);
-    return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent);
+    return await quotationsPage.fillAndSaveQuotationFromPanel(
+      customFields,
+      checkCustomFieldsAbsent
+    );
   }
 
   // ──────────────────────────────────────────────────────────
@@ -2358,9 +2432,15 @@ export class DealsPage extends BasePage {
   async assertDealDetailFields(data: DealData): Promise<void> {
     logger.info('Asserting deal detail header fields and tabs');
     await this.assertOnDealDetailPage();
-    await this.withSessionExpiryRecovery(() => expect(this.ownerFieldValue()).toBeVisible({ timeout: 10000 }));
-    await this.withSessionExpiryRecovery(() => expect(this.companyFieldValue()).toBeVisible({ timeout: 10000 }));
-    await this.withSessionExpiryRecovery(() => expect(this.productsFieldValue()).toBeVisible({ timeout: 10000 }));
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.ownerFieldValue()).toBeVisible({ timeout: 10000 })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.companyFieldValue()).toBeVisible({ timeout: 10000 })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.productsFieldValue()).toBeVisible({ timeout: 10000 })
+    );
     await this.withSessionExpiryRecovery(() =>
       expect(this.estimatedValueFieldValue()).toContainText('INR', { timeout: 10000 })
     );
@@ -2382,10 +2462,13 @@ export class DealsPage extends BasePage {
     const tabPane = this.page.locator('.tab-pane.active.show');
 
     await this.page.locator('#nav-tab0-tab').click();
-    await expect(tabPane, 'Basic Information tab should show the deal name').toContainText(data.name, {
-      timeout: 10000,
-      ignoreCase: true,
-    });
+    await expect(tabPane, 'Basic Information tab should show the deal name').toContainText(
+      data.name,
+      {
+        timeout: 10000,
+        ignoreCase: true,
+      }
+    );
 
     await this.page.locator('#nav-tab1-tab').click();
     await expect(tabPane, 'Campaign Information tab should show UTM source').toContainText(
@@ -2406,7 +2489,9 @@ export class DealsPage extends BasePage {
     // WHY: Confirmed live — the word "Internals" only labels the tab nav item,
     // it never appears inside the pane's own content. Assert real content
     // instead (Created By/Forecasting Type are always present on any deal).
-    await expect(tabPane, 'Internals tab should be active').toContainText('Created By', { timeout: 10000 });
+    await expect(tabPane, 'Internals tab should be active').toContainText('Created By', {
+      timeout: 10000,
+    });
     await expect(tabPane).toContainText('Forecasting Type');
 
     logger.success('Deal detail fields verified');
@@ -2438,14 +2523,26 @@ export class DealsPage extends BasePage {
     await this.page.waitForTimeout(500);
 
     const cf = data.customFields;
-    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Text Field');
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.textField,
+      cf.textField,
+      'Text Field'
+    );
     await this.assertCustomFieldOnDetail(
       DEAL_CUSTOM_FIELD_NAMES.paragraphText,
       cf.paragraphText,
       'Paragraph Text'
     );
-    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
-    await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.number,
+      String(cf.number),
+      'Number'
+    );
+    await this.assertCustomFieldOnDetail(
+      DEAL_CUSTOM_FIELD_NAMES.urlField,
+      cf.urlField,
+      'URL Field'
+    );
     await this.assertCustomFieldOnDetail(
       DEAL_CUSTOM_FIELD_NAMES.checkbox,
       cf.checkbox ? 'Yes' : 'No',
@@ -2462,7 +2559,11 @@ export class DealsPage extends BasePage {
       'Date Time Picker'
     );
     if (cf.pickList) {
-      await this.assertCustomFieldOnDetail(DEAL_CUSTOM_FIELD_NAMES.pickList, cf.pickList, 'Pick List');
+      await this.assertCustomFieldOnDetail(
+        DEAL_CUSTOM_FIELD_NAMES.pickList,
+        cf.pickList,
+        'Pick List'
+      );
     }
     if (cf.multiPickList.length > 0) {
       await this.assertMultiPicklistCustomFieldOnDetail(

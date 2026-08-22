@@ -16,7 +16,9 @@ test.describe('Deals', () => {
   // Navigation
   // ──────────────────────────────────────────────────────────
 
-  test('@smoke @regression @prodSafe admin should navigate to deals list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to deals list page', async ({
+    adminPage,
+  }) => {
     const dealsPage = new DealsPage(adminPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
@@ -287,7 +289,9 @@ test.describe('Deals', () => {
   // Detail page header fields and tabs
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should verify deal detail header fields and tabs', async ({ adminPage }) => {
+  test('@regression admin should verify deal detail header fields and tabs', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -393,9 +397,14 @@ test.describe('Deals', () => {
     // app-level display bug (see CLAUDE.md's Known Issues) if it's still present.
     const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
-    // WHY: Real end-state check — reload and re-read the card count
-    await dealsPage.goToDealDetailsById(dealId!);
-    const afterCount = await dealsPage.getDisplayedAssociatedContactsCount();
+    // WHY: Real end-state check — reload and re-read the card count.
+    // Bounded retry (fixed 2026-08-22, real flake): a single reload could
+    // still race the reloaded card's own async data fetch — see
+    // waitForDisplayedAssociatedContactsCount()'s own comment.
+    const afterCount = await dealsPage.waitForDisplayedAssociatedContactsCount(
+      dealId!,
+      baselineCount + 1
+    );
     expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
     logger.success('D35 passed');
   });
@@ -600,7 +609,10 @@ test.describe('Deals', () => {
 
     const rows = adminPage.locator('.products-input__row');
     const countBefore = await rows.count();
-    expect(countBefore, 'Should have at least 2 product rows before removal').toBeGreaterThanOrEqual(2);
+    expect(
+      countBefore,
+      'Should have at least 2 product rows before removal'
+    ).toBeGreaterThanOrEqual(2);
     const removedRowName = await rows
       .last()
       .locator('.is-invalid__single-value')

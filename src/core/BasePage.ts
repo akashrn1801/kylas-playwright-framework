@@ -503,7 +503,9 @@ export class BasePage {
       .catch(() => {
         /* menu may already be gone, or this control doesn't use this menu class */
       });
-    logger.success(`${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`);
+    logger.success(
+      `${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`
+    );
     return selectedText;
   }
 
@@ -783,7 +785,9 @@ export class BasePage {
       this.page
         .waitForResponse(responsePredicate, { timeout: config.timeouts.navigation })
         .catch(() => null),
-      tableLocator.waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+      tableLocator
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
     ]);
 
     const assertTableVisible = (): Promise<void> =>
@@ -1270,7 +1274,12 @@ export class BasePage {
     // Previously this was a bare `searchInput.fill()` + a single bounded
     // `waitFor`, so a brief DNS blip that failed the lookup request cost the whole
     // first test attempt (only Playwright's outer retry recovered it — see #59).
-    await this.fillSearchAndWaitForOptions(searchInput, options, exactValue ?? searchTerm, description);
+    await this.fillSearchAndWaitForOptions(
+      searchInput,
+      options,
+      exactValue ?? searchTerm,
+      description
+    );
 
     if (exactValue) {
       const exactOption = options
@@ -1548,13 +1557,11 @@ export class BasePage {
     // count worth of chips, so that count plus headroom is a safe, generous
     // bound that still fails fast and loudly instead of hanging silently.
     const maxChipsToClear = 50;
+    const chipRemoveIcons = control.locator('.is-invalid__multi-value__remove');
     let clearedCount = 0;
-    let existingChip = control.locator('.is-invalid__multi-value__remove').first();
-    while (
-      (await existingChip.isVisible({ timeout: 1000 }).catch(() => false)) &&
-      clearedCount < maxChipsToClear
-    ) {
-      await existingChip.click({ timeout: 5000 });
+    let remaining = await chipRemoveIcons.count();
+    while (remaining > 0 && clearedCount < maxChipsToClear) {
+      await chipRemoveIcons.first().click({ timeout: 5000 });
       // WHY: confirmed live (2026-07-08) — clicking a chip's remove button
       // also bubbles into the control's own click handler and pops the
       // options menu open, which then renders on top of (and blocks clicks
@@ -1567,8 +1574,23 @@ export class BasePage {
       if (menuOpen) {
         await this.page.keyboard.press('Escape');
       }
-      await this.page.waitForTimeout(150);
-      existingChip = control.locator('.is-invalid__multi-value__remove').first();
+      // WHY expect.poll() on the real chip COUNT, not a blind fixed-duration
+      // sleep followed by isVisible({timeout}) on a single chip:
+      // confirmed live (2026-08-22, PS10 recurrence in a full-suite run) —
+      // Playwright's own type definitions document isVisible()'s `timeout`
+      // parameter as ignored; it is a one-shot DOM snapshot, never a poll,
+      // despite appearing to grant a grace period. Clicking a chip's remove
+      // icon triggers a full React re-render of the chip list — if that
+      // one-shot snapshot landed mid-re-render, the old loop could read
+      // `false` for a chip that was still logically present and exit
+      // believing "done" while chips genuinely remained (the exact failure
+      // this replaces: "4 chip(s) still present after the clear loop
+      // reported done"). expect.poll() genuinely retries a live count query
+      // until it actually drops, closing that race with a real condition
+      // instead of a fixed 150ms guess.
+      const before = remaining;
+      await expect.poll(() => chipRemoveIcons.count(), { timeout: 3000 }).toBeLessThan(before);
+      remaining = await chipRemoveIcons.count();
       clearedCount++;
     }
     if (clearedCount >= maxChipsToClear) {
@@ -1576,13 +1598,11 @@ export class BasePage {
         `${description}: still had chips to clear after ${maxChipsToClear} removal attempts — a chip's remove button may not be detaching it`
       );
     }
-    // WHY: defense in depth — the loop above exits based on isVisible()
-    // checks that can theoretically race a re-render; confirm zero chips
-    // actually remain rather than only trusting the loop's own exit
-    // condition, so an incomplete clear fails loudly here instead of
-    // silently producing a wrong total that only surfaces later as a
-    // confusing detail-page verification mismatch.
-    const remainingChips = await control.locator('.is-invalid__multi-value__remove').count();
+    // WHY: defense in depth — confirm zero chips actually remain rather than
+    // only trusting the loop's own exit condition, so an incomplete clear
+    // fails loudly here instead of silently producing a wrong total that
+    // only surfaces later as a confusing detail-page verification mismatch.
+    const remainingChips = await chipRemoveIcons.count();
     if (remainingChips > 0) {
       throw new Error(
         `${description}: ${remainingChips} chip(s) still present after the clear loop reported done — clearing is unreliable`
@@ -1938,9 +1958,7 @@ export class BasePage {
     // suffix as the date half (e.g. "..._input_cfDateTimePicker_time").
     const timeSuffix = this.customFieldSuffix(`${fieldName}_time`, suffixStyle);
     const timeInput = this.page.locator(`[id$="${timeSuffix}"]`);
-    const timeInputEnabled = await timeInput
-      .isEnabled({ timeout: 5000 })
-      .catch(() => false);
+    const timeInputEnabled = await timeInput.isEnabled({ timeout: 5000 }).catch(() => false);
     if (!timeInputEnabled) {
       logger.warn(
         `Custom field "${description}" (cf${fieldName}): time input did not become enabled within 5s — proceeding cautiously`
@@ -2080,9 +2098,7 @@ export class BasePage {
    */
   protected async revealDetailCarouselSlideFor(containerId: string): Promise<void> {
     const container = this.page.locator(`[id="${containerId}"]`);
-    const slide = container.locator(
-      'xpath=ancestor::div[contains(@class,"carousel-item")][1]'
-    );
+    const slide = container.locator('xpath=ancestor::div[contains(@class,"carousel-item")][1]');
     // Not inside a carousel (single-page section) → nothing to navigate.
     if ((await slide.count()) === 0) return;
     const slideIsActive = async (): Promise<boolean> =>
@@ -2596,7 +2612,29 @@ export class BasePage {
     await this.click(control, `lookup control: ${name}`);
 
     if (expectFound) {
-      const searchToken = name.trim().split(/\s+/)[0];
+      // WHY the LAST word, not the first (fixed 2026-08-22, confirmed live
+      // via direct API investigation — a "search index lag" theory was
+      // tested and disproven first: a freshly-created product was
+      // confirmed searchable, same-user AND cross-user, within single-digit
+      // milliseconds of creation): this codebase's own auto-generated
+      // fixture names put the generic, widely-SHARED part FIRST (e.g.
+      // "[QA-Auto]", a tag on every fixture ever created — 166+ and
+      // growing, since fixtures are "never deleted, never reused" by
+      // design) and the genuinely UNIQUE, timestamp-based identifier LAST
+      // (e.g. "ADM1787380985879"). The live search API caps results at 50
+      // per page with no relevance ranking beyond alphabetical sort —
+      // confirmed live: searching "[QA-Auto]" alone returned 166 total
+      // matches, and a specific real target product (sorting alphabetically
+      // past the cap) was NOT among the first 50 returned, while the SAME
+      // product searched by its unique suffix alone returned exactly 1
+      // result. The first-word choice was the original design's real
+      // mistake, not a timing issue — the exact-match locator below was
+      // timing out waiting for an option already silently excluded by the
+      // search's own page-size cap, regardless of how long or how many
+      // times the wait retried. For a name with no shared leading tag, the
+      // last word is no less valid a single search token than the first.
+      const words = name.trim().split(/\s+/);
+      const searchToken = words[words.length - 1];
       await this.fillSearchAndWaitForOptions(
         lookupInput,
         optionList,
