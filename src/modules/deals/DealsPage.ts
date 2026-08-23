@@ -1763,70 +1763,100 @@ export class DealsPage extends BasePage {
   // Clone
   // ──────────────────────────────────────────────────────────
 
+  // WHY a bounded reopen-and-retry loop around the modal-open + render-settle
+  // sequence, not a single pass (redesigned 2026-08-23 — see
+  // .claude/sandbox-build-144-task-a-deals-clone.md): the FIRST version of
+  // this redesign made the Name-field-shows-"Copy" wait non-fatal and simply
+  // proceeded to click Save regardless. Verifying that change with 10 real
+  // trials under `--workers=2` surfaced a genuine, confirmed correctness
+  // escape, not just a "flaky test" symptom: one clone was saved with the
+  // STALE (pre-"Copy") name — captured live via `assertClonedDealName()`'s
+  // own failure diff, which showed the persisted deal's real name had no
+  // "Copy" suffix at all. That proves the original 2026-07-17 finding was
+  // right for a reason beyond avoiding a silent no-op click: the modal's
+  // underlying form state can still be mid-commit when Save is clicked, and
+  // clicking anyway can submit genuinely wrong data.
+  //
+  // The corrected design: still don't hard-fail the test on this field's
+  // own timing (that was the original, real flakiness) — but before ever
+  // falling through to "proceed anyway," give the render a second REAL
+  // chance by closing this stale modal attempt and reopening Clone fresh.
+  // A fresh mount has, empirically, always settled within ~1-2s across 30+
+  // real trials (see the investigation doc) — so a reopen is a much
+  // stronger corrective than just waiting longer on the same stuck attempt.
+  // Only after both attempts fail to settle does this proceed to Save
+  // anyway, and even then the actual correctness backstop is unchanged:
+  // `captureDealIdFromResponse()` (a discrete network event), the caller's
+  // ID-difference check, and `assertClonedDealName()` reading the persisted
+  // name off the clone's own separately-loaded detail page.
   async cloneDeal(): Promise<number | null> {
     logger.info('Cloning deal via ellipsis menu');
-    await this.clickEllipsisOption('Clone');
-    await this.editModal().waitFor({ state: 'visible', timeout: 15000 });
-    // WHY this modal-title check (2026-08-09, root-caused via live staging
-    // repro of the deals.rbac.spec.ts:1174 sandbox failure): `#editEntityModal`
-    // is a SHARED container reused for Edit/Clone/Add Contact/Add Quotation —
-    // confirmed live (this session) its real title text is "Clone Deal" — and
-    // this method was the one sibling flow in this file that never verified
-    // it, unlike Add Contact (line ~1863: expects "Edit Deal") and Add
-    // Quotation (line ~2038: expects "Add Quotation"). Without this check, a
-    // stale/wrong modal variant reusing the same container ID would silently
-    // pass the visibility wait and only surface 10s later as a confusing
-    // "Name field not pre-filled" error — this fails immediately with a clear
-    // cause instead.
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.editModal().locator('.modal-title'), 'Clone modal should show "Clone Deal" title').toHaveText(
-        'Clone Deal',
-        { timeout: 10000 }
+    const cloneT0 = Date.now();
+    const maxAttempts = 2;
+    let namePrefilled = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await this.clickEllipsisOption('Clone');
+      await this.editModal().waitFor({ state: 'visible', timeout: 15000 });
+      logger.debug(`Clone modal visible (attempt ${attempt}/${maxAttempts}) at +${Date.now() - cloneT0}ms`);
+      // WHY this modal-title check (2026-08-09, root-caused via live staging
+      // repro of the deals.rbac.spec.ts:1174 sandbox failure): `#editEntityModal`
+      // is a SHARED container reused for Edit/Clone/Add Contact/Add Quotation —
+      // confirmed live its real title text is "Clone Deal". Without this
+      // check, a stale/wrong modal variant reusing the same container ID
+      // would silently pass the visibility wait and only surface later as a
+      // confusing "Name field not pre-filled" error — this fails immediately
+      // with a clear cause instead.
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.editModal().locator('.modal-title'), 'Clone modal should show "Clone Deal" title').toHaveText(
+          'Clone Deal',
+          { timeout: 10000 }
+        )
+      );
+      logger.debug(`Clone modal title ready (attempt ${attempt}/${maxAttempts}) at +${Date.now() - cloneT0}ms`);
+      // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
+      // and there is no email/phone dedup needed (deal form has neither field, and the
+      // app does not reject a duplicate deal name on save).
+      //
+      // WHY still routed through withSessionExpiryRecovery() (rule 3): a
+      // genuine session expiry here must still trigger real recovery, not
+      // be treated as "field just wasn't ready in time."
+      namePrefilled = await this.withSessionExpiryRecovery(() =>
+        expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
+          /Copy/,
+          { timeout: 20000 }
+        )
       )
-    );
-    // WHY: Confirmed live — Clone Deal modal auto pre-fills name as "<original> Copy"
-    // and there is no email/phone dedup needed (deal form has neither field, and the
-    // app does not reject a duplicate deal name on save).
-
-    // WHY: render-settle wait, root-caused via direct instrumentation
-    // (2026-07-17) — NOT a guessed sleep. Reproduced the failure with full
-    // request/response/console logging: the Save click sometimes produces
-    // ZERO network activity for 10+ seconds afterward, while the button
-    // itself stays visible/enabled/unchanged the entire time (ruling out a
-    // detached/replaced button, a slow backend response, or backend
-    // propagation lag — all would show SOME network signal; this showed
-    // none at all). The click was landing only ~80ms after the modal's
-    // outer container became visible, while the modal's own async pre-fill
-    // (name, owner, pipeline, contacts, company, product rows, campaign
-    // fields) was very likely still committing — a known class of
-    // Playwright-vs-React timing issue where a click can be dispatched
-    // during an in-flight render commit and never reach the component's
-    // handler. Waiting for the pre-filled Name field to actually contain
-    // "Copy" is a real DOM-state readiness signal (the modal's own
-    // rendering has committed its first bound field), not an arbitrary
-    // duration — confirmed via 8/8 clean reproductions with this wait in
-    // place vs. a mixed pass/fail rate without it.
-    //
-    // WHY the timeout was widened from 10000ms to 20000ms (2026-08-09): the
-    // sandbox failure this session root-caused occurred under CONFIRMED real
-    // `--workers=2` load (298 concurrent tests) — genuinely heavier than the
-    // conditions the original 8/8 clean reproduction was measured under. The
-    // modal-title check above now catches a wrong-modal scenario immediately,
-    // so this remaining timeout only needs to cover genuine pre-fill latency
-    // under real load, not a structural failure — widening it is a real,
-    // evidence-based safety margin (rule 19), not a blind guess.
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.nameInput(), 'Clone modal Name field should be pre-filled before Save is clicked').toHaveValue(
-        /Copy/,
-        { timeout: 20000 }
-      )
-    );
+        .then(() => true)
+        .catch(() => false);
+      logger.debug(
+        `Clone modal Name field ${namePrefilled ? 'ready ("Copy")' : 'NOT ready in time'} (attempt ${attempt}/${maxAttempts}) at +${Date.now() - cloneT0}ms`
+      );
+      if (namePrefilled || attempt === maxAttempts) break;
+      logger.warn(
+        `Clone modal Name field did not show "Copy" within 20s on attempt ${attempt}/${maxAttempts} — closing and reopening for a fresh render attempt before falling back to Save-anyway`
+      );
+      await this.page.keyboard.press('Escape');
+      await this.editModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+    }
+    if (!namePrefilled) {
+      // WHY still proceed rather than throw (this is the one remaining
+      // non-fatal fallback, now only reached after BOTH attempts failed to
+      // settle): the real correctness check is the ID-difference and
+      // detail-page name assertions the caller performs afterward — if the
+      // submitted name really is stale, that check will now correctly fail
+      // the test with a clear diff instead of masking it.
+      logger.warn(
+        `Clone modal Name field never showed "Copy" after ${maxAttempts} attempts — proceeding to Save anyway; correctness will be verified via the cloned deal's captured ID and its own detail page`
+      );
+    }
 
     const dealIdPromise = this.captureDealIdFromResponse();
     await this.click(this.saveEditButton(), 'clone save button');
     await this.assertNoFormErrors('deal clone form');
     const clonedId = await dealIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above.
+    // This is the PRIMARY correctness signal for the clone flow — a discrete,
+    // hard network event, not a UI snapshot.
     if (!clonedId) {
       throw new Error('Cloned deal ID not captured after save — cannot proceed (save likely failed silently)');
     }

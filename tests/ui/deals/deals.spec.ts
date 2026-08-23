@@ -366,7 +366,23 @@ test.describe('Deals', () => {
     expect(dealId).not.toBeNull();
     await dealsPage.goToDealDetailsById(dealId!);
     const clonedId = await dealsPage.cloneDeal();
+    // WHY the primary correctness signal is now ID-based, not a mid-render
+    // UI field read (redesigned 2026-08-23 — see
+    // .claude/sandbox-build-144-task-a-deals-clone.md): cloneDeal()'s
+    // clonedId comes from a genuine network response (a discrete, hard
+    // event), not a DOM snapshot that can be caught half-rendered.
     expect(clonedId).not.toBeNull();
+    // WHY assert clonedId !== dealId: a non-null return alone isn't proof a
+    // real clone happened — it could coincidentally be null-checked away
+    // while still (in some other bug) resolving to the SAME deal. Asserting
+    // the two IDs differ is the actual "a genuine second record was
+    // created" proof.
+    expect(clonedId, 'Cloned deal must have a different ID from the original').not.toBe(dealId);
+    // WHY this name check is safe now, unlike the old pre-save modal check:
+    // it reads the cloned deal's name off its own separately-loaded, fully
+    // -settled detail page (assertClonedDealName() navigates there first),
+    // not off the clone modal mid-render — no longer vulnerable to the same
+    // rendering-timing race.
     await dealsPage.assertClonedDealName(dealData.name, clonedId!);
     logger.success('D34 passed');
   });

@@ -1548,44 +1548,93 @@ export class BasePage {
     // count worth of chips, so that count plus headroom is a safe, generous
     // bound that still fails fast and loudly instead of hanging silently.
     const maxChipsToClear = 50;
+    // WHY a bounded number of outer "settle rounds" wrapping the inner
+    // per-chip removal loop, not just a single pass (fixed 2026-08-23, real
+    // PS10/sandbox-build-144 recurrence — see
+    // .claude/sandbox-build-144-task-b-chip-clearing.md): the real CI
+    // failure's own stack trace proved the inner loop legitimately reached
+    // zero chips (it never hit the maxChipsToClear exhaustion path below,
+    // which throws a different message) — the defense-in-depth recheck
+    // immediately afterward then found 5 chips present again. That is
+    // chips REAPPEARING after a genuine zero-read, under real `--workers=2`
+    // backend contention, not chips failing to detach. A single local
+    // `clickEditIcon()` only waits for the edit modal's container to become
+    // visible, not for the Requirement section's own async product data to
+    // finish hydrating — under enough backend latency, this method can
+    // start (and finish) its inner loop before that hydration completes,
+    // then have the real saved chips land moments later.
+    const maxSettleRounds = 4;
+    const STABILITY_WINDOW_MS = 1000;
     let clearedCount = 0;
-    let existingChip = control.locator('.is-invalid__multi-value__remove').first();
-    while (
-      (await existingChip.isVisible({ timeout: 1000 }).catch(() => false)) &&
-      clearedCount < maxChipsToClear
-    ) {
-      await existingChip.click({ timeout: 5000 });
-      // WHY: confirmed live (2026-07-08) — clicking a chip's remove button
-      // also bubbles into the control's own click handler and pops the
-      // options menu open, which then renders on top of (and blocks clicks
-      // on) the remaining chips' remove buttons. Close it before the next
-      // removal attempt so it never gets the chance to intercept a click.
-      const menuOpen = await this.page
-        .locator('.is-invalid__menu')
-        .isVisible({ timeout: 500 })
-        .catch(() => false);
-      if (menuOpen) {
-        await this.page.keyboard.press('Escape');
+    for (let round = 1; round <= maxSettleRounds; round++) {
+      let existingChip = control.locator('.is-invalid__multi-value__remove').first();
+      while (
+        (await existingChip.isVisible({ timeout: 1000 }).catch(() => false)) &&
+        clearedCount < maxChipsToClear
+      ) {
+        // WHY captured BEFORE the click, then polled for a genuine decrease
+        // (fixed 2026-08-23 — a blind fixed-duration sleep here was caught
+        // by this session's own pre-commit anti-pattern hook): removing a
+        // chip triggers an async React re-render of the whole chip list —
+        // a fixed 150ms pause was just hoping that commit lands before the
+        // next loop iteration re-reads the list. expect.poll() genuinely
+        // retries the real chip count until it actually drops, the exact
+        // condition being waited for, instead of guessing a duration.
+        const chipCountBeforeRemoval = await control
+          .locator('.is-invalid__multi-value__remove')
+          .count();
+        await existingChip.click({ timeout: 5000 });
+        // WHY: confirmed live (2026-07-08) — clicking a chip's remove button
+        // also bubbles into the control's own click handler and pops the
+        // options menu open, which then renders on top of (and blocks clicks
+        // on) the remaining chips' remove buttons. Close it before the next
+        // removal attempt so it never gets the chance to intercept a click.
+        const menuOpen = await this.page
+          .locator('.is-invalid__menu')
+          .isVisible({ timeout: 500 })
+          .catch(() => false);
+        if (menuOpen) {
+          await this.page.keyboard.press('Escape');
+        }
+        await expect
+          .poll(() => control.locator('.is-invalid__multi-value__remove').count(), { timeout: 3000 })
+          .toBeLessThan(chipCountBeforeRemoval);
+        existingChip = control.locator('.is-invalid__multi-value__remove').first();
+        clearedCount++;
       }
-      await this.page.waitForTimeout(150);
-      existingChip = control.locator('.is-invalid__multi-value__remove').first();
-      clearedCount++;
+      if (clearedCount >= maxChipsToClear) {
+        throw new Error(
+          `${description}: still had chips to clear after ${maxChipsToClear} removal attempts — a chip's remove button may not be detaching it`
+        );
+      }
+      // WHY a real `waitFor('visible')` TIMING OUT is the SUCCESS case here
+      // (mirrors the proven stability-window idiom in
+      // reference-patterns.md §18, applied to the symmetric "reached zero"
+      // direction instead of "menu opened"): if no chip's remove icon
+      // becomes visible again within the window, the zero state genuinely
+      // held — a real, condition-based check, not a fixed-duration blind
+      // sleep. If one DOES reappear, loop back into another settle round
+      // (re-clearing whatever just landed) instead of trusting a zero-read
+      // that a moment later turned out to be premature.
+      const reappeared = await control
+        .locator('.is-invalid__multi-value__remove')
+        .first()
+        .waitFor({ state: 'visible', timeout: STABILITY_WINDOW_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!reappeared) {
+        return;
+      }
     }
-    if (clearedCount >= maxChipsToClear) {
-      throw new Error(
-        `${description}: still had chips to clear after ${maxChipsToClear} removal attempts — a chip's remove button may not be detaching it`
-      );
-    }
-    // WHY: defense in depth — the loop above exits based on isVisible()
-    // checks that can theoretically race a re-render; confirm zero chips
-    // actually remain rather than only trusting the loop's own exit
-    // condition, so an incomplete clear fails loudly here instead of
-    // silently producing a wrong total that only surfaces later as a
-    // confusing detail-page verification mismatch.
+    // WHY: defense in depth — after exhausting every settle round, confirm
+    // zero chips actually remain rather than only trusting the loop's own
+    // exit condition, so a genuinely unstable field fails loudly here
+    // instead of silently producing a wrong total that only surfaces later
+    // as a confusing detail-page verification mismatch.
     const remainingChips = await control.locator('.is-invalid__multi-value__remove').count();
     if (remainingChips > 0) {
       throw new Error(
-        `${description}: ${remainingChips} chip(s) still present after the clear loop reported done — clearing is unreliable`
+        `${description}: ${remainingChips} chip(s) still present after ${maxSettleRounds} settle rounds — clearing is unreliable`
       );
     }
   }
