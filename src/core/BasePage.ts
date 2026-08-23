@@ -2645,11 +2645,29 @@ export class BasePage {
     await this.click(control, `lookup control: ${name}`);
 
     if (expectFound) {
-      const searchToken = name.trim().split(/\s+/)[0];
+      // WHY search with the FULL name, not just its first word (fixed
+      // 2026-08-23, real PS10 recurrence investigated live — see
+      // .claude/product-search-index-lag-investigation.md): the original
+      // `name.trim().split(/\s+/)[0]` was suspected but NOT actually caused
+      // by search-index lag. Confirmed live via a direct diagnostic against
+      // the real backend: searching this method's ONLY current caller's
+      // typical search term (`[QA-Auto]`, the fixed prefix every Products &
+      // Services test fixture shares, per this module's own "fixtures are
+      // never deleted, real accumulation over time" design) returned
+      // exactly 50 results — a hard backend page-size cap — sorted
+      // alphabetically by product name, with the actual target fixture NOT
+      // among them. Searching the SAME target's full name returned exactly
+      // 1 result: the exact fixture. A shared, non-discriminating prefix
+      // token gets crowded out by an ever-growing accumulated pool as this
+      // environment's product data grows (rule 20) — this was never a
+      // freshness/indexing-speed problem. The full name is exactly what the
+      // sibling `addProductRowAndSearchByName()` already searches with
+      // successfully for the same fixtures on Deals/Quotations — mirroring
+      // that proven, working pattern rather than inventing a new one.
       await this.fillSearchAndWaitForOptions(
         lookupInput,
         optionList,
-        searchToken,
+        name,
         `Search and select: ${name}`
       );
       const exactOption = optionList
