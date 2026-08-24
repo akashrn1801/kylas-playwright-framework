@@ -10,6 +10,7 @@ import {
   armSessionExpirySignal,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
+import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
@@ -381,8 +382,6 @@ export class BasePage {
   // for created test entities everywhere else — masking only the login
   // email here would be inconsistent for near-zero security benefit and
   // would cost real debuggability on login-flow failures.
-  private static readonly SENSITIVE_FIELD_PATTERN = /password|passwd|pwd|secret|token|api[_-]?key/i;
-
   // WHY description-based, not a DOM `type="password"` query: the only
   // known sensitive call site already passes an accurate description
   // ('password field'), and this codebase's own convention is descriptive
@@ -395,7 +394,7 @@ export class BasePage {
   // today (`#input_password` is the only password field anywhere, and its
   // one call site already describes itself accurately).
   private isSensitiveFieldDescription(description: string): boolean {
-    return BasePage.SENSITIVE_FIELD_PATTERN.test(description);
+    return SENSITIVE_FIELD_PATTERN.test(description);
   }
 
   async fill(locator: Locator, value: string, description = 'field'): Promise<void> {

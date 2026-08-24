@@ -8,10 +8,13 @@ jobs:
   detect-and-run:
     name: playwright-selective
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
 
       - uses: actions/setup-node@v5
         with:

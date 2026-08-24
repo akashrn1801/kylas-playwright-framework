@@ -50,6 +50,35 @@ export interface TestResult {
   // Undefined when no trace was captured (e.g. a test that failed before any
   // browser context existed) — callers must handle that, not assume presence.
   tracePath?: string;
+  // WHY added 2026-08-24: confirmed live against a real failed test's raw JSON
+  // (prod run, 2026-07-31) that Playwright generates a ready-made, ANSI-colored
+  // code-context block around the failing line (a few lines either side, with a
+  // `^` pointer at the exact column) as error.snippet — this was never captured
+  // before. ANSI-stripped the same way error.message/stack already are.
+  errorSnippet?: string;
+  // WHY added 2026-08-24: confirmed live that results[].errors[] (PLURAL, an
+  // array) can contain a more specific, more useful message than
+  // results[].error (singular — the FIRST entry) — a real example (a flaky
+  // quotations test) had error.message = the generic "Test timeout of
+  // 480000ms exceeded," while errors[1].message was the actual, specific,
+  // actionable cause thrown by application code moments before the timeout.
+  // error/errorStack/errorLocation above are deliberately left untouched
+  // (still sourced from lastResult only) to avoid changing any existing
+  // consumer's behavior (FailureAnalyzer's classification/clustering) — this
+  // is a new, additive field for FailureDetailBuilder to read the full
+  // sequence from, never a replacement of the existing ones.
+  allErrors: string[];
+  // WHY added 2026-08-24: confirmed live that Playwright attaches 1+
+  // screenshots (sometimes several per failing attempt) beyond the trace —
+  // never read before this. Sourced from the same traceSourceResult used for
+  // tracePath (the failing attempt for a flaky test, not the passing retry).
+  screenshotPaths: string[];
+  // WHY added 2026-08-24: confirmed live that Playwright attaches a text/YAML
+  // accessibility-tree snapshot of page state at the moment of failure
+  // (attachment name "error-context") — a genuinely different, often more
+  // useful artifact than a screenshot for a locator/timeout failure. Never
+  // read before this.
+  errorContextPath?: string;
 }
 
 export interface ModuleStats {
@@ -132,6 +161,9 @@ interface PlaywrightJsonError {
   value?: string;
   stack?: string;
   location?: PlaywrightJsonErrorLocation;
+  // WHY added 2026-08-24: see TestResult.errorSnippet's WHY comment — this is
+  // real, confirmed-present raw JSON shape, not a guess.
+  snippet?: string;
 }
 
 interface PlaywrightJsonAttachment {
@@ -143,6 +175,10 @@ interface PlaywrightJsonTestResult {
   status?: 'passed' | 'failed' | 'timedOut' | 'skipped' | 'interrupted';
   duration?: number;
   error?: PlaywrightJsonError;
+  // WHY added 2026-08-24: see TestResult.allErrors's WHY comment — this is a
+  // real, separate array sibling to the singular `error` field above,
+  // confirmed present in real raw JSON output.
+  errors?: PlaywrightJsonError[];
   attachments?: PlaywrightJsonAttachment[];
 }
 
@@ -290,14 +326,6 @@ export class ReportParser {
             // - Using retries > 0 alone is wrong: a test that fails twice has retries=1
             //   but should be 'failed', not 'flaky'
             const status = this.mapStatus(test.status, lastResult?.status);
-            const rawMessage = lastResult?.error?.message || lastResult?.error?.value || undefined;
-            const error = rawMessage ? stripAnsi(rawMessage) : undefined;
-            const rawStack = lastResult?.error?.stack;
-            const errorStack = rawStack ? stripAnsi(rawStack) : undefined;
-            const loc = lastResult?.error?.location;
-            const errorLocation: ErrorLocation | undefined = loc
-              ? { file: loc.file, line: loc.line, column: loc.column }
-              : undefined;
             // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
             // for a flaky test, lastResult is the PASSING retry, which has no
             // trace attachment (trace: 'retain-on-failure' only keeps traces
@@ -310,6 +338,33 @@ export class ReportParser {
               status === 'flaky'
                 ? [...allResults].reverse().find((r) => r.status !== 'passed')
                 : lastResult;
+            // WHY error/errorStack/errorLocation source from traceSourceResult,
+            // NOT lastResult (changed 2026-08-24 — a real bug caught during
+            // this redesign's own verification against real flaky-test data,
+            // not theoretical): these three used to come from lastResult only,
+            // which for a flaky test is the PASSING retry — meaning they were
+            // always empty/undefined for every flaky test, exactly the same
+            // "wrong attempt" mistake trace capture already had and was fixed
+            // for above. Confirmed safe for existing consumers: FailureAnalyzer's
+            // classifyFailure()/clusterFailures() only ever runs on
+            // report.failedTests (hard failures, where traceSourceResult ===
+            // lastResult already — zero behavior change there); the only
+            // behavior change is exactly the intended one, giving flaky tests'
+            // OWN failing-attempt detail for the first time.
+            const rawMessage = traceSourceResult?.error?.message || traceSourceResult?.error?.value || undefined;
+            const error = rawMessage ? stripAnsi(rawMessage) : undefined;
+            const rawStack = traceSourceResult?.error?.stack;
+            const errorStack = rawStack ? stripAnsi(rawStack) : undefined;
+            const loc = traceSourceResult?.error?.location;
+            const errorLocation: ErrorLocation | undefined = loc
+              ? { file: loc.file, line: loc.line, column: loc.column }
+              : undefined;
+            const rawSnippet = traceSourceResult?.error?.snippet;
+            const errorSnippet = rawSnippet ? stripAnsi(rawSnippet) : undefined;
+            const allErrors = (traceSourceResult?.errors ?? [])
+              .map((e) => e.message || e.value)
+              .filter((m): m is string => Boolean(m))
+              .map(stripAnsi);
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
               status,
@@ -317,9 +372,13 @@ export class ReportParser {
               error,
               errorStack,
               errorLocation,
+              errorSnippet,
+              allErrors,
               retries,
               file: currentFile,
-              tracePath: this.extractTracePath(traceSourceResult),
+              tracePath: this.extractAttachmentPaths(traceSourceResult, 'trace')[0],
+              screenshotPaths: this.extractAttachmentPaths(traceSourceResult, 'screenshot'),
+              errorContextPath: this.extractAttachmentPaths(traceSourceResult, 'error-context')[0],
             });
           }
         }
@@ -337,10 +396,15 @@ export class ReportParser {
   // it should match what a reader finds inside the downloaded/extracted
   // test-results artifact zip, not a path that only ever existed on a machine
   // nobody can access anymore.
-  private extractTracePath(result: PlaywrightJsonTestResult | undefined): string | undefined {
-    const trace = result?.attachments?.find((a) => a.name === 'trace' && a.path);
-    if (!trace?.path) return undefined;
-    return path.relative(process.cwd(), trace.path).split(path.sep).join('/');
+  // WHY generalized 2026-08-24 (was extractTracePath, trace-only): screenshot
+  // and error-context attachments need the exact same absolute-to-repo-
+  // relative conversion as trace did — one shared implementation instead of
+  // three near-identical copies. Returns an array (not a single path) since a
+  // failing attempt can carry more than one screenshot (confirmed live);
+  // callers needing a single value (trace, error-context) take index [0].
+  private extractAttachmentPaths(result: PlaywrightJsonTestResult | undefined, name: string): string[] {
+    const matches = result?.attachments?.filter((a) => a.name === name && a.path) ?? [];
+    return matches.map((a) => path.relative(process.cwd(), a.path!).split(path.sep).join('/'));
   }
 
   private mapStatus(

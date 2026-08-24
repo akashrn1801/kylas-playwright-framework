@@ -7,9 +7,11 @@ import {
   SuiteDrift,
   PassRatePoint,
 } from './RunHistory';
-import { HealthScore } from './AutomationHealth';
-import { FailureCluster } from './FailureAnalyzer';
+import { HealthScore, VerdictResult, computeOverallVerdict } from './AutomationHealth';
+import { FailureCategory } from './FailureAnalyzer';
+import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
+import { redactSensitiveText } from './redact';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -59,7 +61,29 @@ export interface EmailContext {
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
   health?: HealthScore;
-  clusters?: FailureCluster[];
+  // WHY: the SINGLE source of truth for "is this run okay" — see
+  // AutomationHealth.computeOverallVerdict()'s own WHY comment. Both the
+  // status banner and the Executive Summary headline render from this one
+  // object so they can never independently disagree.
+  verdict?: VerdictResult;
+  clusters?: EnrichedCluster[];
+  // WHY a separate field, not folded into `clusters`: flaky tests are never
+  // clustered (clusterFailures() only ever accepts report.failedTests) —
+  // this is each flaky test's OWN failing-attempt detail (full error
+  // sequence, snippet, stack, classification), rendered inside the existing
+  // Flaky Tests section, not a new section.
+  flakyFailureDetails?: FailureDetail[];
+  // WHY: distinguishes "the history mechanism has never had a chance to
+  // compare" (no prior run recorded at all) from "compared, and this
+  // specific module/test had no prior entry" — see the Module Analytics
+  // trend-column fix and RegressionStatus.unclassified for where this
+  // matters. Undefined/false renders the same honest "no history yet" state.
+  hasHistoryEverExisted?: boolean;
+  // WHY: base GitHub blob URL (pinned to this run's exact commit SHA) for
+  // the known-issues.md cross-reference — a specific failure's line number
+  // (FailureDetail.knownIssue.line) is appended as #L<line> at render time.
+  // Null when the remote isn't GitHub or couldn't be resolved.
+  knownIssuesUrl?: string | null;
   reportFreshness?: ReportFreshness;
   // WHY: real data only — Node/OS of the process that generated this report
   // (captured at NotificationService runtime), distinct from
@@ -117,21 +141,31 @@ export class EmailTemplate {
   html(ctx: EmailContext): string {
     const health = ctx.health ?? this.fallbackHealth(ctx.report);
     const clusters = ctx.clusters ?? [];
+    // WHY computed here (not left undefined) when a caller omits it: mirrors
+    // fallbackHealth()'s own precedent — EmailTemplate must render something
+    // correct even if a caller forgets to pass ctx.verdict, using the same
+    // real computeOverallVerdict() logic rather than a second, drifting copy.
+    const verdict = ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null);
+    // WHY built once, threaded through: lets the Trend section's "recurring
+    // flaky/failing" test names and Action Required's items deep-link to a
+    // specific test's own card in Failed/Flaky Tests when that test actually
+    // appears in THIS run's output — see buildTestAnchorLookup()'s own WHY.
+    const testAnchors = this.buildTestAnchorLookup(clusters, ctx.flakyFailureDetails ?? []);
 
     const body = [
       this.buildFreshnessWarning(ctx.reportFreshness),
       this.buildMasthead(ctx, health),
-      this.buildStatusBanner(ctx.report.status),
+      this.buildStatusBanner(verdict),
       this.buildStatusBadgeRow(ctx),
-      this.buildExecutiveSummary(ctx, health, clusters),
+      this.buildExecutiveSummary(ctx, health, clusters, verdict),
       this.buildHealthScoreBlock(health),
       this.buildRunMetadata(ctx),
       this.buildKpiDashboard(ctx),
-      this.buildTrendSection(ctx),
+      this.buildTrendSection(ctx, testAnchors),
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
       this.buildFlakyTestsSection(ctx),
-      this.buildFailureClustersSection(clusters),
+      this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
       this.buildActionRequiredSection(ctx, health, clusters),
       this.buildEnvironmentInfoBlock(ctx),
@@ -214,22 +248,18 @@ ${body}
   // Uses the restrained design system's own semantic tokens (not the old
   // template's saturated colors) and a text-only label, no emoji, per the
   // approved direction.
-  private buildStatusBanner(status: ParsedReport['status']): string {
-    // WHY: emoji reintroduced 2026-07-14 for this contextual header indicator
-    // specifically (matches the old template's exact ✅/❌/⚠️ choice for this
-    // same status label) — not applied broadly to every section header in
-    // the email, which stays emoji-free per the earlier restrained-design
-    // decision. Scope is deliberate: contextual "what am I looking at"
-    // indicators (this banner, the SOURCE badge below), not decoration.
-    const map = {
-      passed: { bg: SUCCESS, label: '✅ Passed' },
-      failed: { bg: FAIL, label: '❌ Failed' },
-      unstable: { bg: WARN, label: '⚠️ Unstable' },
-    } as const;
-    const s = map[status];
+  // WHY rewritten 2026-08-24 to render from VerdictResult, not report.status
+  // directly: this is the actual fix for a confirmed-live contradiction
+  // (a run reading "✅ Passed" here while Executive Summary said "Deployment
+  // not recommended" / health "Critical" two sections later) — see
+  // AutomationHealth.computeOverallVerdict()'s own WHY comment. Rendering
+  // both the banner and the Executive Summary headline from the SAME
+  // VerdictResult object makes that disagreement structurally impossible.
+  private buildStatusBanner(verdict: VerdictResult): string {
+    const bg = verdict.bannerTone === 'success' ? SUCCESS : verdict.bannerTone === 'warning' ? WARN : FAIL;
     return `
-<tr><td style="background:${s.bg};padding:12px 28px;text-align:center;">
-  <span style="font-size:14px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${s.label}</span>
+<tr><td style="background:${bg};padding:12px 28px;text-align:center;">
+  <span style="font-size:14px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${this.esc(verdict.bannerLabel)}</span>
 </td></tr>`;
   }
 
@@ -296,7 +326,8 @@ ${body}
   private buildExecutiveSummary(
     ctx: EmailContext,
     health: HealthScore,
-    clusters: FailureCluster[]
+    clusters: EnrichedCluster[],
+    verdict: VerdictResult
   ): string {
     const { report } = ctx;
     const drift = ctx.suiteDrift;
@@ -308,14 +339,13 @@ ${body}
     // it's actually N *clusters* covering a larger number of tests (e.g. 2
     // clusters of 2 tests each = 4 tests, not 2). Report both numbers.
     const clusteredTestCount = multiTestClusters.reduce((sum, c) => sum + c.tests.length, 0);
-    const deploymentSafe = report.failed === 0 && !drift?.occurred && health.label !== 'Critical';
 
     const sentences: string[] = [];
     if (report.failed > 0) {
       sentences.push(
         `${report.failed} test${report.failed === 1 ? '' : 's'} failed${
           multiTestClusters.length > 0
-            ? `, ${clusteredTestCount} of them grouped into ${multiTestClusters.length} shared-cause cluster${multiTestClusters.length === 1 ? '' : 's'} (see Failure Clusters)`
+            ? `, ${clusteredTestCount} of them grouped into ${multiTestClusters.length} shared-cause cluster${multiTestClusters.length === 1 ? '' : 's'} (see Failed Tests)`
             : ''
         }.`
       );
@@ -332,23 +362,26 @@ ${body}
     if (unexpectedMisc > 0) {
       sentences.push(`${unexpectedMisc} unexpected background error${unexpectedMisc === 1 ? '' : 's'} captured.`);
     }
+    // WHY health.label surfaced explicitly here (2026-08-24) when it's the
+    // reason a clean run still isn't "clear": without this sentence, a
+    // reader would see "No test failures this run." next to a "not
+    // recommended" headline with no explanation connecting the two.
+    if (report.failed === 0 && !drift?.occurred && verdict.verdict !== 'clear') {
+      sentences.push(`Automation health is ${health.label} — see Health Score below for why.`);
+    }
 
-    const headline = drift?.occurred
-      ? 'Deployment not recommended — suite drift detected'
-      : deploymentSafe
-        ? report.flaky > 0
-          ? 'Deployment likely safe — review flaky tests'
-          : 'Deployment recommended'
-        : 'Deployment not recommended';
-    const isPositive = deploymentSafe && !drift?.occurred;
-    const stripeColor = isPositive ? SUCCESS : FAIL;
-    const cardBg = isPositive ? '#F3FBF4' : FAIL_BG;
-    const cardBorder = isPositive ? SUCCESS_BORDER : FAIL_BORDER;
+    // WHY headline/tone come from `verdict` (computeOverallVerdict()'s
+    // single shared output), not independently recomputed here — this is
+    // the other half of the item-1 fix; see buildStatusBanner()'s WHY.
+    const isPositive = verdict.verdict === 'clear';
+    const stripeColor: string = verdict.bannerTone === 'success' ? SUCCESS : verdict.bannerTone === 'warning' ? WARN : FAIL;
+    const cardBg = isPositive ? '#F3FBF4' : verdict.bannerTone === 'warning' ? WARN_BG : FAIL_BG;
+    const cardBorder = isPositive ? SUCCESS_BORDER : verdict.bannerTone === 'warning' ? WARN_BORDER : FAIL_BORDER;
 
     const actionLine =
-      !isPositive || report.flaky > 0
+      verdict.verdict !== 'clear'
         ? `<div style="margin-top:8px;font-size:11.5px;font-weight:700;color:${stripeColor};">${
-            isPositive ? 'Recommended — review flaky tests before the next release' : 'Action required — see Action Required section below'
+            verdict.verdict === 'caution' ? 'Recommended — review before the next release' : 'Action required — see Action Required section below'
           }</div>`
         : '';
 
@@ -358,7 +391,7 @@ ${body}
   <div style="border:1px solid ${cardBorder};background:${cardBg};border-radius:6px;padding:14px 16px;display:table;width:100%;">
     <div style="display:table-cell;width:3px;background:${stripeColor};border-radius:2px;"></div>
     <div style="display:table-cell;padding-left:12px;">
-      <div style="font-size:13.5px;font-weight:700;color:${INK};">${this.esc(headline)}</div>
+      <div style="font-size:13.5px;font-weight:700;color:${INK};">${this.esc(verdict.headline)}</div>
       <div style="font-size:12.5px;color:#424A53;line-height:1.55;margin-top:4px;">${this.esc(sentences.join(' '))}</div>
       ${actionLine}
     </div>
@@ -402,8 +435,17 @@ ${body}
 
   private buildRunMetadata(ctx: EmailContext): string {
     const { report } = ctx;
-    const startTime = new Date(report.startTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    const endTime = new Date(report.endTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    // WHY timeZoneName: 'short' added 2026-08-24: confirmed live in this
+    // Node v20.20.2/ICU build that `toLocaleString('en-IN', {timeZone:
+    // 'Asia/Kolkata'})` alone rendered "24/8/2026, 12:47:17 pm" with NO
+    // timezone marker — a reader unfamiliar with this convention had no way
+    // to know it's IST specifically, not their own local time. Verified this
+    // option renders "... IST" (not a "GMT+5:30" fallback, which some
+    // Node/ICU builds render instead for this option) — re-confirm if the
+    // CI runner's Node/ICU build ever differs materially from local.
+    const dtOpts: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata', timeZoneName: 'short' };
+    const startTime = new Date(report.startTime).toLocaleString('en-IN', dtOpts);
+    const endTime = new Date(report.endTime).toLocaleString('en-IN', dtOpts);
     const shortCommit = ctx.gitCommit.substring(0, 8);
     const row = (label: string, value: string): string => `
       <tr>
@@ -442,8 +484,8 @@ ${body}
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
       { value: String(report.passed), label: 'Passed', variant: 'success' },
-      { value: String(report.flaky), label: 'Flaky', variant: report.flaky > 0 ? 'warn' : 'neutral' },
-      { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral' },
+      { value: String(report.flaky), label: 'Flaky', variant: report.flaky > 0 ? 'warn' : 'neutral', anchor: report.flaky > 0 ? '#section-flaky-tests' : undefined },
+      { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral', anchor: report.failed > 0 ? '#section-failed-tests' : undefined },
       { value: String(report.skipped), label: 'Skipped', variant: report.skipped > 0 ? 'warn' : 'neutral' },
     ]);
 
@@ -472,10 +514,10 @@ ${body}
     const recurringFlakyCount = ctx.recurringFlaky?.length ?? 0;
 
     const signalChips = [
-      unexpectedMisc > 0 ? this.signalChip(`${unexpectedMisc} background error${unexpectedMisc === 1 ? '' : 's'}`, 'fail') : '',
-      infraFailures > 0 ? this.signalChip(`${infraFailures} infra-classified failure${infraFailures === 1 ? '' : 's'}`, 'warn') : '',
-      newFailures > 0 ? this.signalChip(`${newFailures} new failure${newFailures === 1 ? '' : 's'}`, 'fail') : '',
-      recurringFlakyCount > 0 ? this.signalChip(`${recurringFlakyCount} recurring flaky test${recurringFlakyCount === 1 ? '' : 's'}`, 'warn') : '',
+      unexpectedMisc > 0 ? this.signalChip(`${unexpectedMisc} background error${unexpectedMisc === 1 ? '' : 's'}`, 'fail', '#section-background-errors') : '',
+      infraFailures > 0 ? this.signalChip(`${infraFailures} infra-classified failure${infraFailures === 1 ? '' : 's'}`, 'warn', '#section-failed-tests') : '',
+      newFailures > 0 ? this.signalChip(`${newFailures} new failure${newFailures === 1 ? '' : 's'}`, 'fail', '#section-failed-tests') : '',
+      recurringFlakyCount > 0 ? this.signalChip(`${recurringFlakyCount} recurring flaky test${recurringFlakyCount === 1 ? '' : 's'}`, 'warn', '#section-trend') : '',
     ]
       .filter(Boolean)
       .join('');
@@ -490,18 +532,26 @@ ${body}
   }
 
   private kpiRow(
-    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn'; subtext?: string }>
+    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn'; subtext?: string; anchor?: string }>
   ): string {
     const widthPct = Math.floor(100 / tiles.length);
-    return `<tr>${tiles.map((t) => this.kpiTile(t.value, t.label, t.variant ?? 'neutral', t.subtext, widthPct)).join('')}</tr>`;
+    return `<tr>${tiles.map((t) => this.kpiTile(t.value, t.label, t.variant ?? 'neutral', t.subtext, widthPct, t.anchor)).join('')}</tr>`;
   }
 
+  // WHY anchor is a best-effort <a> wrapper, not the only way to find the
+  // detail (2026-08-24): real email-client support for `href="#id"` same-page
+  // navigation is ~50% (confirmed broken on iOS Gmail/Mail apps and Outlook
+  // desktop/mobile — see the redesign proposal's item 3 research). On a
+  // supporting client this becomes a real, working jump; on a non-supporting
+  // one it's exactly as inert as the plain text was before — never worse.
+  // The email's information is never reorganized around anchors working.
   private kpiTile(
     value: string,
     label: string,
     variant: 'neutral' | 'success' | 'fail' | 'warn',
     subtext: string | undefined,
-    widthPct: number
+    widthPct: number,
+    anchor?: string
   ): string {
     const stripe = variant === 'success' ? SUCCESS : variant === 'fail' ? FAIL : variant === 'warn' ? WARN : BORDER;
     // WHY: brought back 2026-07-14 (Part A) — a subtle semantic-tinted
@@ -510,21 +560,27 @@ ${body}
     // so status reads at a glance without needing to read the number color.
     const tileBg = variant === 'success' ? SUCCESS_BG : variant === 'fail' ? FAIL_BG : variant === 'warn' ? WARN_BG : '#ffffff';
     const tileBorder = variant === 'success' ? SUCCESS_BORDER : variant === 'fail' ? FAIL_BORDER : variant === 'warn' ? WARN_BORDER : BORDER;
+    const valueHtml = anchor
+      ? `<a href="${this.escAttr(anchor)}" style="color:${INK};text-decoration:none;">${this.mono(value)}</a>`
+      : this.mono(value);
     return `
   <td style="width:${widthPct}%;padding:0 3px;">
     <div style="background:${tileBg};border:1px solid ${tileBorder};border-top:3px solid ${stripe};border-radius:6px;padding:10px 4px 8px;text-align:center;">
-      <div style="font-size:19px;font-weight:700;color:${INK};line-height:1;">${this.mono(value)}</div>
+      <div style="font-size:19px;font-weight:700;color:${INK};line-height:1;">${valueHtml}</div>
       <div style="margin-top:4px;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:${MUTED};">${this.esc(label)}</div>
       ${subtext ? `<div style="margin-top:2px;font-size:9px;color:${SLATE};">${subtext}</div>` : ''}
     </div>
   </td>`;
   }
 
-  private signalChip(text: string, variant: 'fail' | 'warn'): string {
+  private signalChip(text: string, variant: 'fail' | 'warn', anchor?: string): string {
     const bg = variant === 'fail' ? FAIL_BG : WARN_BG;
     const fg = variant === 'fail' ? FAIL : WARN;
     const border = variant === 'fail' ? FAIL_BORDER : WARN_BORDER;
-    return `<span style="display:inline-block;font-size:10.5px;font-weight:700;background:${bg};color:${fg};border:1px solid ${border};border-radius:4px;padding:3px 8px;margin:0 6px 6px 0;">${this.esc(text)}</span>`;
+    const style = `display:inline-block;font-size:10.5px;font-weight:700;background:${bg};color:${fg};border:1px solid ${border};border-radius:4px;padding:3px 8px;margin:0 6px 6px 0;text-decoration:none;`;
+    return anchor
+      ? `<a href="${this.escAttr(anchor)}" style="${style}">${this.esc(text)}</a>`
+      : `<span style="${style}">${this.esc(text)}</span>`;
   }
 
   private deltaSubtext(delta: number, suffix = ''): string {
@@ -540,7 +596,7 @@ ${body}
 
   // ===================== Trend section (incl. sparkline) =====================
 
-  private buildTrendSection(ctx: EmailContext): string {
+  private buildTrendSection(ctx: EmailContext, testAnchors: Map<string, string>): string {
     const delta = ctx.historyDelta;
     const recurringFlaky = ctx.recurringFlaky ?? [];
     const recurringFailures = ctx.recurringFailures ?? [];
@@ -564,16 +620,24 @@ ${body}
 
     const sparkline = this.buildSparkline(passRateSeries);
 
+    // WHY testAnchors is looked up opportunistically, not required (2026-08-24):
+    // a chronically-recurring test can legitimately be ABSENT from this run's
+    // own failed/flaky lists (it happened to pass this time) — in that case
+    // there's no anchor id to jump to (nothing to show this run), and the
+    // title renders as plain text, which is still correct, just not a link.
     const recurringBlock = (title: string, issues: RecurringIssue[]): string =>
       issues.length === 0
         ? ''
         : `<div style="margin-top:10px;">
              <div style="font-size:11.5px;font-weight:700;color:${WARN};margin-bottom:4px;">${this.esc(title)}</div>
              ${issues
-               .map(
-                 (i) =>
-                   `<div style="font-size:11.5px;color:#6B5300;padding:2px 0;">${this.esc(i.title)} — ${i.countInLastNRuns} of last ${i.ofLastNRuns} runs</div>`
-               )
+               .map((i) => {
+                 const anchor = testAnchors.get(i.title);
+                 const titleHtml = anchor
+                   ? `<a href="${this.escAttr(`#${anchor}`)}" style="color:#6B5300;font-weight:600;">${this.esc(i.title)}</a>`
+                   : this.esc(i.title);
+                 return `<div style="font-size:11.5px;color:#6B5300;padding:2px 0;">${titleHtml} — ${i.countInLastNRuns} of last ${i.ofLastNRuns} runs</div>`;
+               })
                .join('')}
            </div>`;
 
@@ -591,7 +655,7 @@ ${body}
            </div>`;
 
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-trend" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:${WARN_BG};border-radius:6px;padding:14px 16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${WARN};margin-bottom:8px;">Trend</div>
     ${deltaLine}
@@ -655,19 +719,35 @@ ${body}
               ? `background:${SUCCESS_BG};color:${SUCCESS};`
               : `background:${CANVAS_TINT};color:${SLATE};`;
         const trend = trendByKey.get(`${m.type}:${m.name}`);
-        const trendGlyph = !trend
-          ? `<span style="color:${MUTED};">–</span>`
-          : trend.direction === 'improving'
-            ? `<span style="color:${SUCCESS};">▲</span>`
-            : trend.direction === 'worsening'
-              ? `<span style="color:${FAIL};">▼</span>`
-              : `<span style="color:${MUTED};">–</span>`;
+        // WHY rewritten 2026-08-24 (item 2 fix): a bare "–" used to render
+        // identically whether the ledger simply has no history at all
+        // (which was true on EVERY real run so far — the run-history branch
+        // has never been successfully written to, see
+        // .claude/ci-reporting-history-fix-proposal.md) or a real comparison
+        // found no change. Those are different facts and must look
+        // different — "–" is now reserved for an ACTUAL confirmed-stable
+        // comparison; the no-data case says so honestly instead.
+        const trendGlyph = !ctx.hasHistoryEverExisted
+          ? `<span style="color:${MUTED};font-size:10px;">no history yet</span>`
+          : !trend
+            ? `<span style="color:${MUTED};font-size:10px;">new module</span>`
+            : trend.direction === 'improving'
+              ? `<span style="color:${SUCCESS};">▲</span>`
+              : trend.direction === 'worsening'
+                ? `<span style="color:${FAIL};">▼</span>`
+                : `<span style="color:${MUTED};">–</span>`;
+        const flakyCell = m.flaky > 0
+          ? `<a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${m.flaky}</a>`
+          : String(m.flaky);
+        const failedCell = m.failed > 0
+          ? `<a href="#section-failed-tests" style="color:${FAIL};text-decoration:none;">${m.failed}</a>`
+          : String(m.failed);
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${m.passed}</td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${m.flaky}</td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${m.failed}</td>
+        <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
+        <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
         <td style="padding:8px;text-align:center;">${trendGlyph}</td>
       </tr>`;
@@ -675,7 +755,7 @@ ${body}
       .join('');
 
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-module-analytics" style="padding:8px 28px;">
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:4px;">Module Analytics</div>
   <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${report.total} tests · ${report.uiCount} UI · ${report.rbacCount} RBAC — ranked by health (best first)</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
@@ -727,10 +807,112 @@ ${body}
 
   // ===================== Flaky tests =====================
 
+  // WHY category color reuses the same high/medium severity split already
+  // established in buildActionRequiredSection (auth/infra = high) — a single
+  // shared Set, not a duplicated inline ternary, so a future 12th category
+  // only needs one line added here to affect both the badge color and the
+  // Action Required item's priority consistently (addendum item 15).
+  private static readonly HIGH_SEVERITY_CATEGORIES = new Set<FailureCategory>(['auth', 'infra']);
+
+  private categoryBadge(category: FailureCategory): string {
+    const isHigh = EmailTemplate.HIGH_SEVERITY_CATEGORIES.has(category);
+    const bg = isHigh ? FAIL_BG : WARN_BG;
+    const fg = isHigh ? FAIL : WARN;
+    const border = isHigh ? FAIL_BORDER : WARN_BORDER;
+    return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;background:${bg};color:${fg};border:1px solid ${border};border-radius:3px;padding:2px 6px;margin-right:6px;">${this.esc(category)}</span>`;
+  }
+
+  private regressionBadge(status: RegressionStatus | undefined, ratio: { count: number; of: number } | undefined): string {
+    if (status === 'new-regression') {
+      return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;background:${FAIL_BG};color:${FAIL};border:1px solid ${FAIL_BORDER};border-radius:3px;padding:2px 6px;margin-right:6px;">New regression</span>`;
+    }
+    if (status === 'chronic' && ratio) {
+      return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;background:${WARN_BG};color:${WARN};border:1px solid ${WARN_BORDER};border-radius:3px;padding:2px 6px;margin-right:6px;">Known chronic (${ratio.count}/${ratio.of} runs)</span>`;
+    }
+    if (status === 'recurring') {
+      return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;background:${CANVAS_TINT};color:${SLATE};border:1px solid ${BORDER};border-radius:3px;padding:2px 6px;margin-right:6px;">Failed last run too</span>`;
+    }
+    // WHY 'unclassified' renders NOTHING, not a guessed badge: no history
+    // exists to classify against yet — an honest absence, not a fabricated
+    // "new" or "chronic" label with no real basis (see the redesign
+    // proposal's items 4/5 and .claude/ci-reporting-history-fix-proposal.md
+    // for why history is empty today).
+    return '';
+  }
+
+  // WHY one shared card renderer for both Failed Tests and Flaky Tests
+  // (2026-08-24): both need the exact same rich detail — category badge,
+  // full error sequence, snippet, truncated stack, artifacts, diagnostic
+  // hint, known-issue cross-reference — the only real difference is whether
+  // a regression/chronic badge applies (meaningless for a test that already
+  // passed on retry this run). One function, one place to fix a rendering
+  // bug, per this codebase's "every new piece of logic does ONE thing" rule.
+  private buildFailureDetailCard(d: FailureDetail, knownIssuesUrl: string | null | undefined, accentColor: string): string {
+    const earlierErrorsHtml =
+      d.earlierErrors.length > 0
+        ? `<div style="margin-top:6px;">
+             <div style="font-size:10px;color:${MUTED};margin-bottom:2px;">Earlier error(s) in this attempt, before the one below:</div>
+             ${d.earlierErrors
+               .map((e) => `<div style="font-size:10.5px;color:${SLATE};font-family:${MONO_FONT};background:${CANVAS_TINT};border-radius:4px;padding:4px 6px;margin-bottom:3px;white-space:pre-wrap;word-break:break-word;">${this.esc(e)}</div>`)
+               .join('')}
+           </div>`
+        : '';
+    const snippetHtml = d.snippet
+      ? `<pre style="margin:6px 0 0;font-size:10.5px;font-family:${MONO_FONT};background:${INK};color:#E6EDF3;border-radius:4px;padding:8px 10px;overflow-x:auto;white-space:pre;">${this.esc(d.snippet)}</pre>`
+      : '';
+    const stackHtml =
+      d.stackFrames.length > 0
+        ? `<div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${d.stackFrames.map((f) => this.esc(f)).join('<br>')}${d.stackTruncatedCount > 0 ? `<br>… +${d.stackTruncatedCount} more frame${d.stackTruncatedCount === 1 ? '' : 's'} — open the trace for the full stack.` : ''}</div>`
+        : '';
+    const artifactLines: string[] = [];
+    const traceHref = d.artifactLinks.trace;
+    artifactLines.push(
+      `Trace: ${d.tracePath ? (traceHref ? `<a href="${this.escAttr(traceHref)}" style="color:${ACCENT};">${this.esc(d.tracePath)}</a>` : this.esc(d.tracePath)) : 'not captured'}`
+    );
+    if (d.screenshotPaths.length > 0) {
+      artifactLines.push(
+        d.screenshotPaths
+          .map((p, i) => {
+            const href = d.artifactLinks.screenshots[i];
+            return `Screenshot: ${href ? `<a href="${this.escAttr(href)}" style="color:${ACCENT};">${this.esc(p)}</a>` : this.esc(p)}`;
+          })
+          .join(' · ')
+      );
+    }
+    if (d.errorContextPath) {
+      const href = d.artifactLinks.errorContext;
+      artifactLines.push(`Page snapshot: ${href ? `<a href="${this.escAttr(href)}" style="color:${ACCENT};">${this.esc(d.errorContextPath)}</a>` : this.esc(d.errorContextPath)}`);
+    }
+    // WHY the artifact links above only ever resolve on Jenkins runs (see
+    // FailureDetailBuilder.buildArtifactLinks's own WHY) — GitHub Actions has
+    // no browsable single-file URL for an archived artifact, confirmed
+    // during the investigation, not assumed; the plain path still renders so
+    // the information isn't lost, just not clickable there.
+    const knownIssueHtml =
+      d.knownIssue && knownIssuesUrl
+        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">known-issues.md${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
+        : '';
+
+    return `
+        <div id="${this.escAttr(d.anchorId)}" style="border-left:3px solid ${accentColor};background:#ffffff;padding:10px 12px;margin-bottom:10px;border-radius:0 4px 4px 0;border-top:1px solid ${CANVAS_TINT};border-right:1px solid ${CANVAS_TINT};border-bottom:1px solid ${CANVAS_TINT};">
+          <div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(d.test.title)}</div>
+          <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}</div>
+          <div style="font-size:10.5px;color:${SLATE};margin-bottom:4px;">${this.esc(d.test.file.split('/').pop() || '')}</div>
+          <div style="font-size:11.5px;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(d.primaryError)}</div>
+          ${earlierErrorsHtml}
+          ${snippetHtml}
+          ${stackHtml}
+          <div style="margin-top:6px;font-size:10.5px;color:${SLATE};font-style:italic;">${this.esc(d.diagnosticHint)}</div>
+          ${knownIssueHtml}
+          <div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${artifactLines.join('<br>')}</div>
+        </div>`;
+  }
+
   private buildFlakyTestsSection(ctx: EmailContext): string {
     const { report } = ctx;
     if (report.flakyTests.length === 0) return '';
     const recurringByTitle = new Map((ctx.recurringFlaky ?? []).map((r) => [r.title, r]));
+    const detailByTitle = new Map((ctx.flakyFailureDetails ?? []).map((d) => [d.test.title, d]));
     const rows = report.flakyTests
       .map((t: TestResult) => {
         const recurring = recurringByTitle.get(t.title);
@@ -740,18 +922,27 @@ ${body}
         const history = recurring
           ? `${recurring.countInLastNRuns} of last ${recurring.ofLastNRuns} runs`
           : 'not previously recurring';
+        const detail = detailByTitle.get(t.title);
+        // WHY the failing attempt's full detail is shown below the summary
+        // row, not instead of it (2026-08-24): this is the exact real-world
+        // case that motivated capturing results[].errors[] in the first
+        // place (investigation §3 finding 3) — a flaky test's generic "Test
+        // timeout exceeded" first error next to the actual specific cause,
+        // which only ever surfaces via the full error sequence.
+        const detailHtml = detail ? this.buildFailureDetailCard(detail, ctx.knownIssuesUrl, WARN) : '';
         return `
-      <tr style="border-bottom:1px solid ${WARN_BORDER};">
+      <tr id="${detail ? this.escAttr(detail.anchorId) : ''}" style="border-bottom:1px solid ${WARN_BORDER};">
         <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
         <td style="padding:6px 0;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} retry</td>
         <td style="padding:6px 0 6px 10px;font-size:11px;color:${riskColor};font-weight:700;white-space:nowrap;">${risk} risk</td>
         <td style="padding:6px 0 6px 10px;font-size:10.5px;color:${SLATE};">${this.esc(history)}</td>
         <td style="padding:6px 0 6px 10px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : 'no trace captured'}</td>
-      </tr>`;
+      </tr>
+      ${detailHtml ? `<tr><td colspan="5" style="padding:0 0 8px;">${detailHtml}</td></tr>` : ''}`;
       })
       .join('');
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-flaky-tests" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:${WARN_BG};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${WARN};margin-bottom:10px;">Flaky Tests (${report.flakyTests.length})</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
@@ -759,47 +950,36 @@ ${body}
 </td></tr>`;
   }
 
-  // ===================== Failure clusters (replaces the old flat Failed Tests table) =====================
+  // ===================== Failed Tests (failure clusters, full detail) =====================
 
-  private buildFailureClustersSection(clusters: FailureCluster[]): string {
+  private buildFailureClustersSection(clusters: EnrichedCluster[], knownIssuesUrl: string | null | undefined): string {
     if (clusters.length === 0) return '';
     const totalTests = clusters.reduce((sum, c) => sum + c.tests.length, 0);
 
-    const testRow = (t: TestResult): string => `
-      <tr style="border-bottom:1px solid ${FAIL_BORDER};">
-        <td style="padding:8px;color:${INK};font-size:12px;">${this.esc(t.title)}</td>
-        <td style="padding:8px;color:${SLATE};font-size:11px;">${this.esc(t.file.split('/').pop() || '')}</td>
-        <td style="padding:8px;color:${FAIL};font-size:11px;font-family:${MONO_FONT};">${this.esc(this.truncate(t.error || 'Unknown error', 300))}</td>
-        <td style="padding:8px;color:${MUTED};font-size:10px;font-family:${MONO_FONT};word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : 'no trace captured'}</td>
-      </tr>`;
-
     const clusterBlocks = clusters
       .map((c) => {
-        const header =
-          c.tests.length > 1
-            ? `<div style="background:${CANVAS_TINT};border-radius:4px 4px 0 0;padding:8px 10px;font-size:11.5px;font-weight:700;color:${INK};border:1px solid ${FAIL_BORDER};border-bottom:none;">
-                 ${c.tests.length} tests affected — shared cause (${this.signalTypeLabel(c.signalType)}) · category: ${this.esc(c.category)}
-               </div>`
-            : '';
-        const rows = c.tests.map(testRow).join('');
+        // WHY the category badge/header is now unconditional (2026-08-24,
+        // item 8/2 fix): it used to render ONLY for clusters with 2+ tests —
+        // the common case (a handful of unrelated standalone failures) got
+        // no classification shown at all, despite FailureAnalyzer already
+        // computing it correctly for every cluster including single-test
+        // ones (confirmed by reading clusterFailures()'s own fallback loop).
+        const header = `<div style="background:${CANVAS_TINT};border-radius:4px 4px 0 0;padding:8px 10px;font-size:11.5px;font-weight:700;color:${INK};border:1px solid ${FAIL_BORDER};border-bottom:none;">
+                 ${c.tests.length > 1 ? `${c.tests.length} tests affected — shared cause (${this.signalTypeLabel(c.signalType)}) · ` : ''}category: ${this.esc(c.category)}
+               </div>`;
+        const cards = c.details.map((d) => this.buildFailureDetailCard(d, knownIssuesUrl, FAIL)).join('');
         return `
         <div style="margin-bottom:12px;">
           ${header}
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;${c.tests.length > 1 ? `border:1px solid ${FAIL_BORDER};border-top:none;` : ''}">
-            <tr style="background:${FAIL_BG};">
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Test</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">File</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Error</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Trace</th>
-            </tr>
-            ${rows}
-          </table>
+          <div style="border:1px solid ${FAIL_BORDER};border-top:none;background:${FAIL_BG};padding:10px;">
+            ${cards}
+          </div>
         </div>`;
       })
       .join('');
 
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-failed-tests" style="padding:8px 28px;">
   <div style="border:1px solid ${FAIL_BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${FAIL};margin-bottom:4px;">Failed Tests (${totalTests})</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">${clusters.filter((c) => c.tests.length > 1).length} cluster(s) sharing a real signal, ${clusters.filter((c) => c.tests.length === 1).length} standalone</div>
@@ -808,7 +988,7 @@ ${body}
 </td></tr>`;
   }
 
-  private signalTypeLabel(t: FailureCluster['signalType']): string {
+  private signalTypeLabel(t: EnrichedCluster['signalType']): string {
     return t === 'exact-message' ? 'identical error message' : t === 'stack-location' ? 'same source location' : 'same failing API endpoint';
   }
 
@@ -817,7 +997,7 @@ ${body}
   private buildBackgroundErrorsSection(miscErrors: MiscErrorReport | null | undefined): string {
     if (!miscErrors || miscErrors.totalErrors === 0) {
       return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-background-errors" style="padding:8px 28px;">
   <div style="border:1px solid ${SUCCESS_BORDER};background:${SUCCESS_BG};border-radius:6px;padding:16px;">
     <div style="font-size:13px;font-weight:700;color:${SUCCESS};">No Background Errors Detected</div>
     <div style="font-size:12px;color:${SLATE};margin-top:4px;">No browser console errors, network failures, or uncaught exceptions were captured during this run.</div>
@@ -848,13 +1028,18 @@ ${body}
                 : e.expectedReason === 'background-noise'
                   ? ` <span style="font-size:10px;background:#EFF3FE;padding:1px 4px;border-radius:3px;margin-left:4px;">Known Background Noise</span>`
                   : '';
+            // WHY redactSensitiveText() applied here (2026-08-24, item 13):
+            // e.message/e.apiErrorMessage are raw captured browser/API text
+            // — never previously redacted anywhere in this pipeline (see
+            // redact.ts's own WHY comment for why BasePage's existing
+            // redaction doesn't cover this data path at all).
             return `<div style="background:#FFF8F3;border-left:3px solid ${WARN};padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
         <div style="font-size:11px;font-weight:700;color:${e.expectedReason ? WARN : FAIL};">[${this.esc(e.type)}]${expectedBadge}</div>
         ${e.method ? `<div style="font-size:10px;color:${INK};margin-top:2px;"><strong>Method:</strong> ${this.esc(e.method)}</div>` : ''}
-        <div style="font-size:11px;color:${INK};margin-top:2px;"><strong>Error:</strong> ${this.esc(this.truncate(e.message || '', 150))}</div>
+        <div style="font-size:11px;color:${INK};margin-top:2px;"><strong>Error:</strong> ${this.esc(this.truncate(redactSensitiveText(e.message || ''), 150))}</div>
         ${e.url ? `<div style="font-size:10px;color:${SLATE};margin-top:2px;word-break:break-all;"><strong>URL:</strong> ${this.esc(e.url)}</div>` : ''}
         ${e.statusCode ? `<div style="font-size:10px;color:${FAIL};font-weight:700;margin-top:2px;">HTTP Status: ${e.statusCode}</div>` : ''}
-        ${e.apiErrorMessage ? `<div style="font-size:11px;color:${FAIL};margin-top:3px;font-weight:600;background:${FAIL_BG};padding:4px 6px;border-radius:4px;">Server Error: ${this.esc(e.apiErrorMessage)}</div>` : ''}
+        ${e.apiErrorMessage ? `<div style="font-size:11px;color:${FAIL};margin-top:3px;font-weight:600;background:${FAIL_BG};padding:4px 6px;border-radius:4px;">Server Error: ${this.esc(redactSensitiveText(e.apiErrorMessage))}</div>` : ''}
         <div style="font-size:10px;color:${MUTED};margin-top:2px;">${e.timestamp}</div>
       </div>`;
           })
@@ -872,7 +1057,7 @@ ${body}
     const unexpectedApp = Math.max(0, miscErrors.unexpectedErrors - unexpectedInfra);
 
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-background-errors" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:#FFFAF3;border-radius:6px;padding:16px;">
     <div style="font-size:13px;font-weight:700;color:${INK};margin-bottom:4px;">Background Errors Captured — ${miscErrors.totalErrors} total</div>
     <div style="margin-bottom:8px;">
@@ -896,33 +1081,48 @@ ${body}
 
   // ===================== Action required =====================
 
-  private buildActionRequiredSection(ctx: EmailContext, health: HealthScore, clusters: FailureCluster[]): string {
-    const items: Array<{ text: string; priority: 'high' | 'medium' | 'low' }> = [];
+  private buildActionRequiredSection(ctx: EmailContext, health: HealthScore, clusters: EnrichedCluster[]): string {
+    const items: Array<{ text: string; priority: 'high' | 'medium' | 'low'; anchor?: string }> = [];
 
     if (ctx.suiteDrift?.occurred) {
       items.push({
         text: `Investigate suite drift — ${ctx.suiteDrift.decreaseBy} fewer test(s) ran than the previous run.`,
         priority: 'high',
+        anchor: '#section-module-analytics',
       });
     }
     const multiClusters = clusters.filter((c) => c.tests.length > 1);
     for (const c of multiClusters) {
-      const severity: 'high' | 'medium' = c.category === 'auth' || c.category === 'infra' ? 'high' : 'medium';
+      const severity: 'high' | 'medium' = EmailTemplate.HIGH_SEVERITY_CATEGORIES.has(c.category) ? 'high' : 'medium';
+      // WHY link to the FIRST test's own anchor, not just the section: a
+      // reader clicking "investigate this cluster" lands directly on one of
+      // the actual affected tests, which is itself inside the same visual
+      // cluster block as the others — one concrete jump beats a generic one.
+      const anchor = c.details[0] ? `#${c.details[0].anchorId}` : '#section-failed-tests';
       items.push({
         text: `Investigate ${c.category} failure cluster affecting ${c.tests.length} tests (${this.signalTypeLabel(c.signalType)}).`,
         priority: severity,
+        anchor,
       });
     }
-    const singleFailures = clusters.filter((c) => c.tests.length === 1).length;
-    if (singleFailures > 0) {
-      items.push({ text: `Investigate ${singleFailures} standalone failure(s) — see Failed Tests section.`, priority: 'medium' });
+    const singleFailureClusters = clusters.filter((c) => c.tests.length === 1);
+    if (singleFailureClusters.length > 0) {
+      items.push({
+        text: `Investigate ${singleFailureClusters.length} standalone failure(s) — see Failed Tests section.`,
+        priority: 'medium',
+        anchor: '#section-failed-tests',
+      });
     }
     if (ctx.report.flaky > 0) {
-      items.push({ text: `Review ${ctx.report.flaky} flaky test(s) — see Flaky Tests section.`, priority: 'medium' });
+      items.push({ text: `Review ${ctx.report.flaky} flaky test(s) — see Flaky Tests section.`, priority: 'medium', anchor: '#section-flaky-tests' });
     }
     const unexpectedMisc = ctx.miscErrors?.unexpectedErrors ?? 0;
     if (unexpectedMisc > 0) {
-      items.push({ text: `Review ${unexpectedMisc} unexpected background error(s) — see Background Errors section.`, priority: 'medium' });
+      items.push({
+        text: `Review ${unexpectedMisc} unexpected background error(s) — see Background Errors section.`,
+        priority: 'medium',
+        anchor: '#section-background-errors',
+      });
     }
     const regressions = (ctx.slowTestTrend ?? []).filter((t) => t.regression);
     if (regressions.length > 0) {
@@ -931,7 +1131,7 @@ ${body}
 
     if (items.length === 0) {
       return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-action-required" style="padding:8px 28px;">
   <div style="border:1px solid ${SUCCESS_BORDER};background:${SUCCESS_BG};border-radius:6px;padding:14px 16px;">
     <div style="font-size:12.5px;font-weight:700;color:${SUCCESS};">No action required — this run is clean.</div>
   </div>
@@ -943,20 +1143,37 @@ ${body}
     const rows = items
       .map((i) => {
         const color = i.priority === 'high' ? FAIL : i.priority === 'medium' ? WARN : SLATE;
+        const textHtml = i.anchor ? `<a href="${this.escAttr(i.anchor)}" style="color:${INK};">${this.esc(i.text)}</a>` : this.esc(i.text);
         return `<div style="padding:5px 0;border-bottom:1px solid ${CANVAS_TINT};font-size:12px;color:${INK};">
           <span style="display:inline-block;width:56px;font-size:9.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:${color};">${i.priority}</span>
-          ${this.esc(i.text)}
+          ${textHtml}
         </div>`;
       })
       .join('');
 
     return `
-<tr><td style="padding:8px 28px;">
+<tr><td id="section-action-required" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Action Required (Automation Health: ${this.esc(health.label)})</div>
     ${rows}
   </div>
 </td></tr>`;
+  }
+
+  // WHY built once and reused (2026-08-24): recurring flaky/failing test
+  // titles in the Trend section can only link to a specific test's card when
+  // that exact test actually has a FailureDetail THIS run (i.e. it's in
+  // report.failedTests or report.flakyTests right now) — a chronically
+  // recurring test that happened to pass cleanly this run has no card to
+  // point at, and correctly renders as plain text instead (see
+  // buildTrendSection's recurringBlock).
+  private buildTestAnchorLookup(clusters: EnrichedCluster[], flakyDetails: FailureDetail[]): Map<string, string> {
+    const lookup = new Map<string, string>();
+    for (const c of clusters) {
+      for (const d of c.details) lookup.set(d.test.title, d.anchorId);
+    }
+    for (const d of flakyDetails) lookup.set(d.test.title, d.anchorId);
+    return lookup;
   }
 
   // ===================== Environment info =====================
