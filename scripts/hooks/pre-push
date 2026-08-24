@@ -8,6 +8,54 @@ echo "🔍 Running pre-push checks..."
 # Example: refs/heads/feature/x 1234abc refs/heads/dev 5678def
 read local_ref local_sha remote_ref remote_sha
 
+# Defensive fallback: this hook's stdin can arrive empty even during a real
+# push (reproduced directly against this hook) — derive the branch from what's
+# actually checked out instead of failing outright.
+#
+# WHY the explicit two-step "run, then check if still empty" checks below
+# (never `cmd || echo fallback`): several git plumbing commands (confirmed via
+# direct testing for `git rev-parse` on an unresolvable ref) print their
+# unresolved argument to STDOUT before exiting non-zero. A `$(cmd || echo x)`
+# pattern captures BOTH cmd's leaked stdout AND the echo, concatenating them
+# into one corrupt multi-line value instead of cleanly falling back — this is
+# exactly the bug this comment block replaced. Do not reintroduce it.
+if [ -z "$remote_ref" ]; then
+    fallback_branch="${local_ref#refs/heads/}"
+    if [ -z "$fallback_branch" ]; then
+        fallback_branch="$(git symbolic-ref --short HEAD 2>/dev/null)"
+    fi
+
+    if [ -z "$fallback_branch" ]; then
+        echo "❌ PUSH BLOCKED: Hook stdin was empty and could not determine the branch being pushed"
+        echo "   HEAD is not on a branch (detached HEAD?) — re-run this push from a real branch checkout."
+        exit 1
+    fi
+
+    local_ref="refs/heads/$fallback_branch"
+    remote_ref="refs/heads/$fallback_branch"
+
+    # WHY --verify --quiet: plain `git rev-parse <unresolvable-ref>` prints the
+    # literal argument back to STDOUT (confirmed via direct testing) even while
+    # exiting non-zero — `2>/dev/null` alone does NOT suppress this, since it's
+    # not on stderr. `--verify --quiet` is git's documented clean-failure mode:
+    # empty stdout, exit 1, nothing on stderr — the only safe way to make an
+    # "is it still empty" check actually mean "did this resolve."
+    if [ -z "$local_sha" ]; then
+        local_sha="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
+    fi
+    if [ -z "$local_sha" ]; then
+        echo "❌ PUSH BLOCKED: Hook stdin was empty and HEAD could not be resolved to a commit"
+        exit 1
+    fi
+
+    if [ -z "$remote_sha" ]; then
+        remote_sha="$(git rev-parse --verify --quiet "origin/$fallback_branch" 2>/dev/null)"
+    fi
+    if [ -z "$remote_sha" ]; then
+        remote_sha="0000000000000000000000000000000000000000"
+    fi
+fi
+
 # Extract remote branch name from remote_ref (e.g., refs/heads/dev → dev)
 remote_branch="${remote_ref#refs/heads/}"
 remote_name="${remote_ref%/*}"
@@ -46,13 +94,15 @@ else
 fi
 
 # Check for waitForTimeout() in staged changes (fail closed on command error)
-if ! git diff "$MERGE_BASE...HEAD" -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/git_diff_out 2>&1; then
+# WHY: Use local_sha (the actual commit being pushed) instead of HEAD, which may
+# refer to a different branch if the user has another branch checked out locally.
+if ! git diff "$MERGE_BASE...$local_sha" -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/git_diff_out 2>&1; then
     echo "❌ PUSH BLOCKED: Could not compute diff for validation"
     cat /tmp/git_diff_out
     exit 1
 fi
 
-if grep -q "waitForTimeout(" /tmp/git_diff_out; then
+if grep "^+" /tmp/git_diff_out | grep -v "^+++" | grep -q "waitForTimeout("; then
     echo "❌ PUSH BLOCKED: Branch contains waitForTimeout() anti-pattern"
     echo ""
     echo "CLAUDE.md Rule #2: No unbounded clicks/actions."
@@ -61,7 +111,7 @@ if grep -q "waitForTimeout(" /tmp/git_diff_out; then
     echo "  ✅ await page.waitForResponse(..., { timeout: 5000 });"
     echo "  ✅ await locator.waitFor({ state: 'visible', timeout: 5000 });"
     echo ""
-    grep "waitForTimeout(" /tmp/git_diff_out | head -3
+    grep "^+" /tmp/git_diff_out | grep -v "^+++" | grep "waitForTimeout(" | head -3
     exit 1
 fi
 

@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 329 tests across 10 modules (19 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 393 tests across 11 modules (21 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -35,9 +35,9 @@ This document is written so a new engineer — or any of us in six months — ca
 | **CI** | GitHub Actions (primary for most branches) + Jenkins (primary for `prod`/`main`, manual fallback elsewhere) |
 | **Runtime** | Node `>=20.0.0`, npm `>=10.0.0` |
 
-**Modules covered** (10): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
+**Modules covered** (11): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-08-12, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-08-22, do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
@@ -50,8 +50,9 @@ This document is written so a new engineer — or any of us in six months — ca
 | Meetings | 15 | 8 | 23 |
 | Products & Services | 9 | 7 | 16 |
 | Quotations | 21 | 14 | 35 |
+| Reports | 37 | 27 | 64 |
 | Tasks | 15 | 13 | 28 |
-| **Total** | **170** | **159** | **329** |
+| **Total** | **207** | **186** | **393** |
 
 Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
@@ -227,6 +228,7 @@ ENV=qa npm run test:call-logs
 ENV=qa npm run test:productsAndServices
 ENV=qa npm run test:quotations          # UI only
 ENV=qa npm run test:quotations:rbac     # RBAC only, separately
+ENV=qa npm run test:reports
 ```
 
 Each of these appends `&& npm run notify` — an email goes out after every one of these runs (see [§8](#reporting-and-notifications)).
@@ -286,15 +288,15 @@ npm run format         # prettier --write .
 
 ## Test Tags
 
-Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 329-test suite (tags overlap, so these don't sum to 329):
+Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 393-test suite (tags overlap, so these don't sum to 393):
 
 | Tag | Count | Meaning | Runs on |
 |---|---:|---|---|
-| `@smoke` | 25 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
-| `@regression` | 316 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
-| `@prodSafe` | 33 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
+| `@smoke` | 29 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
+| `@regression` | 379 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
+| `@prodSafe` | 34 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
 
-`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 329-test suite.
+`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 393-test suite.
 
 ---
 
