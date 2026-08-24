@@ -29,6 +29,40 @@ This is a `TypeError` thrown from inside the Kylas app's own minified `openCallL
 
 ---
 
+## 2. Reports module — removing an empty Dimension row throws a client-side `TypeError`
+
+**Status:** Confirmed live, cleanly reproduced, root-caused to a specific line in the app's own minified bundle. **Environment:** QA (confirmed for both admin and restricted roles — role-independent).
+
+**Background:** discovered while building the Reports module's page object/tests (Create Report form, Dimensions section — a `react-beautiful-dnd` list of draggable single-select rows). Isolated via two clean, single-click tests (not a rapid-click artifact — one deliberate click at a time, browser console error count checked before/after each click).
+
+**Evidence:**
+- Clicking the trash icon (`i.fas.fa-trash`) on an **empty** ("Choose") Dimension row throws every time: `TypeError: Cannot read properties of undefined (reading 'fieldType') at y.removeDimension (...) at onClick (...)`. The row is still removed from the UI afterward — functionally recoverable, but a real, reproducible unhandled exception in the app's own code.
+- Clicking the identical trash icon on a **filled** row (e.g. one with "Source" selected) throws **zero** errors — confirmed via an exact browser console error count before/after (unchanged both times the check was run).
+- **Re-confirmed independently for the restricted-user role**, same paired empty-vs-filled contrast, same exact error signature, same `+3`/`+0` console-error delta.
+- **Root cause, as far as determinable client-side:** `removeDimension()` unconditionally reads a `.fieldType` property off the object representing the dimension being removed — that object is only populated once a real field has been selected for that row. Removing a still-empty row hits `undefined.fieldType`.
+
+**Impact:** low-severity from a user's perspective (the row still gets removed; this is a silent, ignorable console error, not a blocking failure) — but it is a real, confirmed defect worth fixing upstream, and any Reports test around Dimension-row removal should assert the row disappears correctly *and* capture/flag this console error for triage, not silently swallow it.
+
+**Not yet tested:** whether the identical bug exists in the Metrics section's own remove-row mechanism (structurally analogous, never independently checked).
+
+---
+
+## 3. Reports list page — "Report Name" column sort control is visually present but non-functional
+
+**Status:** Confirmed live, reproduced twice per role (admin and restricted), consistent both times. **Environment:** QA.
+
+**Background:** the Reports list page (`/sales/reports/list`) has 5 sortable-looking column headers (Report Name, Entity Type, Report Type, Created At, Created By), all sharing the identical `cursor-pointer` CSS class and sort-indicator icon — visually indistinguishable in terms of "this looks sortable."
+
+**Evidence:**
+- Clicking the **"Created At"** header correctly triggers a new request: `POST /v3/reports/search?page=0&size=10&sort=createdAt,asc` — a real, working sort.
+- Clicking the **"Report Name"** header — tested twice, once via its inner sort-icon button and once via the whole header cell (matching exactly how the working "Created At" click was performed) — produces **no new network request at all**, and row order is byte-for-byte unchanged both times.
+- **Re-verified independently as the restricted user** (a role this check had not been run under before): identical result — zero new request for "Report Name," a real new request for "Created At," in the same session.
+- Not independently determined whether "Entity Type"/"Report Type"/"Created By" share this same defect or work correctly like "Created At" — only these two columns were directly tested.
+
+**Impact:** a real, user-visible defect — a control that looks interactive and does nothing, with no error or feedback to the user. Any Reports list test should assert that clicking a sort header actually changes order/fires the expected request, not just that clicking doesn't throw.
+
+---
+
 ## Investigated but not confirmed — excluded from this list
 
 These were investigated as possible application bugs but never reached the "confirmed" bar this file requires, or were explicitly determined not to be bugs. Full detail lives in `CLAUDE.md`'s Known Issues / Investigation History section — listed here only so nothing looks silently dropped:

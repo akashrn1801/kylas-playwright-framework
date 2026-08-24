@@ -121,6 +121,8 @@ For contacts clone: check `lastNameInput` value instead of `nameInput`.
 
 **`DealsPage.cloneDeal()`'s Save click can silently produce zero effect** — root-caused: the click landed only ~80ms after the modal became visible, while its own async pre-fill was still committing (React click-handler-not-yet-attached race). Fixed by waiting for `nameInput()` to actually contain "Copy" before clicking Save — a real readiness check, not a guessed delay. A first attempt (click-then-retry) made things measurably worse (0/5, new hang) and was reverted. If a similar "click succeeds but nothing happens" symptom appears in another module's clone/save modal with substantial async pre-fill, check for this exact race before assuming something else.
 
+**ID-based clone verification — a durable pattern superseding a modal-snapshot check (2026-08-23).** For any clone/duplicate feature, don't verify success by reading a value off the clone MODAL mid-render — verify via three stable, hard signals instead: (1) capture the new record's ID from a genuine network response (the existing `captureXxxIdFromResponse()` pattern above), (2) assert that ID differs from the original record's ID (a non-null ID alone isn't proof a real second record was created — it could coincidentally resolve to the same one under some other bug), (3) read any content check off the CLONE's own separately-loaded, fully-settled detail/list page — never the modal itself, which can be caught genuinely half-rendered. `DealsPage.cloneDeal()`/`assertClonedDealName()` is the first place this was built out this way — full investigation in `.claude/known-issues.md`'s Sandbox Build #144 entry, including a first, naive redesign attempt that made the pre-save modal-readiness wait purely non-fatal (proceed to Save regardless) and, when verified with real concurrent-load trials, caught a genuine data-correctness escape — one clone saved with a stale, non-"Copy" name. That result proved the modal-snapshot check WAS catching something real, and that removing it safely required adding a stronger end-state check, not just deleting the wait outright. The same category of gap — verifying a mutation via a transient UI/modal state rather than the record's own stable end-state — was independently flagged this session for the Reports module's own Save As feature (built in a parallel branch, noted there as a follow-up, not yet fixed) — worth checking for in any future clone/duplicate/Save-As-style feature in this codebase.
+
 ### 5. Right panel icon pattern (SVG ID map + dual-selector locator)
 
 ```typescript
@@ -313,6 +315,65 @@ Test titles in this codebase carry a literal, sequential label as a bracketed/in
 | Deals | `D` | Products & Services | `PS` |
 | Contacts | `C` | Tasks | `TK` |
 | Companies | `CO` | Call Logs | `CL` |
-| Meetings | `M` | | |
+| Meetings | `M` | Reports | `R` |
 
 UI and RBAC spec files for the same module are numbered independently unless a cross-file collision forces a renumber — this has happened 3 times historically (Quotations' `Q22`–`Q27` → `Q29`–`Q34`; Leads' `L6`–`L21` → `L32`–`L47`; a self-inflicted `D39`/`D40` collision between new Deals UI tests and pre-existing Deals RBAC tests → renumbered to `D41`/`D42`) — see `.claude/known-issues.md`'s Products & Services consolidated-items list for the full resolution history of each. Before adding a new label to any file, grep the file (and its UI/RBAC sibling) for the next free number in sequence rather than assuming a gap-free run.
+
+### 14. react-beautiful-dnd draggable single-select row pattern (Reports' Dimensions/Metrics)
+
+Reports' Dimensions and Metrics sections are **not** a single multi-select — each is a **list of individual single-select rows**, built with `react-beautiful-dnd` (confirmed via `data-react-beautiful-dnd-droppable`/`data-react-beautiful-dnd-draggable` attributes on the container and each row), meaning rows are drag-to-reorder. This is a UI shape not used anywhere else in this codebase — don't assume a "multi-select with chips" pattern (`BasePage.selectRandomFromMultiValueReactSelect()`) applies just because a section conceptually allows more than one value.
+
+- Each row's own react-select control uses the standard `is-invalid__*` class family, id convention `undefined_00_input_dimensions[0].field` / `undefined_00_input_metrics[0]` (index increments per row).
+- An already-selected value in one row is **removed from every other row's own option list** — true duplicate selection is structurally impossible through the UI, confirmed for both Dimensions and Filters (§16 below) independently.
+- **A gating control's enabled/disabled state can be driven by a stale click-counter instead of live row count — confirmed real, not a guess.** Reports' Dimensions "Add New" link was originally believed to cap at exactly 14 rows (one admin-session observation) — a dedicated restricted-user re-verification pass, repeating the exact same steps four more times under materially similar conditions, got four different numbers (22, ~1–3, 2, and the original 14). The likely mechanism: the control's visibility is keyed to a cumulative click count that never decrements when rows are removed, not the actual current row count. **Do not write a test asserting a specific numeric row cap for any similar "Add New" control** — assert only that the control eventually becomes disabled after enough clicks (a bounds-exists check), never a precise count, unless independently reconfirmed stable across repeated runs.
+- **Drag-and-drop reorder was never exercised via real pointer-drag automation** (Playwright's `dragTo()`) in this codebase — only the DOM's draggable attributes were confirmed to exist. If a future test needs to verify reorder, use element-to-element `dragTo()` targeting, never raw pixel-coordinate sequences (a classic source of flaky Playwright tests across viewport sizes/browsers).
+
+### 15. Dual react-select class family on one form — don't assume one family applies uniformly
+
+Confirmed live on Reports' Create form: most dropdowns (Report Type, Entity Type, Chart Type, Date Filter, Date Range, Dimensions, Metrics) use the `is-invalid__control`/`is-invalid__option`/`is-invalid__menu` family already documented everywhere else in this codebase — but the Filters section's own "Select Filter" field picker uses a **completely different** family, `select__control`/`select__option`/`select__placeholder` (no `is-invalid` prefix at all). Both are genuine react-select instances on the exact same page. **Never assume a single class-family convention holds across an entire form** — confirm each dropdown's own class family live before writing its locator, even on a form where every other dropdown already matched the expected pattern.
+
+### 16. Three-separate-full-page-routes pattern — an alternative to the modal-over-detail-page convention
+
+Every other module in this codebase edits via a modal (`#editEntityModal`) layered over the detail page. Reports instead has **three fully distinct URLs**: `/sales/reports/create`, `/sales/reports/details/<id>`, `/sales/reports/edit/<id>` — Edit is a real page navigation, not a modal open/close. A future module built this way needs its own `waitForXEditPage()`-style readiness wait (mirroring `waitForEntityDetailPage()`'s shape) rather than the modal-visible/modal-hidden pattern every other module's edit flow uses. Don't assume the modal convention applies just because every existing module happens to use it — confirm live whether the target module's Edit action navigates or opens a modal before building the page object's Edit Actions section.
+
+### 17. Paginated validation-error carousel banner — a distinct pattern from a single toast/inline error
+
+Reports' Create form surfaces validation errors two ways simultaneously: inline "This is a required field" text under each invalid control, AND a separate paginated carousel banner (e.g. `"Source is a required field" (1/3)` with prev/next arrows) that cycles through multiple simultaneous errors one at a time. Every other module in this codebase uses a single toast or a single inline error — this carousel shape has no existing `BasePage` assertion helper (`assertNoFormErrors()`/`assertFormErrorToast()` don't cover it). If a future module's form surfaces more than one simultaneous validation error this way, a new assertion helper is needed rather than reusing either existing one as-is — check the banner's own page count (`(N/M)`) rather than assuming only one error is ever shown.
+
+### 18. Stability-window fix pattern — for a third-party-widget-triggered react-select race
+
+**A genuinely repo-wide risk, not module-specific**: a third-party embedded widget's own async registration/init call (confirmed live for `viasocket.com`'s chatbot widget) can fire an unrelated DOM mutation 20–160ms after a react-select menu opens, closing it again before an automated click can land — because the widget's script runs on every page of the app, **any** react-select interaction anywhere in this codebase is theoretically exposed to this exact race, not just the one it was found on. The fix is a general, reusable shape: don't just wait for the menu to become visible once — wait for it to **survive a short stability window afterward** before trusting it's safe to interact with:
+
+```typescript
+private async clickToOpenMenu(trigger: Locator, menu: Locator, description: string): Promise<void> {
+  const attempts = 5;
+  const STABILITY_WINDOW_MS = 500;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    await this.click(trigger, `${description}: open menu (attempt ${attempt}/${attempts})`);
+    const opened = await menu
+      .waitFor({ state: 'visible', timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!opened) continue;
+    // WHY waitFor('hidden') TIMING OUT is the SUCCESS case here: if the menu
+    // is still visible after the stability window, it survived — a real,
+    // condition-based check, not a blind waitForTimeout(). Confirmed via 45
+    // combined live trials with zero failures once this window was added.
+    const tornDown = await menu
+      .waitFor({ state: 'hidden', timeout: STABILITY_WINDOW_MS })
+      .then(() => true)
+      .catch(() => false);
+    if (!tornDown) return;
+    // menu closed again within the window — a third-party re-render tore it
+    // down; retry with a fresh click rather than trusting a menu that just
+    // proved itself unstable.
+  }
+  await menu.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+}
+```
+
+**Confirmed live, real gotchas found while building this fix, worth knowing before reaching for either of these two "obvious" alternatives**: blocking the third-party widget's domain via `page.route().abort()` is **unsafe** — it made the widget retry aggressively, saturating the CDP connection and hanging the entire browser session for 30 minutes in one real attempt. Waiting for the widget's own network response before interacting is **insufficient** — the disruptive re-render lands 130–160ms *after* the response arrives, not synchronously with it, so a response-based gate doesn't reliably outlast the race. The stability-window retry above is the only approach confirmed to actually work.
+
+### 19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
+
+Confirmed live and costly enough to generalize: Reports' Create form has a field labeled **"Report Type"** on screen whose real underlying form/API field name is `category` (One Dimensional/Multi Dimensional/Hierarchy/Goal vs Achievement), and a field labeled **"Entity Type"** whose real field name is `reportType` (Lead/Deal/Contact/...) — the two labels and their real field names are effectively swapped from what a reader would guess. A factory whose own TypeScript property names mirror the visible labels (`reportType` meaning "Lead/Deal/...", `category` meaning "One/Multi Dimensional") would silently send data to the wrong field the moment someone forgets the swap. **When building a new module's factory, always confirm the real form/API field name (via live DOM inspection of the `name`/`id` attribute, not the visible label) before naming the corresponding TypeScript property** — name the property after the API field, not the label, exactly the same discipline already established for custom-field Internal Name vs. Label (§10 above), just at the top-level form-field scope instead of custom fields specifically. This class of mismatch can recur in any future module — it isn't a Reports-specific quirk, it's a real risk anywhere a UI label and its underlying field name aren't guaranteed to match.

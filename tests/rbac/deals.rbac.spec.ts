@@ -45,7 +45,9 @@ async function logCallWithRetry(
       // the deal's own GET API response after reload, a real readiness signal.
       await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
       await restrictedDealsPage.waitForDealDetailsPage();
-      const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+      const logACallButton = restrictedPage.locator('button.btn.btn-primary', {
+        hasText: 'Log a call',
+      });
       await logACallButton.waitFor({ state: 'visible', timeout: 10000 });
       const callLogModal = restrictedPage.locator('#callLogModal');
       // WHY a bounded inner retry on the click itself (2026-07-30, found via
@@ -69,12 +71,18 @@ async function logCallWithRetry(
           .catch(() => false);
       }
       if (!modalOpened) {
-        throw new Error('Log a Call modal did not open after 2 click attempts on this outer attempt');
+        throw new Error(
+          'Log a Call modal did not open after 2 click attempts on this outer attempt'
+        );
       }
-      await restrictedPage.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
+      await restrictedPage.evaluate(
+        'document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")'
+      );
       // WHY: Right after the modal becomes visible its content is still
       // skeleton placeholders — wait for those to clear before interacting.
-      await expect(callLogModal.locator('.react-loading-skeleton')).toHaveCount(0, { timeout: 15000 });
+      await expect(callLogModal.locator('.react-loading-skeleton')).toHaveCount(0, {
+        timeout: 15000,
+      });
 
       const callLogsPage = new CallLogsPage(restrictedPage);
       const callLogData = generateCallLogData({ outcome: 'Connected', entityType: 'Deal' });
@@ -100,7 +108,8 @@ async function logCallWithRetry(
       // empty. Search explicitly for the SAME contact we just shared.
       if (associatedContactName) {
         const words = associatedContactName.trim().split(' ');
-        const validWord = words.find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
+        const validWord =
+          words.find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
         await restrictedPage.locator('#associatedEntity').fill(validWord);
       }
       const contactOptions = restrictedPage.locator('.is-invalid__option');
@@ -109,7 +118,9 @@ async function logCallWithRetry(
       // inaccessible contact (confirmed live root cause of a "necessary
       // permission" save failure).
       const matchingContactOption = associatedContactName
-        ? contactOptions.filter({ hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`) })
+        ? contactOptions.filter({
+            hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`),
+          })
         : contactOptions;
       let selectedContactOption = matchingContactOption.first();
       let contactOptionFound = await selectedContactOption.isVisible().catch(() => false);
@@ -129,7 +140,10 @@ async function logCallWithRetry(
       await callLogsPage.fillPhoneNumber();
       await callLogsPage.fillCallSummary(callLogData.callSummary);
       if (callLogData.duration) {
-        await callLogsPage.fillDurationDirect(callLogData.duration.value, callLogData.duration.type);
+        await callLogsPage.fillDurationDirect(
+          callLogData.duration.value,
+          callLogData.duration.type
+        );
       }
       return await callLogsPage.saveCallLog();
     } catch (error) {
@@ -537,7 +551,9 @@ test.describe('Deals RBAC', () => {
     await expect(dropdownMenu.locator('a.dropdown-item').filter({ hasText: 'Delete' })).toBeHidden({
       timeout: 3000,
     });
-    await expect(dropdownMenu.locator('a.dropdown-item').filter({ hasText: 'Reassign' })).toBeHidden({
+    await expect(
+      dropdownMenu.locator('a.dropdown-item').filter({ hasText: 'Reassign' })
+    ).toBeHidden({
       timeout: 3000,
     });
     await expect(dropdownMenu.locator('a.dropdown-item').filter({ hasText: 'Share' })).toBeHidden({
@@ -630,8 +646,13 @@ test.describe('Deals RBAC', () => {
     await restrictedDealsPage.addMeetingFromPanel(meetingTitle);
     // WHY: addMeetingFromPanel already returns us to the deal detail page — reopen panel to verify
     await restrictedDealsPage.clickRightPanelIcon('Meetings');
-    const meetingEntry = restrictedPage.locator('.meeting__title').filter({ hasText: meetingTitle });
-    await expect(meetingEntry, `Meeting "${meetingTitle}" should appear in Meetings panel`).toBeVisible({
+    const meetingEntry = restrictedPage
+      .locator('.meeting__title')
+      .filter({ hasText: meetingTitle });
+    await expect(
+      meetingEntry,
+      `Meeting "${meetingTitle}" should appear in Meetings panel`
+    ).toBeVisible({
       timeout: 10000,
     });
     logger.success('D20 passed');
@@ -685,7 +706,12 @@ test.describe('Deals RBAC', () => {
     await adminDealsPage.shareDeal(restrictedUserName, ['call']);
 
     const restrictedDealsPage = new DealsPage(restrictedPage);
-    const callLogId = await logCallWithRetry(restrictedPage, restrictedDealsPage, dealId, associatedContactName);
+    const callLogId = await logCallWithRetry(
+      restrictedPage,
+      restrictedDealsPage,
+      dealId,
+      associatedContactName
+    );
     expect(callLogId, 'Call log should be created').not.toBeNull();
     logger.success('D21 passed');
   });
@@ -830,16 +856,18 @@ test.describe('Deals RBAC', () => {
     await restrictedDealsPage.clickRightPanelIcon('Call Logs');
     await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
     await restrictedDealsPage.waitForDealDetailsPage();
-    const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    const logACallButton = restrictedPage.locator('button.btn.btn-primary', {
+      hasText: 'Log a call',
+    });
     await logACallButton.waitFor({ state: 'visible', timeout: 10000 });
     await logACallButton.click();
 
     // WHY: Exact dialog confirmed live — #confirmModal, not the call log modal
     const noContactDialog = restrictedPage.locator('#confirmModal');
-    await expect(noContactDialog.locator('.modal-title'), 'Dialog title should match exactly').toHaveText(
-      'No Contact Associated',
-      { timeout: 10000 }
-    );
+    await expect(
+      noContactDialog.locator('.modal-title'),
+      'Dialog title should match exactly'
+    ).toHaveText('No Contact Associated', { timeout: 10000 });
     await expect(
       noContactDialog.locator('.modal-body'),
       'Dialog body should match the exact confirmed message'
@@ -989,7 +1017,9 @@ test.describe('Deals RBAC', () => {
     const taskName = `D24a task ${Date.now()}`;
     await restrictedDealsPage.addTaskFromPanel(taskName);
     await restrictedDealsPage.clickRightPanelIcon('Tasks');
-    await expect(restrictedPage.locator('.task-details-wrapper').getByText(taskName).first()).toBeVisible({
+    await expect(
+      restrictedPage.locator('.task-details-wrapper').getByText(taskName).first()
+    ).toBeVisible({
       timeout: 10000,
     });
 
@@ -1106,10 +1136,13 @@ test.describe('Deals RBAC', () => {
         }
         return false;
       }, text);
-    expect(await checkNoteText('Note to delete'), 'Deleted note text should no longer be present').toBe(
-      false
+    expect(
+      await checkNoteText('Note to delete'),
+      'Deleted note text should no longer be present'
+    ).toBe(false);
+    expect(await checkNoteText('Note to keep'), 'Kept note text should still be present').toBe(
+      true
     );
-    expect(await checkNoteText('Note to keep'), 'Kept note text should still be present').toBe(true);
 
     logger.success('D25 passed');
   });
@@ -1160,9 +1193,10 @@ test.describe('Deals RBAC', () => {
     await restrictedDealsPage.addContactToDeal();
     await restrictedDealsPage.goToDealDetailsById(dealId);
     const afterContactCount = await restrictedDealsPage.getAssociatedContactsCount();
-    expect(afterContactCount, 'Restricted user should be able to add a new contact after reassign').toBe(
-      baselineContactCount + 1
-    );
+    expect(
+      afterContactCount,
+      'Restricted user should be able to add a new contact after reassign'
+    ).toBe(baselineContactCount + 1);
 
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     const updatedData = generateDealData();
@@ -1199,9 +1233,14 @@ test.describe('Deals RBAC', () => {
     // display bug (see CLAUDE.md's Known Issues) if still present.
     const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
-    // WHY: Real end-state check — reload and re-read the card, don't trust the same render
-    await dealsPage.goToDealDetailsById(dealId);
-    const afterCount = await dealsPage.getDisplayedAssociatedContactsCount();
+    // WHY: Real end-state check — reload and re-read the card, don't trust
+    // the same render. Bounded retry (fixed 2026-08-22, real flake): a
+    // single reload could still race the reloaded card's own async data
+    // fetch — see waitForDisplayedAssociatedContactsCount()'s own comment.
+    const afterCount = await dealsPage.waitForDisplayedAssociatedContactsCount(
+      dealId,
+      baselineCount + 1
+    );
     expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
     logger.success('D27 passed');
   });

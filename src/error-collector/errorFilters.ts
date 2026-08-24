@@ -139,6 +139,15 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   // on "admin should clone a meeting and verify cloned meeting exists", which
   // passed cleanly with no assertion depending on this endpoint.
   /\/v1\/meetings\/meeting-invitee\/lookup/i,
+  // WHY: confirmed live 2026-08-21 (Reports module full-suite run, 64/64
+  // passed) — a header/side-widget currency-rates prefetch fires right as
+  // Save As navigates from the report's details page to the Reports list,
+  // and gets cancelled mid-flight by that navigation. Same "navigate-away
+  // abort" mechanism as every other entry in this list. 2 confirmed
+  // occurrences in the same run (admin R35 and restricted R52's Save As
+  // tests), both otherwise cleanly passing with no assertion depending on
+  // this endpoint.
+  /\/v1\/forex\/currencies-with-and-without-exchange-rates/i,
 ];
 
 export const NOISE_PATTERNS: RegExp[] = [
@@ -177,6 +186,16 @@ export const NOISE_PATTERNS: RegExp[] = [
   // WHY: Kylas app bug — MeetingCreate JS crash on intermittent QA env state.
   // App recovers on retry — not actionable from test perspective.
   /Cannot read properties of undefined.*find/i,
+  // WHY: confirmed live 2026-08-21 (Reports module full-suite run, 64/64
+  // passed) — same "app-side JS crash, recovered from, not actionable"
+  // shape as the MeetingCreate entry above, this time in Kylas's own
+  // minified `removeDimension` handler. Fires 3 times in the same run,
+  // always in the "should throw and recover from a client error when
+  // removing an empty dimension row" tests (both admin and restricted
+  // variants) — these tests are deliberately named around triggering and
+  // recovering from exactly this client error, and all 3 occurrences were
+  // on tests that passed cleanly, confirming the recovery.
+  /Cannot read properties of undefined.*fieldType/i,
 ];
 
 export const NOISE_URL_PATTERNS: RegExp[] = [
