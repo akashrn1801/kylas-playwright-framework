@@ -108,15 +108,15 @@ test.describe('Quotations — RBAC', () => {
     let errorMessage = '';
     let quotationId: number | null = null;
     restrictedPage.on('response', async (response) => {
-      if (
-        response.url().includes('/quotations') &&
-        response.request().method() === 'POST'
-      ) {
+      if (response.url().includes('/quotations') && response.request().method() === 'POST') {
         if (response.status() >= 400) {
           const body = await response.json().catch(() => ({}));
           // WHY: Kylas 029003 returns top-level message, not inside errors[]
           errorMessage =
-            body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
+            body?.message ||
+            body?.errors?.[0]?.message ||
+            body?.validationErrors?.[0]?.message ||
+            '';
           logger.warn(`API error — code: ${body?.errorCode}, message: ${errorMessage}`);
         } else {
           const body = await response.json().catch(() => ({}));
@@ -230,17 +230,52 @@ test.describe('Quotations — RBAC', () => {
         await qp.saveQuotationExpectingError();
         stillFailing = await qp.assertErrorToast();
         const retryResponse = await retryResponsePromise;
-        if (retryResponse && retryResponse.status() < 400) {
-          const body = await retryResponse.json().catch(() => ({}));
-          const id = body?.id ?? body?.data?.id ?? null;
-          if (id) quotationId = id;
-          logger.info(`Retry save response confirms success (id: ${quotationId}) despite toast state`);
-          stillFailing = false;
+        if (retryResponse) {
+          if (retryResponse.status() < 400) {
+            const body = await retryResponse.json().catch(() => ({}));
+            const id = body?.id ?? body?.data?.id ?? null;
+            if (id) quotationId = id;
+            logger.info(
+              `Retry save response confirms success (id: ${quotationId}) despite toast state`
+            );
+            stillFailing = false;
+          } else {
+            // WHY derive errorMessage directly from THIS already-awaited
+            // response body, instead of relying on the persistent
+            // `restrictedPage.on('response', ...)` listener registered
+            // above having already parsed it: confirmed live (2026-08-22)
+            // — that listener's own async body-parse callback is not
+            // guaranteed to finish before this code runs. Logs proved the
+            // race: "Retry 1 error message captured: \"\"" logged, with the
+            // real message ("Invalid contact...") only arriving ~65ms
+            // later via the listener. Reading the SAME response's body
+            // directly and synchronously here removes the race — the next
+            // loop iteration's entity-guess (below) now always sees a
+            // freshly, correctly derived value, never a stale empty one.
+            const body = await retryResponse.json().catch(() => ({}));
+            errorMessage =
+              body?.message ||
+              body?.errors?.[0]?.message ||
+              body?.validationErrors?.[0]?.message ||
+              errorMessage;
+          }
         }
         logger.info(`Retry ${attempt} error message captured: "${errorMessage}"`);
       } else {
         // Final allowed attempt — require success; saveQuotation() itself
         // throws a clear error if this genuinely doesn't succeed.
+        //
+        // WHY wait for any stale error toast to clear first (confirmed live
+        // 2026-08-22, reproduced 3/3): the PREVIOUS attempt's error toast
+        // can still be visible in the DOM when saveQuotation()'s own
+        // assertNoFormErrors() check runs next, even though THIS save's own
+        // POST genuinely succeeded — both failing runs captured a real 2xx
+        // response with a real quotation ID immediately before the throw.
+        // assertNoFormErrors() has no way to distinguish a stale toast from
+        // a fresh one; giving it a clean slate first via a real condition
+        // wait (not a blind timeout) removes the false failure at the
+        // source, scoped to this test only.
+        await qp.waitForErrorToastToClear();
         await qp.saveQuotation();
         stillFailing = false;
       }
@@ -266,7 +301,9 @@ test.describe('Quotations — RBAC', () => {
     }
     await qp.goToQuotationDetail(String(quotationId));
     await qp.assertDetailPageFields(data);
-    logger.success(`Q7 passed — inaccessible entity handled, quotation created on retry (id: ${quotationId})`);
+    logger.success(
+      `Q7 passed — inaccessible entity handled, quotation created on retry (id: ${quotationId})`
+    );
   });
 
   // ─── T7b ──────────────────────────────────────────────────────────────────
@@ -297,7 +334,9 @@ test.describe('Quotations — RBAC', () => {
     await qp.fillQuotationForm(data);
     const result = await qp.saveQuotationHandlingInaccessibleEntities();
 
-    expect(result.succeeded, 'Save should succeed, whether or not a fallback was needed').toBe(true);
+    expect(result.succeeded, 'Save should succeed, whether or not a fallback was needed').toBe(
+      true
+    );
 
     if (result.removedEntities.length > 0) {
       // Confirm the fallback's own report of what it identified/removed —
@@ -415,7 +454,12 @@ test.describe('Quotations — RBAC', () => {
       const allRows = restrictedPage.locator('.rt-tr-group');
       const rowCount = await allRows.count();
       for (let i = 0; i < rowCount; i++) {
-        const text = (await allRows.nth(i).innerText().catch(() => '')).trim();
+        const text = (
+          await allRows
+            .nth(i)
+            .innerText()
+            .catch(() => '')
+        ).trim();
         if (text.length > 0) {
           found = true;
           break;
