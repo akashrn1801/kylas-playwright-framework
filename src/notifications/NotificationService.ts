@@ -4,18 +4,22 @@
  * derived health/failure-cluster analysis, to the email template.
  */
 
-import { ReportParser } from './ReportParser';
+import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
-import { computeHealthScore } from './AutomationHealth';
+import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
+import { loadKnownIssuesIndex } from './KnownIssuesIndex';
+import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
+import { logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 // WHY: added 2026-07-14 — confirmed live via two real sends that this
 // pipeline had zero freshness checking anywhere: it unconditionally trusted
@@ -102,6 +106,65 @@ const EMPTY_HISTORY_DELTA: HistoryDeltaFile = {
   passRateSeries: [],
 };
 
+// WHY added 2026-08-24: NotificationService.resolveHistoryBranchUrl() and the
+// new known-issues cross-reference link (§7 of the redesign) both need the
+// same "parse owner/repo out of the real git remote" logic — extracted once
+// so a future change to the parsing regex can't drift between the two
+// call sites, mirroring this file's own existing single-purpose-helper style.
+function resolveGithubOwnerRepo(): { owner: string; repo: string } | null {
+  try {
+    const remoteUrl = execSync('git remote get-url origin', { cwd: process.cwd() }).toString().trim();
+    const match = remoteUrl.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+    if (!match) return null;
+    return { owner: match[1], repo: match[2] };
+  } catch {
+    return null;
+  }
+}
+
+// WHY exported (2026-08-24): same testability precedent already established
+// by notify.ts's resolveNotificationInput() — these three pure/fs-only
+// helpers can be exercised directly in a verification context (confirm the
+// dedup key is stable, confirm hasAlreadyNotified/markNotified actually
+// gate each other) WITHOUT ever reaching EmailAdapter.send(), so idempotency
+// can be proven without risking a real duplicate send to the real QA team.
+export function getNotifiedMarkerDir(env: string): string {
+  return path.resolve(process.cwd(), 'reports', env, '.notified');
+}
+
+// WHY a hash of real run-identifying fields, not just buildNumber: a local
+// run's buildNumber is always the literal string "local" (see notify.ts's
+// resolveNotificationInput()) — keying on buildNumber alone would treat
+// every local run for an env as "the same run" and permanently suppress
+// email after the first. Including branch/startTime/pass-fail counts means
+// two genuinely different reports (even sharing a buildNumber) get different
+// keys, while two identical invocations against the exact same report
+// produce the identical key — which is exactly the idempotency property
+// needed, nothing broader.
+export function computeNotificationDedupKey(input: NotificationInput, report: ParsedReport): string {
+  const raw = [input.env, input.branch, input.buildNumber, report.startTime, report.total, report.passed, report.failed].join('|');
+  return crypto.createHash('sha1').update(raw).digest('hex');
+}
+
+export function hasAlreadyNotified(env: string, key: string): boolean {
+  return fs.existsSync(path.join(getNotifiedMarkerDir(env), `${key}.sent`));
+}
+
+// WHY written only AFTER EmailAdapter.send() resolves successfully (see the
+// call site in notify() below), never before: a genuinely failed first
+// attempt (SMTP down, bad credentials) must still be retriable — marking
+// "sent" before confirming success would permanently and incorrectly
+// suppress every future legitimate retry for that exact report.
+export function markNotified(env: string, key: string): void {
+  try {
+    const dir = getNotifiedMarkerDir(env);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${key}.sent`), new Date().toISOString());
+  } catch {
+    /* best-effort — a failure to write the marker must never fail the whole notify() call */
+  }
+}
+
 export class NotificationService {
   private parser = new ReportParser();
   private template = new EmailTemplate();
@@ -109,23 +172,36 @@ export class NotificationService {
 
   async notify(input: NotificationInput): Promise<void> {
     if (!notificationConfig.enabled) {
-      console.log('[Notification] Notifications disabled — skipping');
+      logger.info('[Notification] Notifications disabled — skipping');
       return;
     }
     const password = process.env.GMAIL_APP_PASSWORD || process.env.ZOHO_APP_PASSWORD || '';
     if (!password) {
-      console.warn('[Notification] Email password not set — skipping email');
+      logger.warn('[Notification] Email password not set — skipping email');
       return;
     }
     notificationConfig.smtp.password = password;
     notificationConfig.smtp.user =
       process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
 
-    console.log('[Notification] Parsing test report...');
+    logger.info('[Notification] Parsing test report...');
     const report = this.parser.parse(input.jsonReportPath);
-    console.log(
+    logger.info(
       `[Notification] Results — Total: ${report.total}, Passed: ${report.passed}, Failed: ${report.failed}, Flaky: ${report.flaky}`
     );
+
+    // WHY checked before any other work (2026-08-24): confirmed live via grep
+    // that nothing in this pipeline previously prevented a second real email
+    // for the exact same run (e.g. a manual re-run of just the notify step,
+    // or a wrapper retrying after an SMTP timeout that actually succeeded
+    // server-side). The dedup key is a hash of real run-identifying fields —
+    // see computeNotificationDedupKey's own WHY comment for why buildNumber
+    // alone isn't enough (a local run's buildNumber is always "local").
+    const dedupKey = computeNotificationDedupKey(input, report);
+    if (hasAlreadyNotified(input.env, dedupKey)) {
+      logger.info(`[Notification] Already sent for this exact run (key ${dedupKey.slice(0, 12)}…) — skipping duplicate send`);
+      return;
+    }
 
     // WHY: Read misc-errors.json — if not found or empty, gracefully skip
     const miscErrorsPath = getMiscErrorsPath(input.env);
@@ -134,15 +210,15 @@ export class NotificationService {
       if (fs.existsSync(miscErrorsPath)) {
         miscErrors = JSON.parse(fs.readFileSync(miscErrorsPath, 'utf-8'));
         if (miscErrors && miscErrors.totalErrors > 0) {
-          console.log(
+          logger.info(
             `[Notification] Background errors found: ${miscErrors.totalErrors} — will include in email`
           );
         } else {
-          console.log('[Notification] No background errors captured');
+          logger.info('[Notification] No background errors captured');
         }
       }
     } catch {
-      console.warn('[Notification] Could not read misc-errors.json — skipping misc errors section');
+      logger.warn('[Notification] Could not read misc-errors.json — skipping misc errors section');
     }
 
     // WHY: Read the extended run-history delta/trend output — if not found
@@ -163,20 +239,20 @@ export class NotificationService {
           passRateSeries: parsed.passRateSeries ?? [],
         };
         if (historyDeltaFile.delta) {
-          console.log(
+          logger.info(
             `[Notification] Run history delta found — vs previous run: ${historyDeltaFile.delta.passedDelta >= 0 ? '+' : ''}${historyDeltaFile.delta.passedDelta} passed`
           );
         }
       }
     } catch {
-      console.warn('[Notification] Could not read history-delta.json — skipping trend section');
+      logger.warn('[Notification] Could not read history-delta.json — skipping trend section');
     }
 
     const clusters = clusterFailures(report.failedTests, miscErrors?.errors ?? null);
     const freshness = checkReportFreshness(report.endTime);
     if (freshness.isStale) {
-      console.warn(
-        `[Notification] ⚠️  STALE REPORT — this report's data is ${Math.round(freshness.ageMs / 3_600_000)}h old (threshold: ${freshness.thresholdHours}h). This may not reflect a fresh run.`
+      logger.warn(
+        `[Notification] STALE REPORT — this report's data is ${Math.round(freshness.ageMs / 3_600_000)}h old (threshold: ${freshness.thresholdHours}h). This may not reflect a fresh run.`
       );
     }
     const health = computeHealthScore(
@@ -188,9 +264,28 @@ export class NotificationService {
       historyDeltaFile.recurringFlaky,
       freshness.isStale
     );
+    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift);
 
     const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
     const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
+    const knownIssuesUrl = this.resolveKnownIssuesUrl(input.gitCommit);
+
+    // WHY previousRunFailedTitles is null (not []) whenever there is no prior
+    // run: distinguishes "compared against real history, found nothing" from
+    // "no history exists to compare against yet" — see FailureDetailBuilder's
+    // RegressionStatus.unclassified for how this degrades honestly rather
+    // than fabricating a "new regression"/"chronic" verdict with no basis.
+    const enrichmentCtx: EnrichmentContext = {
+      miscErrors: miscErrors?.errors ?? null,
+      previousRunFailedTitles: historyDeltaFile.delta?.previousRun?.failedTestTitles ?? null,
+      recurringFailures: historyDeltaFile.recurringFailures,
+      knownIssuesIndex: loadKnownIssuesIndex(path.resolve(process.cwd(), '.claude', 'known-issues.md')),
+      runSource: input.runSource ?? 'local',
+      buildUrl: input.buildUrl,
+    };
+    const usedAnchorIds = new Set<string>();
+    const enrichedClusters = enrichClusters(clusters, enrichmentCtx, usedAnchorIds);
+    const flakyFailureDetails = buildFlakyFailureDetails(report.flakyTests, enrichmentCtx, usedAnchorIds);
 
     const ctx: EmailContext = {
       report,
@@ -211,7 +306,11 @@ export class NotificationService {
       suiteDrift: historyDeltaFile.suiteDrift,
       passRateSeries: historyDeltaFile.passRateSeries,
       health,
-      clusters,
+      verdict,
+      clusters: enrichedClusters,
+      flakyFailureDetails,
+      hasHistoryEverExisted: historyDeltaFile.delta?.previousRun != null,
+      knownIssuesUrl,
       reportFreshness: freshness,
       nodeVersion: process.version,
       osInfo: `${os.platform()} ${os.release()}`,
@@ -223,12 +322,16 @@ export class NotificationService {
     const subject = this.template.subject(ctx);
     const html = this.template.html(ctx);
 
-    console.log(`[Notification] Sending email — Subject: ${subject}`);
+    logger.info(`[Notification] Sending email — Subject: ${subject}`);
     try {
       await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
-      console.log('[Notification] ✅ Email sent successfully');
+      logger.success('[Notification] Email sent successfully');
+      // WHY only marked "sent" here, after a confirmed-successful send: see
+      // markNotified()'s own WHY comment — a failed attempt must remain
+      // retriable.
+      markNotified(input.env, dedupKey);
     } catch (err) {
-      console.error('[Notification] ❌ Failed to send email:', err);
+      logger.error('[Notification] Failed to send email:', err);
     }
   }
 
@@ -236,20 +339,21 @@ export class NotificationService {
   // for this env, mirroring the exact git-remote-resolution technique already
   // used in scripts/syncHistory.ts's resolveGitRemoteUrl() — never fabricated:
   // returns null (and the CI/CD block simply omits the link) if the remote
-  // can't be resolved or isn't a github.com remote. Single call site, small
-  // (~15 lines) — not worth extracting to a shared file alongside
-  // syncHistory.ts's near-identical logic, which runs in a separate script
-  // process anyway.
+  // can't be resolved or isn't a github.com remote.
   private resolveHistoryBranchUrl(env: string): string | null {
-    try {
-      const remoteUrl = execSync('git remote get-url origin', { cwd: process.cwd() }).toString().trim();
-      // Matches both git@github.com:owner/repo.git and https://github.com/owner/repo.git
-      const match = remoteUrl.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
-      if (!match) return null;
-      const [, owner, repo] = match;
-      return `https://github.com/${owner}/${repo}/blob/ci/reporting-history/history/${env}.jsonl`;
-    } catch {
-      return null;
-    }
+    const ownerRepo = resolveGithubOwnerRepo();
+    if (!ownerRepo) return null;
+    return `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/blob/ci/reporting-history/history/${env}.jsonl`;
+  }
+
+  // WHY the commit SHA, not a branch name (2026-08-24): a branch-based link
+  // drifts the moment known-issues.md changes on that branch after this run
+  // — linking to the exact commit under test means the link always shows
+  // precisely the content that existed for THIS build, immutable, never
+  // subject to later edits. GitHub's blob view accepts a short SHA.
+  private resolveKnownIssuesUrl(gitCommit: string): string | null {
+    const ownerRepo = resolveGithubOwnerRepo();
+    if (!ownerRepo || !gitCommit || gitCommit === 'unknown') return null;
+    return `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/blob/${gitCommit}/.claude/known-issues.md`;
   }
 }

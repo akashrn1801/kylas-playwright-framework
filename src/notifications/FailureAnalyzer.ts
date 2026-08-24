@@ -36,7 +36,20 @@ export function classifyFailure(test: TestResult, miscErrors: MiscError[] | null
   const related = (miscErrors ?? []).filter((e) => e.testTitle === test.title);
 
   if (/strict mode violation/i.test(text) || /locator\(.*\)\s*resolved to/i.test(text)) return 'locator';
-  if (/Timeout \d+ms exceeded/i.test(text) || /waiting for (locator|selector|element)/i.test(text))
+  // WHY the second alternative added 2026-08-24: confirmed live via this
+  // redesign's own real-data verification (a real flaky Quotations test,
+  // prod report 2026-07-31) that Playwright's own OUTER test-level timeout
+  // message — "Test timeout of 480000ms exceeded." — has a different shape
+  // from an action-level timeout ("Timeout 60000ms exceeded", already
+  // matched below) and fell through to 'unknown' despite being just as
+  // unambiguously a timeout. Zero classification-ambiguity risk (this exact
+  // string can only ever mean a Playwright test-level timeout) — a real bug
+  // fix, not the kind of "band-aid without an evidence bar" widening
+  // errorFilters.ts's own background-noise allowlist explicitly warns
+  // against (that's about silently suppressing potentially-real errors;
+  // this is a strictly-more-correct classification of an already-surfaced
+  // failure).
+  if (/Timeout \d+ms exceeded/i.test(text) || /Test timeout of \d+ms exceeded/i.test(text) || /waiting for (locator|selector|element)/i.test(text))
     return 'timeout';
   if (/expect\(.*\)\.(to|not)/i.test(text) || /Expected:.*\n.*Received:/i.test(text)) return 'assertion';
 
