@@ -16,7 +16,9 @@ test.describe('Deals', () => {
   // Navigation
   // ──────────────────────────────────────────────────────────
 
-  test('@smoke @regression @prodSafe admin should navigate to deals list page', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin should navigate to deals list page', async ({
+    adminPage,
+  }) => {
     const dealsPage = new DealsPage(adminPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
@@ -287,7 +289,9 @@ test.describe('Deals', () => {
   // Detail page header fields and tabs
   // ──────────────────────────────────────────────────────────
 
-  test('@regression admin should verify deal detail header fields and tabs', async ({ adminPage }) => {
+  test('@regression admin should verify deal detail header fields and tabs', async ({
+    adminPage,
+  }) => {
     test.setTimeout(480000);
 
     const dealsPage = new DealsPage(adminPage);
@@ -366,7 +370,23 @@ test.describe('Deals', () => {
     expect(dealId).not.toBeNull();
     await dealsPage.goToDealDetailsById(dealId!);
     const clonedId = await dealsPage.cloneDeal();
+    // WHY the primary correctness signal is now ID-based, not a mid-render
+    // UI field read (redesigned 2026-08-23 — see
+    // .claude/sandbox-build-144-task-a-deals-clone.md): cloneDeal()'s
+    // clonedId comes from a genuine network response (a discrete, hard
+    // event), not a DOM snapshot that can be caught half-rendered.
     expect(clonedId).not.toBeNull();
+    // WHY assert clonedId !== dealId: a non-null return alone isn't proof a
+    // real clone happened — it could coincidentally be null-checked away
+    // while still (in some other bug) resolving to the SAME deal. Asserting
+    // the two IDs differ is the actual "a genuine second record was
+    // created" proof.
+    expect(clonedId, 'Cloned deal must have a different ID from the original').not.toBe(dealId);
+    // WHY this name check is safe now, unlike the old pre-save modal check:
+    // it reads the cloned deal's name off its own separately-loaded, fully
+    // -settled detail page (assertClonedDealName() navigates there first),
+    // not off the clone modal mid-render — no longer vulnerable to the same
+    // rendering-timing race.
     await dealsPage.assertClonedDealName(dealData.name, clonedId!);
     logger.success('D34 passed');
   });
@@ -393,9 +413,14 @@ test.describe('Deals', () => {
     // app-level display bug (see CLAUDE.md's Known Issues) if it's still present.
     const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
-    // WHY: Real end-state check — reload and re-read the card count
-    await dealsPage.goToDealDetailsById(dealId!);
-    const afterCount = await dealsPage.getDisplayedAssociatedContactsCount();
+    // WHY: Real end-state check — reload and re-read the card count.
+    // Bounded retry (fixed 2026-08-22, real flake): a single reload could
+    // still race the reloaded card's own async data fetch — see
+    // waitForDisplayedAssociatedContactsCount()'s own comment.
+    const afterCount = await dealsPage.waitForDisplayedAssociatedContactsCount(
+      dealId!,
+      baselineCount + 1
+    );
     expect(afterCount, 'Associated contacts count should increase by 1').toBe(baselineCount + 1);
     logger.success('D35 passed');
   });
@@ -600,7 +625,10 @@ test.describe('Deals', () => {
 
     const rows = adminPage.locator('.products-input__row');
     const countBefore = await rows.count();
-    expect(countBefore, 'Should have at least 2 product rows before removal').toBeGreaterThanOrEqual(2);
+    expect(
+      countBefore,
+      'Should have at least 2 product rows before removal'
+    ).toBeGreaterThanOrEqual(2);
     const removedRowName = await rows
       .last()
       .locator('.is-invalid__single-value')
