@@ -38,6 +38,7 @@
     "test:quotations": "playwright test tests/ui/quotations/ --project=chromium && npm run notify",
     "test:quotations:rbac": "playwright test tests/rbac/quotations.rbac.spec.ts --project=chromium && npm run notify",
     "test:productsAndServices": "playwright test tests/ui/productsAndServices/ tests/rbac/productsAndServices.rbac.spec.ts --project=chromium && npm run notify",
+    "test:reports": "playwright test tests/ui/reports/ tests/rbac/reports.rbac.spec.ts --project=chromium && npm run notify",
     "sandbox:reset": "bash scripts/reset-sandbox.sh"
   },
   "keywords": [

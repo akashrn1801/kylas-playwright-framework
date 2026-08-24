@@ -1,6 +1,6 @@
 node_modules/
 test-results/
-reports/
+/reports/
 playwright-report/
 allure-results/
 src/auth/storageStates/

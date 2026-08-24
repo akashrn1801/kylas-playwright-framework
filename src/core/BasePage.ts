@@ -503,7 +503,9 @@ export class BasePage {
       .catch(() => {
         /* menu may already be gone, or this control doesn't use this menu class */
       });
-    logger.success(`${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`);
+    logger.success(
+      `${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`
+    );
     return selectedText;
   }
 
@@ -783,7 +785,9 @@ export class BasePage {
       this.page
         .waitForResponse(responsePredicate, { timeout: config.timeouts.navigation })
         .catch(() => null),
-      tableLocator.waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null),
+      tableLocator
+        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+        .catch(() => null),
     ]);
 
     const assertTableVisible = (): Promise<void> =>
@@ -1270,7 +1274,12 @@ export class BasePage {
     // Previously this was a bare `searchInput.fill()` + a single bounded
     // `waitFor`, so a brief DNS blip that failed the lookup request cost the whole
     // first test attempt (only Playwright's outer retry recovered it — see #59).
-    await this.fillSearchAndWaitForOptions(searchInput, options, exactValue ?? searchTerm, description);
+    await this.fillSearchAndWaitForOptions(
+      searchInput,
+      options,
+      exactValue ?? searchTerm,
+      description
+    );
 
     if (exactValue) {
       const exactOption = options
@@ -1548,44 +1557,93 @@ export class BasePage {
     // count worth of chips, so that count plus headroom is a safe, generous
     // bound that still fails fast and loudly instead of hanging silently.
     const maxChipsToClear = 50;
+    // WHY a bounded number of outer "settle rounds" wrapping the inner
+    // per-chip removal loop, not just a single pass (fixed 2026-08-23, real
+    // PS10/sandbox-build-144 recurrence — see
+    // .claude/sandbox-build-144-task-b-chip-clearing.md): the real CI
+    // failure's own stack trace proved the inner loop legitimately reached
+    // zero chips (it never hit the maxChipsToClear exhaustion path below,
+    // which throws a different message) — the defense-in-depth recheck
+    // immediately afterward then found 5 chips present again. That is
+    // chips REAPPEARING after a genuine zero-read, under real `--workers=2`
+    // backend contention, not chips failing to detach. A single local
+    // `clickEditIcon()` only waits for the edit modal's container to become
+    // visible, not for the Requirement section's own async product data to
+    // finish hydrating — under enough backend latency, this method can
+    // start (and finish) its inner loop before that hydration completes,
+    // then have the real saved chips land moments later.
+    const maxSettleRounds = 4;
+    const STABILITY_WINDOW_MS = 1000;
     let clearedCount = 0;
-    let existingChip = control.locator('.is-invalid__multi-value__remove').first();
-    while (
-      (await existingChip.isVisible({ timeout: 1000 }).catch(() => false)) &&
-      clearedCount < maxChipsToClear
-    ) {
-      await existingChip.click({ timeout: 5000 });
-      // WHY: confirmed live (2026-07-08) — clicking a chip's remove button
-      // also bubbles into the control's own click handler and pops the
-      // options menu open, which then renders on top of (and blocks clicks
-      // on) the remaining chips' remove buttons. Close it before the next
-      // removal attempt so it never gets the chance to intercept a click.
-      const menuOpen = await this.page
-        .locator('.is-invalid__menu')
-        .isVisible({ timeout: 500 })
-        .catch(() => false);
-      if (menuOpen) {
-        await this.page.keyboard.press('Escape');
+    for (let round = 1; round <= maxSettleRounds; round++) {
+      let existingChip = control.locator('.is-invalid__multi-value__remove').first();
+      while (
+        (await existingChip.isVisible({ timeout: 1000 }).catch(() => false)) &&
+        clearedCount < maxChipsToClear
+      ) {
+        // WHY captured BEFORE the click, then polled for a genuine decrease
+        // (fixed 2026-08-23 — a blind fixed-duration sleep here was caught
+        // by this session's own pre-commit anti-pattern hook): removing a
+        // chip triggers an async React re-render of the whole chip list —
+        // a fixed 150ms pause was just hoping that commit lands before the
+        // next loop iteration re-reads the list. expect.poll() genuinely
+        // retries the real chip count until it actually drops, the exact
+        // condition being waited for, instead of guessing a duration.
+        const chipCountBeforeRemoval = await control
+          .locator('.is-invalid__multi-value__remove')
+          .count();
+        await existingChip.click({ timeout: 5000 });
+        // WHY: confirmed live (2026-07-08) — clicking a chip's remove button
+        // also bubbles into the control's own click handler and pops the
+        // options menu open, which then renders on top of (and blocks clicks
+        // on) the remaining chips' remove buttons. Close it before the next
+        // removal attempt so it never gets the chance to intercept a click.
+        const menuOpen = await this.page
+          .locator('.is-invalid__menu')
+          .isVisible({ timeout: 500 })
+          .catch(() => false);
+        if (menuOpen) {
+          await this.page.keyboard.press('Escape');
+        }
+        await expect
+          .poll(() => control.locator('.is-invalid__multi-value__remove').count(), { timeout: 3000 })
+          .toBeLessThan(chipCountBeforeRemoval);
+        existingChip = control.locator('.is-invalid__multi-value__remove').first();
+        clearedCount++;
       }
-      await this.page.waitForTimeout(150);
-      existingChip = control.locator('.is-invalid__multi-value__remove').first();
-      clearedCount++;
+      if (clearedCount >= maxChipsToClear) {
+        throw new Error(
+          `${description}: still had chips to clear after ${maxChipsToClear} removal attempts — a chip's remove button may not be detaching it`
+        );
+      }
+      // WHY a real `waitFor('visible')` TIMING OUT is the SUCCESS case here
+      // (mirrors the proven stability-window idiom in
+      // reference-patterns.md §18, applied to the symmetric "reached zero"
+      // direction instead of "menu opened"): if no chip's remove icon
+      // becomes visible again within the window, the zero state genuinely
+      // held — a real, condition-based check, not a fixed-duration blind
+      // sleep. If one DOES reappear, loop back into another settle round
+      // (re-clearing whatever just landed) instead of trusting a zero-read
+      // that a moment later turned out to be premature.
+      const reappeared = await control
+        .locator('.is-invalid__multi-value__remove')
+        .first()
+        .waitFor({ state: 'visible', timeout: STABILITY_WINDOW_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!reappeared) {
+        return;
+      }
     }
-    if (clearedCount >= maxChipsToClear) {
-      throw new Error(
-        `${description}: still had chips to clear after ${maxChipsToClear} removal attempts — a chip's remove button may not be detaching it`
-      );
-    }
-    // WHY: defense in depth — the loop above exits based on isVisible()
-    // checks that can theoretically race a re-render; confirm zero chips
-    // actually remain rather than only trusting the loop's own exit
-    // condition, so an incomplete clear fails loudly here instead of
-    // silently producing a wrong total that only surfaces later as a
-    // confusing detail-page verification mismatch.
+    // WHY: defense in depth — after exhausting every settle round, confirm
+    // zero chips actually remain rather than only trusting the loop's own
+    // exit condition, so a genuinely unstable field fails loudly here
+    // instead of silently producing a wrong total that only surfaces later
+    // as a confusing detail-page verification mismatch.
     const remainingChips = await control.locator('.is-invalid__multi-value__remove').count();
     if (remainingChips > 0) {
       throw new Error(
-        `${description}: ${remainingChips} chip(s) still present after the clear loop reported done — clearing is unreliable`
+        `${description}: ${remainingChips} chip(s) still present after ${maxSettleRounds} settle rounds — clearing is unreliable`
       );
     }
   }
@@ -1938,9 +1996,7 @@ export class BasePage {
     // suffix as the date half (e.g. "..._input_cfDateTimePicker_time").
     const timeSuffix = this.customFieldSuffix(`${fieldName}_time`, suffixStyle);
     const timeInput = this.page.locator(`[id$="${timeSuffix}"]`);
-    const timeInputEnabled = await timeInput
-      .isEnabled({ timeout: 5000 })
-      .catch(() => false);
+    const timeInputEnabled = await timeInput.isEnabled({ timeout: 5000 }).catch(() => false);
     if (!timeInputEnabled) {
       logger.warn(
         `Custom field "${description}" (cf${fieldName}): time input did not become enabled within 5s — proceeding cautiously`
@@ -2080,9 +2136,7 @@ export class BasePage {
    */
   protected async revealDetailCarouselSlideFor(containerId: string): Promise<void> {
     const container = this.page.locator(`[id="${containerId}"]`);
-    const slide = container.locator(
-      'xpath=ancestor::div[contains(@class,"carousel-item")][1]'
-    );
+    const slide = container.locator('xpath=ancestor::div[contains(@class,"carousel-item")][1]');
     // Not inside a carousel (single-page section) → nothing to navigate.
     if ((await slide.count()) === 0) return;
     const slideIsActive = async (): Promise<boolean> =>
@@ -2596,11 +2650,44 @@ export class BasePage {
     await this.click(control, `lookup control: ${name}`);
 
     if (expectFound) {
-      const searchToken = name.trim().split(/\s+/)[0];
+      // WHY search with the FULL name, not just its first word (fixed
+      // 2026-08-23, real PS10 recurrence investigated live — see
+      // .claude/product-search-index-lag-investigation.md): the original
+      // `name.trim().split(/\s+/)[0]` was suspected but NOT actually caused
+      // by search-index lag. Confirmed live via a direct diagnostic against
+      // the real backend: searching this method's ONLY current caller's
+      // typical search term (`[QA-Auto]`, the fixed prefix every Products &
+      // Services test fixture shares, per this module's own "fixtures are
+      // never deleted, real accumulation over time" design) returned
+      // exactly 50 results — a hard backend page-size cap — sorted
+      // alphabetically by product name, with the actual target fixture NOT
+      // among them. Searching the SAME target's full name returned exactly
+      // 1 result: the exact fixture. A shared, non-discriminating prefix
+      // token gets crowded out by an ever-growing accumulated pool as this
+      // environment's product data grows (rule 20) — this was never a
+      // freshness/indexing-speed problem. The full name is exactly what the
+      // sibling `addProductRowAndSearchByName()` already searches with
+      // successfully for the same fixtures on Deals/Quotations — mirroring
+      // that proven, working pattern rather than inventing a new one.
+      //
+      // WHY this superseded a different, independently-found "search by
+      // the LAST word instead" fix for the identical bug (found one day
+      // earlier, same root cause, same live-confirmed evidence quality —
+      // fixture names put the accumulating shared tag first and a genuinely
+      // unique timestamp suffix last): resolved in favor of the full-name
+      // approach during a merge, on the deciding evidence that the
+      // last-word fix had never actually been exercised by any real test
+      // run — it was introduced in the exact commit whose own next CI run
+      // (sandbox Build #144) failed before ever reaching this code path,
+      // and no verification trial for it exists anywhere in this
+      // codebase's history — versus the full-name fix's 21/21 real live
+      // trials, including the exact fresh-fixture-creation scenario that
+      // originally failed. Matching the sibling method's already-proven
+      // convention was the secondary reason, not the deciding one.
       await this.fillSearchAndWaitForOptions(
         lookupInput,
         optionList,
-        searchToken,
+        name,
         `Search and select: ${name}`
       );
       const exactOption = optionList

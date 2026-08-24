@@ -11,7 +11,6 @@ import {
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 
-
 interface GrandTotalComponents {
   subTotal: number;
   additionalDiscount: number;
@@ -394,7 +393,8 @@ export class QuotationsPage extends BasePage {
       // but fixing it anyway rather than leaving a latent trap for whoever
       // wires it up next.
       const response = await this.armResponseWaitWithRecovery(
-        (r: Response) => /\/v1\/quotations\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
+        (r: Response) =>
+          /\/v1\/quotations\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
         'captureQuotationIdFromResponse: create POST',
         15000
       );
@@ -462,7 +462,8 @@ export class QuotationsPage extends BasePage {
   private async waitForQuotationDetailPage(): Promise<void> {
     const response = await this.waitForEntityDetailPage(
       /\/quotations\/details\//,
-      (res) => res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
+      (res) =>
+        res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
       'Quotation detail'
     );
     if (response.status() === 404) {
@@ -542,12 +543,10 @@ export class QuotationsPage extends BasePage {
 
     await Promise.all([
       this.armResponseWaitWithRecovery(
-        (r) =>
-          r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
+        (r) => r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
         'performSearch: search POST',
         15000
-      )
-        .catch(() => null),
+      ).catch(() => null),
       this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 }),
     ]);
 
@@ -654,7 +653,9 @@ export class QuotationsPage extends BasePage {
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
     let isVisible = await productInput.isVisible().catch(() => false);
-    let controlClass = isVisible ? await productControl.getAttribute('class').catch(() => null) : null;
+    let controlClass = isVisible
+      ? await productControl.getAttribute('class').catch(() => null)
+      : null;
     let isDisabled = controlClass?.includes('is-invalid__control--is-disabled') ?? false;
     if (isDisabled) {
       // WHY: confirmed live (2026-07-30) — the product control's disabled
@@ -669,7 +670,9 @@ export class QuotationsPage extends BasePage {
       // Quotation is always deal-based; see CLAUDE.md's Quotations
       // pre-created-on-deals note) and is the only way to reliably save a
       // quotation with a product from these two panel contexts.
-      const dealValue = await this.dealInput().inputValue().catch(() => '');
+      const dealValue = await this.dealInput()
+        .inputValue()
+        .catch(() => '');
       if (!dealValue) {
         logger.info('Product row disabled with no deal linked — selecting a deal to enable it');
         await this.selectRandomDeal();
@@ -683,7 +686,9 @@ export class QuotationsPage extends BasePage {
           return;
         }
         isVisible = await productInput.isVisible().catch(() => false);
-        controlClass = isVisible ? await productControl.getAttribute('class').catch(() => null) : null;
+        controlClass = isVisible
+          ? await productControl.getAttribute('class').catch(() => null)
+          : null;
         isDisabled = controlClass?.includes('is-invalid__control--is-disabled') ?? false;
       }
     }
@@ -756,7 +761,8 @@ export class QuotationsPage extends BasePage {
     // its own listener, causing it to miss the response and return null after 15s.
     // Registering here guarantees we capture the response regardless of timing.
     const responsePromise = this.armResponseWaitWithRecovery(
-      (res) => res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
+      (res) =>
+        res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
       'goToQuotationDetail: detail GET',
       20000
     ).catch(() => null);
@@ -979,7 +985,11 @@ export class QuotationsPage extends BasePage {
       cf.urlField,
       'URL Field'
     );
-    await this.setCheckboxCustomField(QUOTATION_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    await this.setCheckboxCustomField(
+      QUOTATION_CUSTOM_FIELD_NAMES.checkbox,
+      cf.checkbox,
+      'Checkbox'
+    );
     await this.selectDateCustomField(QUOTATION_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
     await this.selectDateTimeCustomField(
       QUOTATION_CUSTOM_FIELD_NAMES.dateTimePicker,
@@ -1080,7 +1090,10 @@ export class QuotationsPage extends BasePage {
     await this.assertQuotationCustomFieldOnDetailByLabel('Number', String(cf.number));
     await this.assertQuotationCustomFieldOnDetailByLabel('URL Field', cf.urlField);
     await this.assertQuotationCustomFieldOnDetailByLabel('Checkbox', cf.checkbox ? 'Yes' : 'No');
-    await this.assertQuotationCustomFieldOnDetailByLabel('Date', this.formatCustomFieldDetailDate(cf.date));
+    await this.assertQuotationCustomFieldOnDetailByLabel(
+      'Date',
+      this.formatCustomFieldDetailDate(cf.date)
+    );
     await this.assertQuotationCustomFieldOnDetailByLabel(
       'Date Time Picker',
       this.formatCustomFieldDetailDateTime(cf.dateTimePicker)
@@ -1106,7 +1119,10 @@ export class QuotationsPage extends BasePage {
       try {
         await this.ownerControl().click({ timeout: config.timeouts.expect });
         await this.ownerInput().fill(searchTerm);
-        const ownerOption = this.page.locator('.is-invalid__option').filter({ hasText: ownerName }).first();
+        const ownerOption = this.page
+          .locator('.is-invalid__option')
+          .filter({ hasText: ownerName })
+          .first();
         await ownerOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
         await ownerOption.click({ timeout: config.timeouts.expect });
         await this.page
@@ -1136,7 +1152,9 @@ export class QuotationsPage extends BasePage {
           .catch(() => {});
       }
     }
-    throw new Error(`fillOwner: failed to set owner to "${ownerName}" after ${maxAttempts} attempts — ${String(lastError)}`);
+    throw new Error(
+      `fillOwner: failed to set owner to "${ownerName}" after ${maxAttempts} attempts — ${String(lastError)}`
+    );
   }
 
   async fillAssociatedCompany(companyName: string): Promise<void> {
@@ -1317,7 +1335,11 @@ export class QuotationsPage extends BasePage {
   private classifyInaccessibleEntityError(
     status: number,
     body: QuotationSaveErrorBody
-  ): { isInaccessibleEntityError: boolean; entity: 'contact' | 'company' | null; rawMessage: string } {
+  ): {
+    isInaccessibleEntityError: boolean;
+    entity: 'contact' | 'company' | null;
+    rawMessage: string;
+  } {
     const message: string =
       body?.message || body?.errors?.[0]?.message || body?.validationErrors?.[0]?.message || '';
     const errorCode: string | undefined = body?.errorCode;
@@ -1328,7 +1350,11 @@ export class QuotationsPage extends BasePage {
       : /Invalid contact/i.test(message)
         ? 'contact'
         : null;
-    return { isInaccessibleEntityError: isKnownCode || isKnownMessage, entity, rawMessage: message };
+    return {
+      isInaccessibleEntityError: isKnownCode || isKnownMessage,
+      entity,
+      rawMessage: message,
+    };
   }
 
   // WHY: A deal auto-populates its associated Contact and Company onto the
@@ -1393,8 +1419,7 @@ export class QuotationsPage extends BasePage {
           ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
         'saveQuotationHandlingInaccessibleEntities: save POST/PATCH/PUT',
         20000
-      )
-        .catch(() => null);
+      ).catch(() => null);
       await this.modalSaveButton().click();
       const response = await responsePromise;
 
@@ -1417,7 +1442,8 @@ export class QuotationsPage extends BasePage {
           .isVisible()
           .catch(() => false);
         const url = this.page.url();
-        const onListOrDetail = url.includes('/quotations/list') || url.includes('/quotations/details/');
+        const onListOrDetail =
+          url.includes('/quotations/list') || url.includes('/quotations/details/');
         if (success || onListOrDetail) {
           logger.warn('Save response not captured, but page state confirms success');
           return { succeeded: true, removedEntities, lastErrorMessage };
@@ -1472,10 +1498,8 @@ export class QuotationsPage extends BasePage {
         );
       }
 
-      const { isInaccessibleEntityError, entity, rawMessage } = this.classifyInaccessibleEntityError(
-        response.status(),
-        body
-      );
+      const { isInaccessibleEntityError, entity, rawMessage } =
+        this.classifyInaccessibleEntityError(response.status(), body);
       lastErrorMessage = rawMessage;
 
       if (!isInaccessibleEntityError) {
@@ -1579,7 +1603,9 @@ export class QuotationsPage extends BasePage {
 
     if (changes.summary !== undefined) {
       // WHY: Summary may be disabled in edit mode on some envs — skip if not editable
-      const summaryEnabled = await this.summaryInput().isEnabled().catch(() => false);
+      const summaryEnabled = await this.summaryInput()
+        .isEnabled()
+        .catch(() => false);
       if (summaryEnabled) {
         await this.fill(this.summaryInput(), changes.summary, 'Summary (edit)');
       } else {
@@ -1721,6 +1747,22 @@ export class QuotationsPage extends BasePage {
     const text = await this.errorToast().innerText();
     logger.warn(`Error toast appeared: ${text}`);
     return true;
+  }
+
+  // WHY: confirmed live (2026-08-22) — a caller retrying a save after
+  // clearing an inaccessible entity can still have the PREVIOUS attempt's
+  // error toast visible in the DOM when it next calls a strict
+  // save-and-verify path (e.g. saveQuotation()'s own assertNoFormErrors()
+  // check), which has no way to distinguish a stale, not-yet-faded toast
+  // from a genuinely new one — a real, deterministically-reproduced false
+  // failure this method fixes at the source, not just papers over. Bounded,
+  // condition-based (rule 2): waitFor('hidden') resolves immediately if no
+  // toast is present at all, so this is always safe to call regardless of
+  // whether a toast actually exists.
+  async waitForErrorToastToClear(): Promise<void> {
+    await this.errorToast()
+      .waitFor({ state: 'hidden', timeout: 5000 })
+      .catch(() => {});
   }
 
   async assertDetailPageFields(data: QuotationData): Promise<void> {
@@ -1872,7 +1914,9 @@ export class QuotationsPage extends BasePage {
         logger.warn('Edit modal found open — clicking close button to dismiss');
         // WHY: Modal has data-keyboard="false" and data-backdrop="static"
         // so Escape key and backdrop click don't work — must click close button
-        const closeBtn = this.page.locator('#editEntityModal .close, #editEntityModal [data-dismiss="modal"]').first();
+        const closeBtn = this.page
+          .locator('#editEntityModal .close, #editEntityModal [data-dismiss="modal"]')
+          .first();
         const closeBtnVisible = await closeBtn.isVisible({ timeout: 2000 }).catch(() => false);
         if (closeBtnVisible) {
           await closeBtn.click();
