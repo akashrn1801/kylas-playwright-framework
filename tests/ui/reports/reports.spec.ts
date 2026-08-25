@@ -906,8 +906,23 @@ test.describe('Reports', () => {
     const reportsPage = new ReportsPage(adminPage);
     const leadsPage = new LeadsPage(adminPage);
 
+    // WHY a uniquely-tagged Last Name, filtered on below via
+    // verifyRunCountForEntity()'s `filters` param: confirmed real
+    // (.claude/known-issues.md, Sandbox Build #147 investigation, revised
+    // 2026-08-25) — this report's own Custom Date Range is day-granularity
+    // only (a hard app UI limitation), padded ±1 day around this lead's
+    // creation moment. Under a real concurrent, multi-hour, `--workers=2`
+    // full-suite run, that ~2-day window is shared with every OTHER Lead any
+    // other test creates in the same run — a before/after total COMPARISON
+    // over that shared window is not a safe assertion on its own, since an
+    // unrelated concurrent Lead creation between the two reads can mask or
+    // exceed the -1 signal from this one deletion. An exact-match filter on
+    // a value nothing else in the suite will ever coincidentally share scopes
+    // the report down to just this one entity, making the comparison correct
+    // by construction rather than tolerant-by-retry.
+    const uniqueLastName = `R36-delete-check-${Date.now()}`;
     const windowStart = new Date();
-    const leadData = generateLeadData();
+    const leadData = generateLeadData({ lastName: uniqueLastName });
     await leadsPage.goToLeadsList();
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
@@ -916,15 +931,23 @@ test.describe('Reports', () => {
     const { reportId, reportTotal: beforeTotal } = await reportsPage.verifyRunCountForEntity(
       'Lead',
       windowStart,
-      windowEnd
+      windowEnd,
+      'admin',
+      [{ field: 'Last Name', operator: 'Equals', value: uniqueLastName }]
     );
     expect(beforeTotal).toBeGreaterThan(0);
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    await reportsPage.goToReportDetails(reportId);
-    const afterTotal = await reportsPage.getReportTotalFromHeader();
+    // WHY waitForReportTotalBelow(), not a single re-read: a small,
+    // defense-in-depth bounded retry (re-navigate, never sleep) for a
+    // separate, not-yet-confirmed possibility — a brief backend
+    // indexing/propagation lag between the completed deletion and the
+    // report engine's own next read — on top of, not instead of, the real
+    // fix above (the filter is what makes this comparison trustworthy at
+    // all under concurrent load in the first place).
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
     expect(
       afterTotal,
       'Report total should reflect the deleted lead no longer counting, without erroring or showing stale data'

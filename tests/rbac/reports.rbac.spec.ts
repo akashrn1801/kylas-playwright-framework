@@ -713,8 +713,14 @@ test.describe('Reports RBAC', () => {
     const reportsPage = new ReportsPage(restrictedPage);
     const leadsPage = new LeadsPage(restrictedPage);
 
+    // WHY a uniquely-tagged Last Name + filtered report: shares the exact
+    // root cause and fix as reports.spec.ts's R36 — see that test's own WHY
+    // comment and .claude/known-issues.md's Sandbox Build #147 investigation
+    // (revised 2026-08-25) for the full evidence. Not independently
+    // re-investigated as a separate root cause since it's byte-identical.
+    const uniqueLastName = `R64-delete-check-${Date.now()}`;
     const windowStart = new Date();
-    const leadData = generateLeadData();
+    const leadData = generateLeadData({ lastName: uniqueLastName });
     await leadsPage.goToLeadsList();
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
@@ -724,15 +730,15 @@ test.describe('Reports RBAC', () => {
       'Lead',
       windowStart,
       windowEnd,
-      'restricted'
+      'restricted',
+      [{ field: 'Last Name', operator: 'Equals', value: uniqueLastName }]
     );
     expect(beforeTotal).toBeGreaterThan(0);
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    await reportsPage.goToReportDetails(reportId);
-    const afterTotal = await reportsPage.getReportTotalFromHeader();
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
     expect(afterTotal).toBeLessThan(beforeTotal);
     logger.success('R64 passed');
   });

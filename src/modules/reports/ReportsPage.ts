@@ -9,6 +9,7 @@ import {
   ReportEntityType,
   ChartType,
   DateRangeOption,
+  ReportFilter,
   ReportFilterOperator,
   REPORT_OWNER_DIMENSION_BY_ENTITY,
   REPORT_COUNT_METRIC_BY_ENTITY,
@@ -1367,10 +1368,33 @@ export class ReportsPage extends BasePage {
   // parentheses ("Number of Leads (1023)") — the same "empty title, real
   // content in a data attribute" pattern already documented elsewhere in
   // this codebase for other modules' icons.
+  // WHY this races the header metric against detailsNoDataMessage(), rather
+  // than only ever waiting on the metric: found via a real live failure
+  // (2026-08-25, R36/R64 fix verification) — confirmed via this file's own
+  // pre-existing evidence (completeSaveAs()'s WHY comment above, and
+  // detailsNoDataMessage()'s own WHY comment, both 2026-08-21) that
+  // `.report__header .metric-name` does NOT render at all when a report's
+  // filter/dimension/metric combination matches zero real records — the app
+  // instead renders "Oops, report cannot be generated for the data being
+  // requested." Before this fix, a genuinely-zero report could only ever
+  // produce a hard 10s TimeoutError here (confirmed live), never a parsed
+  // `0` — harmless for the 14+ existing callers whose report windows are
+  // broad enough to almost never legitimately hit zero, but a real gap for
+  // any narrowly-filtered report (e.g. verifyRunCountForEntity()'s optional
+  // `filters` param, added the same session specifically so a report can be
+  // scoped to one uniquely-tagged entity) where hitting exactly zero after a
+  // deletion is the CORRECT, expected outcome, not an error.
   async getReportTotalFromHeader(): Promise<number> {
     return this.withSessionExpiryRecovery(async () => {
       const metricName = this.reportHeaderMetricName();
-      await metricName.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      const noDataMessage = this.detailsNoDataMessage();
+      const isZero = await Promise.race([
+        metricName.waitFor({ state: 'visible', timeout: config.timeouts.expect }).then(() => false),
+        noDataMessage.waitFor({ state: 'visible', timeout: config.timeouts.expect }).then(() => true),
+      ]);
+      if (isZero) {
+        return 0;
+      }
       const title = await metricName.getAttribute('data-original-title');
       const match = title?.match(/\((\d+)\)/);
       if (!match) {
@@ -1378,6 +1402,37 @@ export class ReportsPage extends BasePage {
       }
       return parseInt(match[1], 10);
     });
+  }
+
+  // WHY this exists at all, and why it re-navigates instead of sleeping:
+  // added 2026-08-25 for R36/R64 (see verifyRunCountForEntity()'s own WHY
+  // comment on its `filters` param for the confirmed root cause of why
+  // these two tests were flaky — a shared, contamination-prone report
+  // window under concurrent CI load, now fixed at the source by scoping the
+  // report to one uniquely-tagged entity via an exact-match filter). This
+  // retry is a SEPARATE, defense-in-depth layer on top of that real fix —
+  // for a distinct, not-yet-confirmed-or-ruled-out possibility (a brief
+  // backend indexing/propagation lag between a committed entity deletion
+  // and the report engine's own next read reflecting it), mirroring the
+  // exact same bounded, re-navigate-don't-sleep idiom already proven for
+  // this exact report engine's OTHER retry loop (verifyRunCountForEntity's
+  // own mismatch-retry above, and searchReportsListUntilFound() below) —
+  // never introduced as a substitute for the filter-based fix, since with
+  // the report now scoped to a single entity, a genuine miss here would
+  // mean the report never reflects a real deletion at all, not benign noise.
+  async waitForReportTotalBelow(reportId: string, priorTotal: number): Promise<number> {
+    const { retries } = this.retryConfig;
+    await this.goToReportDetails(reportId);
+    let total = await this.getReportTotalFromHeader();
+    for (let attempt = 1; attempt < retries && total >= priorTotal; attempt++) {
+      logger.info(
+        `waitForReportTotalBelow: total (${total}) not yet below prior (${priorTotal}) on attempt ` +
+          `${attempt}/${retries} — re-navigating and re-checking`
+      );
+      await this.goToReportDetails(reportId);
+      total = await this.getReportTotalFromHeader();
+    }
+    return total;
   }
 
   async assertMetricTotal(expectedTotal: number): Promise<void> {
@@ -1732,11 +1787,106 @@ export class ReportsPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
+  // WHY this exists, and why it retries ONLY this one exact signature:
+  // confirmed live 2026-08-25 (see APPLICATION_BUGS.md's dedicated entry and
+  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
+  // `POST /v3/reports` for a newly-created Meeting report deterministically
+  // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
+  // errorDetails always null), while an immediate retry of the identical,
+  // unmodified request succeeds cleanly (201). Confirmed backend-side, not a
+  // client race: nothing about the request changes between the two
+  // attempts, and 5 independent successful report IDs across 5 independent
+  // attempts came back perfectly consecutive — no ID gap — meaning the
+  // failed attempt leaves no partial/orphaned report behind to clean up.
+  // Cross-entity-type reproduction found this is NOT universal — Lead/Deal/
+  // Contact/Call log did not reproduce it in the same live check — so this
+  // retry is intentionally narrow: it fires only for this exact status+code
+  // pair, never as a blanket "retry any failed save," so a genuinely
+  // different backend/validation error still surfaces immediately, unmasked.
+  private readonly REPORT_CREATE_TRANSIENT_ERROR_CODE = '01403004';
+
+  // WHY a separate single-attempt helper, called once for the primary
+  // attempt and (conditionally) once more for the fallback below, rather
+  // than a generic retry loop: makes it structurally impossible to confuse
+  // "the normal save path" with "the workaround" — the exact same code runs
+  // both times by construction (no special-casing hidden inside a loop
+  // iteration), and the caller below reads as plain, sequential control
+  // flow: try once, and only if that one exact confirmed signature comes
+  // back, fall back to trying again.
+  private async attemptSaveOnceAndClassify(): Promise<'done' | 'confirmedTransientBackendBug'> {
+    // WHY armed BEFORE the click, matching this codebase's own established
+    // "ID-capture set up before Save" convention (.claude/reference-
+    // patterns.md §7): the response can land before the click's own
+    // promise resolves.
+    const responsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.request().method() === 'POST' && /\/v3\/reports\/?(?:\?.*)?$/.test(new URL(res.url()).pathname),
+        { timeout: config.timeouts.navigation }
+      )
+      .catch(() => null);
+    await this.clickSaveButton();
+    const response = await responsePromise;
+    if (!response || response.ok()) {
+      // Either a real success, or no matching response was captured at all
+      // (e.g. a client-side validation error that never reached the
+      // network) — either way, this isn't the confirmed backend signature,
+      // so let the caller's own waitForReportDetailPage()/form-error checks
+      // be the real signal, unmodified.
+      return 'done';
+    }
+    const body = await response.json().catch(() => null);
+    const isConfirmedTransientBackendBug =
+      response.status() === 500 && body?.code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE;
+    return isConfirmedTransientBackendBug ? 'confirmedTransientBackendBug' : 'done';
+  }
+
+  // WHY this exists, and why the retry below is a FALLBACK, never the
+  // default path: confirmed live 2026-08-25 (see APPLICATION_BUGS.md #4 and
+  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
+  // `POST /v3/reports` for a newly-created Meeting report deterministically
+  // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
+  // errorDetails always null), while an immediate retry of the identical,
+  // unmodified request succeeds cleanly (201). Confirmed backend-side, not a
+  // client race: nothing about the request changes between the two
+  // attempts, and 5 independent successful report IDs across 5 independent
+  // attempts came back perfectly consecutive — no ID gap — meaning the
+  // failed attempt leaves no partial/orphaned report behind to clean up.
+  // Cross-entity-type reproduction found this is NOT universal — Lead/Deal/
+  // Contact/Call log did not reproduce it in the same live check — so the
+  // fallback below fires only for this exact status+code pair, never as a
+  // blanket "retry any failed save," so a genuinely different backend/
+  // validation error still surfaces immediately, unmasked.
+  private async clickSaveButtonForCreateWithBackendRetry(): Promise<void> {
+    // PRIMARY ATTEMPT — a normal, unmodified Save click. No special-casing,
+    // no workaround logic: this is exactly what a plain `clickSaveButton()`
+    // call would do.
+    const primaryOutcome = await this.attemptSaveOnceAndClassify();
+    if (primaryOutcome !== 'confirmedTransientBackendBug') {
+      return;
+    }
+
+    // FALLBACK — workaround for a confirmed Kylas backend bug (HTTP 500,
+    // code 01403004), see APPLICATION_BUGS.md #4. Reached ONLY because the
+    // primary attempt above matched this exact confirmed signature. Retried
+    // exactly once — whatever happens on this attempt is final; no further
+    // retries, and any different failure here still propagates normally via
+    // the caller's own checks.
+    logger.warn(
+      `createReport: POST /v3/reports returned 500/${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} ` +
+        '(confirmed Kylas backend bug — see APPLICATION_BUGS.md) on the primary attempt — ' +
+        'retrying Save once as a fallback'
+    );
+    await this.attemptSaveOnceAndClassify();
+  }
+
   async createReport(data: ReportData): Promise<{ id: string; name: string }> {
     logger.info(`Creating report: ${data.name}`);
     await this.goToCreateReport();
     await this.fillReportForm(data);
-    await this.clickSaveButton();
+    await this.clickSaveButtonForCreateWithBackendRetry();
     await this.waitForReportDetailPage();
     const id = this.captureReportIdFromUrl();
     if (!id) {
@@ -1787,11 +1937,33 @@ export class ReportsPage extends BasePage {
   // same "give the backend a moment" effect as a sleep would, without a
   // synthetic wait, and is arguably a MORE correct check (it re-proves the
   // report engine's own read path, not just the passage of time).
+  // WHY the optional `filters` param, added 2026-08-25 (R36/R64 flakiness
+  // investigation — see .claude/known-issues.md's "Sandbox Build #147
+  // investigation" section for the full root-cause writeup): every existing
+  // caller of this method (14 across reports.spec.ts/reports.rbac.spec.ts)
+  // only ever needs "report total >= a tight-window API ground truth,"
+  // which already tolerates the report's own coarse ±1-day date window
+  // picking up OTHER concurrently-created entities — that tolerance is
+  // exactly why those callers were never flaky. R36/R64 are structurally
+  // different: they compare a BEFORE/AFTER snapshot of that same coarse,
+  // shared window, and under real concurrent CI load (`--workers=2`, a
+  // multi-hour full-suite run), other tests can legitimately create MORE
+  // entities inside that same ~2-day window between the before- and
+  // after-read, masking or exceeding the -1 signal from a single deletion —
+  // a genuine test-isolation gap, not a reporting-engine bug. Passing an
+  // exact-match filter (mirroring R35's own already-proven `filters` usage
+  // immediately above in reports.spec.ts) scopes the underlying REPORT
+  // itself to just the one entity under test, making the before/after
+  // comparison immune to concurrent noise by construction — not tolerated
+  // via a wider retry budget. Defaults to `undefined` (no filter, current
+  // `generateReportData()` default) — every existing caller's behavior is
+  // byte-for-byte unchanged.
   async verifyRunCountForEntity(
     entityType: ReportEntityType,
     windowStart: Date,
     windowEnd: Date,
-    role: 'admin' | 'restricted' = 'admin'
+    role: 'admin' | 'restricted' = 'admin',
+    filters?: ReportFilter[]
   ): Promise<RunCountVerificationResult> {
     const dimension = REPORT_OWNER_DIMENSION_BY_ENTITY[entityType];
     const metric = REPORT_COUNT_METRIC_BY_ENTITY[entityType];
@@ -1839,6 +2011,7 @@ export class ReportsPage extends BasePage {
       dateFilter,
       dateRangeOption: 'Custom',
       customDateRange: { start: paddedStart, end: paddedEnd },
+      filters,
     });
 
     const { id } = await this.createReport(data);
