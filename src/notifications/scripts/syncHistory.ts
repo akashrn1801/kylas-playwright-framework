@@ -74,49 +74,123 @@ function resolveGitRemoteUrl(): string {
 }
 const MAX_PUSH_RETRIES = 3;
 
-// WHY: confirmed real via sandbox.yml run 32748451285 (2026-08-24) — see the
-// dated 2026-08-25 entry in .claude/known-issues.md's "CI reporting-history
-// ledger" section for the full captured log and root-cause writeup. A push
-// REJECTION on HISTORY_BRANCH_NAME (below) proves the branch already exists
-// on GitHub's primary (a competing run's push landed first) — but the very
-// next `git fetch` of that same ref, fired with zero delay, can still fail
-// with "couldn't find remote ref" if it lands on a GitHub backend replica
-// that hasn't yet caught up with the ref JUST created moments earlier. This
-// is a narrow, transient replication-lag window specific to the instant a
-// ref is first created under concurrent competition — NOT the same as the
-// ref genuinely, permanently not existing (that case is handled separately,
-// by the initial cloneAttempt/orphan-branch-creation path above, which must
-// stay untouched by this).
+// WHY: confirmed real via TWO separate CI occurrences now — sandbox.yml runs
+// 32748451285 (2026-08-24) and 32822096101 (2026-08-25) — see the dated
+// entries in .claude/known-issues.md's "CI reporting-history ledger" section
+// for both. A push REJECTION on HISTORY_BRANCH_NAME (below) proves the
+// branch already exists on GitHub's primary (a competing writer's push
+// landed first) — but the very next `git fetch` of that same ref, fired
+// with zero delay, can still fail with "couldn't find remote ref" if it
+// lands on a GitHub backend replica that hasn't yet caught up with the ref
+// JUST created moments earlier. This is a narrow, transient replication-lag
+// window specific to the instant a ref is first created under concurrent
+// competition — NOT the same as the ref genuinely, permanently not existing
+// (that case is handled separately, by the initial cloneAttempt/orphan-
+// branch-creation path above, which must stay untouched by this).
+//
+// WHY elapsed-time-bounded exponential backoff, not a fixed short list of
+// delays: the first version of this fix used 3 fixed delays
+// (300/800/1500ms, ~2.6s total) — confirmed INSUFFICIENT by the second
+// occurrence above, which exhausted that exact budget and failed again with
+// the identical signature. GitHub's replication lag is not a fixed,
+// predictable duration, and there is no public API to query it directly —
+// confirmed by checking: GitHub's REST "get a reference" endpoint
+// (`GET /repos/{owner}/{repo}/git/refs/{ref}`) exposes exactly the same
+// exists-or-not information `git fetch` already gives us, no propagation/
+// consistency metadata; the only replication-status introspection GitHub
+// exposes anywhere is `ghe-repl-status`, for GitHub ENTERPRISE SERVER's own
+// self-hosted HA replica nodes — irrelevant to github.com, which is what
+// this repo uses. Blind bounded retry is therefore the correct approach in
+// principle (nothing better is available), but "bounded" must mean a real
+// ELAPSED-TIME ceiling, not a specific guessed delay count — any fixed
+// number of fixed delays can fail again the moment a real lag happens to
+// exceed it, exactly as just proven twice.
 const MISSING_REMOTE_REF_PATTERN = /couldn't find remote ref/i;
-const FETCH_RETRY_BACKOFF_MS = [300, 800, 1500];
+// WHY 45s specifically, not a guess: this codebase already has two
+// established conventions for "how long to wait on a cross-process/cross-
+// node eventual-consistency condition before giving up" — AuthManager.
+// withFileLock()'s 30000ms-per-cycle stale-lock-detection window (the
+// closest analogous case: a cross-process race with no way to directly
+// query the other side's state), and config.timeouts.navigation's 60000ms
+// default (this codebase's standard budget for a network-dependent wait
+// that deserves generous headroom). 45s sits between the two established
+// numbers rather than inventing a third, unrelated one. Being generous here
+// costs nothing real: this whole sync step runs AFTER the test suite has
+// already finished and reported its own pass/fail, wrapped in a "never fail
+// the build" try/catch (see main()'s own catch block below) — a slow-but-
+// eventually-successful history sync has zero effect on real test feedback.
+const FETCH_RETRY_CEILING_MS = 45000;
+const FETCH_RETRY_INITIAL_DELAY_MS = 300;
+// WHY capped per-attempt instead of letting the doubling grow unboundedly:
+// keeps retries (and their log lines) frequent enough to stay observable in
+// a live CI log — an eventual multi-minute single sleep this deep into a
+// background step would look indistinguishable from a genuine hang to
+// anyone watching the log live, and finer-grained retries cost nothing
+// extra against the 45s ceiling (worst case ~12 attempts, not excessive).
+const FETCH_RETRY_MAX_DELAY_MS = 5000;
+const FETCH_RETRY_BACKOFF_MULTIPLIER = 2;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// WHY: a bounded retry-with-backoff on the fetch itself, not a blind sleep
-// before it — this only ever activates for the one specific, transient error
-// signature confirmed above; any other fetch failure (auth, network, a
-// genuinely absent branch) fails fast on the first attempt, unchanged from
-// before. Retrying via the outer MAX_PUSH_RETRIES loop alone does not fix
-// this, since that loop introduces no delay between attempts — all of its
-// attempts could fire within milliseconds of each other, well inside the
-// replication-lag window this is working around.
+// WHY real exponential backoff (each delay roughly doubling, capped per
+// attempt) bounded by ELAPSED TIME rather than a fixed attempt count: a
+// fixed count paired with fixed delays (the original 300/800/1500ms
+// version) is really just a disguised fixed ceiling (~2.6s total) — exactly
+// what was already proven insufficient. Bounding by elapsed time instead
+// means the number of attempts falls out of the time budget rather than
+// being chosen in advance: a short-lived lag still resolves within the
+// first fast retry or two with no wasted time, while a longer one keeps
+// getting a real chance — for however many attempts that takes — right up
+// to the 45s ceiling, adapting to whatever the actual lag turns out to be
+// instead of a number guessed in advance. This only ever activates for the
+// one specific, transient error signature confirmed above; any other fetch
+// failure (auth, network, a genuinely absent branch) fails fast on the
+// first attempt, unchanged from before. Retrying via the outer
+// MAX_PUSH_RETRIES loop alone does not fix this, since that loop introduces
+// no delay between attempts — all of its attempts could fire within
+// milliseconds of each other, well inside the replication-lag window this
+// is working around.
 async function fetchHistoryBranchWithBackoff(repoDir: string, branch: string): Promise<void> {
-  for (let attempt = 1; attempt <= FETCH_RETRY_BACKOFF_MS.length + 1; attempt++) {
+  const startedAt = Date.now();
+  let delayMs = FETCH_RETRY_INITIAL_DELAY_MS;
+  let attempt = 0;
+
+  // WHY `while (true)` is still safe here (never an indefinite hang): the
+  // elapsed-time check below is a hard ceiling checked on every iteration
+  // before ever sleeping again — this loop always either returns (fetch
+  // succeeded) or throws (ceiling hit, or a genuinely different failure),
+  // both of which are reachable in bounded real time.
+  while (true) {
+    attempt++;
     const result = shSafe(`git fetch origin ${branch}`, repoDir);
     if (result.ok) return;
 
-    const delayMs = FETCH_RETRY_BACKOFF_MS[attempt - 1];
-    if (!MISSING_REMOTE_REF_PATTERN.test(result.output) || delayMs === undefined) {
+    if (!MISSING_REMOTE_REF_PATTERN.test(result.output)) {
       throw new Error(`git fetch origin ${branch} failed: ${result.output}`);
     }
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= FETCH_RETRY_CEILING_MS) {
+      // WHY this still throws rather than looping forever: preserves the
+      // exact same "never fail the build" contract as before — this throw
+      // propagates to main()'s own outer try/catch, which logs and
+      // continues without history for this run. The ceiling is a hard cap,
+      // not a soft suggestion.
+      throw new Error(
+        `git fetch origin ${branch} failed after ${attempt} attempt(s) over ${elapsedMs}ms ` +
+          `(ceiling ${FETCH_RETRY_CEILING_MS}ms) — still "couldn't find remote ref": ${result.output}`
+      );
+    }
+
     console.log(
       `[syncHistory] Fetch of ${branch} returned "couldn't find remote ref" right after a push ` +
         `rejection — likely GitHub replication lag on a just-created ref, not a real absence. ` +
-        `Retrying in ${delayMs}ms (attempt ${attempt}/${FETCH_RETRY_BACKOFF_MS.length + 1})`
+        `Retrying in ${delayMs}ms (attempt ${attempt}, ${elapsedMs}ms elapsed of ${FETCH_RETRY_CEILING_MS}ms ceiling)`
     );
     await delay(delayMs);
+    delayMs = Math.min(delayMs * FETCH_RETRY_BACKOFF_MULTIPLIER, FETCH_RETRY_MAX_DELAY_MS);
   }
 }
 
