@@ -25,8 +25,12 @@ jobs:
   test-staging:
     name: Run Staging Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
       - uses: actions/setup-node@v5
         with:
           node-version: 24
