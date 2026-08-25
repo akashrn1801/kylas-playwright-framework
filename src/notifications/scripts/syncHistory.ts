@@ -74,6 +74,52 @@ function resolveGitRemoteUrl(): string {
 }
 const MAX_PUSH_RETRIES = 3;
 
+// WHY: confirmed real via sandbox.yml run 32748451285 (2026-08-24) — see the
+// dated 2026-08-25 entry in .claude/known-issues.md's "CI reporting-history
+// ledger" section for the full captured log and root-cause writeup. A push
+// REJECTION on HISTORY_BRANCH_NAME (below) proves the branch already exists
+// on GitHub's primary (a competing run's push landed first) — but the very
+// next `git fetch` of that same ref, fired with zero delay, can still fail
+// with "couldn't find remote ref" if it lands on a GitHub backend replica
+// that hasn't yet caught up with the ref JUST created moments earlier. This
+// is a narrow, transient replication-lag window specific to the instant a
+// ref is first created under concurrent competition — NOT the same as the
+// ref genuinely, permanently not existing (that case is handled separately,
+// by the initial cloneAttempt/orphan-branch-creation path above, which must
+// stay untouched by this).
+const MISSING_REMOTE_REF_PATTERN = /couldn't find remote ref/i;
+const FETCH_RETRY_BACKOFF_MS = [300, 800, 1500];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// WHY: a bounded retry-with-backoff on the fetch itself, not a blind sleep
+// before it — this only ever activates for the one specific, transient error
+// signature confirmed above; any other fetch failure (auth, network, a
+// genuinely absent branch) fails fast on the first attempt, unchanged from
+// before. Retrying via the outer MAX_PUSH_RETRIES loop alone does not fix
+// this, since that loop introduces no delay between attempts — all of its
+// attempts could fire within milliseconds of each other, well inside the
+// replication-lag window this is working around.
+async function fetchHistoryBranchWithBackoff(repoDir: string, branch: string): Promise<void> {
+  for (let attempt = 1; attempt <= FETCH_RETRY_BACKOFF_MS.length + 1; attempt++) {
+    const result = shSafe(`git fetch origin ${branch}`, repoDir);
+    if (result.ok) return;
+
+    const delayMs = FETCH_RETRY_BACKOFF_MS[attempt - 1];
+    if (!MISSING_REMOTE_REF_PATTERN.test(result.output) || delayMs === undefined) {
+      throw new Error(`git fetch origin ${branch} failed: ${result.output}`);
+    }
+    console.log(
+      `[syncHistory] Fetch of ${branch} returned "couldn't find remote ref" right after a push ` +
+        `rejection — likely GitHub replication lag on a just-created ref, not a real absence. ` +
+        `Retrying in ${delayMs}ms (attempt ${attempt}/${FETCH_RETRY_BACKOFF_MS.length + 1})`
+    );
+    await delay(delayMs);
+  }
+}
+
 // WHY: added 2026-07-14 — this file had its own, separate, older branch-name
 // derivation that never received the local-git fallback fix applied to the
 // email-facing code (notify.ts's resolveNotificationInput()). A bare local
@@ -280,7 +326,7 @@ async function main() {
     for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
       if (attempt > 1) {
         console.log(`[syncHistory] Attempt ${attempt}/${MAX_PUSH_RETRIES} — fetching latest and recomputing fresh`);
-        sh(`git fetch origin ${HISTORY_BRANCH_NAME}`, repoDir);
+        await fetchHistoryBranchWithBackoff(repoDir, HISTORY_BRANCH_NAME);
         sh(`git reset --hard origin/${HISTORY_BRANCH_NAME}`, repoDir);
       }
 
