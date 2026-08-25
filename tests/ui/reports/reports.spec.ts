@@ -27,9 +27,10 @@ import { logger } from '../../../src/utils/logger';
 
 // WHY label prefix 'R' — the first label assigned to this brand-new module,
 // per .claude/architecture.md §13's per-module letter-prefix convention. UI
-// (R1-R37) and RBAC (R38-R64) share one continuous numbering space from the
-// start, avoiding the renumbering collisions that convention's own history
-// documents for other modules that started each file at 1 independently.
+// (R1-R37, plus R65 added 2026-08-25) and RBAC (R38-R64) share one
+// continuous numbering space from the start, avoiding the renumbering
+// collisions that convention's own history documents for other modules that
+// started each file at 1 independently.
 test.describe('Reports', () => {
   // WHY this creation-helper map lives at module scope: shared by every one
   // of the 8 per-entity-type run-count tests below (R4-R11), each needing a
@@ -953,6 +954,53 @@ test.describe('Reports', () => {
       'Report total should reflect the deleted lead no longer counting, without erroring or showing stale data'
     ).toBeLessThan(beforeTotal);
     logger.success('R36 passed');
+  });
+
+  // WHY this test exists: R36 above already proves the delete-then-recount
+  // scenario is correct, but it does so via the `filters` option — it never
+  // actually exercises `narrowWindow`/`includeTime`, the OTHER option added
+  // 2026-08-25 for the same class of test (`.claude/known-issues.md`'s "Dual
+  // date-window strategy" entry). That option shipped verified only by
+  // `tsc`/`eslint` — never run against the real app. This test closes that
+  // gap: same delete-then-recount shape as R36, but deliberately WITHOUT a
+  // `filters` value, so `narrowWindow: true` alone (not filters) is what has
+  // to isolate the before/after comparison from any other concurrently
+  // fresh data — the only way to prove the rc-time-picker fill
+  // (`fillTimeInPicker()`) and the 5-minute-padded window actually work
+  // end-to-end against the live app, not just compile.
+  test('@regression admin should verify report count updates correctly using the narrow time-scoped window (no filters)', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const reportsPage = new ReportsPage(adminPage);
+    const leadsPage = new LeadsPage(adminPage);
+
+    const windowStart = new Date();
+    const leadData = generateLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    const windowEnd = new Date();
+
+    const { reportId, reportTotal: beforeTotal } = await reportsPage.verifyRunCountForEntity(
+      'Lead',
+      windowStart,
+      windowEnd,
+      'admin',
+      undefined,
+      true
+    );
+    expect(beforeTotal).toBeGreaterThan(0);
+
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    await leadsPage.deleteLead();
+
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
+    expect(
+      afterTotal,
+      'Report total should reflect the deleted lead no longer counting, using the narrow window alone (no filters)'
+    ).toBeLessThan(beforeTotal);
+    logger.success('R65 passed');
   });
 
   // WHY this test exists at all: found missing during a final numbering

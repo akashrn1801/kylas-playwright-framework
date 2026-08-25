@@ -166,7 +166,17 @@ export interface ReportData {
   // Date react-dates pickers only exist in the DOM at all once Date Range is
   // switched to 'Custom' (confirmed live — every other Date Range value
   // renders Start/End Date as plain read-only text with no input to fill).
-  customDateRange?: { start: Date; end: Date };
+  // WHY `includeTime` is optional and defaults to false (added 2026-08-25 for
+  // verifyRunCountForEntity()'s narrow-window option — see its own WHY
+  // comment): ReportsPage.fillCustomDateRange() has never filled the
+  // Start/End Date rc-time-picker inputs — every existing caller leaves them
+  // at the app's own default (12:00 am start / 11:59 pm end), which is exactly
+  // why the day-cell-only Custom Date Range has always meant a whole-day (or
+  // padded multi-day) window regardless of how tight `start`/`end` themselves
+  // are. Setting this true is what actually lets a caller get a genuinely
+  // narrow (minutes-wide, not day-wide) UI window — byte-identical behavior
+  // (time inputs never touched) for every caller that omits it.
+  customDateRange?: { start: Date; end: Date; includeTime?: boolean };
 }
 
 // WHY this per-entity map exists at all, rather than always defaulting to

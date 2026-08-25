@@ -189,6 +189,15 @@ export class ReportsPage extends BasePage {
     this.page.locator('input[id$="_input_dateFilter.startDate"]');
   private readonly customEndDateInput = (): Locator =>
     this.page.locator('input[id$="_input_dateFilter.endDate"]');
+  // WHY these exist at all (added 2026-08-25 for the narrow-window option):
+  // confirmed live — the Custom Date Range's Start/End Date each have their
+  // own separate rc-time-picker time input (id suffix `..._time`), sitting
+  // right next to the day-picker input above, identical in shape to the one
+  // already handled for custom fields in BasePage.selectDateTimeCustomField().
+  private readonly customStartTimeInput = (): Locator =>
+    this.page.locator('input[id$="_input_dateFilter.startDate_time"]');
+  private readonly customEndTimeInput = (): Locator =>
+    this.page.locator('input[id$="_input_dateFilter.endDate_time"]');
   private readonly calendarForwardButton = (): Locator =>
     this.page.getByLabel('Move forward to switch to the next month.');
   // WHY added (2026-08-21, found via a real live failure): the forward-only
@@ -918,10 +927,68 @@ export class ReportsPage extends BasePage {
     await dayCell.click();
   }
 
-  async fillCustomDateRange(start: Date, end: Date): Promise<void> {
+  // WHY this exists as its own method rather than reusing
+  // BasePage.selectDateTimeCustomField() (added 2026-08-25 for the
+  // narrow-window option): that method's time-input lookup is built around
+  // the custom-field suffix convention (`customFieldSuffix()`), not Reports'
+  // own `..._input_dateFilter.startDate_time`/`endDate_time` id pattern — a
+  // thin, locator-adapted copy of its already-proven rc-time-picker
+  // column-click sequence, matching this file's own established precedent of
+  // NOT sharing `selectDateInPicker()` across modules for the same reason
+  // (see `.claude/known-issues.md` item 19 — several native date pickers in
+  // this codebase are independently duplicated per module rather than
+  // consolidated).
+  private async fillTimeInPicker(input: Locator, date: Date, description: string): Promise<void> {
+    // WHY force: true — the rc-time-picker input sits behind a clock icon
+    // that can intercept the click at its exact center, same as confirmed
+    // live for the custom-field version this pattern is copied from.
+    await this.click(input, `${description}: open time picker`, true);
+    await this.page.waitForSelector('.rc-time-picker-panel', { timeout: config.timeouts.expect });
+    const hour12 = date.getHours() % 12 === 0 ? 12 : date.getHours() % 12;
+    const hourStr = String(hour12).padStart(2, '0');
+    const minuteStr = String(date.getMinutes()).padStart(2, '0');
+    const amPm = date.getHours() < 12 ? 'am' : 'pm';
+    const columns = this.page.locator('.rc-time-picker-panel:visible .rc-time-picker-panel-select');
+    await columns
+      .nth(0)
+      .locator('li', { hasText: new RegExp(`^${hourStr}$`) })
+      .click();
+    await columns
+      .nth(1)
+      .locator('li', { hasText: new RegExp(`^${minuteStr}$`) })
+      .click();
+    await columns
+      .nth(2)
+      .locator('li', { hasText: new RegExp(`^${amPm}$`, 'i') })
+      .click();
+    await this.page.keyboard.press('Escape');
+    // WHY waiting for the panel to actually hide, not a blind wait: confirmed
+    // live for the identical widget in BasePage.selectDateTimeCustomField() —
+    // rc-time-picker closes and unhides the underlying field when Escape is
+    // pressed, a real DOM-state signal to wait on instead of guessing a
+    // duration.
+    await this.page
+      .waitForSelector('.rc-time-picker-panel', { state: 'hidden', timeout: 3000 })
+      .catch(() => {});
+    logger.success(`${description}: time set to ${hourStr}:${minuteStr} ${amPm}`);
+  }
+
+  // WHY `includeTime` is a plain optional boolean, default false (added
+  // 2026-08-25): byte-identical behavior for every existing caller — none of
+  // which have ever filled the time inputs, all relying on the app's own
+  // default (12:00 am start / 11:59 pm end). Passing true is what
+  // verifyRunCountForEntity()'s new narrow-window option uses to get a
+  // genuinely minutes-wide UI window instead of a whole-day one.
+  async fillCustomDateRange(start: Date, end: Date, includeTime = false): Promise<void> {
     logger.info(`Filling custom date range: ${start.toDateString()} → ${end.toDateString()}`);
     await this.selectDateInPicker(this.customStartDateInput(), start);
+    if (includeTime) {
+      await this.fillTimeInPicker(this.customStartTimeInput(), start, 'Start Date');
+    }
     await this.selectDateInPicker(this.customEndDateInput(), end);
+    if (includeTime) {
+      await this.fillTimeInPicker(this.customEndTimeInput(), end, 'End Date');
+    }
     logger.success('Custom date range filled');
   }
 
@@ -1084,7 +1151,11 @@ export class ReportsPage extends BasePage {
     if (data.dateRangeOption && data.dateRangeOption !== 'Current Month') {
       await this.selectDateRangeOption(data.dateRangeOption);
       if (data.dateRangeOption === 'Custom' && data.customDateRange) {
-        await this.fillCustomDateRange(data.customDateRange.start, data.customDateRange.end);
+        await this.fillCustomDateRange(
+          data.customDateRange.start,
+          data.customDateRange.end,
+          data.customDateRange.includeTime ?? false
+        );
       }
     }
 
@@ -1806,6 +1877,13 @@ export class ReportsPage extends BasePage {
   // different backend/validation error still surfaces immediately, unmasked.
   private readonly REPORT_CREATE_TRANSIENT_ERROR_CODE = '01403004';
 
+  // WHY a class constant, not an inline literal: gives verifyRunCountForEntity()'s
+  // own narrowWindow WHY comment a single named value to point at, and makes
+  // the buffer size a one-line change if a future occurrence shows 5 minutes
+  // isn't enough margin — see that method's own WHY comment for the
+  // reasoning behind "a few minutes, not zero."
+  private readonly NARROW_WINDOW_PADDING_MINUTES = 5;
+
   // WHY a separate single-attempt helper, called once for the primary
   // attempt and (conditionally) once more for the fallback below, rather
   // than a generic retry loop: makes it structurally impossible to confuse
@@ -1958,12 +2036,46 @@ export class ReportsPage extends BasePage {
   // via a wider retry budget. Defaults to `undefined` (no filter, current
   // `generateReportData()` default) — every existing caller's behavior is
   // byte-for-byte unchanged.
+  //
+  // WHY the optional `narrowWindow` param, added 2026-08-25 (dual
+  // date-window strategy, alongside the `filters` param above): the ±1
+  // CALENDAR DAY padding below (kept as the default — see its own WHY
+  // comment) is deliberate and still wanted for tests specifically
+  // exercising the report's own date-range-filtering logic across a wide
+  // window — MORE data in that window is a MORE thorough check of that
+  // logic. Confirmed via grep (18 real call sites across
+  // reports.spec.ts/reports.rbac.spec.ts) that every one of them either
+  // genuinely wants that broad-window coverage, or — for the two before/
+  // after-delete tests, R36/R64 — is already made concurrency-safe via the
+  // `filters` param alone, with no need for a narrower window on top.
+  // But a test needing an EXACT count immune to concurrent contamination
+  // (e.g. a before/after delete comparison) is better served by a genuinely
+  // NARROW window than by a wide one tolerated via a retry budget or a
+  // `filters` exact-match alone — R36/R64 already prove `filters` alone is
+  // sufficient for those two tests, but a future test comparing raw counts
+  // without a uniquely-taggable field to filter on would still be exposed
+  // to the full ±1-day contamination window. `narrowWindow: true` builds the
+  // UI window from the real windowStart/windowEnd (padded by a few minutes,
+  // not zero — real wall-clock time passes between capturing the JS
+  // timestamp and the report engine's own read, and this repo's own
+  // documented environment auth/clock-skew history means a razor-thin
+  // zero-padding window risks a false undercount) instead of ±1 day, AND
+  // fills the Custom Date Range's rc-time-picker inputs (via
+  // `fillCustomDateRange()`'s new `includeTime` option) so the UI window is
+  // actually minutes-wide, not day-wide despite the tighter Date values —
+  // the calendar's own day-granularity meant a tight Date alone was never
+  // enough on its own (see that WHY comment). Defaults to `false` — every
+  // existing caller's behavior, including the exact ±1-day/no-time-fill
+  // path, is byte-for-byte unchanged. Combinable with `filters` for tests
+  // wanting both: a report scoped to one entity AND a minutes-wide window,
+  // rather than either alone.
   async verifyRunCountForEntity(
     entityType: ReportEntityType,
     windowStart: Date,
     windowEnd: Date,
     role: 'admin' | 'restricted' = 'admin',
-    filters?: ReportFilter[]
+    filters?: ReportFilter[],
+    narrowWindow = false
   ): Promise<RunCountVerificationResult> {
     const dimension = REPORT_OWNER_DIMENSION_BY_ENTITY[entityType];
     const metric = REPORT_COUNT_METRIC_BY_ENTITY[entityType];
@@ -1972,24 +2084,40 @@ export class ReportsPage extends BasePage {
     // stays on the tight, exact window: found via a real live failure
     // (2026-08-21) — the Custom Date Range calendar only supports DAY
     // granularity (a day-cell click, per formatDateForCalendarLabel()), with
-    // no time-of-day control this file fills. windowStart/windowEnd are
-    // real timestamps captured seconds apart on the SAME calendar day —
-    // selecting that identical day for both Start and End left the report
-    // with no header at all (a genuine zero-data page, confirmed via the
-    // failure's own timeout on `.report__header .metric-name`), because the
-    // app's own default start-of-day/end-of-day time for an unfilled time
-    // picker excluded the freshly-created entities. Padding by a full day on
-    // each side guarantees the actual creation timestamps fall inside the
-    // UI's window regardless of that default. This does NOT weaken the
-    // check: `apiTotal` is still computed from the exact, unpadded window,
-    // so `reportTotal < apiTotal` (a genuine under-count) is still caught —
+    // no time-of-day control this file fills BY DEFAULT — see the
+    // `narrowWindow` WHY comment above for the option that now fills it.
+    // windowStart/windowEnd are real timestamps captured seconds apart on
+    // the SAME calendar day — selecting that identical day for both Start
+    // and End left the report with no header at all (a genuine zero-data
+    // page, confirmed via the failure's own timeout on
+    // `.report__header .metric-name`), because the app's own default
+    // start-of-day/end-of-day time for an unfilled time picker excluded the
+    // freshly-created entities. Padding by a full day on each side
+    // guarantees the actual creation timestamps fall inside the UI's window
+    // regardless of that default. This does NOT weaken the check: `apiTotal`
+    // is still computed from the exact, unpadded window, so
+    // `reportTotal < apiTotal` (a genuine under-count) is still caught —
     // padding can only ever make the report's own total equal or larger,
     // consistent with this method's own already-accepted "report >= api"
-    // tolerance for benign timing noise.
+    // tolerance for benign timing noise. `narrowWindow` mode below applies
+    // the same "pad slightly wider than the exact API window, never
+    // tighter" discipline, just with minutes instead of a day.
     const paddedStart = new Date(windowStart);
-    paddedStart.setDate(paddedStart.getDate() - 1);
     const paddedEnd = new Date(windowEnd);
-    paddedEnd.setDate(paddedEnd.getDate() + 1);
+    if (narrowWindow) {
+      // WHY 5 minutes, not zero: "a small padding buffer... to account for
+      // clock/timezone rounding," per this feature's own spec — zero-padding
+      // would make the UI window's edges exactly equal to the entity's real
+      // creation moment, with no margin for the seconds of real wall-clock
+      // time this method's own network calls (report creation, navigation,
+      // the report engine's own read) take between capturing
+      // windowStart/windowEnd and the report actually being generated.
+      paddedStart.setMinutes(paddedStart.getMinutes() - this.NARROW_WINDOW_PADDING_MINUTES);
+      paddedEnd.setMinutes(paddedEnd.getMinutes() + this.NARROW_WINDOW_PADDING_MINUTES);
+    } else {
+      paddedStart.setDate(paddedStart.getDate() - 1);
+      paddedEnd.setDate(paddedEnd.getDate() + 1);
+    }
     // WHY the dateFilter value is always resolved from
     // REPORT_CREATED_DATE_FILTER_BY_ENTITY, never a hardcoded 'Created At':
     // confirmed live (2026-08-21) via a real test failure — Call log's Date
@@ -2010,7 +2138,7 @@ export class ReportsPage extends BasePage {
       metric,
       dateFilter,
       dateRangeOption: 'Custom',
-      customDateRange: { start: paddedStart, end: paddedEnd },
+      customDateRange: { start: paddedStart, end: paddedEnd, includeTime: narrowWindow },
       filters,
     });
 

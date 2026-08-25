@@ -271,7 +271,22 @@ async function createRolePage(
     );
     await authManager.clearStorageState(role).catch(() => {});
     AuthManager['lastValidated'].delete(role);
-    await authManager.loginAndSaveState(role);
+    try {
+      await authManager.loginAndSaveState(role);
+    } catch (recoveryError) {
+      // WHY: a transient failure here (e.g. a CDP-level browser.newContext()
+      // Protocol error — confirmed real, sandbox run 32839778416, 2026-08-25,
+      // see known-issues.md) must not burn the remaining retry attempt. Log
+      // and fall through — the next loop iteration's own
+      // getContextForRole()/navigateAndConfirmLoggedIn() below gets a
+      // genuine second try (getContextForRole() has its own "no valid state,
+      // login fresh" fallback) instead of this throwing straight past the
+      // whole loop.
+      logger.warn(
+        `${role} page: recovery login failed on attempt ${attempt}/${maxAttempts} ` +
+          `(${String(recoveryError)}) — will retry`
+      );
+    }
     await page.close().catch(() => {});
     await context.close().catch(() => {});
     context = await authManager.getContextForRole(role);
