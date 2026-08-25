@@ -72,6 +72,10 @@ jobs:
           ENV: staging
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
+          # credential — see .claude/known-issues.md's "CI reporting-history
+          # ledger" section for the confirmed root cause.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true
 
       - name: Send notification email
