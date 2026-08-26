@@ -954,9 +954,41 @@ export class CompaniesPage extends BasePage {
   async saveEditedCompany(): Promise<void> {
     logger.info('Saving updated company');
 
+    // WHY: same class of gap as LeadsPage.saveEditedLead() (fixed 2026-07-15,
+    // see that method's own WHY comment for the original root-cause writeup)
+    // — never applied here (rule 18: a bug class fixed in one place is not
+    // fixed everywhere). This method previously had no network wait at all,
+    // only a client-side "no error toast" check and a modal-hidden check,
+    // both satisfiable before the actual PUT /v1/companies/{id} request
+    // finishes persisting server-side. A caller's immediately-following
+    // search (assertCompanyExistsInList → retryFindCompany) can race the
+    // real database write — confirmed live 2026-08-25 (sandbox run
+    // 32748451285): "admin shares company Update permission restricted user
+    // sees edit button and can edit company" failed with
+    // `assertCompanyExistsInList`'s `expect(found).toBeTruthy()` returning
+    // false immediately after this method returned. Capture and await the
+    // real update response BEFORE declaring success, mirroring
+    // saveEditedLead()'s exact pattern.
+    const updateResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/companies\/\d+$/) !== null && res.request().method() === 'PUT',
+      'company update response',
+      config.timeouts.navigation
+    ).catch(() => null);
+
     await this.click(this.saveButton(), 'save button');
 
     await this.assertNoFormErrors('company edit form');
+
+    const updateResponse = await updateResponsePromise;
+
+    // WHY: same fail-fast convention as saveEditedLead() — a failed/slow
+    // update that never persisted server-side must not be silently reported
+    // as success, letting callers proceed as if the edit took effect.
+    if (!updateResponse) {
+      throw new Error(
+        'Company update (PUT /v1/companies/{id}) response not captured after save — cannot proceed (update likely failed silently or did not persist in time)'
+      );
+    }
 
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeHidden({ timeout: 30000 })
