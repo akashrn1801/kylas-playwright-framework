@@ -948,7 +948,7 @@ test.describe('Reports', () => {
     // report engine's own next read — on top of, not instead of, the real
     // fix above (the filter is what makes this comparison trustworthy at
     // all under concurrent load in the first place).
-    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
     expect(
       afterTotal,
       'Report total should reflect the deleted lead no longer counting, without erroring or showing stale data'
@@ -995,7 +995,7 @@ test.describe('Reports', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
     expect(
       afterTotal,
       'Report total should reflect the deleted lead no longer counting, using the narrow window alone (no filters)'

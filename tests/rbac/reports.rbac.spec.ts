@@ -738,7 +738,7 @@ test.describe('Reports RBAC', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal);
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
     expect(afterTotal).toBeLessThan(beforeTotal);
     logger.success('R64 passed');
   });

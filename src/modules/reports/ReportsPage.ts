@@ -63,6 +63,29 @@ interface ReportVerificationApiConfig {
   startPage: number;
 }
 
+// WHY this map exists, scoped deliberately narrow (added 2026-08-26): the
+// ground-truth query inside getApiCountForWindow() must apply the SAME
+// `filters` the UI report is scoped by, or the two diverge under real
+// concurrent load — confirmed live via a real CI failure (sandbox run
+// 32857703303... 32857739191, 2026-08-25): R36 failed with report=1/api=2
+// because a concurrently-running test's Lead, created within the same tight
+// window, was counted by the unfiltered ground-truth query but correctly
+// excluded by the UI report's own Last-Name-Equals filter. Every real
+// `filters` call site in this codebase today uses only Lead + "Last Name" +
+// Equals (confirmed via grep) — only that one entry is added here, not a
+// full generic label->field map, per rule 6/12 (never guess an unconfirmed
+// API field name). The raw field name `lastName` was confirmed two ways:
+// LeadsPage's own `input[name="lastName"]` locator, and a live scratch probe
+// against POST /v1/search/lead confirming `{field:'lastName', type:'string',
+// operator:'equal'}` returns the correct exact-match count (`equals`/`=`/
+// type:'text' were all live-confirmed WRONG — rejected with HTTP 400
+// "Invalid string operation"). Add a new entry here only once a real caller
+// needs it, and only after confirming the raw field name + operator shape
+// live the same way, not by guessing from the label alone.
+const REPORT_FILTER_FIELD_TO_API_FIELD: Partial<Record<ReportEntityType, Record<string, string>>> = {
+  Lead: { 'Last Name': 'lastName' },
+};
+
 const REPORT_VERIFICATION_API_CONFIG: Record<ReportEntityType, ReportVerificationApiConfig> = {
   Lead: { path: '/search/lead', startPage: 0 },
   Deal: { path: '/search/deal', startPage: 0 },
@@ -74,25 +97,29 @@ const REPORT_VERIFICATION_API_CONFIG: Record<ReportEntityType, ReportVerificatio
   'Call log': { path: '/call-logs/search', startPage: 1 },
 };
 
-// WHY this map, confirmed live 2026-08-21 (network capture on each entity's
-// own Generate Preview call): the Reports engine's own save/preview endpoint
-// is `/v3/reports/<entity-plural>` — and the pluralization is NOT uniform.
-// Lead/Deal follow simple pluralization; Company is irregular
-// ("companies"); Call log is the most surprising — its endpoint is
-// `/v3/reports/calls`, not `/v3/reports/call-logs` or `/v3/reports/calllogs`
-// (matching Call Log's own list route, `/sales/calls/list`, not
-// `/sales/call-logs/list`). Contact/Task/Meeting/Quotation were NOT
-// independently confirmed this session (time-boxed to the two entity types
-// most likely to diverge from a naive plural — an irregular plural and a
-// renamed entity — plus the two already confirmed via the original
-// investigation) — only the 4 CONFIRMED entries are used by
-// assertReportApiEndpointForEntityType() below; this map exists purely as
-// living documentation of what's actually been verified, not a claim about
-// the other 4.
+// WHY this map, confirmed live (2026-08-21 for the original 4; the
+// remaining 4 confirmed live 2026-08-26 via a dedicated Generate-Preview
+// network capture per entity type, Quotation specifically re-run against QA
+// since it's not deployed to stage/prod — see reports.spec.ts's own
+// `config.env !== 'qa'` skip): the Reports engine's own save/preview AND
+// report-detail-load endpoint is `POST /v3/reports/<entity-plural>` — and
+// the pluralization is NOT uniform. Lead/Deal/Contact/Task/Meeting/Quotation
+// follow simple pluralization; Company is irregular ("companies"); Call log
+// is the most surprising — its endpoint is `/v3/reports/calls`, not
+// `/v3/reports/call-logs` or `/v3/reports/calllogs` (matching Call Log's own
+// list route, `/sales/calls/list`, not `/sales/call-logs/list`). All 8
+// entries below are now live-confirmed — used by both
+// assertReportApiEndpointForEntityType() and armReportDataResponseCapture()
+// (verifyRunCountForEntity()'s own real-count-source, see that method's own
+// WHY comment).
 const REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED: Partial<Record<ReportEntityType, string>> = {
   Lead: 'leads',
   Deal: 'deals',
+  Contact: 'contacts',
   Company: 'companies',
+  Task: 'tasks',
+  Meeting: 'meetings',
+  Quotation: 'quotations',
   'Call log': 'calls',
 };
 
@@ -697,9 +724,32 @@ export class ReportsPage extends BasePage {
   private async getApiCountForWindow(
     entityType: ReportEntityType,
     from: Date,
-    to: Date
+    to: Date,
+    filters?: ReportFilter[]
   ): Promise<number> {
     const cfg = REPORT_VERIFICATION_API_CONFIG[entityType];
+    // WHY throw rather than silently skip an unmapped filter: a silently
+    // unscoped ground-truth query is exactly the bug this param exists to
+    // fix (see REPORT_FILTER_FIELD_TO_API_FIELD's own WHY comment) — a
+    // caller passing a filter this method can't apply must fail loudly, not
+    // quietly re-introduce the same divergence in a new form.
+    const extraRules = (filters ?? []).map((f) => {
+      if (f.operator !== 'Equals') {
+        throw new Error(
+          `getApiCountForWindow(${entityType}): filter operator "${f.operator}" on field "${f.field}" ` +
+            'has no confirmed API translation — extend REPORT_FILTER_FIELD_TO_API_FIELD (and confirm ' +
+            'the real operator shape live) before using it here.'
+        );
+      }
+      const apiField = REPORT_FILTER_FIELD_TO_API_FIELD[entityType]?.[f.field];
+      if (!apiField) {
+        throw new Error(
+          `getApiCountForWindow(${entityType}): no confirmed API field for filter "${f.field}" — ` +
+            'add it to REPORT_FILTER_FIELD_TO_API_FIELD after confirming the real field name live.'
+        );
+      }
+      return { id: apiField, field: apiField, type: 'string', operator: 'equal', value: f.value };
+    });
     const body = {
       jsonRule: {
         condition: 'AND',
@@ -711,6 +761,7 @@ export class ReportsPage extends BasePage {
             operator: 'between',
             value: [from.toISOString(), to.toISOString()],
           },
+          ...extraRules,
         ],
         valid: true,
       },
@@ -925,6 +976,23 @@ export class ReportsPage extends BasePage {
       throw new Error(`selectDateInPicker: could not find day cell for "${dayLabel}" after ${attempts} attempts`);
     }
     await dayCell.click();
+  }
+
+  // WHY this exists (added 2026-08-26, see verifyRunCountForEntity()'s own
+  // WHY comment on its two call sites): returns a new Date whose LOCAL
+  // getters (getHours()/getMinutes()/getDate()/toLocaleDateString(), in ANY
+  // process timezone) report the Asia/Kolkata (IST) wall-clock numbers for
+  // the given instant — the standard toLocaleString-then-reparse trick.
+  // `date.toLocaleString('en-US', {timeZone:'Asia/Kolkata'})` renders the
+  // instant as IST wall-clock text with no zone marker; re-parsing that text
+  // via `new Date(string)` interprets it as local time in whatever zone is
+  // currently running, which is exactly what makes this correct on both an
+  // IST dev machine and a UTC CI runner alike — verified live under both
+  // (`TZ=UTC node -e ...` and this repo's own IST dev environment both
+  // produced the identical, correct IST wall-clock output for the same
+  // input instant).
+  private toIstWallClockDate(date: Date): Date {
+    return new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   }
 
   // WHY this exists as its own method rather than reusing
@@ -1475,6 +1543,81 @@ export class ReportsPage extends BasePage {
     });
   }
 
+  // WHY a pure parser, separate from the network-capture method below:
+  // confirmed live (2026-08-26, real network capture during report
+  // creation/open) — POST /v3/reports/<plural>?timezone=Asia%2FCalcutta is
+  // the ACTUAL API call that computes and returns a report's real data: an
+  // array of dimension-value buckets, each `{id, name, values: [n], ...}`,
+  // where `values[0]` is this bucket's own metric value. For the single-
+  // dimension, single-COUNT-metric reports verifyRunCountForEntity() always
+  // builds, the report's own displayed total is the SUM of every bucket's
+  // `values[0]` — confirmed live: a 1-owner, 1-lead report returned
+  // `[{"id":2733,"name":"Playwright Stage ","values":[1],...}]`, matching
+  // the header's own displayed total of 1 exactly. An empty array (`[]`) —
+  // confirmed live for a genuinely zero-match report — sums to 0 with no
+  // special-casing needed, unlike getReportTotalFromHeader()'s own DOM-based
+  // read (see that method's own WHY comment on the header/no-data-message
+  // race this was built to work around; that workaround stays as-is for
+  // getReportTotalFromHeader()'s other, unrelated callers).
+  private sumReportDataResponse(body: unknown): number {
+    if (!Array.isArray(body)) {
+      throw new Error(`sumReportDataResponse: expected an array response body, got ${JSON.stringify(body)}`);
+    }
+    return body.reduce((sum: number, bucket: unknown) => {
+      const values = (bucket as { values?: unknown })?.values;
+      if (!Array.isArray(values) || typeof values[0] !== 'number') {
+        throw new Error(`sumReportDataResponse: bucket missing a numeric values[0]: ${JSON.stringify(bucket)}`);
+      }
+      return sum + values[0];
+    }, 0);
+  }
+
+  // WHY this exists, replacing a DOM scrape with a direct network-response
+  // capture, for verifyRunCountForEntity()/waitForReportTotalBelow()
+  // specifically (added 2026-08-26): getReportTotalFromHeader() reads a
+  // rendered tooltip attribute — a UI PROJECTION of the real data, one hop
+  // removed from the actual source. The real source is this exact
+  // POST /v3/reports/<plural>?timezone=... call (confirmed live via network
+  // capture — it fires every time a report is created or its details page
+  // is (re)loaded, before the header even renders). Capturing it directly is
+  // both more direct (one fewer layer that could drift — a DOM-rendering bug
+  // could theoretically show a stale/wrong number even if the underlying
+  // data is correct, which this bypasses entirely) and simpler for the
+  // zero-match case (see sumReportDataResponse()'s own WHY comment) — no
+  // need to race against a "no data" fallback message. This does NOT
+  // replace getApiCountForWindow()'s separate, independent `/v1/search/*`
+  // ground-truth check below — that one exists specifically to catch a
+  // genuine REPORT-ENGINE bug (the report disagreeing with the real
+  // underlying data), which comparing a report's own output against itself
+  // could never catch. WHY armed here (returning a Promise to await later),
+  // not awaited immediately: Playwright's waitForResponse() must be armed
+  // BEFORE the action that triggers the response (report creation or
+  // navigation) — the caller arms this, then performs that action, then
+  // awaits the returned promise.
+  private armReportDataResponseCapture(entityType: ReportEntityType): Promise<number> {
+    const plural = REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED[entityType];
+    if (!plural) {
+      throw new Error(
+        `armReportDataResponseCapture: no confirmed plural endpoint for "${entityType}" — ` +
+          'see REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED\'s own comment.'
+      );
+    }
+    return this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(new RegExp(`/v3/reports/${plural}(?:\\?.*)?$`)) !== null &&
+          res.request().method() === 'POST',
+        { timeout: config.timeouts.navigation }
+      )
+      .then(async (res) => this.sumReportDataResponse(await res.json()))
+      .catch((e) => {
+        throw new Error(
+          `armReportDataResponseCapture(${entityType}): failed to capture/parse the real ` +
+            `/v3/reports/${plural} response: ${String(e)}`
+        );
+      });
+  }
+
   // WHY this exists at all, and why it re-navigates instead of sleeping:
   // added 2026-08-25 for R36/R64 (see verifyRunCountForEntity()'s own WHY
   // comment on its `filters` param for the confirmed root cause of why
@@ -1491,17 +1634,19 @@ export class ReportsPage extends BasePage {
   // never introduced as a substitute for the filter-based fix, since with
   // the report now scoped to a single entity, a genuine miss here would
   // mean the report never reflects a real deletion at all, not benign noise.
-  async waitForReportTotalBelow(reportId: string, priorTotal: number): Promise<number> {
+  async waitForReportTotalBelow(reportId: string, priorTotal: number, entityType: ReportEntityType): Promise<number> {
     const { retries } = this.retryConfig;
+    let dataPromise = this.armReportDataResponseCapture(entityType);
     await this.goToReportDetails(reportId);
-    let total = await this.getReportTotalFromHeader();
+    let total = await dataPromise;
     for (let attempt = 1; attempt < retries && total >= priorTotal; attempt++) {
       logger.info(
         `waitForReportTotalBelow: total (${total}) not yet below prior (${priorTotal}) on attempt ` +
           `${attempt}/${retries} — re-navigating and re-checking`
       );
+      dataPromise = this.armReportDataResponseCapture(entityType);
       await this.goToReportDetails(reportId);
-      total = await this.getReportTotalFromHeader();
+      total = await dataPromise;
     }
     return total;
   }
@@ -1841,7 +1986,8 @@ export class ReportsPage extends BasePage {
     if (!expectedPlural) {
       throw new Error(
         `assertReportApiEndpointForEntityType: no confirmed endpoint mapping for "${entityType}" — ` +
-          'only Lead/Deal/Company/Call log were live-confirmed this session, see the map\'s own comment.'
+          'all 8 entity types are live-confirmed as of 2026-08-26; this means a genuinely new/renamed ' +
+          'entity type was added to ReportEntityType without extending the map, see its own comment.'
       );
     }
     const responsePromise = this.page.waitForResponse(
@@ -2132,29 +2278,55 @@ export class ReportsPage extends BasePage {
     // ground-truth query scoped to the same underlying field for every
     // entity type, Call log included.
     const dateFilter = REPORT_CREATED_DATE_FILTER_BY_ENTITY[entityType];
+    // WHY: the Custom Date Range's day-picker/time-picker are always
+    // interpreted by the Kylas app in Asia/Kolkata (IST) — confirmed via
+    // this class's own dateFilter API calls (timezone=Asia%2FCalcutta
+    // elsewhere in this file). fillTimeInPicker()/formatDateForCalendarLabel()
+    // read the RUNNING PROCESS's own local system timezone, which is correct
+    // only by coincidence on an IST machine — confirmed live (2026-08-26):
+    // GitHub Actions' ubuntu-latest CI runners default to UTC, a ~5.5h
+    // offset from IST that shifted BOTH the selected calendar day and the
+    // filled time completely off the real window, root-caused via R65
+    // failing 2/2 in real CI (sandbox run 32857739191, 2026-08-25) with
+    // report=0 despite passing 4/4 on every local IST-machine run. Only
+    // applied for narrowWindow — the broad ±1-day default already tolerates
+    // a timezone-sized shift by design (see that branch's own WHY comment
+    // above).
+    const uiStart = narrowWindow ? this.toIstWallClockDate(paddedStart) : paddedStart;
+    const uiEnd = narrowWindow ? this.toIstWallClockDate(paddedEnd) : paddedEnd;
     const data = generateReportData({
       reportType: entityType,
       dimension,
       metric,
       dateFilter,
       dateRangeOption: 'Custom',
-      customDateRange: { start: paddedStart, end: paddedEnd, includeTime: narrowWindow },
+      customDateRange: { start: uiStart, end: uiEnd, includeTime: narrowWindow },
       filters,
     });
 
+    // WHY armed here, before createReport(): the real /v3/reports/<plural>
+    // response — the one that actually computes and produces this report's
+    // total, confirmed live 2026-08-26 to fire during createReport()'s own
+    // internal navigation to the details page — must be armed before the
+    // triggering action, per Playwright's waitForResponse() contract (see
+    // armReportDataResponseCapture()'s own WHY comment for the full
+    // reasoning on why this replaces getReportTotalFromHeader()'s DOM scrape
+    // here specifically).
+    const initialDataPromise = this.armReportDataResponseCapture(entityType);
     const { id } = await this.createReport(data);
+    let reportTotal = await initialDataPromise;
 
     const { retries } = this.retryConfig;
-    let reportTotal = await this.getReportTotalFromHeader();
-    let apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd);
+    let apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd, filters);
     for (let attempt = 1; attempt < retries && reportTotal !== apiTotal; attempt++) {
       logger.info(
         `verifyRunCountForEntity(${entityType}): mismatch on attempt ${attempt}/${retries} ` +
           `(report=${reportTotal}, api=${apiTotal}) — re-checking`
       );
+      const retryDataPromise = this.armReportDataResponseCapture(entityType);
       await this.goToReportDetails(id);
-      reportTotal = await this.getReportTotalFromHeader();
-      apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd);
+      reportTotal = await retryDataPromise;
+      apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd, filters);
     }
 
     if (reportTotal < apiTotal) {
