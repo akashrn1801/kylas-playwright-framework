@@ -159,20 +159,81 @@ type NavOutcome = 'sales' | 'signIn' | 'timeout';
 // bounded number of forced-relogin retries before finally throwing — a real
 // failure (e.g. the app is genuinely down) still fails loudly, it's just no
 // longer indistinguishable from an ordinary, recoverable session expiry.
+// WHY a real, computed deadline threaded through every step, instead of a
+// fixed per-attempt timeout (redesigned 2026-08-26 — an earlier version of
+// this fix statically padded testInfo.timeout by a guessed +120000ms;
+// rejected as patch work, not a root-cause fix, since it didn't explain WHY
+// the existing budget was insufficient, just made the guess bigger for one
+// environment). The real root cause: navigateAndConfirmLoggedIn()'s own
+// retry budget (up to 3 goto attempts, each independently allowed up to
+// 60000ms) and createRolePage()'s outer 2-attempt recovery loop were each
+// sized in isolation, with no shared awareness of the ONE governing ceiling
+// (Playwright's own test timeout) they all run inside — so a slow attempt 1
+// could silently consume the entire budget before recovery ever got a fair
+// chance, confirmed live (sandbox run 32857739191, 2026-08-25: a recovery
+// login was killed the instant it started, because attempt 1's own
+// navigation had already exhausted the shared clock). A single deadline,
+// derived as a fraction of whatever testInfo.timeout ACTUALLY is right now
+// (120000ms on CI, 480000ms locally, or anything this config is ever changed
+// to — zero environment-specific hardcoding), makes every step shrink its
+// own wait to fit whatever time is genuinely left, and fail FAST with a
+// clear diagnostic the moment there isn't enough left for a meaningful
+// attempt — rather than blindly starting a wait it structurally cannot
+// finish before Playwright's own blunt, contextless kill fires. Mirrors this
+// codebase's own already-proven pattern for the identical class of problem —
+// see `.claude/known-issues.md`'s CI reporting-history entry, where a fixed
+// retry-delay list was replaced with a real elapsed-time-bounded backoff for
+// the same underlying reason ("a bigger guessed number is still a disguised
+// ceiling").
+const SETUP_DEADLINE_FRACTION = 0.85;
+const MIN_GOTO_STEP_BUDGET_MS = 5000;
+const MIN_RECOVERY_BUDGET_MS = 15000;
+
 async function navigateAndConfirmLoggedIn(
   page: Page,
-  role: 'admin' | 'restricted'
+  role: 'admin' | 'restricted',
+  deadline: number
 ): Promise<NavOutcome> {
   // WHY: QA env has intermittent TCP timeouts under parallel load — retry the
-  // raw navigation itself before ever judging where it landed.
+  // raw navigation itself before ever judging where it landed. Each attempt's
+  // own timeout is capped by whatever real time remains before `deadline`,
+  // not a flat 60000ms regardless of how much of the shared budget is
+  // already spent.
   for (let gotoAttempt = 1; gotoAttempt <= 3; gotoAttempt++) {
+    const budget = deadline - Date.now();
+    if (budget < MIN_GOTO_STEP_BUDGET_MS) {
+      logger.warn(
+        `${role}Page goto: only ${Math.max(0, budget)}ms left before the fixture-setup deadline — ` +
+          `not attempting goto (attempt ${gotoAttempt}/3)`
+      );
+      return 'timeout';
+    }
     try {
-      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: Math.min(60000, budget) });
       break;
     } catch (e) {
       if (gotoAttempt === 3) throw e;
-      logger.warn(`${role}Page goto attempt ${gotoAttempt} failed — retrying in 3s`);
-      await page.waitForTimeout(3000);
+      const remaining = deadline - Date.now();
+      if (remaining < MIN_GOTO_STEP_BUDGET_MS) throw e;
+      const backoffBudget = Math.min(3000, remaining);
+      logger.warn(`${role}Page goto attempt ${gotoAttempt} failed — backing off (up to ${backoffBudget}ms) before retrying`);
+      // WHY page.waitForLoadState() instead of an unconditional fixed sleep
+      // (found and fixed 2026-08-26 — this exact line was flagged by the
+      // pre-commit hook as a genuine pre-existing blind-wait call that
+      // happened to move into the staged diff, the same class of catch
+      // already documented in known-issues.md's Sandbox Build #144 entry):
+      // a failed goto() can still be completing its navigation in the
+      // background (it can throw on the waitUntil condition timing out
+      // while the page genuinely finishes loading moments later) — waiting
+      // on the page's own real load state, bounded by the same backoff
+      // budget, resolves EARLY the instant that happens instead of always
+      // waiting the full duration, and degrades identically (a bounded,
+      // capped wait) when it doesn't. The .catch(() => {}) also closes a
+      // real latent gap the old fixed sleep had: on an already-closed/
+      // crashed page (e.g. the "Target page, context or browser has been
+      // closed" class from the 2026-08-25 investigation), the old call
+      // threw uncaught here — this doesn't.
+      await page.waitForLoadState('load', { timeout: backoffBudget }).catch(() => {});
     }
   }
 
@@ -181,12 +242,17 @@ async function navigateAndConfirmLoggedIn(
   // test's fixture setup — CI evidence (2026-07-19, sandbox run 29673393047,
   // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
   // setting up 'adminPage'/'restrictedPage'" failures, several tracing
-  // through this exact code path (createRolePage → getContextForRole).
+  // through this exact code path (createRolePage → getContextForRole). The
+  // race's own timeout is now also deadline-bounded, same reasoning as above.
+  const raceTimeout = Math.max(
+    MIN_GOTO_STEP_BUDGET_MS,
+    Math.min(config.timeouts.navigation, deadline - Date.now())
+  );
   return Promise.race([
-    safeWaitForURL(page, /sales\//, config.timeouts.navigation)
+    safeWaitForURL(page, /sales\//, raceTimeout)
       .then((): NavOutcome => 'sales')
       .catch((): NavOutcome => 'timeout'),
-    safeWaitForURL(page, /\/(signIn|login)/, config.timeouts.navigation)
+    safeWaitForURL(page, /\/(signIn|login)/, raceTimeout)
       .then((): NavOutcome => 'signIn')
       .catch((): NavOutcome => 'timeout'),
   ]);
@@ -212,6 +278,16 @@ async function createRolePage(
   // WHY: Set current test context so errors captured during this test
   // are tagged with the correct test title and file
   ErrorCollector.setCurrentTest(testInfo.title, testInfo.file);
+
+  // WHY 85% of whatever testInfo.timeout currently is, not a fixed number:
+  // see navigateAndConfirmLoggedIn()'s own WHY comment for the full
+  // reasoning. This scales automatically with CI's 120000ms, local dev's
+  // 480000ms, or any future value — reserving the remaining 15% guarantees
+  // the test body + normal teardown always keep a real slice of the shared
+  // clock, rather than fixture setup being free to consume the entire
+  // budget as it could before (which is exactly what happened in the
+  // confirmed live failures this replaces).
+  const setupDeadline = Date.now() + testInfo.timeout * SETUP_DEADLINE_FRACTION;
 
   // WHY: Use AuthManager.getContextForRole() instead of raw storageState —
   // AuthManager validates the session before creating the context and
@@ -240,13 +316,23 @@ async function createRolePage(
   const maxAttempts = 2;
   let landed = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const outcome = await navigateAndConfirmLoggedIn(page, role);
+    const outcome = await navigateAndConfirmLoggedIn(page, role, setupDeadline);
     if (outcome === 'sales') {
       landed = true;
       break;
     }
 
-    if (attempt === maxAttempts) {
+    // WHY checking the real remaining budget here too, not just `attempt ===
+    // maxAttempts`: the recovery step below (clear storage + full re-login +
+    // a fresh context) is itself a multi-second operation — starting it with
+    // only a few hundred ms left before the deadline just means it also gets
+    // cut off mid-flight, producing the exact same opaque, contextless
+    // Playwright kill this whole redesign exists to replace. Failing here
+    // instead, with a clear breakdown of why, is strictly more useful to
+    // whoever reads this next.
+    const timeLeftForRecovery = setupDeadline - Date.now();
+    const outOfTime = timeLeftForRecovery < MIN_RECOVERY_BUDGET_MS;
+    if (attempt === maxAttempts || outOfTime) {
       // WHY: Confirmed live (2026-07-07 reporting-overhaul investigation) —
       // this used to throw directly, leaking the context/page created above
       // (or re-created on a prior loop iteration) since a throw before
@@ -257,11 +343,15 @@ async function createRolePage(
       const failureUrl = page.url();
       await page.close().catch(() => {});
       await context.close().catch(() => {});
+      const reason =
+        outOfTime && attempt !== maxAttempts
+          ? `only ${Math.max(0, timeLeftForRecovery)}ms left before the fixture-setup deadline — ` +
+            `not enough to attempt another recovery login (attempt ${attempt}/${maxAttempts})`
+          : `after ${maxAttempts} login attempts`;
       throw new Error(
-        `${role} page failed to reach the app's /sales/ area after ${maxAttempts} login ` +
-          `attempts (last outcome: ${outcome}, current URL: ${failureUrl}). This is a genuine ` +
-          `failure, not a session-expiry false positive a retry could paper over — investigate ` +
-          `the app/environment.`
+        `${role} page failed to reach the app's /sales/ area (${reason}) — last outcome: ${outcome}, ` +
+          `current URL: ${failureUrl}. This is a genuine failure, not a session-expiry false ` +
+          `positive a retry could paper over — investigate the app/environment.`
       );
     }
 
@@ -271,7 +361,22 @@ async function createRolePage(
     );
     await authManager.clearStorageState(role).catch(() => {});
     AuthManager['lastValidated'].delete(role);
-    await authManager.loginAndSaveState(role);
+    try {
+      await authManager.loginAndSaveState(role);
+    } catch (recoveryError) {
+      // WHY: a transient failure here (e.g. a CDP-level browser.newContext()
+      // Protocol error — confirmed real, sandbox run 32839778416, 2026-08-25,
+      // see known-issues.md) must not burn the remaining retry attempt. Log
+      // and fall through — the next loop iteration's own
+      // getContextForRole()/navigateAndConfirmLoggedIn() below gets a
+      // genuine second try (getContextForRole() has its own "no valid state,
+      // login fresh" fallback) instead of this throwing straight past the
+      // whole loop.
+      logger.warn(
+        `${role} page: recovery login failed on attempt ${attempt}/${maxAttempts} ` +
+          `(${String(recoveryError)}) — will retry`
+      );
+    }
     await page.close().catch(() => {});
     await context.close().catch(() => {});
     context = await authManager.getContextForRole(role);

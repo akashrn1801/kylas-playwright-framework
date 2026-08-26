@@ -63,6 +63,29 @@ This is a `TypeError` thrown from inside the Kylas app's own minified `openCallL
 
 ---
 
+## 4. Meeting-report creation deterministically 500s on the first save attempt, succeeds on an immediate identical retry
+
+**Status:** Confirmed live, 100% reproducible (5/5), backend-side. **Environment:** Stage (confirmed); untested on QA/Prod. **Entity-type scope:** confirmed Meeting-specific — Lead, Deal, Contact, and Call log reports were each tested 5x under the identical methodology and showed **zero** first-attempt failures (20/20 clean). Task and Quotation were not tested this session.
+
+**Background:** the human manually observed that creating a Meeting-type report sometimes needed a second Save click to succeed. This was investigated by driving the exact real production code (`ReportsPage.fillReportForm()`/`clickSaveButton()`, same dimension="Owner"/metric="Number of Meetings"/dateFilter="Created At" defaults `reports.spec.ts`'s own R9 test uses) against real staging, with a raw network listener capturing every `POST /v3/reports` request/response, and a manual click → observe → retry-the-same-form loop (never reloading, never re-filling) to mirror the human's exact reported behavior.
+
+**Evidence:**
+- **5/5 fresh, independent attempts** (5 separate browser contexts, 5 different reports, same tenant) reproduced the identical pattern: the first `POST /v3/reports` returns **HTTP 500** with body `{"timestamp":"...","code":"01403004","message":null,"errorDetails":null}` — an opaque backend error with no human-readable message. An immediate retry of the Save button, on the exact same, unmodified, already-filled form (no reload, no re-fill, no data change), succeeds every time with **HTTP 201** `{"id": <n>}`.
+- **Confirmed backend-side, not a client-side race:** nothing about the request changes between the failing first attempt and the succeeding retry — same payload, same session, same form state. A client-side "button not yet wired" or "clicked before an async step finished" race would not explain a real HTTP 500 response body arriving from the server for the first attempt specifically.
+- **No orphaned/partial data left behind:** the 5 successful report IDs across the 5 independent attempts came back perfectly consecutive (`40583, 40584, 40585, 40586, 40587`) with no gap. If the failed first attempt had inserted a report row before erroring, the next successful ID would be offset by one for each failure; it isn't. The failed request appears to fully roll back server-side.
+- **Deterministic per-request, not per-session:** all 5 attempts used fresh browser contexts (fresh page load, same underlying session token) and each independently hit the identical first-fail-then-succeed pattern on its own new report. This rules out a "some global resource lazily initializes once per tenant/session, self-heals afterward" explanation — the failure recurs on every single new Meeting report creation, not just the first one of a session. The most likely mechanism (not confirmable from black-box HTTP evidence alone, since the message field is always null): a same-request read-after-write race inside the backend's own Meeting-report create handler, where an internal step reads a resource the immediately-preceding write hasn't made visible yet.
+- **Entity-type scope, confirmed via the identical methodology:** Lead (5/5 first-try 201), Deal (5/5), Contact (5/5), Call log (5/5) — all clean, zero 500s, no retry ever needed. This is not a generic report-creation code-path defect; it is specific to Meeting reports (or, less likely but not ruled out, to whatever Meeting-specific config/lookup the backend performs during a Meeting report's create step).
+
+**Impact:** any UI flow or test that creates a Meeting-type report will need to click Save twice roughly every time, or hit a hard failure if it doesn't. For a real end user, this presents as "Save appeared to fail, I clicked it again and it worked" — confusing but not data-destructive, per the no-orphan-data evidence above.
+
+**Not yet tested:** Task and Quotation report creation (out of scope for this pass); whether the bug is tenant-specific or affects every Kylas tenant; whether it also affects Meeting report **updates** (`saveEditForm()`'s own Save click uses a different code path/endpoint, not exercised by this investigation).
+
+**Test-side mitigation (not a fix — the defect is in Kylas's own backend, outside this repo):** `ReportsPage.createReport()` now retries the Save click, bounded to 2 attempts total, but **only** when the captured response is exactly `HTTP 500` + `code: "01403004"` — any other failure (a different status, a different code, no network response at all) surfaces immediately, unretried. See `ReportsPage.clickSaveButtonForCreateWithBackendRetry()` and the corresponding `.claude/known-issues.md` entry (Sandbox Build #147 investigation section) for the code-side detail and verification evidence.
+
+**Recommendation:** report to the Kylas backend team with the exact reproduction steps above (create any Meeting-type report; expect a `500`/`01403004` on the first `POST /v3/reports`, success on immediate retry) and the error code `01403004` for their own log correlation — this repo's evidence stops at the HTTP boundary and cannot identify the exact server-side line/mechanism.
+
+---
+
 ## Investigated but not confirmed — excluded from this list
 
 These were investigated as possible application bugs but never reached the "confirmed" bar this file requires, or were explicitly determined not to be bugs. Full detail lives in `CLAUDE.md`'s Known Issues / Investigation History section — listed here only so nothing looks silently dropped:

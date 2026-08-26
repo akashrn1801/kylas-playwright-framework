@@ -8,10 +8,13 @@ jobs:
   detect-and-run:
     name: playwright-selective
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
 
       - uses: actions/setup-node@v5
         with:
@@ -92,6 +95,10 @@ jobs:
           BRANCH_NAME: sandbox
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
+          # credential — see .claude/known-issues.md's "CI reporting-history
+          # ledger" section for the confirmed root cause.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true
 
       - name: Send notification email
