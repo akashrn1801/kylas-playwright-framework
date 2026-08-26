@@ -9,6 +9,7 @@ import {
   ReportEntityType,
   ChartType,
   DateRangeOption,
+  ReportFilter,
   ReportFilterOperator,
   REPORT_OWNER_DIMENSION_BY_ENTITY,
   REPORT_COUNT_METRIC_BY_ENTITY,
@@ -62,6 +63,29 @@ interface ReportVerificationApiConfig {
   startPage: number;
 }
 
+// WHY this map exists, scoped deliberately narrow (added 2026-08-26): the
+// ground-truth query inside getApiCountForWindow() must apply the SAME
+// `filters` the UI report is scoped by, or the two diverge under real
+// concurrent load — confirmed live via a real CI failure (sandbox run
+// 32857703303... 32857739191, 2026-08-25): R36 failed with report=1/api=2
+// because a concurrently-running test's Lead, created within the same tight
+// window, was counted by the unfiltered ground-truth query but correctly
+// excluded by the UI report's own Last-Name-Equals filter. Every real
+// `filters` call site in this codebase today uses only Lead + "Last Name" +
+// Equals (confirmed via grep) — only that one entry is added here, not a
+// full generic label->field map, per rule 6/12 (never guess an unconfirmed
+// API field name). The raw field name `lastName` was confirmed two ways:
+// LeadsPage's own `input[name="lastName"]` locator, and a live scratch probe
+// against POST /v1/search/lead confirming `{field:'lastName', type:'string',
+// operator:'equal'}` returns the correct exact-match count (`equals`/`=`/
+// type:'text' were all live-confirmed WRONG — rejected with HTTP 400
+// "Invalid string operation"). Add a new entry here only once a real caller
+// needs it, and only after confirming the raw field name + operator shape
+// live the same way, not by guessing from the label alone.
+const REPORT_FILTER_FIELD_TO_API_FIELD: Partial<Record<ReportEntityType, Record<string, string>>> = {
+  Lead: { 'Last Name': 'lastName' },
+};
+
 const REPORT_VERIFICATION_API_CONFIG: Record<ReportEntityType, ReportVerificationApiConfig> = {
   Lead: { path: '/search/lead', startPage: 0 },
   Deal: { path: '/search/deal', startPage: 0 },
@@ -73,25 +97,29 @@ const REPORT_VERIFICATION_API_CONFIG: Record<ReportEntityType, ReportVerificatio
   'Call log': { path: '/call-logs/search', startPage: 1 },
 };
 
-// WHY this map, confirmed live 2026-08-21 (network capture on each entity's
-// own Generate Preview call): the Reports engine's own save/preview endpoint
-// is `/v3/reports/<entity-plural>` — and the pluralization is NOT uniform.
-// Lead/Deal follow simple pluralization; Company is irregular
-// ("companies"); Call log is the most surprising — its endpoint is
-// `/v3/reports/calls`, not `/v3/reports/call-logs` or `/v3/reports/calllogs`
-// (matching Call Log's own list route, `/sales/calls/list`, not
-// `/sales/call-logs/list`). Contact/Task/Meeting/Quotation were NOT
-// independently confirmed this session (time-boxed to the two entity types
-// most likely to diverge from a naive plural — an irregular plural and a
-// renamed entity — plus the two already confirmed via the original
-// investigation) — only the 4 CONFIRMED entries are used by
-// assertReportApiEndpointForEntityType() below; this map exists purely as
-// living documentation of what's actually been verified, not a claim about
-// the other 4.
+// WHY this map, confirmed live (2026-08-21 for the original 4; the
+// remaining 4 confirmed live 2026-08-26 via a dedicated Generate-Preview
+// network capture per entity type, Quotation specifically re-run against QA
+// since it's not deployed to stage/prod — see reports.spec.ts's own
+// `config.env !== 'qa'` skip): the Reports engine's own save/preview AND
+// report-detail-load endpoint is `POST /v3/reports/<entity-plural>` — and
+// the pluralization is NOT uniform. Lead/Deal/Contact/Task/Meeting/Quotation
+// follow simple pluralization; Company is irregular ("companies"); Call log
+// is the most surprising — its endpoint is `/v3/reports/calls`, not
+// `/v3/reports/call-logs` or `/v3/reports/calllogs` (matching Call Log's own
+// list route, `/sales/calls/list`, not `/sales/call-logs/list`). All 8
+// entries below are now live-confirmed — used by both
+// assertReportApiEndpointForEntityType() and armReportDataResponseCapture()
+// (verifyRunCountForEntity()'s own real-count-source, see that method's own
+// WHY comment).
 const REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED: Partial<Record<ReportEntityType, string>> = {
   Lead: 'leads',
   Deal: 'deals',
+  Contact: 'contacts',
   Company: 'companies',
+  Task: 'tasks',
+  Meeting: 'meetings',
+  Quotation: 'quotations',
   'Call log': 'calls',
 };
 
@@ -188,6 +216,15 @@ export class ReportsPage extends BasePage {
     this.page.locator('input[id$="_input_dateFilter.startDate"]');
   private readonly customEndDateInput = (): Locator =>
     this.page.locator('input[id$="_input_dateFilter.endDate"]');
+  // WHY these exist at all (added 2026-08-25 for the narrow-window option):
+  // confirmed live — the Custom Date Range's Start/End Date each have their
+  // own separate rc-time-picker time input (id suffix `..._time`), sitting
+  // right next to the day-picker input above, identical in shape to the one
+  // already handled for custom fields in BasePage.selectDateTimeCustomField().
+  private readonly customStartTimeInput = (): Locator =>
+    this.page.locator('input[id$="_input_dateFilter.startDate_time"]');
+  private readonly customEndTimeInput = (): Locator =>
+    this.page.locator('input[id$="_input_dateFilter.endDate_time"]');
   private readonly calendarForwardButton = (): Locator =>
     this.page.getByLabel('Move forward to switch to the next month.');
   // WHY added (2026-08-21, found via a real live failure): the forward-only
@@ -687,9 +724,32 @@ export class ReportsPage extends BasePage {
   private async getApiCountForWindow(
     entityType: ReportEntityType,
     from: Date,
-    to: Date
+    to: Date,
+    filters?: ReportFilter[]
   ): Promise<number> {
     const cfg = REPORT_VERIFICATION_API_CONFIG[entityType];
+    // WHY throw rather than silently skip an unmapped filter: a silently
+    // unscoped ground-truth query is exactly the bug this param exists to
+    // fix (see REPORT_FILTER_FIELD_TO_API_FIELD's own WHY comment) — a
+    // caller passing a filter this method can't apply must fail loudly, not
+    // quietly re-introduce the same divergence in a new form.
+    const extraRules = (filters ?? []).map((f) => {
+      if (f.operator !== 'Equals') {
+        throw new Error(
+          `getApiCountForWindow(${entityType}): filter operator "${f.operator}" on field "${f.field}" ` +
+            'has no confirmed API translation — extend REPORT_FILTER_FIELD_TO_API_FIELD (and confirm ' +
+            'the real operator shape live) before using it here.'
+        );
+      }
+      const apiField = REPORT_FILTER_FIELD_TO_API_FIELD[entityType]?.[f.field];
+      if (!apiField) {
+        throw new Error(
+          `getApiCountForWindow(${entityType}): no confirmed API field for filter "${f.field}" — ` +
+            'add it to REPORT_FILTER_FIELD_TO_API_FIELD after confirming the real field name live.'
+        );
+      }
+      return { id: apiField, field: apiField, type: 'string', operator: 'equal', value: f.value };
+    });
     const body = {
       jsonRule: {
         condition: 'AND',
@@ -701,6 +761,7 @@ export class ReportsPage extends BasePage {
             operator: 'between',
             value: [from.toISOString(), to.toISOString()],
           },
+          ...extraRules,
         ],
         valid: true,
       },
@@ -917,10 +978,85 @@ export class ReportsPage extends BasePage {
     await dayCell.click();
   }
 
-  async fillCustomDateRange(start: Date, end: Date): Promise<void> {
+  // WHY this exists (added 2026-08-26, see verifyRunCountForEntity()'s own
+  // WHY comment on its two call sites): returns a new Date whose LOCAL
+  // getters (getHours()/getMinutes()/getDate()/toLocaleDateString(), in ANY
+  // process timezone) report the Asia/Kolkata (IST) wall-clock numbers for
+  // the given instant — the standard toLocaleString-then-reparse trick.
+  // `date.toLocaleString('en-US', {timeZone:'Asia/Kolkata'})` renders the
+  // instant as IST wall-clock text with no zone marker; re-parsing that text
+  // via `new Date(string)` interprets it as local time in whatever zone is
+  // currently running, which is exactly what makes this correct on both an
+  // IST dev machine and a UTC CI runner alike — verified live under both
+  // (`TZ=UTC node -e ...` and this repo's own IST dev environment both
+  // produced the identical, correct IST wall-clock output for the same
+  // input instant).
+  private toIstWallClockDate(date: Date): Date {
+    return new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  }
+
+  // WHY this exists as its own method rather than reusing
+  // BasePage.selectDateTimeCustomField() (added 2026-08-25 for the
+  // narrow-window option): that method's time-input lookup is built around
+  // the custom-field suffix convention (`customFieldSuffix()`), not Reports'
+  // own `..._input_dateFilter.startDate_time`/`endDate_time` id pattern — a
+  // thin, locator-adapted copy of its already-proven rc-time-picker
+  // column-click sequence, matching this file's own established precedent of
+  // NOT sharing `selectDateInPicker()` across modules for the same reason
+  // (see `.claude/known-issues.md` item 19 — several native date pickers in
+  // this codebase are independently duplicated per module rather than
+  // consolidated).
+  private async fillTimeInPicker(input: Locator, date: Date, description: string): Promise<void> {
+    // WHY force: true — the rc-time-picker input sits behind a clock icon
+    // that can intercept the click at its exact center, same as confirmed
+    // live for the custom-field version this pattern is copied from.
+    await this.click(input, `${description}: open time picker`, true);
+    await this.page.waitForSelector('.rc-time-picker-panel', { timeout: config.timeouts.expect });
+    const hour12 = date.getHours() % 12 === 0 ? 12 : date.getHours() % 12;
+    const hourStr = String(hour12).padStart(2, '0');
+    const minuteStr = String(date.getMinutes()).padStart(2, '0');
+    const amPm = date.getHours() < 12 ? 'am' : 'pm';
+    const columns = this.page.locator('.rc-time-picker-panel:visible .rc-time-picker-panel-select');
+    await columns
+      .nth(0)
+      .locator('li', { hasText: new RegExp(`^${hourStr}$`) })
+      .click();
+    await columns
+      .nth(1)
+      .locator('li', { hasText: new RegExp(`^${minuteStr}$`) })
+      .click();
+    await columns
+      .nth(2)
+      .locator('li', { hasText: new RegExp(`^${amPm}$`, 'i') })
+      .click();
+    await this.page.keyboard.press('Escape');
+    // WHY waiting for the panel to actually hide, not a blind wait: confirmed
+    // live for the identical widget in BasePage.selectDateTimeCustomField() —
+    // rc-time-picker closes and unhides the underlying field when Escape is
+    // pressed, a real DOM-state signal to wait on instead of guessing a
+    // duration.
+    await this.page
+      .waitForSelector('.rc-time-picker-panel', { state: 'hidden', timeout: 3000 })
+      .catch(() => {});
+    logger.success(`${description}: time set to ${hourStr}:${minuteStr} ${amPm}`);
+  }
+
+  // WHY `includeTime` is a plain optional boolean, default false (added
+  // 2026-08-25): byte-identical behavior for every existing caller — none of
+  // which have ever filled the time inputs, all relying on the app's own
+  // default (12:00 am start / 11:59 pm end). Passing true is what
+  // verifyRunCountForEntity()'s new narrow-window option uses to get a
+  // genuinely minutes-wide UI window instead of a whole-day one.
+  async fillCustomDateRange(start: Date, end: Date, includeTime = false): Promise<void> {
     logger.info(`Filling custom date range: ${start.toDateString()} → ${end.toDateString()}`);
     await this.selectDateInPicker(this.customStartDateInput(), start);
+    if (includeTime) {
+      await this.fillTimeInPicker(this.customStartTimeInput(), start, 'Start Date');
+    }
     await this.selectDateInPicker(this.customEndDateInput(), end);
+    if (includeTime) {
+      await this.fillTimeInPicker(this.customEndTimeInput(), end, 'End Date');
+    }
     logger.success('Custom date range filled');
   }
 
@@ -1083,7 +1219,11 @@ export class ReportsPage extends BasePage {
     if (data.dateRangeOption && data.dateRangeOption !== 'Current Month') {
       await this.selectDateRangeOption(data.dateRangeOption);
       if (data.dateRangeOption === 'Custom' && data.customDateRange) {
-        await this.fillCustomDateRange(data.customDateRange.start, data.customDateRange.end);
+        await this.fillCustomDateRange(
+          data.customDateRange.start,
+          data.customDateRange.end,
+          data.customDateRange.includeTime ?? false
+        );
       }
     }
 
@@ -1367,10 +1507,33 @@ export class ReportsPage extends BasePage {
   // parentheses ("Number of Leads (1023)") — the same "empty title, real
   // content in a data attribute" pattern already documented elsewhere in
   // this codebase for other modules' icons.
+  // WHY this races the header metric against detailsNoDataMessage(), rather
+  // than only ever waiting on the metric: found via a real live failure
+  // (2026-08-25, R36/R64 fix verification) — confirmed via this file's own
+  // pre-existing evidence (completeSaveAs()'s WHY comment above, and
+  // detailsNoDataMessage()'s own WHY comment, both 2026-08-21) that
+  // `.report__header .metric-name` does NOT render at all when a report's
+  // filter/dimension/metric combination matches zero real records — the app
+  // instead renders "Oops, report cannot be generated for the data being
+  // requested." Before this fix, a genuinely-zero report could only ever
+  // produce a hard 10s TimeoutError here (confirmed live), never a parsed
+  // `0` — harmless for the 14+ existing callers whose report windows are
+  // broad enough to almost never legitimately hit zero, but a real gap for
+  // any narrowly-filtered report (e.g. verifyRunCountForEntity()'s optional
+  // `filters` param, added the same session specifically so a report can be
+  // scoped to one uniquely-tagged entity) where hitting exactly zero after a
+  // deletion is the CORRECT, expected outcome, not an error.
   async getReportTotalFromHeader(): Promise<number> {
     return this.withSessionExpiryRecovery(async () => {
       const metricName = this.reportHeaderMetricName();
-      await metricName.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      const noDataMessage = this.detailsNoDataMessage();
+      const isZero = await Promise.race([
+        metricName.waitFor({ state: 'visible', timeout: config.timeouts.expect }).then(() => false),
+        noDataMessage.waitFor({ state: 'visible', timeout: config.timeouts.expect }).then(() => true),
+      ]);
+      if (isZero) {
+        return 0;
+      }
       const title = await metricName.getAttribute('data-original-title');
       const match = title?.match(/\((\d+)\)/);
       if (!match) {
@@ -1378,6 +1541,114 @@ export class ReportsPage extends BasePage {
       }
       return parseInt(match[1], 10);
     });
+  }
+
+  // WHY a pure parser, separate from the network-capture method below:
+  // confirmed live (2026-08-26, real network capture during report
+  // creation/open) — POST /v3/reports/<plural>?timezone=Asia%2FCalcutta is
+  // the ACTUAL API call that computes and returns a report's real data: an
+  // array of dimension-value buckets, each `{id, name, values: [n], ...}`,
+  // where `values[0]` is this bucket's own metric value. For the single-
+  // dimension, single-COUNT-metric reports verifyRunCountForEntity() always
+  // builds, the report's own displayed total is the SUM of every bucket's
+  // `values[0]` — confirmed live: a 1-owner, 1-lead report returned
+  // `[{"id":2733,"name":"Playwright Stage ","values":[1],...}]`, matching
+  // the header's own displayed total of 1 exactly. An empty array (`[]`) —
+  // confirmed live for a genuinely zero-match report — sums to 0 with no
+  // special-casing needed, unlike getReportTotalFromHeader()'s own DOM-based
+  // read (see that method's own WHY comment on the header/no-data-message
+  // race this was built to work around; that workaround stays as-is for
+  // getReportTotalFromHeader()'s other, unrelated callers).
+  private sumReportDataResponse(body: unknown): number {
+    if (!Array.isArray(body)) {
+      throw new Error(`sumReportDataResponse: expected an array response body, got ${JSON.stringify(body)}`);
+    }
+    return body.reduce((sum: number, bucket: unknown) => {
+      const values = (bucket as { values?: unknown })?.values;
+      if (!Array.isArray(values) || typeof values[0] !== 'number') {
+        throw new Error(`sumReportDataResponse: bucket missing a numeric values[0]: ${JSON.stringify(bucket)}`);
+      }
+      return sum + values[0];
+    }, 0);
+  }
+
+  // WHY this exists, replacing a DOM scrape with a direct network-response
+  // capture, for verifyRunCountForEntity()/waitForReportTotalBelow()
+  // specifically (added 2026-08-26): getReportTotalFromHeader() reads a
+  // rendered tooltip attribute — a UI PROJECTION of the real data, one hop
+  // removed from the actual source. The real source is this exact
+  // POST /v3/reports/<plural>?timezone=... call (confirmed live via network
+  // capture — it fires every time a report is created or its details page
+  // is (re)loaded, before the header even renders). Capturing it directly is
+  // both more direct (one fewer layer that could drift — a DOM-rendering bug
+  // could theoretically show a stale/wrong number even if the underlying
+  // data is correct, which this bypasses entirely) and simpler for the
+  // zero-match case (see sumReportDataResponse()'s own WHY comment) — no
+  // need to race against a "no data" fallback message. This does NOT
+  // replace getApiCountForWindow()'s separate, independent `/v1/search/*`
+  // ground-truth check below — that one exists specifically to catch a
+  // genuine REPORT-ENGINE bug (the report disagreeing with the real
+  // underlying data), which comparing a report's own output against itself
+  // could never catch. WHY armed here (returning a Promise to await later),
+  // not awaited immediately: Playwright's waitForResponse() must be armed
+  // BEFORE the action that triggers the response (report creation or
+  // navigation) — the caller arms this, then performs that action, then
+  // awaits the returned promise.
+  private armReportDataResponseCapture(entityType: ReportEntityType): Promise<number> {
+    const plural = REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED[entityType];
+    if (!plural) {
+      throw new Error(
+        `armReportDataResponseCapture: no confirmed plural endpoint for "${entityType}" — ` +
+          'see REPORT_SAVE_API_ENDPOINT_PLURAL_CONFIRMED\'s own comment.'
+      );
+    }
+    return this.page
+      .waitForResponse(
+        (res) =>
+          res.url().match(new RegExp(`/v3/reports/${plural}(?:\\?.*)?$`)) !== null &&
+          res.request().method() === 'POST',
+        { timeout: config.timeouts.navigation }
+      )
+      .then(async (res) => this.sumReportDataResponse(await res.json()))
+      .catch((e) => {
+        throw new Error(
+          `armReportDataResponseCapture(${entityType}): failed to capture/parse the real ` +
+            `/v3/reports/${plural} response: ${String(e)}`
+        );
+      });
+  }
+
+  // WHY this exists at all, and why it re-navigates instead of sleeping:
+  // added 2026-08-25 for R36/R64 (see verifyRunCountForEntity()'s own WHY
+  // comment on its `filters` param for the confirmed root cause of why
+  // these two tests were flaky — a shared, contamination-prone report
+  // window under concurrent CI load, now fixed at the source by scoping the
+  // report to one uniquely-tagged entity via an exact-match filter). This
+  // retry is a SEPARATE, defense-in-depth layer on top of that real fix —
+  // for a distinct, not-yet-confirmed-or-ruled-out possibility (a brief
+  // backend indexing/propagation lag between a committed entity deletion
+  // and the report engine's own next read reflecting it), mirroring the
+  // exact same bounded, re-navigate-don't-sleep idiom already proven for
+  // this exact report engine's OTHER retry loop (verifyRunCountForEntity's
+  // own mismatch-retry above, and searchReportsListUntilFound() below) —
+  // never introduced as a substitute for the filter-based fix, since with
+  // the report now scoped to a single entity, a genuine miss here would
+  // mean the report never reflects a real deletion at all, not benign noise.
+  async waitForReportTotalBelow(reportId: string, priorTotal: number, entityType: ReportEntityType): Promise<number> {
+    const { retries } = this.retryConfig;
+    let dataPromise = this.armReportDataResponseCapture(entityType);
+    await this.goToReportDetails(reportId);
+    let total = await dataPromise;
+    for (let attempt = 1; attempt < retries && total >= priorTotal; attempt++) {
+      logger.info(
+        `waitForReportTotalBelow: total (${total}) not yet below prior (${priorTotal}) on attempt ` +
+          `${attempt}/${retries} — re-navigating and re-checking`
+      );
+      dataPromise = this.armReportDataResponseCapture(entityType);
+      await this.goToReportDetails(reportId);
+      total = await dataPromise;
+    }
+    return total;
   }
 
   async assertMetricTotal(expectedTotal: number): Promise<void> {
@@ -1715,7 +1986,8 @@ export class ReportsPage extends BasePage {
     if (!expectedPlural) {
       throw new Error(
         `assertReportApiEndpointForEntityType: no confirmed endpoint mapping for "${entityType}" — ` +
-          'only Lead/Deal/Company/Call log were live-confirmed this session, see the map\'s own comment.'
+          'all 8 entity types are live-confirmed as of 2026-08-26; this means a genuinely new/renamed ' +
+          'entity type was added to ReportEntityType without extending the map, see its own comment.'
       );
     }
     const responsePromise = this.page.waitForResponse(
@@ -1732,11 +2004,113 @@ export class ReportsPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
+  // WHY this exists, and why it retries ONLY this one exact signature:
+  // confirmed live 2026-08-25 (see APPLICATION_BUGS.md's dedicated entry and
+  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
+  // `POST /v3/reports` for a newly-created Meeting report deterministically
+  // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
+  // errorDetails always null), while an immediate retry of the identical,
+  // unmodified request succeeds cleanly (201). Confirmed backend-side, not a
+  // client race: nothing about the request changes between the two
+  // attempts, and 5 independent successful report IDs across 5 independent
+  // attempts came back perfectly consecutive — no ID gap — meaning the
+  // failed attempt leaves no partial/orphaned report behind to clean up.
+  // Cross-entity-type reproduction found this is NOT universal — Lead/Deal/
+  // Contact/Call log did not reproduce it in the same live check — so this
+  // retry is intentionally narrow: it fires only for this exact status+code
+  // pair, never as a blanket "retry any failed save," so a genuinely
+  // different backend/validation error still surfaces immediately, unmasked.
+  private readonly REPORT_CREATE_TRANSIENT_ERROR_CODE = '01403004';
+
+  // WHY a class constant, not an inline literal: gives verifyRunCountForEntity()'s
+  // own narrowWindow WHY comment a single named value to point at, and makes
+  // the buffer size a one-line change if a future occurrence shows 5 minutes
+  // isn't enough margin — see that method's own WHY comment for the
+  // reasoning behind "a few minutes, not zero."
+  private readonly NARROW_WINDOW_PADDING_MINUTES = 5;
+
+  // WHY a separate single-attempt helper, called once for the primary
+  // attempt and (conditionally) once more for the fallback below, rather
+  // than a generic retry loop: makes it structurally impossible to confuse
+  // "the normal save path" with "the workaround" — the exact same code runs
+  // both times by construction (no special-casing hidden inside a loop
+  // iteration), and the caller below reads as plain, sequential control
+  // flow: try once, and only if that one exact confirmed signature comes
+  // back, fall back to trying again.
+  private async attemptSaveOnceAndClassify(): Promise<'done' | 'confirmedTransientBackendBug'> {
+    // WHY armed BEFORE the click, matching this codebase's own established
+    // "ID-capture set up before Save" convention (.claude/reference-
+    // patterns.md §7): the response can land before the click's own
+    // promise resolves.
+    const responsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.request().method() === 'POST' && /\/v3\/reports\/?(?:\?.*)?$/.test(new URL(res.url()).pathname),
+        { timeout: config.timeouts.navigation }
+      )
+      .catch(() => null);
+    await this.clickSaveButton();
+    const response = await responsePromise;
+    if (!response || response.ok()) {
+      // Either a real success, or no matching response was captured at all
+      // (e.g. a client-side validation error that never reached the
+      // network) — either way, this isn't the confirmed backend signature,
+      // so let the caller's own waitForReportDetailPage()/form-error checks
+      // be the real signal, unmodified.
+      return 'done';
+    }
+    const body = await response.json().catch(() => null);
+    const isConfirmedTransientBackendBug =
+      response.status() === 500 && body?.code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE;
+    return isConfirmedTransientBackendBug ? 'confirmedTransientBackendBug' : 'done';
+  }
+
+  // WHY this exists, and why the retry below is a FALLBACK, never the
+  // default path: confirmed live 2026-08-25 (see APPLICATION_BUGS.md #4 and
+  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
+  // `POST /v3/reports` for a newly-created Meeting report deterministically
+  // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
+  // errorDetails always null), while an immediate retry of the identical,
+  // unmodified request succeeds cleanly (201). Confirmed backend-side, not a
+  // client race: nothing about the request changes between the two
+  // attempts, and 5 independent successful report IDs across 5 independent
+  // attempts came back perfectly consecutive — no ID gap — meaning the
+  // failed attempt leaves no partial/orphaned report behind to clean up.
+  // Cross-entity-type reproduction found this is NOT universal — Lead/Deal/
+  // Contact/Call log did not reproduce it in the same live check — so the
+  // fallback below fires only for this exact status+code pair, never as a
+  // blanket "retry any failed save," so a genuinely different backend/
+  // validation error still surfaces immediately, unmasked.
+  private async clickSaveButtonForCreateWithBackendRetry(): Promise<void> {
+    // PRIMARY ATTEMPT — a normal, unmodified Save click. No special-casing,
+    // no workaround logic: this is exactly what a plain `clickSaveButton()`
+    // call would do.
+    const primaryOutcome = await this.attemptSaveOnceAndClassify();
+    if (primaryOutcome !== 'confirmedTransientBackendBug') {
+      return;
+    }
+
+    // FALLBACK — workaround for a confirmed Kylas backend bug (HTTP 500,
+    // code 01403004), see APPLICATION_BUGS.md #4. Reached ONLY because the
+    // primary attempt above matched this exact confirmed signature. Retried
+    // exactly once — whatever happens on this attempt is final; no further
+    // retries, and any different failure here still propagates normally via
+    // the caller's own checks.
+    logger.warn(
+      `createReport: POST /v3/reports returned 500/${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} ` +
+        '(confirmed Kylas backend bug — see APPLICATION_BUGS.md) on the primary attempt — ' +
+        'retrying Save once as a fallback'
+    );
+    await this.attemptSaveOnceAndClassify();
+  }
+
   async createReport(data: ReportData): Promise<{ id: string; name: string }> {
     logger.info(`Creating report: ${data.name}`);
     await this.goToCreateReport();
     await this.fillReportForm(data);
-    await this.clickSaveButton();
+    await this.clickSaveButtonForCreateWithBackendRetry();
     await this.waitForReportDetailPage();
     const id = this.captureReportIdFromUrl();
     if (!id) {
@@ -1787,11 +2161,67 @@ export class ReportsPage extends BasePage {
   // same "give the backend a moment" effect as a sleep would, without a
   // synthetic wait, and is arguably a MORE correct check (it re-proves the
   // report engine's own read path, not just the passage of time).
+  // WHY the optional `filters` param, added 2026-08-25 (R36/R64 flakiness
+  // investigation — see .claude/known-issues.md's "Sandbox Build #147
+  // investigation" section for the full root-cause writeup): every existing
+  // caller of this method (14 across reports.spec.ts/reports.rbac.spec.ts)
+  // only ever needs "report total >= a tight-window API ground truth,"
+  // which already tolerates the report's own coarse ±1-day date window
+  // picking up OTHER concurrently-created entities — that tolerance is
+  // exactly why those callers were never flaky. R36/R64 are structurally
+  // different: they compare a BEFORE/AFTER snapshot of that same coarse,
+  // shared window, and under real concurrent CI load (`--workers=2`, a
+  // multi-hour full-suite run), other tests can legitimately create MORE
+  // entities inside that same ~2-day window between the before- and
+  // after-read, masking or exceeding the -1 signal from a single deletion —
+  // a genuine test-isolation gap, not a reporting-engine bug. Passing an
+  // exact-match filter (mirroring R35's own already-proven `filters` usage
+  // immediately above in reports.spec.ts) scopes the underlying REPORT
+  // itself to just the one entity under test, making the before/after
+  // comparison immune to concurrent noise by construction — not tolerated
+  // via a wider retry budget. Defaults to `undefined` (no filter, current
+  // `generateReportData()` default) — every existing caller's behavior is
+  // byte-for-byte unchanged.
+  //
+  // WHY the optional `narrowWindow` param, added 2026-08-25 (dual
+  // date-window strategy, alongside the `filters` param above): the ±1
+  // CALENDAR DAY padding below (kept as the default — see its own WHY
+  // comment) is deliberate and still wanted for tests specifically
+  // exercising the report's own date-range-filtering logic across a wide
+  // window — MORE data in that window is a MORE thorough check of that
+  // logic. Confirmed via grep (18 real call sites across
+  // reports.spec.ts/reports.rbac.spec.ts) that every one of them either
+  // genuinely wants that broad-window coverage, or — for the two before/
+  // after-delete tests, R36/R64 — is already made concurrency-safe via the
+  // `filters` param alone, with no need for a narrower window on top.
+  // But a test needing an EXACT count immune to concurrent contamination
+  // (e.g. a before/after delete comparison) is better served by a genuinely
+  // NARROW window than by a wide one tolerated via a retry budget or a
+  // `filters` exact-match alone — R36/R64 already prove `filters` alone is
+  // sufficient for those two tests, but a future test comparing raw counts
+  // without a uniquely-taggable field to filter on would still be exposed
+  // to the full ±1-day contamination window. `narrowWindow: true` builds the
+  // UI window from the real windowStart/windowEnd (padded by a few minutes,
+  // not zero — real wall-clock time passes between capturing the JS
+  // timestamp and the report engine's own read, and this repo's own
+  // documented environment auth/clock-skew history means a razor-thin
+  // zero-padding window risks a false undercount) instead of ±1 day, AND
+  // fills the Custom Date Range's rc-time-picker inputs (via
+  // `fillCustomDateRange()`'s new `includeTime` option) so the UI window is
+  // actually minutes-wide, not day-wide despite the tighter Date values —
+  // the calendar's own day-granularity meant a tight Date alone was never
+  // enough on its own (see that WHY comment). Defaults to `false` — every
+  // existing caller's behavior, including the exact ±1-day/no-time-fill
+  // path, is byte-for-byte unchanged. Combinable with `filters` for tests
+  // wanting both: a report scoped to one entity AND a minutes-wide window,
+  // rather than either alone.
   async verifyRunCountForEntity(
     entityType: ReportEntityType,
     windowStart: Date,
     windowEnd: Date,
-    role: 'admin' | 'restricted' = 'admin'
+    role: 'admin' | 'restricted' = 'admin',
+    filters?: ReportFilter[],
+    narrowWindow = false
   ): Promise<RunCountVerificationResult> {
     const dimension = REPORT_OWNER_DIMENSION_BY_ENTITY[entityType];
     const metric = REPORT_COUNT_METRIC_BY_ENTITY[entityType];
@@ -1800,24 +2230,40 @@ export class ReportsPage extends BasePage {
     // stays on the tight, exact window: found via a real live failure
     // (2026-08-21) — the Custom Date Range calendar only supports DAY
     // granularity (a day-cell click, per formatDateForCalendarLabel()), with
-    // no time-of-day control this file fills. windowStart/windowEnd are
-    // real timestamps captured seconds apart on the SAME calendar day —
-    // selecting that identical day for both Start and End left the report
-    // with no header at all (a genuine zero-data page, confirmed via the
-    // failure's own timeout on `.report__header .metric-name`), because the
-    // app's own default start-of-day/end-of-day time for an unfilled time
-    // picker excluded the freshly-created entities. Padding by a full day on
-    // each side guarantees the actual creation timestamps fall inside the
-    // UI's window regardless of that default. This does NOT weaken the
-    // check: `apiTotal` is still computed from the exact, unpadded window,
-    // so `reportTotal < apiTotal` (a genuine under-count) is still caught —
+    // no time-of-day control this file fills BY DEFAULT — see the
+    // `narrowWindow` WHY comment above for the option that now fills it.
+    // windowStart/windowEnd are real timestamps captured seconds apart on
+    // the SAME calendar day — selecting that identical day for both Start
+    // and End left the report with no header at all (a genuine zero-data
+    // page, confirmed via the failure's own timeout on
+    // `.report__header .metric-name`), because the app's own default
+    // start-of-day/end-of-day time for an unfilled time picker excluded the
+    // freshly-created entities. Padding by a full day on each side
+    // guarantees the actual creation timestamps fall inside the UI's window
+    // regardless of that default. This does NOT weaken the check: `apiTotal`
+    // is still computed from the exact, unpadded window, so
+    // `reportTotal < apiTotal` (a genuine under-count) is still caught —
     // padding can only ever make the report's own total equal or larger,
     // consistent with this method's own already-accepted "report >= api"
-    // tolerance for benign timing noise.
+    // tolerance for benign timing noise. `narrowWindow` mode below applies
+    // the same "pad slightly wider than the exact API window, never
+    // tighter" discipline, just with minutes instead of a day.
     const paddedStart = new Date(windowStart);
-    paddedStart.setDate(paddedStart.getDate() - 1);
     const paddedEnd = new Date(windowEnd);
-    paddedEnd.setDate(paddedEnd.getDate() + 1);
+    if (narrowWindow) {
+      // WHY 5 minutes, not zero: "a small padding buffer... to account for
+      // clock/timezone rounding," per this feature's own spec — zero-padding
+      // would make the UI window's edges exactly equal to the entity's real
+      // creation moment, with no margin for the seconds of real wall-clock
+      // time this method's own network calls (report creation, navigation,
+      // the report engine's own read) take between capturing
+      // windowStart/windowEnd and the report actually being generated.
+      paddedStart.setMinutes(paddedStart.getMinutes() - this.NARROW_WINDOW_PADDING_MINUTES);
+      paddedEnd.setMinutes(paddedEnd.getMinutes() + this.NARROW_WINDOW_PADDING_MINUTES);
+    } else {
+      paddedStart.setDate(paddedStart.getDate() - 1);
+      paddedEnd.setDate(paddedEnd.getDate() + 1);
+    }
     // WHY the dateFilter value is always resolved from
     // REPORT_CREATED_DATE_FILTER_BY_ENTITY, never a hardcoded 'Created At':
     // confirmed live (2026-08-21) via a real test failure — Call log's Date
@@ -1832,28 +2278,55 @@ export class ReportsPage extends BasePage {
     // ground-truth query scoped to the same underlying field for every
     // entity type, Call log included.
     const dateFilter = REPORT_CREATED_DATE_FILTER_BY_ENTITY[entityType];
+    // WHY: the Custom Date Range's day-picker/time-picker are always
+    // interpreted by the Kylas app in Asia/Kolkata (IST) — confirmed via
+    // this class's own dateFilter API calls (timezone=Asia%2FCalcutta
+    // elsewhere in this file). fillTimeInPicker()/formatDateForCalendarLabel()
+    // read the RUNNING PROCESS's own local system timezone, which is correct
+    // only by coincidence on an IST machine — confirmed live (2026-08-26):
+    // GitHub Actions' ubuntu-latest CI runners default to UTC, a ~5.5h
+    // offset from IST that shifted BOTH the selected calendar day and the
+    // filled time completely off the real window, root-caused via R65
+    // failing 2/2 in real CI (sandbox run 32857739191, 2026-08-25) with
+    // report=0 despite passing 4/4 on every local IST-machine run. Only
+    // applied for narrowWindow — the broad ±1-day default already tolerates
+    // a timezone-sized shift by design (see that branch's own WHY comment
+    // above).
+    const uiStart = narrowWindow ? this.toIstWallClockDate(paddedStart) : paddedStart;
+    const uiEnd = narrowWindow ? this.toIstWallClockDate(paddedEnd) : paddedEnd;
     const data = generateReportData({
       reportType: entityType,
       dimension,
       metric,
       dateFilter,
       dateRangeOption: 'Custom',
-      customDateRange: { start: paddedStart, end: paddedEnd },
+      customDateRange: { start: uiStart, end: uiEnd, includeTime: narrowWindow },
+      filters,
     });
 
+    // WHY armed here, before createReport(): the real /v3/reports/<plural>
+    // response — the one that actually computes and produces this report's
+    // total, confirmed live 2026-08-26 to fire during createReport()'s own
+    // internal navigation to the details page — must be armed before the
+    // triggering action, per Playwright's waitForResponse() contract (see
+    // armReportDataResponseCapture()'s own WHY comment for the full
+    // reasoning on why this replaces getReportTotalFromHeader()'s DOM scrape
+    // here specifically).
+    const initialDataPromise = this.armReportDataResponseCapture(entityType);
     const { id } = await this.createReport(data);
+    let reportTotal = await initialDataPromise;
 
     const { retries } = this.retryConfig;
-    let reportTotal = await this.getReportTotalFromHeader();
-    let apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd);
+    let apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd, filters);
     for (let attempt = 1; attempt < retries && reportTotal !== apiTotal; attempt++) {
       logger.info(
         `verifyRunCountForEntity(${entityType}): mismatch on attempt ${attempt}/${retries} ` +
           `(report=${reportTotal}, api=${apiTotal}) — re-checking`
       );
+      const retryDataPromise = this.armReportDataResponseCapture(entityType);
       await this.goToReportDetails(id);
-      reportTotal = await this.getReportTotalFromHeader();
-      apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd);
+      reportTotal = await retryDataPromise;
+      apiTotal = await this.getApiCountForWindow(entityType, windowStart, windowEnd, filters);
     }
 
     if (reportTotal < apiTotal) {

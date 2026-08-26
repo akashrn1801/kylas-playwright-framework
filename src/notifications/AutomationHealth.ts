@@ -12,6 +12,16 @@ import { ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 
+export type OverallVerdict = 'clear' | 'caution' | 'blocked';
+export type VerdictTone = 'success' | 'warning' | 'danger';
+
+export interface VerdictResult {
+  verdict: OverallVerdict;
+  bannerLabel: string;
+  bannerTone: VerdictTone;
+  headline: string;
+}
+
 export interface HealthFactor {
   name: string;
   impact: number; // negative = penalty
@@ -137,4 +147,65 @@ export function computeHealthScore(
     score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
 
   return { score, label, factors };
+}
+
+/**
+ * The SINGLE source of truth for "is this run okay," consumed identically by
+ * EmailTemplate's status banner AND its Executive Summary headline (2026-08-24
+ * fix for a real, confirmed-live contradiction: a run with 0 failures/0 flaky
+ * this run — banner: "✅ Passed" — could still independently compute
+ * health.label === 'Critical' via background errors/staleness/suite drift,
+ * producing Executive Summary's own separately-derived "Deployment not
+ * recommended" right next to a green "Passed" banner. That was possible
+ * because the banner and the summary each computed their own verdict from
+ * different inputs. Making both render from this ONE function's output
+ * makes disagreement structurally impossible — not just less likely — since
+ * there is only one verdict, not two independently-derived ones.
+ */
+export function computeOverallVerdict(
+  report: ParsedReport,
+  health: HealthScore,
+  suiteDrift: SuiteDrift | null
+): VerdictResult {
+  if (report.failed > 0) {
+    return { verdict: 'blocked', bannerLabel: '❌ Failed', bannerTone: 'danger', headline: 'Deployment not recommended' };
+  }
+  if (suiteDrift?.occurred) {
+    return {
+      verdict: 'blocked',
+      bannerLabel: '⚠️ Suite Drift Detected',
+      bannerTone: 'danger',
+      headline: 'Deployment not recommended — suite drift detected',
+    };
+  }
+  // WHY this branch is the actual fix: a clean run (0 failed) whose health
+  // score is still Critical (background errors, staleness, recurring
+  // history) must say so IN THE BANNER ITSELF, not show a plain "Passed"
+  // that contradicts a "Critical"/"not recommended" verdict shown two
+  // sections later.
+  if (health.label === 'Critical') {
+    return {
+      verdict: 'blocked',
+      bannerLabel: '⚠️ Passed — Health Critical',
+      bannerTone: 'danger',
+      headline: 'Deployment not recommended — automation health is Critical despite a clean run this time',
+    };
+  }
+  if (report.flaky > 0) {
+    return {
+      verdict: 'caution',
+      bannerLabel: '⚠️ Unstable',
+      bannerTone: 'warning',
+      headline: 'Deployment likely safe — review flaky tests',
+    };
+  }
+  if (health.label === 'Needs Attention') {
+    return {
+      verdict: 'caution',
+      bannerLabel: '⚠️ Passed — Needs Attention',
+      bannerTone: 'warning',
+      headline: 'Deployment likely safe — review automation health factors before proceeding',
+    };
+  }
+  return { verdict: 'clear', bannerLabel: '✅ Passed', bannerTone: 'success', headline: 'Deployment recommended' };
 }

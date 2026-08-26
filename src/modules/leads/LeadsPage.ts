@@ -1700,8 +1700,19 @@ export class LeadsPage extends BasePage {
     logger.info('Deleting lead via ellipsis menu');
     await this.clickEllipsisOption('Delete');
     await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
+    // WHY: Capture the DELETE response before clicking — never end a mutation
+    // with only a fixed-duration sleep (CLAUDE.md rule #2). Mirrors
+    // DealsPage.deleteDeal()'s already-proven shape; see
+    // .claude/known-issues.md's Build #147 entry for why the previous
+    // unconditional 1s pause here was masking a real "report count checked
+    // before the delete actually committed" failure.
+    const deleteResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/leads\/\d+$/) !== null && res.request().method() === 'DELETE',
+      'delete lead',
+      15000
+    ).catch(() => null);
     await this.deleteConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    await deleteResponsePromise;
     logger.success('Lead deleted');
   }
 

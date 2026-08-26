@@ -43,6 +43,86 @@ import {
 // why this matters specifically for Jenkinsfile (main)'s pipeline.
 loadDotEnv();
 
+// ── Secret redaction — the ONE chokepoint every log line in this file must
+// route through ──────────────────────────────────────────────────────────
+//
+// WHY this exists at all: confirmed real, 2026-08-25 (see the dated entry in
+// .claude/known-issues.md's "CI reporting-history ledger" section) — this
+// script's temp clone (see resolveGitRemoteUrl()'s own WHY comment) never
+// received the PIPELINE_TOKEN credential that authenticates every OTHER git
+// operation in this repo's CI, so every `git push` it ever attempted was a
+// silent, unauthenticated, anonymous request — guaranteed to fail, every
+// single run, forever. That gap is fixed below by handing this script its
+// own credential via `gitAuthEnv()`. The moment a real secret exists inside
+// this process, this file's own risk profile changes completely: any future
+// edit that adds a `console.log(someGitOutput)` or rethrows a caught error
+// verbatim now has a real chance of printing that secret into a public CI
+// log, unless something prevents it structurally.
+//
+// WHY a single registered-secret + redact()-on-every-output-path design,
+// rather than "just be careful not to log the token variable directly" at
+// each call site: that second approach is exactly the discipline that
+// already failed once in this same file, in a different form — the push
+// loop's "assume concurrent update" classification (see the git failure
+// classification registry below, particularly AUTH_FAILURE_CLASSIFIER's own
+// WHY comment) was itself an unverified assumption baked into one call
+// site, trusted by every reader since, until real evidence proved it wrong.
+// Secret-handling deserves a stronger guarantee than "this specific line
+// happens to be safe today" — it must hold even if someone
+// adds a new console.log to this file next year with no knowledge of this
+// comment. Routing every single console.log/console.warn in this file
+// through log()/warn() below, which unconditionally scrub the one
+// registered secret from any string before it reaches an actual output
+// sink, makes that guarantee structural rather than a matter of discipline.
+//
+// This is deliberately layered ON TOP OF (not a replacement for) choosing a
+// credential-delivery mechanism that never puts the secret in a command
+// line, URL, or persisted file in the first place (see gitAuthEnv()'s own
+// WHY comment for that mechanism and the real, live evidence backing it) —
+// defense in depth: the primary defense is "the secret is never in a string
+// that could be logged," and this redaction layer is the backstop for the
+// case that assumption is ever wrong, now or after a future change.
+let registeredSecret: string | null = null;
+
+function registerSecretForRedaction(secret: string): void {
+  registeredSecret = secret;
+}
+
+function redact(text: string): string {
+  if (!registeredSecret) return text;
+  return text.split(registeredSecret).join('[REDACTED]');
+}
+
+// WHY log()/warn() exist, and why EVERY console.log/console.warn call in
+// this file (including inside functions defined below) is written through
+// these two instead of calling console.* directly: this is the structural
+// guarantee itself — there is no code path left in this file that can print
+// a string without it passing through redact() first. A future contributor
+// adding a new log line only needs to know "use log()/warn(), not
+// console.*" — they don't need to separately remember "and also, don't
+// print the token" for that specific new line, because there is no way to
+// bypass the scrub short of deliberately calling console.* directly.
+function log(message: string): void {
+  console.log(redact(message));
+}
+
+function warn(message: string, err?: unknown): void {
+  if (err === undefined) {
+    console.warn(redact(message));
+    return;
+  }
+  // WHY stringified here (losing Node's default Error pretty-printing),
+  // rather than passing `err` through to console.warn as its own object:
+  // redact() only operates on strings — an un-stringified Error/unknown
+  // value could carry the secret in a property redact() would never see
+  // (e.g. a future ExecException whose .cmd embeds an env var value some
+  // future Node version starts including). Flattening to one already-
+  // redacted string is a deliberate, small readability cost for a
+  // guarantee that holds regardless of the error's real shape.
+  const errText = err instanceof Error ? `${err.message}${err.stack ? `\n${err.stack}` : ''}` : String(err);
+  console.warn(redact(message), redact(errText));
+}
+
 // WHY: a dedicated, never-merged branch — NOT main/dev/qa/stage/prod — so this
 // ledger's commits (a) can never trip branch-protection rules configured on
 // deployment branches, (b) never show up in a code PR's diff, and (c) isolate
@@ -74,6 +154,258 @@ function resolveGitRemoteUrl(): string {
 }
 const MAX_PUSH_RETRIES = 3;
 
+// WHY: confirmed real via TWO separate CI occurrences now — sandbox.yml runs
+// 32748451285 (2026-08-24) and 32822096101 (2026-08-25) — see the dated
+// entries in .claude/known-issues.md's "CI reporting-history ledger" section
+// for both. A push REJECTION on HISTORY_BRANCH_NAME (below) proves the
+// branch already exists on GitHub's primary (a competing writer's push
+// landed first) — but the very next `git fetch` of that same ref, fired
+// with zero delay, can still fail with "couldn't find remote ref" if it
+// lands on a GitHub backend replica that hasn't yet caught up with the ref
+// JUST created moments earlier. This is a narrow, transient replication-lag
+// window specific to the instant a ref is first created under concurrent
+// competition — NOT the same as the ref genuinely, permanently not existing
+// (that case is handled separately, by the initial cloneAttempt/orphan-
+// branch-creation path above, which must stay untouched by this).
+//
+// WHY elapsed-time-bounded exponential backoff, not a fixed short list of
+// delays: the first version of this fix used 3 fixed delays
+// (300/800/1500ms, ~2.6s total) — confirmed INSUFFICIENT by the second
+// occurrence above, which exhausted that exact budget and failed again with
+// the identical signature. GitHub's replication lag is not a fixed,
+// predictable duration, and there is no public API to query it directly —
+// confirmed by checking: GitHub's REST "get a reference" endpoint
+// (`GET /repos/{owner}/{repo}/git/refs/{ref}`) exposes exactly the same
+// exists-or-not information `git fetch` already gives us, no propagation/
+// consistency metadata; the only replication-status introspection GitHub
+// exposes anywhere is `ghe-repl-status`, for GitHub ENTERPRISE SERVER's own
+// self-hosted HA replica nodes — irrelevant to github.com, which is what
+// this repo uses. Blind bounded retry is therefore the correct approach in
+// principle (nothing better is available), but "bounded" must mean a real
+// ELAPSED-TIME ceiling, not a specific guessed delay count — any fixed
+// number of fixed delays can fail again the moment a real lag happens to
+// exceed it, exactly as just proven twice.
+//
+// ── Git failure classification — an open registry, not an if/else chain ──
+//
+// WHY this exists, replacing an unconditional assumption, not just a wrong
+// one: confirmed real, 2026-08-25 (see .claude/known-issues.md) — the push
+// loop below used to log EVERY non-zero exit from `git push` as "rejected
+// (concurrent update)" with NO check of the actual error text at all. That
+// unconditional guess is what hid the real bug (Bug 1 above — no
+// credentials at all, so `git push` always failed with a genuine
+// authentication error) through two entire prior fix attempts that both
+// tuned a retry budget for a race condition that was never actually
+// happening. The lesson generalizes: a hardcoded "when this fails, it must
+// mean X" is exactly as dangerous whether X is "concurrent update" or
+// anything else convenient to assume — the fix is to always check the real
+// error text, and to have an honest, first-class outcome for "text I don't
+// recognize," never a default that pretends to know.
+//
+// WHY a data-driven list of classifiers rather than a growing if/else
+// chain: adding a THIRD (or fourth, fifth...) known failure shape in the
+// future — for either fetch or push — is adding one entry to the relevant
+// array below, not restructuring conditional logic. Each classifier states
+// its own real, evidence-backed error-text pattern and whether that
+// specific, NAMED failure is safe to retry — nothing about "everything not
+// otherwise matched" is ever assumed to be retryable.
+interface GitFailureClassifier {
+  readonly kind: string;
+  readonly pattern: RegExp;
+  readonly retryable: boolean;
+}
+
+// WHY checked before every other classifier, in both the fetch and push
+// registries below: an authentication/permission failure is the one
+// outcome that must never be retried under any circumstances (retrying it
+// can never succeed, only waste the retry budget and, as happened here,
+// disguise the real problem as something benign) — checking it first
+// guarantees it can never be shadowed by a coincidental match against a
+// less urgent pattern. Grounded in real, observed git client behavior, not
+// research alone — see gitAuthEnv()'s own WHY comment for the live HTTP
+// server test that produced `could not read Username for '<url>': No such
+// device or address` as the actual text a non-interactive git client emits
+// on a genuine 401; the remaining alternatives in this pattern are git/
+// GitHub's own well-documented standard wording for the same failure class
+// (a missing/invalid/insufficiently-scoped credential) that this session's
+// local-only test server cannot itself produce (e.g. GitHub's own
+// server-side 403/"Invalid username or token" responses for a real,
+// rejected PAT), included for completeness against the real github.com
+// backend this script actually talks to in CI.
+const AUTH_FAILURE_CLASSIFIER: GitFailureClassifier = {
+  kind: 'auth-failure',
+  retryable: false,
+  pattern:
+    /authentication failed|could not read username|permission denied|permission to .* denied|\b401\b|\b403\b|invalid username or token|terminal prompts disabled|repository not found|support for password authentication was removed/i,
+};
+
+// WHY this exact pattern, and why it's retryable: git's own client-side
+// wording for "the remote has a commit I don't have locally" — confirmed
+// standard, stable git terminology, not GitHub-specific. This is the ONE
+// genuine case the recompute-and-retry logic below exists for: a real
+// second writer's push landed first. Never reached in this session's own
+// investigation (every real occurrence turned out to be Bug 1's
+// authentication failure instead, caught above before this is ever
+// checked) — kept because a genuine race becomes newly POSSIBLE now that
+// pushes can actually succeed at all.
+const NON_FAST_FORWARD_CLASSIFIER: GitFailureClassifier = {
+  kind: 'non-fast-forward',
+  retryable: true,
+  pattern: /\[rejected\]|non-fast-forward|\(fetch first\)|failed to push some refs/i,
+};
+
+// WHY this exact pattern: unchanged from the original fix (see the dated
+// entries above) — confirmed real via two separate CI occurrences. Kept as
+// its own named classifier (not folded into NON_FAST_FORWARD_CLASSIFIER)
+// because it is fetch-specific vocabulary (a ref genuinely or transiently
+// absent), never push-specific, and because — now that Bug 1 is fixed and
+// this app confirmed public (a `git fetch` never needed auth for this repo
+// during this whole investigation) — a recurrence of this exact fetch
+// signature has a real chance of finally being genuine GitHub replication
+// lag rather than a symptom of some entirely different bug, which the
+// classifier registry below (AUTH_FAILURE_CLASSIFIER checked first) can now
+// tell apart instead of blindly retrying anything that isn't this pattern.
+const MISSING_REMOTE_REF_CLASSIFIER: GitFailureClassifier = {
+  kind: 'missing-remote-ref',
+  retryable: true,
+  pattern: /couldn't find remote ref/i,
+};
+
+// WHY the caller supplies its OWN ordered classifier list rather than this
+// function hardcoding one global list: fetch failures and push failures
+// have genuinely different retryable vocabularies (a fetch can plausibly
+// be "missing remote ref"; a push can plausibly be "non-fast-forward"; the
+// reverse never applies to either) — sharing one flat list would let a
+// push-only pattern wrongly match fetch output or vice versa. Both
+// contexts still share AUTH_FAILURE_CLASSIFIER by listing it explicitly.
+// WHY the fallback is an explicit, honestly-named `unclassified` outcome
+// rather than defaulting to either retryable or not: this is the single
+// most important property of this whole redesign — an error text this
+// script has never seen before must never be silently assumed to be
+// anything. `retryable: false` on the fallback is a deliberate, safe
+// default (never loop on an unknown condition), not a guess about what the
+// error means.
+function classifyGitFailure(
+  rawOutput: string,
+  classifiers: readonly GitFailureClassifier[]
+): { kind: string; retryable: boolean } {
+  for (const classifier of classifiers) {
+    if (classifier.pattern.test(rawOutput)) {
+      return { kind: classifier.kind, retryable: classifier.retryable };
+    }
+  }
+  return { kind: 'unclassified', retryable: false };
+}
+
+// WHY a single shared formatter for every thrown/logged classification
+// outcome: guarantees the exact phrase "unclassified failure: <exact raw
+// text>" for the one case nothing recognized, and an equally explicit,
+// equally evidence-cited phrase for every recognized case — no call site
+// can phrase either case ambiguously, since neither call site constructs
+// this string by hand.
+function describeGitFailure(
+  commandLabel: string,
+  classification: { kind: string; retryable: boolean },
+  rawOutput: string
+): string {
+  if (classification.kind === 'unclassified') {
+    return `${commandLabel} failed — unclassified failure: ${rawOutput}`;
+  }
+  return `${commandLabel} failed — classified as ${classification.kind} (confirmed from the real git error text, not assumed): ${rawOutput}`;
+}
+// WHY 45s specifically, not a guess: this codebase already has two
+// established conventions for "how long to wait on a cross-process/cross-
+// node eventual-consistency condition before giving up" — AuthManager.
+// withFileLock()'s 30000ms-per-cycle stale-lock-detection window (the
+// closest analogous case: a cross-process race with no way to directly
+// query the other side's state), and config.timeouts.navigation's 60000ms
+// default (this codebase's standard budget for a network-dependent wait
+// that deserves generous headroom). 45s sits between the two established
+// numbers rather than inventing a third, unrelated one. Being generous here
+// costs nothing real: this whole sync step runs AFTER the test suite has
+// already finished and reported its own pass/fail, wrapped in a "never fail
+// the build" try/catch (see main()'s own catch block below) — a slow-but-
+// eventually-successful history sync has zero effect on real test feedback.
+const FETCH_RETRY_CEILING_MS = 45000;
+const FETCH_RETRY_INITIAL_DELAY_MS = 300;
+// WHY capped per-attempt instead of letting the doubling grow unboundedly:
+// keeps retries (and their log lines) frequent enough to stay observable in
+// a live CI log — an eventual multi-minute single sleep this deep into a
+// background step would look indistinguishable from a genuine hang to
+// anyone watching the log live, and finer-grained retries cost nothing
+// extra against the 45s ceiling (worst case ~12 attempts, not excessive).
+const FETCH_RETRY_MAX_DELAY_MS = 5000;
+const FETCH_RETRY_BACKOFF_MULTIPLIER = 2;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// WHY real exponential backoff (each delay roughly doubling, capped per
+// attempt) bounded by ELAPSED TIME rather than a fixed attempt count: a
+// fixed count paired with fixed delays (the original 300/800/1500ms
+// version) is really just a disguised fixed ceiling (~2.6s total) — exactly
+// what was already proven insufficient. Bounding by elapsed time instead
+// means the number of attempts falls out of the time budget rather than
+// being chosen in advance: a short-lived lag still resolves within the
+// first fast retry or two with no wasted time, while a longer one keeps
+// getting a real chance — for however many attempts that takes — right up
+// to the 45s ceiling, adapting to whatever the actual lag turns out to be
+// instead of a number guessed in advance. This only ever activates for the
+// one specific, transient error signature confirmed above; any other fetch
+// failure (auth, network, a genuinely absent branch) fails fast on the
+// first attempt, unchanged from before. Retrying via the outer
+// MAX_PUSH_RETRIES loop alone does not fix this, since that loop introduces
+// no delay between attempts — all of its attempts could fire within
+// milliseconds of each other, well inside the replication-lag window this
+// is working around.
+async function fetchHistoryBranchWithBackoff(repoDir: string, branch: string): Promise<void> {
+  const startedAt = Date.now();
+  let delayMs = FETCH_RETRY_INITIAL_DELAY_MS;
+  let attempt = 0;
+
+  // WHY `while (true)` is still safe here (never an indefinite hang): the
+  // elapsed-time check below is a hard ceiling checked on every iteration
+  // before ever sleeping again — this loop always either returns (fetch
+  // succeeded) or throws (ceiling hit, or a genuinely different failure),
+  // both of which are reachable in bounded real time.
+  while (true) {
+    attempt++;
+    const result = shSafe(`git fetch origin ${branch}`, repoDir);
+    if (result.ok) return;
+
+    const classification = classifyGitFailure(result.output, [AUTH_FAILURE_CLASSIFIER, MISSING_REMOTE_REF_CLASSIFIER]);
+    if (!classification.retryable) {
+      // WHY this covers BOTH the confirmed auth-failure case and any
+      // genuinely unrecognized error, with one honest code path: neither
+      // should ever be retried, and describeGitFailure() names precisely
+      // which of the two this is (never a guess) in the thrown message.
+      throw new Error(describeGitFailure(`git fetch origin ${branch}`, classification, result.output));
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= FETCH_RETRY_CEILING_MS) {
+      // WHY this still throws rather than looping forever: preserves the
+      // exact same "never fail the build" contract as before — this throw
+      // propagates to main()'s own outer try/catch, which logs and
+      // continues without history for this run. The ceiling is a hard cap,
+      // not a soft suggestion.
+      throw new Error(
+        `git fetch origin ${branch} failed after ${attempt} attempt(s) over ${elapsedMs}ms ` +
+          `(ceiling ${FETCH_RETRY_CEILING_MS}ms), still classified as ${classification.kind}: ${result.output}`
+      );
+    }
+
+    log(
+      `[syncHistory] Fetch of ${branch} classified as ${classification.kind} (retryable) — likely GitHub ` +
+        `replication lag on a just-created ref, not a real absence. Retrying in ${delayMs}ms ` +
+        `(attempt ${attempt}, ${elapsedMs}ms elapsed of ${FETCH_RETRY_CEILING_MS}ms ceiling)`
+    );
+    await delay(delayMs);
+    delayMs = Math.min(delayMs * FETCH_RETRY_BACKOFF_MULTIPLIER, FETCH_RETRY_MAX_DELAY_MS);
+  }
+}
+
 // WHY: added 2026-07-14 — this file had its own, separate, older branch-name
 // derivation that never received the local-git fallback fix applied to the
 // email-facing code (notify.ts's resolveNotificationInput()). A bare local
@@ -94,8 +426,76 @@ function localGitFallback(cmd: string): string | null {
   }
 }
 
+// WHY env-var-injected git config (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/
+// `GIT_CONFIG_VALUE_0`), rather than either alternative considered —
+// confirmed root cause (2026-08-25, see .claude/known-issues.md): this
+// script's temp clone (created by `git clone` into a fresh `os.tmpdir()`
+// directory — see resolveGitRemoteUrl()'s own WHY comment) has NO
+// relationship to the original checked-out CI workspace's git config, so it
+// never inherits the `PIPELINE_TOKEN` credential `actions/checkout` sets up
+// there. Confirmed via research (GitHub's own actions/checkout source and
+// documented behavior) that checkout persists its credential via `git
+// config --local http.https://github.com/.extraheader "AUTHORIZATION: basic
+// <base64 x-access-token:TOKEN>"` — LOCAL scope, never inherited by an
+// unrelated clone elsewhere on disk. Two ways to give THIS script's own temp
+// clone the equivalent credential were considered and rejected in favor of
+// this one:
+//   (a) Embed the token directly in the remote URL
+//       (https://x-access-token:TOKEN@github.com/...). Rejected: confirmed
+//       via direct code inspection that `gitRemoteUrl` (built from this
+//       embedded-token URL) gets interpolated into `sh()`/plain execSync
+//       command strings elsewhere in this file (the clone/fetch/push calls
+//       below) — Node's execSync embeds the FULL command string into its own
+//       thrown error's `.message` the moment any of those commands fails for
+//       ANY reason, which would print the token straight into this script's
+//       own caught-and-logged error path. A URL is also the value most
+//       likely to be echoed back verbatim inside git's own error text on a
+//       real failure (e.g. "fatal: unable to access 'https://TOKEN@...'"),
+//       an additional, independent leak vector this option can't avoid.
+//   (b) `git config --local http.https://github.com/.extraheader ...`,
+//       mirroring actions/checkout exactly, via a one-time setup call after
+//       the temp clone exists. Avoids the URL-echo risk above, but still
+//       requires a specific call site to remember to run it before the
+//       first fetch/push, and persists the secret to a file on disk
+//       (`repoDir/.git/config`) for the life of the temp directory.
+//   (c) THIS: inject the identical `AUTHORIZATION: basic ...` header via
+//       `GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` environment variables passed
+//       to every git invocation through the shared sh()/shSafe() helpers —
+//       the ONLY functions this entire file ever uses to run a git command
+//       (confirmed via grep). This gets both properties (a) and (b)
+//       individually lack: the secret is never in a command-line argument,
+//       a URL, or a file on disk at any point — Node's execSync does NOT
+//       include the `env` option's contents in a thrown error's `.message`
+//       (confirmed: only the command string and exit code are), so a future
+//       failure of ANY git command in this script cannot leak it via that
+//       path — and because the injection lives in sh()/shSafe() themselves,
+//       every git call in this file is authenticated automatically, present
+//       and future, with no separate call site to place or forget.
+// WHY verified live, not just reasoned from documentation: built a local
+// HTTP server that logs the raw `Authorization` header it receives, pointed
+// a real `git ls-remote` at it with this exact env-var mechanism configured
+// for a test token, and confirmed the server received EXACTLY
+// `Basic <base64 of x-access-token:test-token-abc123>` — byte-for-byte the
+// same scheme actions/checkout itself uses. Separately confirmed (same
+// local server, configured to require a specific header and reject any
+// other with HTTP 401) that a real, non-interactive `git` client's own
+// error text for an actual authentication failure is
+// `fatal: could not read Username for '<url>': No such device or address` —
+// this exact string is what AUTH_FAILURE_CLASSIFIER below is grounded in,
+// not assumed from research alone.
+function gitAuthEnv(): NodeJS.ProcessEnv {
+  const token = process.env.PIPELINE_TOKEN;
+  if (!token) return process.env;
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+  };
+}
+
 function sh(cmd: string, cwd: string): string {
-  return execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+  return execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: gitAuthEnv() }).toString().trim();
 }
 
 function shSafe(cmd: string, cwd: string): { ok: boolean; output: string } {
@@ -181,6 +581,16 @@ const EMPTY_DELTA_OUTPUT: HistoryDeltaOutput = {
 };
 
 async function main() {
+  // WHY registered here, before a single line of this function's own logic
+  // runs: this must happen before ANY git command executes, so that even a
+  // failure in the very first clone attempt below is already covered by
+  // redact(). registerSecretForRedaction() is a pure in-memory no-op when
+  // PIPELINE_TOKEN is unset (local/HISTORY_GIT_REMOTE testing) — see
+  // redact()'s own guard.
+  if (process.env.PIPELINE_TOKEN) {
+    registerSecretForRedaction(process.env.PIPELINE_TOKEN);
+  }
+
   const env = process.env.ENV || 'qa';
   const branch =
     process.env.BRANCH_NAME ||
@@ -216,7 +626,7 @@ async function main() {
   writeDeltaOutput(EMPTY_DELTA_OUTPUT);
 
   if (!fs.existsSync(jsonReportPath)) {
-    console.warn(`[syncHistory] No results.json at ${jsonReportPath} — skipping history sync`);
+    warn(`[syncHistory] No results.json at ${jsonReportPath} — skipping history sync`);
     return;
   }
 
@@ -224,7 +634,7 @@ async function main() {
   try {
     current = buildCurrentRecord(env, branch, buildNumber, runSource, jsonReportPath);
   } catch (err) {
-    console.warn('[syncHistory] Failed to parse current run for history — skipping:', err);
+    warn('[syncHistory] Failed to parse current run for history — skipping:', err);
     return;
   }
 
@@ -246,7 +656,7 @@ async function main() {
       // WHY: branch doesn't exist yet (first-ever sync) — create it as an
       // orphan so this ledger never inherits or depends on the code branches'
       // history/size.
-      console.log('[syncHistory] History branch not found — creating it as a fresh orphan branch');
+      log('[syncHistory] History branch not found — creating it as a fresh orphan branch');
       fs.mkdirSync(repoDir, { recursive: true });
       sh(`git clone ${gitRemoteUrl} .`, repoDir);
       sh(`git checkout --orphan ${HISTORY_BRANCH_NAME}`, repoDir);
@@ -279,8 +689,8 @@ async function main() {
     let deltaOutput: HistoryDeltaOutput = EMPTY_DELTA_OUTPUT;
     for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
       if (attempt > 1) {
-        console.log(`[syncHistory] Attempt ${attempt}/${MAX_PUSH_RETRIES} — fetching latest and recomputing fresh`);
-        sh(`git fetch origin ${HISTORY_BRANCH_NAME}`, repoDir);
+        log(`[syncHistory] Attempt ${attempt}/${MAX_PUSH_RETRIES} — fetching latest and recomputing fresh`);
+        await fetchHistoryBranchWithBackoff(repoDir, HISTORY_BRANCH_NAME);
         sh(`git reset --hard origin/${HISTORY_BRANCH_NAME}`, repoDir);
       }
 
@@ -309,7 +719,14 @@ async function main() {
         repoDir
       );
       if (!commitResult.ok) {
-        console.log('[syncHistory] Nothing to commit (identical record already present?) — treating as success');
+        // WHY still an assumption, deliberately NOT hardened in this pass:
+        // this is the same SHAPE of unverified "if it fails, it must mean
+        // X" reasoning as the push classification this fix corrects —
+        // flagged honestly here (and in the dated known-issues.md entry)
+        // rather than silently left implicit, but out of scope for this
+        // fix, which is scoped to the two confirmed bugs above (missing
+        // credentials, and the push-failure classification specifically).
+        log('[syncHistory] Nothing to commit (identical record already present?) — treating as success');
         pushed = true;
         break;
       }
@@ -319,7 +736,25 @@ async function main() {
         pushed = true;
         break;
       }
-      console.log(`[syncHistory] Push attempt ${attempt}/${MAX_PUSH_RETRIES} rejected (concurrent update) — will retry`);
+
+      const classification = classifyGitFailure(pushResult.output, [AUTH_FAILURE_CLASSIFIER, NON_FAST_FORWARD_CLASSIFIER]);
+      if (!classification.retryable) {
+        // WHY this throws immediately, out of the retry loop entirely,
+        // rather than logging and continuing to the next attempt: this is
+        // the exact fix for Bug 2. An authentication failure can never
+        // succeed on retry — looping on it only burns the retry budget and
+        // (as happened here, twice) produces a misleading "concurrent
+        // update" log that hides the real, fixable problem. An
+        // `unclassified` failure is treated with the same discipline: never
+        // assumed retryable just because it isn't the one recognized
+        // retryable case.
+        throw new Error(describeGitFailure(`git push origin ${HISTORY_BRANCH_NAME}`, classification, pushResult.output));
+      }
+
+      log(
+        `[syncHistory] Push attempt ${attempt}/${MAX_PUSH_RETRIES} classified as ${classification.kind} ` +
+          '(confirmed from the real git error text — a genuine concurrent writer landed first) — will fetch latest and retry'
+      );
     }
 
     // WHY: write delta/trend output AFTER the loop, from whichever attempt
@@ -328,14 +763,14 @@ async function main() {
     writeDeltaOutput(deltaOutput);
 
     if (!pushed) {
-      console.warn(
+      warn(
         `[syncHistory] Could not push history after ${MAX_PUSH_RETRIES} attempts — this run's own record was not persisted to the ledger this time. The delta/trend output above is still the best available (from the last attempt), but treat it as approximate.`
       );
     } else {
-      console.log(`[syncHistory] History updated: ${historyFileRelPath} (${env}, build #${buildNumber})`);
+      log(`[syncHistory] History updated: ${historyFileRelPath} (${env}, build #${buildNumber})`);
     }
   } catch (err) {
-    console.warn('[syncHistory] History sync failed — continuing without it:', err);
+    warn('[syncHistory] History sync failed — continuing without it:', err);
   } finally {
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -354,7 +789,7 @@ async function main() {
 // the same fix even though it wasn't the one that misfired this time.
 if (require.main === module) {
   main().catch((err) => {
-    console.warn('[syncHistory] Fatal error — history sync skipped, build continues:', err);
+    warn('[syncHistory] Fatal error — history sync skipped, build continues:', err);
     process.exit(0);
   });
 }

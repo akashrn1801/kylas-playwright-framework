@@ -27,9 +27,10 @@ import { logger } from '../../../src/utils/logger';
 
 // WHY label prefix 'R' — the first label assigned to this brand-new module,
 // per .claude/architecture.md §13's per-module letter-prefix convention. UI
-// (R1-R37) and RBAC (R38-R64) share one continuous numbering space from the
-// start, avoiding the renumbering collisions that convention's own history
-// documents for other modules that started each file at 1 independently.
+// (R1-R37, plus R65 added 2026-08-25) and RBAC (R38-R64) share one
+// continuous numbering space from the start, avoiding the renumbering
+// collisions that convention's own history documents for other modules that
+// started each file at 1 independently.
 test.describe('Reports', () => {
   // WHY this creation-helper map lives at module scope: shared by every one
   // of the 8 per-entity-type run-count tests below (R4-R11), each needing a
@@ -906,6 +907,74 @@ test.describe('Reports', () => {
     const reportsPage = new ReportsPage(adminPage);
     const leadsPage = new LeadsPage(adminPage);
 
+    // WHY a uniquely-tagged Last Name, filtered on below via
+    // verifyRunCountForEntity()'s `filters` param: confirmed real
+    // (.claude/known-issues.md, Sandbox Build #147 investigation, revised
+    // 2026-08-25) — this report's own Custom Date Range is day-granularity
+    // only (a hard app UI limitation), padded ±1 day around this lead's
+    // creation moment. Under a real concurrent, multi-hour, `--workers=2`
+    // full-suite run, that ~2-day window is shared with every OTHER Lead any
+    // other test creates in the same run — a before/after total COMPARISON
+    // over that shared window is not a safe assertion on its own, since an
+    // unrelated concurrent Lead creation between the two reads can mask or
+    // exceed the -1 signal from this one deletion. An exact-match filter on
+    // a value nothing else in the suite will ever coincidentally share scopes
+    // the report down to just this one entity, making the comparison correct
+    // by construction rather than tolerant-by-retry.
+    const uniqueLastName = `R36-delete-check-${Date.now()}`;
+    const windowStart = new Date();
+    const leadData = generateLeadData({ lastName: uniqueLastName });
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    const windowEnd = new Date();
+
+    const { reportId, reportTotal: beforeTotal } = await reportsPage.verifyRunCountForEntity(
+      'Lead',
+      windowStart,
+      windowEnd,
+      'admin',
+      [{ field: 'Last Name', operator: 'Equals', value: uniqueLastName }]
+    );
+    expect(beforeTotal).toBeGreaterThan(0);
+
+    await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+    await leadsPage.deleteLead();
+
+    // WHY waitForReportTotalBelow(), not a single re-read: a small,
+    // defense-in-depth bounded retry (re-navigate, never sleep) for a
+    // separate, not-yet-confirmed possibility — a brief backend
+    // indexing/propagation lag between the completed deletion and the
+    // report engine's own next read — on top of, not instead of, the real
+    // fix above (the filter is what makes this comparison trustworthy at
+    // all under concurrent load in the first place).
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
+    expect(
+      afterTotal,
+      'Report total should reflect the deleted lead no longer counting, without erroring or showing stale data'
+    ).toBeLessThan(beforeTotal);
+    logger.success('R36 passed');
+  });
+
+  // WHY this test exists: R36 above already proves the delete-then-recount
+  // scenario is correct, but it does so via the `filters` option — it never
+  // actually exercises `narrowWindow`/`includeTime`, the OTHER option added
+  // 2026-08-25 for the same class of test (`.claude/known-issues.md`'s "Dual
+  // date-window strategy" entry). That option shipped verified only by
+  // `tsc`/`eslint` — never run against the real app. This test closes that
+  // gap: same delete-then-recount shape as R36, but deliberately WITHOUT a
+  // `filters` value, so `narrowWindow: true` alone (not filters) is what has
+  // to isolate the before/after comparison from any other concurrently
+  // fresh data — the only way to prove the rc-time-picker fill
+  // (`fillTimeInPicker()`) and the 5-minute-padded window actually work
+  // end-to-end against the live app, not just compile.
+  test('@regression admin should verify report count updates correctly using the narrow time-scoped window (no filters)', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const reportsPage = new ReportsPage(adminPage);
+    const leadsPage = new LeadsPage(adminPage);
+
     const windowStart = new Date();
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
@@ -916,20 +985,22 @@ test.describe('Reports', () => {
     const { reportId, reportTotal: beforeTotal } = await reportsPage.verifyRunCountForEntity(
       'Lead',
       windowStart,
-      windowEnd
+      windowEnd,
+      'admin',
+      undefined,
+      true
     );
     expect(beforeTotal).toBeGreaterThan(0);
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    await reportsPage.goToReportDetails(reportId);
-    const afterTotal = await reportsPage.getReportTotalFromHeader();
+    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
     expect(
       afterTotal,
-      'Report total should reflect the deleted lead no longer counting, without erroring or showing stale data'
+      'Report total should reflect the deleted lead no longer counting, using the narrow window alone (no filters)'
     ).toBeLessThan(beforeTotal);
-    logger.success('R36 passed');
+    logger.success('R65 passed');
   });
 
   // WHY this test exists at all: found missing during a final numbering
