@@ -7,7 +7,7 @@ import {
   ReportEntityType,
 } from '../../../src/data/factories/reportFactory';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
-import { generateLeadData } from '../../../src/data/factories/leadFactory';
+import { generateLeadData, generateAdminLeadData } from '../../../src/data/factories/leadFactory';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../../src/data/factories/dealFactory';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
@@ -415,17 +415,48 @@ test.describe('Reports', () => {
   }) => {
     test.setTimeout(480000);
     const reportsPage = new ReportsPage(adminPage);
-    const reportData = generateReportData({ reportType: 'Lead' });
-    const { id } = await reportsPage.createReport(reportData);
-    await reportsPage.goToReportDetails(id);
+    const leadsPage = new LeadsPage(adminPage);
 
-    const barTotal = await reportsPage.getReportTotalFromHeader();
-    expect(barTotal).toBeGreaterThan(0);
+    // WHY a fresh, tagged Lead is created (and deleted) here (fixed
+    // 2026-09-03, confirmed via a real dev-smoke failure — barTotal was
+    // genuinely 0, live-verified as real: no locator/timing bug, no data
+    // existed): this report has no explicit date range, so
+    // ReportsPage.fillReportForm() falls through to the create form's own
+    // default, "Current Month" (see that method's own comment) — combined
+    // with the Owner/Count-of-Leads default dimension/metric, this test was
+    // silently depending on SOME Lead already existing, created by the
+    // admin, in the current calendar month — ambient traffic from other
+    // suites, not anything this test itself guaranteed. `ADM<timestamp>`
+    // via generateAdminLeadData() (not the untagged generateLeadData(), and
+    // not left behind afterward): same reasoning as R36/R65 above — a
+    // persisted-but-untagged Lead would be indistinguishable from real
+    // data, and even a persisted-but-TAGGED one can't actually be relied on
+    // for a future run anyway (that's the exact ambient-data assumption
+    // being fixed here) while still adding one permanent, unbounded record
+    // to the QA account on every dev/qa/stage/main CI push, forever.
+    // Creating and deleting fresh data every run makes this test fully
+    // self-contained, independent of calendar month or ambient traffic.
+    await leadsPage.goToLeadsList();
+    const leadData = generateAdminLeadData();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
 
-    await reportsPage.switchChartType('Table');
-    await reportsPage.assertTableModeHasNoRecordTable();
-    await reportsPage.assertTableModeTotalRow(barTotal);
-    await reportsPage.assertTableModeDrillThroughLinksPresent();
+    try {
+      const reportData = generateReportData({ reportType: 'Lead' });
+      const { id } = await reportsPage.createReport(reportData);
+      await reportsPage.goToReportDetails(id);
+
+      const barTotal = await reportsPage.getReportTotalFromHeader();
+      expect(barTotal).toBeGreaterThan(0);
+
+      await reportsPage.switchChartType('Table');
+      await reportsPage.assertTableModeHasNoRecordTable();
+      await reportsPage.assertTableModeTotalRow(barTotal);
+      await reportsPage.assertTableModeDrillThroughLinksPresent();
+    } finally {
+      await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+      await leadsPage.deleteLead();
+    }
     logger.success('R15 passed');
   });
 

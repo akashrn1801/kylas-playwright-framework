@@ -35,24 +35,27 @@ This document is written so a new engineer — or any of us in six months — ca
 | **CI** | GitHub Actions (primary for most branches) + Jenkins (primary for `prod`/`main`, manual fallback elsewhere) |
 | **Runtime** | Node `>=20.0.0`, npm `>=10.0.0` |
 
-**Modules covered** (11): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, and Dashboard/Login. Every module except Dashboard has both a UI spec and an RBAC spec.
+**Modules covered** (12): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, Dashboard, and Login. Every module except Login has both a UI spec and an RBAC spec. (Dashboard was split out from the former combined "Dashboard/Login" row on 2026-09-02, once it grew into a full module with its own page object, factory, and RBAC coverage — Login remains its own small, separate spec, deliberately not using the shared fixture system since it tests the login UI itself.)
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-08-22, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-02, do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
 | Call Logs | 26 | 24 | 50 |
 | Companies | 19 | 22 | 41 |
 | Contacts | 19 | 19 | 38 |
-| Dashboard/Login | 4 | — | 4 |
+| Dashboard | 30 | 29 | 59 |
 | Deals | 21 | 25 | 46 |
 | Leads | 21 | 27 | 48 |
+| Login | 4 | — | 4 |
 | Meetings | 15 | 8 | 23 |
 | Products & Services | 9 | 7 | 16 |
 | Quotations | 21 | 14 | 35 |
-| Reports | 37 | 27 | 64 |
+| Reports | 38 | 27 | 65 |
 | Tasks | 15 | 13 | 28 |
-| **Total** | **207** | **186** | **393** |
+| **Total** | **238** | **215** | **453** |
+
+Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
 
 Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
@@ -107,7 +110,7 @@ kylas-playwright-framework/
 │   ├── core/
 │   │   └── BasePage.ts                   # Base class every page object extends
 │   ├── data/
-│   │   ├── factories/                    # generateXxxData() per module (9 factories)
+│   │   ├── factories/                    # generateXxxData() per module (11 factories)
 │   │   ├── files/
 │   │   │   └── test-recording.mp3        # Real, non-empty audio fixture for Call Log recording upload
 │   │   └── productFixtureAccessor.ts     # Reads src/data/productFixtures/<env>.json (gitignored, generated per run)
@@ -120,12 +123,14 @@ kylas-playwright-framework/
 │   │   ├── call-logs/CallLogsPage.ts
 │   │   ├── companies/CompaniesPage.ts
 │   │   ├── contacts/ContactsPage.ts
-│   │   ├── dashboard/LoginPage.ts
+│   │   ├── dashboard/DashboardPage.ts
+│   │   ├── dashboard/LoginPage.ts         # Same directory as Dashboard, but its own module — see below
 │   │   ├── deals/DealsPage.ts
 │   │   ├── leads/LeadsPage.ts
 │   │   ├── meetings/MeetingsPage.ts
 │   │   ├── productsAndServices/ProductsAndServicesPage.ts   # Lives under /setup/, not /sales/ — see .claude/architecture.md
 │   │   ├── quotations/QuotationsPage.ts
+│   │   ├── reports/ReportsPage.ts
 │   │   └── tasks/TasksPage.ts
 │   ├── notifications/
 │   │   ├── adapters/EmailAdapter.ts

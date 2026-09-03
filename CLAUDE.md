@@ -123,7 +123,7 @@ Full detail: `.claude/architecture.md` (imported above).
 
 ## Reference Patterns Index
 
-Full code + evidence for all 10 in `.claude/reference-patterns.md` (imported above) — read that file instead of re-reading source for these recurring shapes:
+Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported above) — read that file instead of re-reading source for these recurring shapes:
 
 1. `waitForXDetailsPage()` — URL + domcontentloaded + API response (superseded by `waitForEntityDetailPage()`/`waitForEntityListPage()` for list/detail readiness specifically)
 2. Ellipsis menu pattern
@@ -144,6 +144,7 @@ Full code + evidence for all 10 in `.claude/reference-patterns.md` (imported abo
 17. Paginated validation-error carousel banner — distinct from a single toast/inline error
 18. Stability-window fix pattern — for a third-party-widget-triggered react-select race (repo-wide risk, not module-specific — see Known Issues below)
 19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
+20. Dashboard's Add-Dashlet wizard — per-dashlet-type entity availability, a cross-module dependency on Reports, and Grouped Smartlists' genuine multi-select (test-imposed 2-4 cap, no real app cap)
 
 ---
 
@@ -158,7 +159,7 @@ Full code + evidence for all 10 in `.claude/reference-patterns.md` (imported abo
 
 ## Module Status
 
-Verified fresh via `npx playwright test --project=chromium --list` as of 2026-08-22: **393 tests across 21 spec files, 10 modules** (Reports added since the 2026-07-28 count — 37 UI + 27 RBAC). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
+Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-02: **453 tests across 23 spec files, 12 modules** (Dashboard added since the 2026-08-22 count as its own module, split out from the former combined "Dashboard/Login" row now that Login has its own, unchanged, separate 4-test count; Dashboard's own UI count is 30, not 31, after DB3 was removed the same day — see `.claude/known-issues.md`'s Dashboard section). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
 
 **Last full regression evidence (2026-07-28):** all 10 UI+RBAC spec files touched by that session's work (Companies, Contacts, Deals, Leads, Tasks) run in full on stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (193 total). Two unrelated network-connectivity drops and one memory-pressure process kill occurred mid-verification (confirmed via direct `curl`/`free -h` evidence) — each discarded its own polluted partial data and was re-run clean.
 
