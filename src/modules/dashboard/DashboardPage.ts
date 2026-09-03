@@ -1123,8 +1123,42 @@ export class DashboardPage extends BasePage {
   // WHY this deletes by name via the switcher first, never assumes the
   // caller is already viewing the target dashboard: teardown code frequently
   // runs after a test has switched away or the page has reloaded.
+  //
+  // WHY presence-checked FIRST (fixed 2026-09-03, root-caused via a real
+  // sandbox --workers=2 CI failure, not a guess): DB10/DB22's own `finally`
+  // blocks call this a SECOND time, defensively, even after their own `try`
+  // block already deleted the exact same dashboard — by their own comment's
+  // stated intent, "a guaranteed no-op if deletion already succeeded."
+  // Before this fix that was only true by accident: a genuinely-gone
+  // dashboard isn't in the switcher, so the old code fell straight into
+  // `switchToDashboard(name)`, whose click has nothing to find and hangs
+  // for its full `config.timeouts.navigation` wait — 60s locally, but
+  // `sandbox.yml` sets `NAVIGATION_TIMEOUT: 120000` in CI, which exactly
+  // equals CI's own outer TEST timeout (also 120000ms per
+  // playwright.config.ts), leaving zero headroom. A single such doomed
+  // wait was already enough to blow the whole test's budget in CI (this
+  // was never safe, just previously masked by local's much larger
+  // 60s-wait-vs-480s-test-timeout ratio); the DB13/DB25 fix's 3-attempt
+  // retry (same file, same day) made it worse by tripling the exposure.
+  // Confirmed live: DB10 and DB22 both failed on a real sandbox run with a
+  // bare `Test timeout of 120000ms exceeded` and NO assertion error — this
+  // method's own `logger.success('Dashboard deleted: ...')` never printed
+  // for the redundant call, but the calling test's OWN success log (e.g.
+  // `logger.success('DB22 passed')`) DID print seconds later, proving the
+  // test's real logic had already finished; Playwright's outer timeout had
+  // simply already fired and force-closed the page mid-wait
+  // (`Error: locator.waitFor: Target page, context or browser has been
+  // closed` on the retry attempts that followed), independent of whatever
+  // the JS continuation went on to log. A real presence check makes the
+  // "guaranteed no-op" promise true by construction instead of by luck,
+  // and costs nothing extra for the real (non-redundant) delete path —
+  // `isDashboardInSwitcher()` is a fast, timeout-free `isVisible()` probe.
   async deleteDashboardByName(name: string): Promise<void> {
     logger.info(`Deleting dashboard: ${name}`);
+    if (!(await this.isDashboardInSwitcher(name))) {
+      logger.info(`Dashboard "${name}" not present in switcher — nothing to delete`);
+      return;
+    }
     const current = await this.getCurrentDashboardName();
     if (current !== name) {
       await this.switchToDashboard(name);
