@@ -15,6 +15,23 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, '');
 }
 
+// WHY extracted as its own exported function (2026-09-03): this was
+// previously inlined directly inside parse()'s moduleMap-building loop —
+// the ONLY place a test's module name/type ever got derived. The new
+// skipped-tests email section (EmailTemplate.ts's buildSkippedTestsSection())
+// needs the identical derivation to label each skipped test the same way
+// Module Analytics already labels every other test — reusing this function
+// keeps both in agreement by construction instead of risking two
+// independently-maintained copies of the same regex drifting apart.
+export function deriveModuleFromFile(file: string): { name: string; type: 'UI' | 'RBAC' | 'Other' } {
+  const fp = file || '';
+  const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac') ? 'RBAC' : fp.includes('ui') ? 'UI' : 'Other';
+  const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
+  const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
+  const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  return { name, type };
+}
+
 export interface ErrorLocation {
   file: string;
   line: number;
@@ -79,6 +96,16 @@ export interface TestResult {
   // useful artifact than a screenshot for a locator/timeout failure. Never
   // read before this.
   errorContextPath?: string;
+  // WHY added 2026-09-03 — confirmed live against two real skipped tests
+  // (one conditional `test.skip(condition, reason)`, one unconditional
+  // `test.skip('title', fn)`) that Playwright's raw JSON already carries the
+  // real reason string via test.annotations[] (type 'skip'), never read
+  // before this. Only ever populated for status === 'skipped'; undefined
+  // for every other status, and undefined (not a fabricated placeholder)
+  // when a skip genuinely has no reason — confirmed live that an
+  // unconditional test.skip('title', fn) produces an annotation with no
+  // `description` field at all, unlike the conditional form.
+  skipReason?: string;
 }
 
 export interface ModuleStats {
@@ -110,6 +137,13 @@ export interface ParsedReport {
   status: 'passed' | 'failed' | 'unstable';
   failedTests: TestResult[];
   flakyTests: TestResult[];
+  // WHY added 2026-09-03: the count was always derived (`skipped` above),
+  // but the underlying filtered TestResult[] — same shape already kept for
+  // failedTests/flakyTests — was computed just to be counted, then
+  // discarded. Without this, the email could say "2 Skipped" with no way
+  // for a reader to tell whether that's an expected, documented skip or
+  // something worth investigating.
+  skippedTests: TestResult[];
   passRate: number;
   modules: ModuleStats[];
   slowestTests: TestResult[];
@@ -182,12 +216,20 @@ interface PlaywrightJsonTestResult {
   attachments?: PlaywrightJsonAttachment[];
 }
 
+interface PlaywrightJsonAnnotation {
+  type: string;
+  description?: string;
+}
+
 interface PlaywrightJsonTest {
   // WHY: required, not optional — Playwright's JSON reporter always emits a status
   // for every test entry; the pre-existing call site (mapStatus below) never
   // defensively handled an absent value, confirming this was always assumed present.
   status: 'expected' | 'unexpected' | 'flaky' | 'skipped';
   results?: PlaywrightJsonTestResult[];
+  // WHY added 2026-09-03: see TestResult.skipReason's own WHY comment —
+  // confirmed live present at this (test) level, not just per-result.
+  annotations?: PlaywrightJsonAnnotation[];
 }
 
 interface PlaywrightJsonSpec {
@@ -230,6 +272,7 @@ export class ReportParser {
     const duration = raw.stats?.duration ?? results.reduce((sum, r) => sum + r.duration, 0);
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
+    const skippedTests = results.filter((r) => r.status === 'skipped');
     const status: ParsedReport['status'] =
       failed > 0 ? 'failed' : flaky > 0 ? 'unstable' : 'passed';
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
@@ -243,15 +286,7 @@ export class ReportParser {
     const endTime = new Date(new Date(startTime).getTime() + duration).toISOString();
     const moduleMap = new Map<string, ModuleStats>();
     for (const r of results) {
-      const fp = r.file || '';
-      const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac')
-        ? 'RBAC'
-        : fp.includes('ui')
-          ? 'UI'
-          : 'Other';
-      const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
-      const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
-      const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+      const { name, type } = deriveModuleFromFile(r.file);
       const key = `${type}:${name}`;
       if (!moduleMap.has(key))
         moduleMap.set(key, {
@@ -296,6 +331,7 @@ export class ReportParser {
       status,
       failedTests,
       flakyTests,
+      skippedTests,
       passRate,
       modules,
       slowestTests,
@@ -365,6 +401,10 @@ export class ReportParser {
               .map((e) => e.message || e.value)
               .filter((m): m is string => Boolean(m))
               .map(stripAnsi);
+            const skipReason =
+              status === 'skipped'
+                ? test.annotations?.find((a) => a.type === 'skip')?.description
+                : undefined;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
               status,
@@ -379,6 +419,7 @@ export class ReportParser {
               tracePath: this.extractAttachmentPaths(traceSourceResult, 'trace')[0],
               screenshotPaths: this.extractAttachmentPaths(traceSourceResult, 'screenshot'),
               errorContextPath: this.extractAttachmentPaths(traceSourceResult, 'error-context')[0],
+              skipReason,
             });
           }
         }
