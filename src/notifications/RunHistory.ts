@@ -62,6 +62,23 @@ export interface RunHistoryRecord {
   // feature that only ever needs the tests that are actually slow.
   slowestTests: Array<{ title: string; duration: number }>;
   modules: ModuleHistoryStats[];
+  // WHY gitCommit + isDevEquivalentRun added 2026-09-03 (fixes a real false
+  // "Suite Drift Detected" alarm — see the dated known-issues.md entry): a
+  // `sandbox:reset` run (scripts/reset-sandbox.sh does `git reset --hard
+  // origin/dev` then force-pushes) always has a commit BYTE-IDENTICAL to
+  // dev's own HEAD — a hard reset moves the branch pointer to the same
+  // commit object, it never creates a new one. `isDevEquivalentRun` is
+  // computed once, at record-build time, by comparing this run's own
+  // `gitCommit` against dev's HEAD SHA at that moment (see
+  // scripts/syncHistory.ts's `detectDevEquivalentRun()`) — persisted here so
+  // a FUTURE dev-equivalent run can find the most recent PAST one and
+  // compare suite size against that genuine baseline, not "whatever ran
+  // last" (which is frequently an unrelated, larger feature-branch run in
+  // the same env-keyed history file). gitCommit itself was already computed
+  // at notify-time (notify.ts's resolveNotificationInput(), used for
+  // resolveKnownIssuesUrl()) but never persisted into history before this.
+  gitCommit: string;
+  isDevEquivalentRun: boolean;
 }
 
 export interface RunDelta {
@@ -334,6 +351,29 @@ export function computeSlowTestTrend(
 export interface SuiteDrift {
   occurred: boolean;
   decreaseBy: number;
+  // WHY added 2026-09-03 (fixes a real false-alarm, see the dated
+  // known-issues.md entry): tells the email WHICH comparison actually
+  // produced this verdict, so it can render an honest, specific note
+  // instead of a one-size-fits-all message.
+  // - 'previous-run': the original, unqualified comparison — whatever ran
+  //   immediately before this one in the same env-keyed history file,
+  //   regardless of branch/commit. Unchanged default behavior.
+  // - 'previous-reset-run': this run's commit matched dev's HEAD (a
+  //   sandbox:reset run) AND a prior dev-equivalent run exists in history —
+  //   compared against THAT run's count instead, a genuine baseline-vs-
+  //   baseline comparison that still catches a real regression across
+  //   resets.
+  // - 'no-reset-baseline-yet': this run's commit matched dev's HEAD but no
+  //   prior dev-equivalent run exists yet to compare against — occurred is
+  //   always false here by construction; never an alarm, but the email
+  //   still says so explicitly rather than rendering identically to "no
+  //   drift found" (same "silence is ambiguous" concern already fixed once
+  //   for Module Analytics' own trend glyph — see that code's own comment).
+  basis: 'previous-run' | 'previous-reset-run' | 'no-reset-baseline-yet';
+  // Present only when basis === 'previous-reset-run' — lets the email cite
+  // exactly which prior run was used as the baseline.
+  baselineBuildNumber?: string;
+  baselineTotal?: number;
 }
 
 /**
@@ -347,10 +387,46 @@ export interface SuiteDrift {
  * is much worse. Increases are never flagged as drift — this suite grows
  * constantly as normal development, and that growth deserves a neutral note,
  * not an alarm.
+ *
+ * WHY this is no longer the only entry point (2026-09-03): kept exactly as
+ * it was — still used as-is by computeSuiteDrift() below for the normal
+ * (non-dev-equivalent) case — but callers computing the email's actual
+ * suiteDrift signal should call computeSuiteDrift() instead, which adds the
+ * dev-equivalent-run branch on top without changing this function's own
+ * behavior or its other caller's (none currently) expectations.
  */
 export function detectSuiteDrift(delta: RunDelta): SuiteDrift {
   const occurred = delta.previousRun !== null && delta.totalDelta < 0;
-  return { occurred, decreaseBy: occurred ? Math.abs(delta.totalDelta) : 0 };
+  return { occurred, decreaseBy: occurred ? Math.abs(delta.totalDelta) : 0, basis: 'previous-run' };
+}
+
+/**
+ * The real entry point for the email's suite-drift signal (2026-09-03) — see
+ * SuiteDrift's own WHY comment for the full false-alarm history this fixes.
+ * Delegates to the original detectSuiteDrift()/computeDelta() unchanged for
+ * a normal run; only a confirmed dev-equivalent run (current.isDevEquivalentRun)
+ * takes the new path, comparing against the most recent PRIOR dev-equivalent
+ * run in history instead of whatever ran last, regardless of branch.
+ */
+export function computeSuiteDrift(
+  historyBeforeAppend: RunHistoryRecord[],
+  current: RunHistoryRecord
+): SuiteDrift {
+  if (!current.isDevEquivalentRun) {
+    return detectSuiteDrift(computeDelta(historyBeforeAppend, current));
+  }
+  const lastReset = [...historyBeforeAppend].reverse().find((r) => r.isDevEquivalentRun);
+  if (!lastReset) {
+    return { occurred: false, decreaseBy: 0, basis: 'no-reset-baseline-yet' };
+  }
+  const decreaseBy = lastReset.total - current.total;
+  return {
+    occurred: decreaseBy > 0,
+    decreaseBy: Math.max(decreaseBy, 0),
+    basis: 'previous-reset-run',
+    baselineBuildNumber: lastReset.buildNumber,
+    baselineTotal: lastReset.total,
+  };
 }
 
 export interface PassRatePoint {

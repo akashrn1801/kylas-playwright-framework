@@ -103,11 +103,17 @@ export function computeHealthScore(
   if (suiteDrift?.occurred) {
     const driftPenalty = Math.min(10 + suiteDrift.decreaseBy * 2, 30);
     score -= driftPenalty;
-    factors.push({
-      name: 'Suite drift',
-      impact: -driftPenalty,
-      note: `${suiteDrift.decreaseBy} fewer test(s) ran than the previous run`,
-    });
+    // WHY basis-aware note text (2026-09-03): a dev-equivalent (reset) run
+    // that STILL drifted was compared against the last reset run specifically
+    // (see SuiteDrift's own WHY comment) — a genuine baseline-vs-baseline
+    // finding, worth citing which run that was so the reader isn't left
+    // wondering whether this is the same false-alarm-prone "vs. whatever ran
+    // last" comparison this fix exists to stop producing.
+    const note =
+      suiteDrift.basis === 'previous-reset-run'
+        ? `${suiteDrift.decreaseBy} fewer test(s) ran than the last reset-to-dev run (#${suiteDrift.baselineBuildNumber}, ${suiteDrift.baselineTotal} tests)`
+        : `${suiteDrift.decreaseBy} fewer test(s) ran than the previous run`;
+    factors.push({ name: 'Suite drift', impact: -driftPenalty, note });
   }
 
   // WHY: failures weighted heavier than flaky here — a test that keeps

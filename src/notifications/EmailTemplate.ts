@@ -1,4 +1,4 @@
-import { ParsedReport, TestResult } from './ReportParser';
+import { ParsedReport, TestResult, deriveModuleFromFile } from './ReportParser';
 import {
   RunDelta,
   RecurringIssue,
@@ -165,6 +165,7 @@ export class EmailTemplate {
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
       this.buildFlakyTestsSection(ctx),
+      this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
       this.buildActionRequiredSection(ctx, health, clusters),
@@ -355,7 +356,7 @@ ${body}
     if (report.flaky > 0) sentences.push(`${report.flaky} flaky test${report.flaky === 1 ? '' : 's'} observed.`);
     if (drift?.occurred) {
       sentences.push(
-        `Test count dropped by ${drift.decreaseBy} vs. the previous run — confirm this was intentional (see Action Required).`
+        `Test count dropped by ${drift.decreaseBy} vs. ${this.driftComparisonLabel(drift)} — confirm this was intentional (see Action Required).`
       );
     }
     const unexpectedMisc = ctx.miscErrors?.unexpectedErrors ?? 0;
@@ -473,7 +474,7 @@ ${body}
     const previousRun = ctx.historyDelta?.previousRun ?? null;
 
     const totalSubtext = ctx.suiteDrift?.occurred
-      ? `<span style="color:${FAIL};font-weight:700;">▼ ${ctx.suiteDrift.decreaseBy} vs last run</span>`
+      ? `<span style="color:${FAIL};font-weight:700;">▼ ${ctx.suiteDrift.decreaseBy} vs ${this.driftComparisonLabel(ctx.suiteDrift)}</span>`
       : previousRun
         ? this.deltaSubtext(ctx.historyDelta!.totalDelta)
         : undefined;
@@ -581,6 +582,39 @@ ${body}
     return anchor
       ? `<a href="${this.escAttr(anchor)}" style="${style}">${this.esc(text)}</a>`
       : `<span style="${style}">${this.esc(text)}</span>`;
+  }
+
+  // WHY one shared helper for this phrase, used at all 4 suite-drift call
+  // sites (Executive Summary, KPI dashboard, Module Analytics/
+  // AutomationHealth's own factor note, Action Required) (2026-09-03): each
+  // previously hardcoded "vs. the previous run" unconditionally — accurate
+  // for a normal run, but misleading for a dev-equivalent (reset) run
+  // compared against the last reset run instead (see SuiteDrift's own WHY
+  // comment in RunHistory.ts). One shared label keeps all 4 spots honest and
+  // in agreement, rather than 3 of them saying "vs. last reset run (#159,
+  // 33 tests)" while a 4th still says the generic, now-inaccurate phrase.
+  private driftComparisonLabel(drift: SuiteDrift): string {
+    return drift.basis === 'previous-reset-run'
+      ? `the last reset-to-dev run (#${drift.baselineBuildNumber}, ${drift.baselineTotal} tests)`
+      : 'the previous run';
+  }
+
+  // WHY this renders even when suiteDrift.occurred is false (2026-09-03):
+  // a confirmed dev-equivalent run with NO prior reset-run baseline yet
+  // (basis 'no-reset-baseline-yet') never produces an alarm — occurred is
+  // always false by construction — but rendering nothing at all would be
+  // indistinguishable from "not a reset run, nothing to say," the same
+  // "silence is ambiguous" concern already fixed once for Module Analytics'
+  // own trend glyph (see that code's own comment). A calm, explicit, non-
+  // alarming note replaces the drift alarm this run would otherwise have
+  // risked showing for the wrong reason — never rendered for a normal run.
+  private buildDevEquivalentRunNote(drift: SuiteDrift | null | undefined): string {
+    if (!drift || drift.basis === 'previous-run') return '';
+    const text =
+      drift.basis === 'no-reset-baseline-yet'
+        ? "This run's commit matches dev's HEAD (a reset run) — count comparison not meaningful for a reset run; no prior reset-run baseline yet to compare against."
+        : `This run's commit matches dev's HEAD (a reset run) — suite-size comparison uses ${this.driftComparisonLabel(drift)}, not whatever ran immediately before it.`;
+    return `<div style="font-size:11px;color:${SLATE};background:${CANVAS_TINT};border-radius:4px;padding:6px 8px;margin-bottom:8px;">ℹ️ ${text}</div>`;
   }
 
   private deltaSubtext(delta: number, suffix = ''): string {
@@ -758,6 +792,7 @@ ${body}
 <tr><td id="section-module-analytics" style="padding:8px 28px;">
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:4px;">Module Analytics</div>
   <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${report.total} tests · ${report.uiCount} UI · ${report.rbacCount} RBAC — ranked by health (best first)</div>
+  ${this.buildDevEquivalentRunNote(ctx.suiteDrift)}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
     <tr style="background:${CANVAS_TINT};">
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Module</th>
@@ -800,6 +835,55 @@ ${body}
 <tr><td style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Slowest Tests (Top 5)</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+  </div>
+</td></tr>`;
+  }
+
+  // ===================== Skipped tests =====================
+
+  // WHY this section exists at all (2026-09-03): the KPI dashboard already
+  // shows a bare "N Skipped" count — this makes WHICH tests, and WHY,
+  // visible without opening CI logs, so a reader can tell an expected,
+  // documented skip apart from one worth investigating. Styled like
+  // buildSlowTestsSection() above (a bordered card, not Module Analytics'
+  // plain table) — there's no error/failure detail to show, just a title,
+  // module, and reason, which doesn't need the rich failure-card treatment
+  // buildFlakyTestsSection()/buildFailureClustersSection() use below.
+  // Module label reuses deriveModuleFromFile() — the exact same derivation
+  // Module Analytics itself uses (ReportParser.ts), so a skipped test's
+  // module tag here always agrees with its own row there.
+  private buildSkippedTestsSection(ctx: EmailContext): string {
+    const { report } = ctx;
+    if (report.skippedTests.length === 0) return '';
+    const rows = report.skippedTests
+      .map((t: TestResult) => {
+        const { name, type } = deriveModuleFromFile(t.file);
+        const typeStyle =
+          type === 'UI'
+            ? `background:#EFF3FE;color:${ACCENT};`
+            : type === 'RBAC'
+              ? `background:${SUCCESS_BG};color:${SUCCESS};`
+              : `background:${CANVAS_TINT};color:${SLATE};`;
+        const reason = t.skipReason
+          ? `<span style="color:${SLATE};">${this.esc(t.skipReason)}</span>`
+          : `<span style="color:${MUTED};font-style:italic;">No reason given</span>`;
+        return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:8px 0;">
+          <div style="font-size:12px;color:${INK};margin-bottom:2px;">
+            <span style="${typeStyle}padding:1px 5px;border-radius:3px;font-size:9.5px;font-weight:700;margin-right:6px;">${name}</span>
+            ${this.esc(t.title)}
+          </div>
+          <div style="font-size:11px;padding-left:2px;">${reason}</div>
+        </td>
+      </tr>`;
+      })
+      .join('');
+    return `
+<tr><td id="section-skipped-tests" style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Skipped Tests (${report.skippedTests.length})</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
   </div>
 </td></tr>`;
@@ -1086,7 +1170,7 @@ ${body}
 
     if (ctx.suiteDrift?.occurred) {
       items.push({
-        text: `Investigate suite drift — ${ctx.suiteDrift.decreaseBy} fewer test(s) ran than the previous run.`,
+        text: `Investigate suite drift — ${ctx.suiteDrift.decreaseBy} fewer test(s) ran than ${this.driftComparisonLabel(ctx.suiteDrift)}.`,
         priority: 'high',
         anchor: '#section-module-analytics',
       });

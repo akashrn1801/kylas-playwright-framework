@@ -21,7 +21,7 @@ test.describe('Login', () => {
     logger.success('LG2 passed');
   });
 
-  test('@regression restricted credentials should log in successfully', async ({ page }) => {
+  test('@smoke @regression @prodSafe restricted credentials should log in successfully', async ({ page }) => {
     const loginPage = new LoginPage(page);
     await loginPage.navigateTo('/');
     await loginPage.loginWithCredentials(
