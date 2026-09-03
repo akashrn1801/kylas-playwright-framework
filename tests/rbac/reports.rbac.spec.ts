@@ -7,7 +7,7 @@ import {
   ReportEntityType,
 } from '../../src/data/factories/reportFactory';
 import { LeadsPage } from '../../src/modules/leads/LeadsPage';
-import { generateLeadData } from '../../src/data/factories/leadFactory';
+import { generateLeadData, generateAdminLeadData } from '../../src/data/factories/leadFactory';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { generateDealData } from '../../src/data/factories/dealFactory';
 import { ContactsPage } from '../../src/modules/contacts/ContactsPage';
@@ -350,13 +350,39 @@ test.describe('Reports RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const reportsPage = new ReportsPage(restrictedPage);
-    const reportData = generateRestrictedReportData({ reportType: 'Lead' });
-    const { id, name } = await reportsPage.createReport(reportData);
-    await reportsPage.goToReportDetails(id);
+    const leadsPage = new LeadsPage(restrictedPage);
 
-    const csvContent = await reportsPage.downloadReportCsv();
-    expect(csvContent).toContain(name);
-    expect(csvContent).toContain('Total');
+    // WHY a fresh, tagged Lead is created (and deleted) here (fixed
+    // 2026-09-03, confirmed via a real sandbox staging batch failure — the
+    // downloaded CSV genuinely had zero data rows and no Total row, not a
+    // locator/timing bug): same root cause as R15 (tests/ui/reports/
+    // reports.spec.ts) — this report has no explicit date range, so it
+    // falls through to the create form's own default, "Current Month," and
+    // this test never created any Lead of its own to guarantee that scope
+    // isn't empty. Created via restrictedPage specifically, not adminPage:
+    // this report is viewed entirely by the restricted user, so the
+    // supporting Lead must be OWNED by restricted to be visible in their
+    // own CSV at all — generateAdminLeadData() is used only for its
+    // ADM<timestamp>-tagged naming (traceability, matching the ADM/SHR
+    // convention used elsewhere), not because the record itself is
+    // admin-owned; ownership comes from which page creates it.
+    await leadsPage.goToLeadsList();
+    const leadData = generateAdminLeadData();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+
+    try {
+      const reportData = generateRestrictedReportData({ reportType: 'Lead' });
+      const { id, name } = await reportsPage.createReport(reportData);
+      await reportsPage.goToReportDetails(id);
+
+      const csvContent = await reportsPage.downloadReportCsv();
+      expect(csvContent).toContain(name);
+      expect(csvContent).toContain('Total');
+    } finally {
+      await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+      await leadsPage.deleteLead();
+    }
     logger.success('R48 passed');
   });
 
@@ -550,19 +576,45 @@ test.describe('Reports RBAC', () => {
     test.setTimeout(480000);
     const restrictedReportsPage = new ReportsPage(restrictedPage);
     const adminReportsPage = new ReportsPage(adminPage);
+    const adminLeadsPage = new LeadsPage(adminPage);
 
-    const reportData = generateRestrictedReportData({ reportType: 'Lead' });
-    const { id } = await restrictedReportsPage.createReport(reportData);
-    const totalAsRestricted = await restrictedReportsPage.getReportTotalFromHeader();
+    // WHY a fresh, admin-owned Lead is created (and deleted) here (fixed
+    // 2026-09-03, confirmed via a real sandbox staging batch failure PLUS
+    // a direct CI-log timeline correlation — both totals were genuinely 0,
+    // not a race/bug in this test's own comparison logic): same root cause
+    // as R15/R48 — this report has no explicit date range ("Current
+    // Month" default), and this test never guaranteed that scope has any
+    // data, so admin and restricted could both legitimately see 0 and
+    // trivially "match." Specifically ADMIN-owned, not restricted-owned:
+    // admin's visibility is always a superset of restricted's in this
+    // app's RBAC model (established throughout this codebase) — one
+    // admin-only Lead this calendar month is enough to guarantee
+    // totalAsAdmin exceeds totalAsRestricted regardless of whatever
+    // ambient data does or doesn't otherwise exist, since restricted can
+    // never see this lead — it can only widen the gap this assertion
+    // checks for, never close it.
+    await adminLeadsPage.goToLeadsList();
+    const leadData = generateAdminLeadData();
+    const leadId = await adminLeadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
 
-    await adminReportsPage.goToReportDetails(id);
-    const totalAsAdmin = await adminReportsPage.getReportTotalFromHeader();
+    try {
+      const reportData = generateRestrictedReportData({ reportType: 'Lead' });
+      const { id } = await restrictedReportsPage.createReport(reportData);
+      const totalAsRestricted = await restrictedReportsPage.getReportTotalFromHeader();
 
-    expect(
-      totalAsAdmin,
-      'The identical report object must show DIFFERENT totals for admin vs. restricted — data is ' +
-        "scoped per-viewer at view-time, not fixed by the creator's access at save-time"
-    ).not.toBe(totalAsRestricted);
+      await adminReportsPage.goToReportDetails(id);
+      const totalAsAdmin = await adminReportsPage.getReportTotalFromHeader();
+
+      expect(
+        totalAsAdmin,
+        'The identical report object must show DIFFERENT totals for admin vs. restricted — data is ' +
+          "scoped per-viewer at view-time, not fixed by the creator's access at save-time"
+      ).not.toBe(totalAsRestricted);
+    } finally {
+      await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
+      await adminLeadsPage.deleteLead();
+    }
     logger.success('R55 passed');
   });
 

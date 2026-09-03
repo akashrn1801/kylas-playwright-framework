@@ -28,7 +28,7 @@ import {
   computeRecurringFailures,
   computeModuleTrend,
   computeSlowTestTrend,
-  detectSuiteDrift,
+  computeSuiteDrift,
   buildPassRateSeries,
   RunHistoryRecord,
   RunDelta,
@@ -507,12 +507,36 @@ function shSafe(cmd: string, cwd: string): { ok: boolean; output: string } {
   }
 }
 
+// WHY this exists (2026-09-03, fixes a real false "Suite Drift Detected"
+// alarm — see the dated known-issues.md entry): scripts/reset-sandbox.sh
+// does `git reset --hard origin/dev` then force-pushes sandbox — a hard
+// reset moves the branch pointer to dev's EXACT commit object, never a new
+// one, so a reset run's own commit is always byte-identical to dev's HEAD.
+// `git ls-remote` (not a full fetch/clone) is deliberately used here — it's
+// a single lightweight network round-trip that only needs the ref's tip
+// SHA, mirroring this file's own "shallow, only-what's-needed" git-usage
+// convention elsewhere (see the --depth 50 clone's own WHY comment).
+// Routed through sh()'s existing gitAuthEnv() (same as every other git call
+// in this file) since a private repo's `dev` ref isn't readable anonymously
+// in CI. Never throws — a resolution failure (offline, auth issue, `dev`
+// genuinely absent) degrades to "not a dev-equivalent run," the same safe
+// default as before this fix existed, never a false positive.
+function detectDevEquivalentRun(gitRemoteUrl: string, gitCommit: string): boolean {
+  if (!gitCommit || gitCommit === 'unknown') return false;
+  const result = shSafe(`git ls-remote ${gitRemoteUrl} refs/heads/dev`, process.cwd());
+  if (!result.ok) return false;
+  const devHeadSha = result.output.split('\t')[0]?.trim();
+  return !!devHeadSha && devHeadSha === gitCommit;
+}
+
 function buildCurrentRecord(
   env: string,
   branch: string,
   buildNumber: string,
   runSource: RunHistoryRecord['runSource'],
-  jsonReportPath: string
+  jsonReportPath: string,
+  gitCommit: string,
+  isDevEquivalentRun: boolean
 ): RunHistoryRecord {
   const parser = new ReportParser();
   const report = parser.parse(jsonReportPath);
@@ -522,6 +546,8 @@ function buildCurrentRecord(
     branch,
     buildNumber,
     runSource,
+    gitCommit,
+    isDevEquivalentRun,
     total: report.total,
     passed: report.passed,
     failed: report.failed,
@@ -603,6 +629,15 @@ async function main() {
     : process.env.GITHUB_ACTIONS
       ? 'github-actions'
       : 'local';
+  // WHY the FULL SHA here, not notify.ts's own `--short HEAD` fallback: this
+  // value is compared byte-for-byte against `git ls-remote`'s own output
+  // below (always full-length) to detect a dev-equivalent (reset) run — a
+  // short SHA would never match and silently disable the whole feature for
+  // any run relying on the local-git fallback instead of GITHUB_SHA.
+  const gitCommit =
+    process.env.GITHUB_SHA || localGitFallback('git rev-parse HEAD') || 'unknown';
+  const gitRemoteUrl = resolveGitRemoteUrl();
+  const isDevEquivalentRun = detectDevEquivalentRun(gitRemoteUrl, gitCommit);
   const jsonReportPath = path.resolve(
     process.env.REPORT_PATH ||
       (process.env.CI
@@ -632,7 +667,15 @@ async function main() {
 
   let current: RunHistoryRecord;
   try {
-    current = buildCurrentRecord(env, branch, buildNumber, runSource, jsonReportPath);
+    current = buildCurrentRecord(
+      env,
+      branch,
+      buildNumber,
+      runSource,
+      jsonReportPath,
+      gitCommit,
+      isDevEquivalentRun
+    );
   } catch (err) {
     warn('[syncHistory] Failed to parse current run for history — skipping:', err);
     return;
@@ -642,7 +685,6 @@ async function main() {
   const historyFileRelPath = `history/${env}.jsonl`;
 
   try {
-    const gitRemoteUrl = resolveGitRemoteUrl();
     // WHY: shallow, single-branch clone — this branch only ever needs its tip,
     // never full history, and a shallow clone keeps every CI run's sync step
     // fast regardless of how many runs have accumulated over the project's life.
@@ -705,7 +747,7 @@ async function main() {
         recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
         moduleTrend: computeModuleTrend(historyBeforeAppend, current),
         slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
-        suiteDrift: detectSuiteDrift(delta),
+        suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
         passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
       };
 
