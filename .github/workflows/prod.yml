@@ -40,10 +40,14 @@ jobs:
           PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
           PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
           PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
+          # WHY (2026-09-04): estimate-duration's own git fetch of
+          # ci/reporting-history needs this — same root cause as
+          # syncHistory.ts's own credential requirement below.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "🕐  Estimated duration: ~3 min"
+          WORKERS=2 npm run estimate-duration --silent || true
           npx playwright test --project=chromium --grep @prodSafe --workers=2 --timeout=90000
           EXIT_CODE=$?
           END_TIME=$(date +%s)
@@ -60,6 +64,10 @@ jobs:
           ENV: prod
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-09-04): must match the real --workers value the "Run
+          # prod-safe tests" step above just used — see
+          # .claude/known-issues.md's dynamic-duration-estimate entry.
+          WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.

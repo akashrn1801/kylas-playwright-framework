@@ -51,11 +51,32 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          # WHY (2026-09-04): estimate-duration's own git fetch of
+          # ci/reporting-history needs this — same root cause as
+          # syncHistory.ts's own credential requirement below.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "🕐  Estimated duration: ~44 min"
-          npx playwright test --project=chromium --workers=2 --timeout=120000
+          # WHY workers=1, not 2 (2026-09-04): mitigation for the documented
+          # intermittent staging failures under concurrent CI load — see
+          # .claude/known-issues.md's staging-intermittency entry. Roughly
+          # doubles this workflow's runtime; not a confirmed fix, since the
+          # root cause of the underlying intermittency was never fully
+          # pinned down this session.
+          # WHY a computed estimate now, not another hardcoded echo (same
+          # day, same session): replaces the manually-computed "~9 hours"
+          # figure below the same design that caught the ORIGINAL wrong
+          # "~44 min" comment — see .claude/known-issues.md's dynamic-
+          # duration-estimate entry. This will correctly report
+          # "insufficient history" until enough real --workers=1 runs
+          # accumulate (the last workers=2 runs, averaging ~4.6h/4.2h-5.0h
+          # across 2026-08-13 through 2026-08-31, are a DIFFERENT bucket by
+          # design and never blended in here) — that period's real
+          # wall-clock runtime is expected to be roughly double that
+          # historical average, ~9h, until this reports a real number.
+          WORKERS=1 npm run estimate-duration --silent || true
+          npx playwright test --project=chromium --workers=1 --timeout=120000
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
@@ -72,6 +93,10 @@ jobs:
           ENV: staging
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-09-04): must match the real --workers value the "Run
+          # full suite" step above just used — see .claude/known-issues.md's
+          # dynamic-duration-estimate entry.
+          WORKERS: '1'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
