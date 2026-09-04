@@ -29,6 +29,7 @@
     "clean": "rm -rf test-results reports/ allure-results",
     "notify": "ts-node src/notifications/scripts/notify.ts",
     "history:sync": "ts-node src/notifications/scripts/syncHistory.ts",
+    "estimate-duration": "ts-node src/notifications/scripts/estimateDuration.ts",
     "test:notify": "npm test && npm run notify",
     "posttest": "if [ -z \"$CI\" ]; then npm run notify; fi",
     "test:contacts": "playwright test tests/ui/contacts/ tests/rbac/contacts.rbac.spec.ts --project=chromium && npm run notify",

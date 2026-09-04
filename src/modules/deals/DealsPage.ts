@@ -342,6 +342,12 @@ export class DealsPage extends BasePage {
   // #nav-tab5-tab since Deal has fewer top-level tabs.
   private readonly otherDetailsDetailPageTab = (): Locator => this.page.locator('#nav-tab2-tab');
 
+  // WHY: same 4-tab layout as otherDetailsDetailPageTab's own comment —
+  // "Internals" is index 3 (#nav-tab3-tab). The "Cloned From" field (see
+  // assertClonedFromFieldOnDetail() below) lives on this tab, confirmed live
+  // 2026-09-04.
+  private readonly internalsDetailPageTab = (): Locator => this.page.locator('#nav-tab3-tab');
+
   // ──────────────────────────────────────────────────────────
   // Constructor
   // ──────────────────────────────────────────────────────────
@@ -1909,6 +1915,34 @@ export class DealsPage extends BasePage {
     const found = await this.retryFindDeal(clonedName);
     expect(found, `Cloned deal "${clonedName}" should exist in list`).toBeTruthy();
     logger.success(`Cloned deal found with name: ${clonedName}`);
+  }
+
+  // WHY: confirmed live 2026-09-04 (both admin and restricted roles,
+  // identical shape for both) — a cloned Deal has a genuinely uneditable
+  // internal field, container id="clonedFrom", label "Cloned From", showing
+  // the ORIGINAL deal's plain name (no "Copy" suffix) as its value. It lives
+  // on the "Internals" tab (#nav-tab3-tab), on that tab's own second
+  // carousel slide alongside other system-only fields (Forecasting Type,
+  // Score, Deal Aging (Days), etc.) — not on "Other Details" (that tab holds
+  // the 9 admin-configured custom fields instead, a separate concept).
+  // Confirmed genuinely read-only: the identical read-only-info display
+  // block (label + plain-text span, no input/textarea/select anywhere)
+  // renders a second time inside the Edit form itself (id
+  // "<n>_input_clonedFrom" there) — Kylas surfaces this system field for
+  // reference inside Edit, but never as an editable control. The value's
+  // wrapper (`div.link-primary`, cursor: pointer) visually resembles a link,
+  // but is a plain <div> with no `href` — click-through to the original
+  // deal was not confirmed live this session (not required for this
+  // assertion, which only checks the displayed value).
+  // assertFieldOnDetailByContainerId() (BasePage) already handles the
+  // "field can be on an inactive carousel slide" case via toContainText, so
+  // no explicit carousel navigation is needed here — only the outer
+  // "Internals" TAB click, a separate concept from the inner carousel slide.
+  // Assumes the caller is already on the CLONE's own detail page (matching
+  // assertClonedDealName()'s own convention just above).
+  async assertClonedFromFieldOnDetail(originalDealName: string): Promise<void> {
+    await this.click(this.internalsDetailPageTab(), 'Internals tab');
+    await this.assertFieldOnDetailByContainerId('clonedFrom', originalDealName, 'Cloned From');
   }
 
   // ──────────────────────────────────────────────────────────

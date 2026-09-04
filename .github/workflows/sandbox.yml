@@ -47,6 +47,10 @@ jobs:
           STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          # WHY (2026-09-04): estimate-duration's own git fetch of
+          # ci/reporting-history needs this — same root cause as
+          # syncHistory.ts's own credential requirement below.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: |
           TARGET="${{ steps.detect.outputs.target }}"
           # WHY: Dynamic workers — 2 for large suites (>50 tests), 1 for small
@@ -57,16 +61,33 @@ jobs:
           else
             WORKERS=1
           fi
+          # WHY (2026-09-04): bridges this step's dynamically-computed WORKERS
+          # to the later "Sync run history" step, which needs the SAME real
+          # value to tag this run's own history record correctly (steps don't
+          # share shell state — $GITHUB_ENV is the standard GH Actions bridge,
+          # same mechanism this file already uses via $GITHUB_OUTPUT for
+          # TARGET above).
+          echo "COMPUTED_WORKERS=$WORKERS" >> $GITHUB_ENV
           # WHY: Track start time for elapsed time reporting
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
           echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS"
+          # WHY a real historical estimate ALSO printed here (2026-09-04), not
+          # a replacement for the AVG_SECS formula below: sandbox's own test
+          # SCOPE varies wildly run to run (selective, changed-files-based —
+          # see "Sync run history"'s own WHY comment on this same caveat for
+          # the pass/fail delta feature), so a branch="sandbox"-scoped
+          # historical average blends together runs of very different sizes
+          # under the same workers value — expect a wide range here, that's
+          # inherent to this branch's own selective-run design, not a bug in
+          # the estimate mechanism itself.
+          BRANCH_NAME=sandbox WORKERS=$WORKERS npm run estimate-duration --silent || true
           # WHY: Estimate completion time — avg 30s per test divided by workers
           AVG_SECS=30
           ESTIMATED_SECS=$(( (TEST_COUNT * AVG_SECS + WORKERS - 1) / WORKERS ))
           ESTIMATED_MINS=$(( ESTIMATED_SECS / 60 ))
           ESTIMATED_END=$(date -d "+${ESTIMATED_SECS} seconds" '+%H:%M:%S' 2>/dev/null || date -v +${ESTIMATED_SECS}S '+%H:%M:%S')
-          echo "🕐  Estimated duration: ~${ESTIMATED_MINS} min | ETA: ${ESTIMATED_END}"
+          echo "🕐  Test-count-based estimate: ~${ESTIMATED_MINS} min | ETA: ${ESTIMATED_END}"
           echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET"
 
           npx playwright test --project=chromium --workers=$WORKERS $TARGET
@@ -95,6 +116,13 @@ jobs:
           BRANCH_NAME: sandbox
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-09-04): the real value computed by "Run selective
+          # tests" above, bridged via $GITHUB_ENV — see that step's own WHY
+          # comment. Falls through to empty (omitted from the record — see
+          # syncHistory.ts's own WORKERS-parsing WHY comment) if that step
+          # never ran (e.g. "Detect changed tests" itself failed) — never a
+          # guessed value.
+          WORKERS: ${{ env.COMPUTED_WORKERS }}
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
