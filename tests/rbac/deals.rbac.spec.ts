@@ -1267,6 +1267,31 @@ test.describe('Deals RBAC', () => {
   });
 
   // ──────────────────────────────────────────────────────────
+  // Clone — "Cloned From" internal field
+  // WHY no cleanup/deletion here (deliberate, per explicit direction): both
+  // the original deal and its clone are left in place after this test runs.
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression restricted user should see original deal name in Cloned From field on cloned deal', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    if (!dealId) throw new Error('Deal ID not captured');
+    await dealsPage.goToDealDetailsById(dealId);
+    const clonedId = await dealsPage.cloneDeal();
+    expect(clonedId, 'Cloned deal ID should be captured').not.toBeNull();
+    expect(clonedId, 'Cloned deal must have a different ID from the original').not.toBe(dealId);
+
+    await dealsPage.goToDealDetailsById(clonedId!);
+    await dealsPage.assertClonedFromFieldOnDetail(dealData.name);
+    logger.success('D46 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
   // Delete
   // ──────────────────────────────────────────────────────────
 
