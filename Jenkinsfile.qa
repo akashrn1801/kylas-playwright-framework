@@ -69,6 +69,24 @@ pipeline {
           def bufferMinutes = 30
           def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
           echo "Detected ${testCount} @regression tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+          // WHY additive only, not replacing computedTimeoutMinutes above
+          // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
+          // same reasoning, applied consistently. WHY WORKERS=2 here, not
+          // this file's own top-level `environment { WORKERS = '1' }`
+          // (2026-09-04, found while implementing this): that env-level value
+          // is dead — the actual test run below passes --workers=2 as an
+          // explicit CLI flag, which always wins over a WORKERS env var per
+          // this repo's own documented convention (CLAUDE.md rule 23). Using
+          // the stale env value here would tag every history record with the
+          // wrong concurrency, silently corrupting future estimates for this
+          // branch — not fixed here (out of scope, a separate pre-existing
+          // inconsistency), just not propagated into new code.
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              ENV=qa WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+            '''
+          }
           timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
             // WHY: Confirmed live (2026-07-07 reporting audit) — this used to pass
             // --reporter=line,allure-playwright, which REPLACES (not merges with)
@@ -124,6 +142,27 @@ pipeline {
         reportFiles          : 'index.html',
         reportName           : 'Playwright HTML Report — QA'
       ])
+      // WHY added 2026-09-04 — this pipeline never had ANY history-ledger
+      // wiring before (confirmed via grep: no history:sync call anywhere in
+      // this file, unlike Jenkinsfile/Jenkinsfile.sandbox). Deliberately
+      // history:sync ONLY, not also notify/email — that needs its own GMAIL_*
+      // credential binding this pipeline has never had either, and wiring up
+      // email notifications for a pipeline that's never sent any is a
+      // separate, bigger decision than this feature's own scope (a duration
+      // estimate only needs the write side to function). Mirrors
+      // Jenkinsfile/Jenkinsfile.sandbox's existing try/catch shape exactly.
+      script {
+        try {
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              ENV=qa WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run history:sync || true
+            '''
+          }
+        } catch (e) {
+          echo 'History sync failed — continuing'
+        }
+      }
       cleanWs()
     }
   }

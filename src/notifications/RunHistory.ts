@@ -79,6 +79,23 @@ export interface RunHistoryRecord {
   // resolveKnownIssuesUrl()) but never persisted into history before this.
   gitCommit: string;
   isDevEquivalentRun: boolean;
+  // WHY optional, added 2026-09-04 (dynamic CI duration-estimate feature —
+  // see .claude/known-issues.md's dated entry for the full design): no
+  // existing record has this populated, and it must stay optional forever
+  // for backward compatibility — parseHistory()/serializeHistory() and every
+  // existing consumer (computeDelta, computeModuleTrend, EmailTemplate.ts,
+  // etc.) already tolerate unknown fields being absent, confirmed by
+  // reading each one rather than assumed. The real per-run `--workers=N`
+  // value, threaded through from the workflow/Jenkinsfile that produced
+  // this run (see syncHistory.ts's buildCurrentRecord()) — required for
+  // computeDurationEstimate() below to only ever average runs under the
+  // SAME concurrency configuration. A useful, deliberate side effect: right
+  // after this field is introduced, every historical record lacks it, so
+  // computeDurationEstimate() correctly reports "insufficient history" for
+  // every branch until enough new-schema runs accumulate — the same safe
+  // behavior a real worker-count change (like stage.yml's 2→1 mitigation)
+  // needs, for free, with no special-casing.
+  workers?: number;
 }
 
 export interface RunDelta {
@@ -452,4 +469,67 @@ export function buildPassRateSeries(
     timestamp: r.timestamp,
   });
   return [...historyBeforeAppend.slice(-(n - 1)), current].map(toPoint);
+}
+
+export interface DurationEstimate {
+  available: boolean;
+  avgMs?: number;
+  minMs?: number;
+  maxMs?: number;
+  sampleSize: number;
+  // WHY present only when available: false — mirrors PassRatePoint/SuiteDrift's
+  // own "explicit reason over silent absence" convention elsewhere in this
+  // file, so a caller never has to guess why no number was produced.
+  reason?: string;
+}
+
+// WHY 3, not 1 or 2: a single matching run is not a trustworthy average (it
+// IS the number, with zero variance information) — 3 was chosen as the
+// smallest sample that can show a real min/max spread, not a statistically
+// derived constant. Revisit if real accumulated history ever suggests
+// otherwise, matching this file's own precedent for SLOW_TEST_REGRESSION_THRESHOLD's
+// "starting heuristic, not derived" framing.
+export const DURATION_ESTIMATE_MIN_SAMPLES = 3;
+export const DURATION_ESTIMATE_LOOKBACK = 10;
+
+/**
+ * Computes a duration estimate from REAL historical runs, scoped to the
+ * exact same branch (workflow identity — see syncHistory.ts's own branch-
+ * derivation WHY comment) AND the exact same worker count (concurrency
+ * configuration) as the caller's current run — never blended across a
+ * config change, per this feature's own design requirement. Returns
+ * available: false with an honest reason (never a misleading/guessed
+ * number) when fewer than `minSamples` matching runs exist in the last
+ * `lookback` records for that branch — this is the ONLY thing that makes a
+ * worker-count or test-count change (like stage.yml's 2→1 mitigation) safe:
+ * the very first runs under a new configuration have zero matching prior
+ * history by construction, so this correctly reports "insufficient
+ * history" instead of confidently stating a number computed under the OLD
+ * configuration.
+ */
+export function computeDurationEstimate(
+  records: RunHistoryRecord[],
+  branch: string,
+  workers: number,
+  minSamples: number = DURATION_ESTIMATE_MIN_SAMPLES,
+  lookback: number = DURATION_ESTIMATE_LOOKBACK
+): DurationEstimate {
+  const matching = records.filter((r) => r.branch === branch && r.workers === workers);
+  const recent = matching.slice(-lookback);
+  if (recent.length < minSamples) {
+    return {
+      available: false,
+      sampleSize: recent.length,
+      reason: `insufficient history for branch="${branch}" at workers=${workers}: ${recent.length}/${minSamples} matching runs found (of ${matching.length} total matching, ${records.length} in file)`,
+    };
+  }
+  const durations = recent.map((r) => r.duration);
+  const avgMs = durations.reduce((a, b) => a + b, 0) / durations.length;
+  return {
+    available: true,
+    avgMs,
+    minMs: Math.min(...durations),
+    maxMs: Math.max(...durations),
+    sampleSize: recent.length,
+  };
 }

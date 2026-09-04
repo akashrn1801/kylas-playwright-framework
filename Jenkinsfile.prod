@@ -74,6 +74,19 @@ pipeline {
           def bufferMinutes = 20
           def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
           echo "Detected ${testCount} @prodSafe tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+          // WHY additive only, not replacing computedTimeoutMinutes above
+          // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
+          // same reasoning, applied consistently, with the same production-
+          // risk care given this is a PROD pipeline. WHY WORKERS=2 here, not
+          // this file's own top-level `environment { WORKERS = '1' }` — see
+          // Jenkinsfile.qa's identical WHY comment on this exact same
+          // pre-existing, dead env-value inconsistency.
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              ENV=prod WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+            '''
+          }
           timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
             // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
             // --reporter=line,allure-playwright override, which was replacing
@@ -120,6 +133,21 @@ pipeline {
         reportFiles          : 'index.html',
         reportName           : 'Playwright HTML Report — Prod'
       ])
+      // WHY added 2026-09-04 — see Jenkinsfile.qa's identical WHY comment;
+      // this pipeline never had ANY history-ledger wiring before either.
+      // history:sync only, not notify — same scoping decision as Jenkinsfile.qa.
+      script {
+        try {
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              ENV=prod WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run history:sync || true
+            '''
+          }
+        } catch (e) {
+          echo 'History sync failed — continuing'
+        }
+      }
       cleanWs()
     }
   }

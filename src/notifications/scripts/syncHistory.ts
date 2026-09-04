@@ -536,7 +536,8 @@ function buildCurrentRecord(
   runSource: RunHistoryRecord['runSource'],
   jsonReportPath: string,
   gitCommit: string,
-  isDevEquivalentRun: boolean
+  isDevEquivalentRun: boolean,
+  workers: number | undefined
 ): RunHistoryRecord {
   const parser = new ReportParser();
   const report = parser.parse(jsonReportPath);
@@ -548,6 +549,7 @@ function buildCurrentRecord(
     runSource,
     gitCommit,
     isDevEquivalentRun,
+    ...(workers !== undefined ? { workers } : {}),
     total: report.total,
     passed: report.passed,
     failed: report.failed,
@@ -636,6 +638,18 @@ async function main() {
   // any run relying on the local-git fallback instead of GITHUB_SHA.
   const gitCommit =
     process.env.GITHUB_SHA || localGitFallback('git rev-parse HEAD') || 'unknown';
+  // WHY: no fallback chain here, unlike env/branch/gitCommit above — a wrong
+  // GUESSED worker count would be worse than none at all for
+  // computeDurationEstimate()'s "same configuration" matching (it would
+  // silently blend runs under a different real concurrency into the same
+  // bucket). undefined (omitted from the record entirely, see
+  // buildCurrentRecord() above) is the only safe degrade when the caller
+  // doesn't pass WORKERS explicitly.
+  const workersEnv = process.env.WORKERS;
+  const workers =
+    workersEnv !== undefined && workersEnv !== '' && !Number.isNaN(Number(workersEnv))
+      ? Number(workersEnv)
+      : undefined;
   const gitRemoteUrl = resolveGitRemoteUrl();
   const isDevEquivalentRun = detectDevEquivalentRun(gitRemoteUrl, gitCommit);
   const jsonReportPath = path.resolve(
@@ -674,7 +688,8 @@ async function main() {
       runSource,
       jsonReportPath,
       gitCommit,
-      isDevEquivalentRun
+      isDevEquivalentRun,
+      workers
     );
   } catch (err) {
     warn('[syncHistory] Failed to parse current run for history — skipping:', err);
