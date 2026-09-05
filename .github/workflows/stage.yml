@@ -58,25 +58,22 @@ jobs:
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          # WHY workers=1, not 2 (2026-09-04): mitigation for the documented
-          # intermittent staging failures under concurrent CI load — see
-          # .claude/known-issues.md's staging-intermittency entry. Roughly
-          # doubles this workflow's runtime; not a confirmed fix, since the
-          # root cause of the underlying intermittency was never fully
-          # pinned down this session.
-          # WHY a computed estimate now, not another hardcoded echo (same
-          # day, same session): replaces the manually-computed "~9 hours"
-          # figure below the same design that caught the ORIGINAL wrong
-          # "~44 min" comment — see .claude/known-issues.md's dynamic-
-          # duration-estimate entry. This will correctly report
-          # "insufficient history" until enough real --workers=1 runs
-          # accumulate (the last workers=2 runs, averaging ~4.6h/4.2h-5.0h
-          # across 2026-08-13 through 2026-08-31, are a DIFFERENT bucket by
-          # design and never blended in here) — that period's real
-          # wall-clock runtime is expected to be roughly double that
-          # historical average, ~9h, until this reports a real number.
-          WORKERS=1 npm run estimate-duration --silent || true
-          npx playwright test --project=chromium --workers=1 --timeout=120000
+          # WHY workers=2, not 1 (reverted 2026-09-05): --workers=1 was a
+          # speculative mitigation applied 2026-09-04 for a documented but
+          # NEVER-confirmed intermittent-staging-failures theory ("correlated,
+          # not proven" — see .claude/known-issues.md's staging-intermittency
+          # entry). It roughly doubled this workflow's real runtime (~4.6h avg
+          # at workers=2 → ~9.9h projected at workers=1, confirmed via a real
+          # killed run's own partial progress: 275/455 tests in the full
+          # 360-minute default before GitHub Actions force-killed the job as
+          # an orphan process — results.json was never written, so
+          # history:sync/notify both failed downstream of that, not as
+          # separate bugs). Reverted rather than extending the timeout to
+          # accommodate an unproven mitigation — see
+          # .claude/known-issues.md's dated entry for the full incident and
+          # revert reasoning.
+          WORKERS=2 npm run estimate-duration --silent || true
+          npx playwright test --project=chromium --workers=2 --timeout=120000
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
@@ -93,10 +90,11 @@ jobs:
           ENV: staging
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
-          # WHY (2026-09-04): must match the real --workers value the "Run
-          # full suite" step above just used — see .claude/known-issues.md's
-          # dynamic-duration-estimate entry.
-          WORKERS: '1'
+          # WHY (2026-09-04, value reverted 2026-09-05): must match the real
+          # --workers value the "Run full suite" step above just used — see
+          # .claude/known-issues.md's dynamic-duration-estimate entry and the
+          # separate workers=1-revert entry for why this is back to '2'.
+          WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
