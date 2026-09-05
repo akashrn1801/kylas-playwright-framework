@@ -8,6 +8,18 @@ jobs:
   run-tests:
     name: playwright-ci
     runs-on: ubuntu-latest
+    # WHY 480 (2026-09-05): confirmed real risk, found while investigating an
+    # unrelated stage.yml timeout kill — this workflow had no explicit
+    # timeout-minutes at all, defaulting to GitHub Actions' 360-minute job
+    # ceiling. 5 real recent completed runs measured 287-324 minutes
+    # (2026-08-24 through 2026-09-04) — as little as ~36 minutes of margin
+    # below that default, purely from this workflow's own legitimate
+    # @regression-suite runtime plus natural suite growth over time, entirely
+    # unrelated to the stage.yml workers=1 mitigation/revert. 480 gives a real
+    # ~1.5x margin over the observed max (324 min) rather than leaving this on
+    # a default that real data shows is already this close to being breached.
+    # See .claude/known-issues.md's dated entry for the full investigation.
+    timeout-minutes: 480
     permissions:
       contents: write
     steps:
