@@ -392,6 +392,32 @@ test.describe('Deals', () => {
   });
 
   // ──────────────────────────────────────────────────────────
+  // Clone — "Cloned From" internal field
+  // WHY no cleanup/deletion here (deliberate, per explicit direction): both
+  // the original deal and its clone are left in place after this test runs.
+  // ──────────────────────────────────────────────────────────
+
+  test('@regression admin should see original deal name in Cloned From field on cloned deal', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+    const clonedId = await dealsPage.cloneDeal();
+    expect(clonedId).not.toBeNull();
+    expect(clonedId, 'Cloned deal must have a different ID from the original').not.toBe(dealId);
+
+    await dealsPage.goToDealDetailsById(clonedId!);
+    await dealsPage.assertClonedFromFieldOnDetail(dealData.name);
+    logger.success('D45 passed');
+  });
+
+  // ──────────────────────────────────────────────────────────
   // Add Contact
   // ──────────────────────────────────────────────────────────
 

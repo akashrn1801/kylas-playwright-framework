@@ -99,10 +99,11 @@ const REPORT_VERIFICATION_API_CONFIG: Record<ReportEntityType, ReportVerificatio
 
 // WHY this map, confirmed live (2026-08-21 for the original 4; the
 // remaining 4 confirmed live 2026-08-26 via a dedicated Generate-Preview
-// network capture per entity type, Quotation specifically re-run against QA
-// since it's not deployed to stage/prod — see reports.spec.ts's own
-// `config.env !== 'qa'` skip): the Reports engine's own save/preview AND
-// report-detail-load endpoint is `POST /v3/reports/<entity-plural>` — and
+// network capture per entity type; Quotation reports were confirmed
+// deployed to stage/prod 2026-09-03, so the pluralization below applies
+// across all environments, not just QA): the Reports engine's own
+// save/preview AND report-detail-load endpoint is
+// `POST /v3/reports/<entity-plural>` — and
 // the pluralization is NOT uniform. Lead/Deal/Contact/Task/Meeting/Quotation
 // follow simple pluralization; Company is irregular ("companies"); Call log
 // is the most surprising — its endpoint is `/v3/reports/calls`, not

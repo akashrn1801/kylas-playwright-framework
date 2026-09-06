@@ -22,7 +22,6 @@ import { QuotationsPage } from '../../src/modules/quotations/QuotationsPage';
 import { generateQuotationData } from '../../src/data/factories/quotationFactory';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
-import { config } from '../../config/config';
 import { logger } from '../../src/utils/logger';
 
 // WHY label prefix 'R', continuing from reports.spec.ts's R1-R37 — see that
@@ -296,13 +295,9 @@ test.describe('Reports RBAC', () => {
       );
     });
 
-    // WHY `test.skip()` directly on this one individual test, same as
-    // reports.spec.ts's own Quotation entry: matches decision #3's given
-    // pattern now that Quotation is its own distinct test again.
     test('@regression restricted should verify quotation report count matches actual filtered entity count on own reports', async ({
       restrictedPage,
     }) => {
-      test.skip(config.env !== 'qa', 'Quotation reports not yet deployed to stage/prod');
       test.setTimeout(480000);
       const reportsPage = new ReportsPage(restrictedPage);
       const creators = buildEntityCreators(restrictedPage);

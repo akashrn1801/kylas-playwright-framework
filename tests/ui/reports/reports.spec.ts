@@ -22,7 +22,6 @@ import { QuotationsPage } from '../../../src/modules/quotations/QuotationsPage';
 import { generateQuotationData } from '../../../src/data/factories/quotationFactory';
 import { CallLogsPage } from '../../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../../src/data/factories/callLogFactory';
-import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 
 // WHY label prefix 'R' — the first label assigned to this brand-new module,
@@ -339,14 +338,9 @@ test.describe('Reports', () => {
       );
     });
 
-    // WHY `test.skip()` here, directly on this one individual test, not on
-    // a shared loop entry: per decision #3's own given snippet — this is
-    // now its own distinct test, so it can use the exact pattern given
-    // rather than the whole-array workaround the bundled version needed.
     test('@regression admin should verify quotation report count matches actual filtered entity count', async ({
       adminPage,
     }) => {
-      test.skip(config.env !== 'qa', 'Quotation reports not yet deployed to stage/prod');
       test.setTimeout(480000);
       const reportsPage = new ReportsPage(adminPage);
       const creators = buildEntityCreators(adminPage);
