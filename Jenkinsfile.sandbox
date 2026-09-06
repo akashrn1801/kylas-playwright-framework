@@ -105,6 +105,24 @@ REPORT_PATH=reports/playwright-report/results.json
       steps {
         script {
           echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
+          // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
+          // this is NOT a multibranch job — env.BRANCH_NAME is not
+          // Jenkins-native here (only env.GIT_BRANCH, set by the Git plugin
+          // during checkout, typically prefixed "origin/"), so it's derived
+          // via bash parameter expansion inside the single-quoted sh block
+          // below, never Groovy-string-interpolated (same reasoning as the
+          // credential itself — a real bound env var, resolved by bash, never
+          // appears in a logged command string). See .claude/known-issues.md's
+          // dynamic-duration-estimate entry for the full design and for why
+          // this file's OWN existing "Sync run history" call below needed the
+          // identical fix — confirmed via direct grep that neither ever had a
+          // git credential wired, so this push has always failed silently.
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              ENV=staging WORKERS=1 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+            '''
+          }
           // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
           // --reporter=line,allure-playwright override, which was replacing (not
           // merging with) playwright.config.ts's full reporter array and silently
@@ -148,7 +166,18 @@ REPORT_PATH=reports/playwright-report/results.json
         try {
           // WHY: see Jenkinsfile (main) for the full explanation — must run
           // before notify so its delta output exists in time for the email.
-          sh 'npm run history:sync || true'
+          // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
+          // same fix, same root cause, as this file's own "Run Selective
+          // Tests" stage above — this call had never had a git credential
+          // wired (confirmed via direct grep across every Jenkinsfile), so
+          // every push here has always failed silently. Not multibranch, so
+          // BRANCH_NAME is derived from env.GIT_BRANCH the same way.
+          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              BRANCH_NAME="${GIT_BRANCH#origin/}"
+              WORKERS=1 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run history:sync || true
+            '''
+          }
         } catch (e) {
           echo 'History sync failed — continuing'
         }

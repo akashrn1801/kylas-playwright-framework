@@ -37,10 +37,14 @@ jobs:
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
           QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
           QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
+          # WHY (2026-09-04): estimate-duration's own git fetch of
+          # ci/reporting-history needs this — same root cause as
+          # syncHistory.ts's own credential requirement below.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "🕐  Estimated duration: ~10 min"
+          WORKERS=1 npm run estimate-duration --silent || true
           npx playwright test --project=chromium --grep @smoke --workers=1 --timeout=90000
           EXIT_CODE=$?
           END_TIME=$(date +%s)
@@ -58,6 +62,13 @@ jobs:
           ENV: qa
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
+          # WHY (2026-09-04): must match the real --workers value the "Run
+          # smoke tests" step above just used, exactly — see
+          # .claude/known-issues.md's dynamic-duration-estimate entry.
+          # computeDurationEstimate() only ever averages runs recorded under
+          # the same workers value; a wrong number here would silently
+          # corrupt every future estimate for this branch.
+          WORKERS: '1'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
