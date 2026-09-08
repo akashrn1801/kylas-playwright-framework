@@ -145,6 +145,7 @@ Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported abo
 18. Stability-window fix pattern — for a third-party-widget-triggered react-select race (repo-wide risk, not module-specific — see Known Issues below)
 19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
 20. Dashboard's Add-Dashlet wizard — per-dashlet-type entity availability, a cross-module dependency on Reports, and Grouped Smartlists' genuine multi-select (test-imposed 2-4 cap, no real app cap)
+21. Hide Empty Fields toggle — per-module tab-collapse vs. field-only behavior, exclusions (relationship cards, Meetings' Description, Quotations' 0-values)
 
 ---
 

@@ -4,6 +4,7 @@ import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateContactData,
+  generateMinimalContactData,
   generateContactCustomFieldData,
   generateContactCustomFieldInvalidTextField,
   generateContactCustomFieldInvalidParagraphText,
@@ -584,6 +585,111 @@ test.describe('Contacts', () => {
     await contactsPage.assertContactDetailFields(updatedData);
     logger.success(`Address after update: "${updatedData.address}"`);
     logger.success('C19 passed');
+  });
+
+  // ── Hide Empty Fields — C20-C23 ──────────────────────────────
+  // WHY this shape, confirmed live during investigation: tabs are the
+  // granularity (fully-empty tab collapses, mixed tab hides only its own
+  // empty fields). Social (Facebook/Twitter/LinkedIn) AND Campaign
+  // Information (Campaign/Source/Sub Source/UTM*) can BOTH be driven to a
+  // genuinely 100%-empty state for Contact — confirmed live via
+  // ContactsPage.fillContactForm()'s code that Campaign/Source are
+  // conditionally filled (`if (data.campaign)`), unlike Lead's equivalent,
+  // which is unconditionally random. Professional stays mixed (Company is
+  // unconditionally random-picked regardless of input).
+
+  test('@regression admin should hide empty fields/tabs on a contact with minimal, genuinely-empty Social and Campaign Information tabs', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Campaign Information');
+    await contactsPage.assertTabVisible('Professional');
+    await contactsPage.assertTabVisible('Other Details');
+
+    logger.success('C20 passed');
+  });
+
+  test('@regression admin should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabVisible('Social');
+
+    logger.success('C21 passed');
+  });
+
+  test('@regression admin should hide only empty fields within a mixed section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabVisible('Professional');
+
+    const professionalTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Professional' });
+    await professionalTab.click();
+    await contactsPage.assertFieldLabelHidden('Department');
+    await contactsPage.assertFieldLabelHidden('Designation');
+    await contactsPage.assertFieldLabelVisible('Company');
+
+    logger.success('C22 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(adminPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await contactsPage.clickEditIcon();
+    await contactsPage.fillEditForm({ ...contactData, facebook: newFacebook });
+    await contactsPage.saveEditedContact();
+
+    // No re-toggle — auto-reveal must happen on its own
+    await contactsPage.assertTabVisible('Social');
+    const socialTab = adminPage.locator('a.nav-item.nav-link, a.nav-link').filter({ hasText: 'Social' });
+    await socialTab.click();
+    await expect(adminPage.getByText(newFacebook)).toBeVisible({ timeout: config.timeouts.expect });
+
+    logger.success('C23 passed');
   });
 
 });

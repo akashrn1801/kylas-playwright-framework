@@ -1,9 +1,10 @@
-import { test } from '../../src/fixtures/index';
+import { test, expect } from '../../src/fixtures/index';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
 import { logger } from '../../src/utils/logger';
 import {
   generateAdminMeetingData,
   generateRestrictedMeetingData,
+  generateMinimalMeetingData,
 } from '../../src/data/factories/meetingFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,6 +41,14 @@ test.describe('Meetings RBAC', () => {
     const meetingData = generateRestrictedMeetingData();
 
     await meetingsPage.goToMeetingsList();
+    // WHY reverted to addInvitee default (2026-09-07): a prior version of
+    // this fix passed addInvitee=false, but deeper investigation
+    // (PROD_BUILD4_INVESTIGATION.md, Cluster 2.1) found the same 422 also
+    // occurs on 3 other call sites that never select an invitee at all —
+    // proving the invitee pick is not the actual cause, so removing it here
+    // provided no real protection. Reverted to keep this test's real-world
+    // shape identical to M13 (reschedule, same file), which already
+    // exercises this exact addInvitee=true path successfully.
     const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Restricted');
     // Assert the meeting appears in the restricted user's list
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
@@ -66,6 +75,8 @@ test.describe('Meetings RBAC', () => {
 
     // Create first
     await meetingsPage.goToMeetingsList();
+    // WHY reverted to addInvitee default — see the identical rationale in
+    // the "create their own meeting" test above (M9).
     const originalId = await meetingsPage.createMeeting(originalData, 'Restricted');
     await meetingsPage.assertMeetingInList(originalData.title, originalId);
 
@@ -281,5 +292,121 @@ test.describe('Meetings RBAC', () => {
     if (!clonedId) throw new Error('Cloned meeting ID should be captured after clone');
     await meetingsPage.assertClonedMeetingTitle(title, clonedId);
     logger.success('M16 passed');
+  });
+
+  // ── Hide Empty Fields — M17-M20 (RBAC parity, restricted user's own
+  // meeting — mirrors tests/ui/meetings/meetings.spec.ts's M23-M26, same
+  // no-tab-collapse-target and Description-exclusion exceptions) ─────────
+
+  test('@regression restricted user should hide only empty fields on a meeting with minimal custom-field data, keeping Other Details visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Restricted', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+
+    await meetingsPage.assertTabVisible('Other Details');
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+    await meetingsPage.assertFieldLabelHidden('Paragraph Text');
+    await meetingsPage.assertFieldLabelHidden('URL Field');
+    await meetingsPage.assertFieldLabelVisible('Number');
+
+    logger.success('M27 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Restricted', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+
+    await meetingsPage.toggleHideEmptyFields();
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelVisible('Text Field');
+
+    logger.success('M28 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Restricted', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+
+    const newTextField = `Revealed-${Date.now()}`;
+    await meetingsPage.clickEditFromMenu();
+    await meetingsPage.fillEditForm(meetingData.title, undefined, undefined, {
+      ...meetingData.customFields,
+      textField: newTextField,
+    });
+    await meetingsPage.saveEditedMeeting();
+
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelVisible('Text Field');
+    await expect(restrictedPage.getByText(newTextField)).toBeVisible({ timeout: 10000 });
+
+    logger.success('M29 passed');
+  });
+
+  test('@regression restricted user: Description is architecturally excluded from the Hide Empty Fields toggle', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(restrictedPage);
+    const meetingData = generateMinimalMeetingData({ description: '' });
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Restricted', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    const descriptionLabelCountBefore = await restrictedPage
+      .getByText('Description', { exact: true })
+      .count();
+
+    await meetingsPage.toggleHideEmptyFields();
+
+    const descriptionLabelCountAfter = await restrictedPage
+      .getByText('Description', { exact: true })
+      .count();
+    expect(
+      descriptionLabelCountAfter,
+      'Description field label presence must be unaffected by the Hide Empty Fields toggle'
+    ).toBe(descriptionLabelCountBefore);
+
+    logger.success('M30 passed');
   });
 });

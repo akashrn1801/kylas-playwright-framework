@@ -15,6 +15,7 @@ import {
   generateLeadData,
   generateAdminLeadData,
   generateSharedLeadData,
+  generateMinimalLeadData,
   LEAD_CUSTOM_FIELD_NAMES,
 } from '../../src/data/factories/leadFactory';
 import { config } from '../../config/config';
@@ -763,12 +764,16 @@ test.describe('Leads RBAC', () => {
     await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
     await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
     await restrictedPage.waitForTimeout(3000);
-    // WHY: Click Notes icon to open notes panel
-    await restrictedPage
-      .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')
-      .first()
-      .click();
-    await restrictedPage.waitForTimeout(500);
+    // WHY (2026-09-07, PROD Build #4): this used to be a raw, unbounded
+    // click with no timeout/retry/reload-fallback — under real PROD load
+    // this exact right-panel-icon-visibility-can-lag-after-share race
+    // (reference-patterns.md §5) has no bound of its own and can consume
+    // the whole 480s test timeout, surfacing later as a confusing "browser
+    // has been closed" error on an unrelated downstream step. Reuse the
+    // existing bounded reload-and-retry helper instead of a raw locator
+    // click, matching every other module with this concept.
+    await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
+    await restrictedLeadsPage.clickRightPanelIcon('Notes');
     // WHY: Confirmed live on Deals' identical Notes component — the generic
     // `div.row.pt-2.pl-2.pr-2` class combo also matches unrelated elements
     // elsewhere on the detail page (0 of 3 page-wide matches were actually
@@ -1005,5 +1010,105 @@ test.describe('Leads RBAC', () => {
       );
     }
     logger.success('L31 passed');
+  });
+
+  // ── Hide Empty Fields — L32-L35 (RBAC parity: same behavior for the
+  // restricted user's own lead — this feature has no permission-boundary
+  // component, confirmed during investigation; these mirror
+  // tests/ui/leads/leads.spec.ts's L48-L51 exactly, just as the restricted
+  // role) ─────────────────────────────────────────────────────
+
+  test('@regression restricted user should hide empty fields/tabs on a lead with a minimal, genuinely-empty Social tab', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(restrictedPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+    await leadsPage.assertTabVisible('Professional');
+    await leadsPage.assertTabVisible('Requirement');
+    await leadsPage.assertTabVisible('Other Details');
+
+    logger.success('L32 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(restrictedPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabVisible('Social');
+
+    logger.success('L33 passed');
+  });
+
+  test('@regression restricted user should hide only empty fields within a mixed section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(restrictedPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabVisible('Professional');
+
+    const professionalTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Professional' });
+    await professionalTab.click();
+    await leadsPage.assertFieldLabelHidden('Company Name');
+    await leadsPage.assertFieldLabelHidden('Department');
+    await leadsPage.assertFieldLabelHidden('Designation');
+    await leadsPage.assertFieldLabelVisible('Company Industry');
+    await leadsPage.assertFieldLabelVisible('Business Type');
+    await leadsPage.assertFieldLabelVisible('Company Employees');
+
+    logger.success('L34 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(restrictedPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await leadsPage.clickEditIcon();
+    await leadsPage.fillEditForm({ ...leadData, facebook: newFacebook });
+    await leadsPage.saveEditedLead();
+
+    await leadsPage.assertTabVisible('Social');
+    await leadsPage.assertDetailTabContent('nav-tab2-tab', [newFacebook]);
+
+    logger.success('L35 passed');
   });
 });

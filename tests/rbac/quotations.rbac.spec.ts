@@ -750,4 +750,80 @@ test.describe('Quotations — RBAC', () => {
     await qp.assertOnListPage();
     logger.success('Q28 passed');
   });
+
+  // ── Hide Empty Fields — Q38-Q40 (RBAC parity, restricted user's own
+  // quotation — mirrors tests/ui/quotations/quotations.spec.ts's Q35-Q37,
+  // same no-tabs/no-mixed-section exception and Summary-is-required
+  // disqualification documented there) ────────────────────────────────────
+
+  test('@regression restricted user should hide an empty custom Text Field after toggling Hide Empty Fields', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const qp = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+    const result = await qp.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await qp.goToQuotationDetail(result.id!);
+    await qp.clickEditButton();
+    await qp.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await qp.saveQuotation();
+
+    await qp.toggleHideEmptyFields();
+    await qp.assertFieldLabelHidden('Text Field');
+
+    logger.success('Q38 passed');
+  });
+
+  test('@regression restricted user should restore a hidden field after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const qp = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+    const result = await qp.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await qp.goToQuotationDetail(result.id!);
+    await qp.clickEditButton();
+    await qp.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await qp.saveQuotation();
+
+    await qp.toggleHideEmptyFields();
+    await qp.assertFieldLabelHidden('Text Field');
+
+    await qp.toggleHideEmptyFields();
+    await qp.assertFieldLabelVisible('Text Field');
+
+    logger.success('Q39 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const qp = new QuotationsPage(restrictedPage);
+    const data = generateRestrictedQuotationData();
+    const result = await qp.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await qp.goToQuotationDetail(result.id!);
+    await qp.clickEditButton();
+    await qp.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await qp.saveQuotation();
+
+    await qp.toggleHideEmptyFields();
+    await qp.assertFieldLabelHidden('Text Field');
+
+    const newTextField = `Revealed-${Date.now()}`;
+    await qp.clickEditButton();
+    await qp.fillEditForm({ customFields: { ...data.customFields, textField: newTextField } });
+    await qp.saveQuotation();
+
+    await qp.assertFieldLabelVisible('Text Field');
+    await expect(restrictedPage.getByText(newTextField)).toBeVisible({ timeout: 10000 });
+
+    logger.success('Q40 passed');
+  });
 });

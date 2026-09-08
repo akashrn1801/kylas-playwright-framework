@@ -291,6 +291,47 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
   };
 }
 
+// WHY this specific subset, not every optional field: Timezone, Country,
+// Company Industry/Business Type/Company Employees, Campaign/Source, and
+// Requirement's Products-or-Services/Currency are all confirmed live to be
+// UNCONDITIONALLY random-picked by LeadsPage.fillLeadForm() regardless of
+// what value is passed here (the same class of gap fixed with
+// skipOptionalFields on CallLogsPage — see CLAUDE.md's Call Logs section) —
+// so blanking them via override would silently have no effect, not
+// genuinely leave them empty. PickList/MultiPickList custom fields are the
+// same. The fields below are the ones CONFIRMED to respect a plain empty-
+// string override (verified live via the Hide-Empty-Fields investigation):
+// blanking all 3 Social fields empties that entire tab (confirmed live to
+// fully collapse it), and blanking these specific Professional/Requirement/
+// Other-Details fields leaves each of those tabs genuinely mixed (some
+// fields populated, some empty) — the two distinct shapes the Hide-Empty-
+// Fields tests need.
+export function generateMinimalLeadData(overrides: Partial<LeadData> = {}): LeadData {
+  const { requirement: requirementOverrides, customFields: customFieldOverrides, ...restOverrides } =
+    overrides;
+  return generateLeadData({
+    facebook: '',
+    twitter: '',
+    linkedIn: '',
+    companyName: '',
+    department: '',
+    designation: '',
+    companyAddress: '',
+    companyCity: '',
+    companyState: '',
+    companyZipcode: '',
+    companyWebsite: '',
+    requirement: generateLeadRequirementData({ requirementName: '', ...requirementOverrides }),
+    customFields: generateLeadCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 // WHY: Admin lead data uses a unique timestamp prefix to avoid collision
 // with old test data in staging/qa databases from previous test runs.
 // Restricted user searching for "ADM1234567890_John" will NEVER find

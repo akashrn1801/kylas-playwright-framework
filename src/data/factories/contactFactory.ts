@@ -155,6 +155,42 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
   };
 }
 
+// WHY this specific subset: confirmed live via ContactsPage.fillContactForm()
+// that Company (a live async lookup) is unconditionally random-picked
+// regardless of what's passed here (`data.company || undefined` falls
+// through to the random-pick branch on falsy input) — same class of gap as
+// LeadsPage's unconditional react-selects — so Professional never goes
+// fully empty, only mixed. Campaign/Source ARE genuinely conditional here
+// (`if (data.campaign)`/`if (data.source)`), unlike Lead's equivalent —
+// confirmed live via direct code read, not assumed to transfer from Lead —
+// so Campaign Information (unlike Lead's) CAN be driven to a true 100%-empty
+// state, giving Contact a second tab-collapse target beyond Social.
+export function generateMinimalContactData(overrides: Partial<ContactData> = {}): ContactData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
+  return generateContactData({
+    facebook: '',
+    twitter: '',
+    linkedin: '',
+    department: '',
+    designation: '',
+    campaign: '',
+    source: '',
+    subSource: '',
+    utmSource: '',
+    utmCampaign: '',
+    utmMedium: '',
+    utmContent: '',
+    utmTerm: '',
+    customFields: generateContactCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 // WHY: Admin contact data uses a unique timestamp prefix to avoid collision
 // with old test data in staging/qa databases from previous test runs.
 // Restricted user searching for "ADM1234567890_John" will NEVER find
