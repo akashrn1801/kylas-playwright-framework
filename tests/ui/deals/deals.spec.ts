@@ -4,6 +4,7 @@ import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateDealData,
   generateSharedDealData,
+  generateMinimalDealData,
   CLOSED_LOST_REASONS,
   CLOSED_UNQUALIFIED_REASONS,
 } from '../../../src/data/factories/dealFactory';
@@ -709,5 +710,130 @@ test.describe('Deals', () => {
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();
     logger.success('D-prodSafe passed');
+  });
+
+  // ── Hide Empty Fields — D47-D50 ──────────────────────────────
+  // WHY this shape, REVISED after a real live-verification failure:
+  // Deal's confirmed real minimum is Name+Estimated Value only (contradicts
+  // an earlier static-analysis guess) — everything else is genuinely
+  // optional. Campaign Information was ORIGINALLY assumed to be a
+  // fully-collapsible target (subSource/UTM* all blankable) — confirmed
+  // WRONG via a live test failure: DealsPage.fillDealForm()'s Campaign and
+  // Source react-selects are ALSO unconditionally auto-picked (first
+  // available option, no data-driven input at all — the same
+  // always-random-pick class already documented elsewhere in this
+  // codebase, just not caught in the original code read for this section).
+  // This means Campaign Information can NEVER be driven to a genuine
+  // 100%-empty state — same confirmed structural shape as Tasks/Meetings
+  // (mixed-section-only, no tab-collapse target). Other Details (custom
+  // fields) remains the one working mixed-section target. Relationship-card
+  // widgets (Associated Contacts/Company, pipeline attachment) are
+  // architecturally separate from the toggle — confirmed never hidden
+  // regardless of state, so these tests never assert anything about them.
+
+  test('@regression admin should hide only empty fields within a mixed Campaign Information section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    await dealsPage.assertTabVisible('Campaign Information');
+
+    const campaignTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('Sub Source');
+    await dealsPage.assertFieldLabelHidden('UTM Campaign');
+
+    logger.success('D47 passed');
+  });
+
+  test('@regression admin should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    const campaignTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('Sub Source');
+
+    await dealsPage.toggleHideEmptyFields();
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelVisible('Sub Source');
+
+    logger.success('D48 passed');
+  });
+
+  test('@regression admin should hide only empty fields within a mixed Other Details section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    await dealsPage.assertTabVisible('Other Details');
+
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await dealsPage.assertFieldLabelHidden('Text Field');
+    await dealsPage.assertFieldLabelHidden('Paragraph Text');
+    await dealsPage.assertFieldLabelHidden('URL Field');
+    await dealsPage.assertFieldLabelVisible('Number');
+
+    logger.success('D49 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(adminPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    const campaignTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('UTM Campaign');
+
+    const newUtmCampaign = `campaign_revealed_${Date.now()}`;
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm({ ...dealData, utmCampaign: newUtmCampaign });
+    await dealsPage.saveEditedDeal();
+
+    // No re-toggle — auto-reveal must happen on its own
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelVisible('UTM Campaign');
+    await expect(adminPage.getByText(newUtmCampaign)).toBeVisible({ timeout: 10000 });
+
+    logger.success('D50 passed');
   });
 });

@@ -736,11 +736,22 @@ test.describe('Dashboard', () => {
       expect(await dashboardPage.getCurrentDashboardName()).toBe(data.name);
       expect(await dashboardPage.isMarkAsPrimaryDisabled()).toBe(true);
     } finally {
-      // WHY a single guarded restore call, not 3 independently-`.catch()`'d
-      // steps: see DashboardPage.restorePrimaryToDefaultDashboard()'s own
-      // WHY comment — a failed switch must never let the mark-as-primary
-      // step run anyway against whatever dashboard is still active.
-      await dashboardPage.restorePrimaryToDefaultDashboard();
+      // WHY a plain, unconditional delete — no explicit "restore Default
+      // Dashboard as primary" step (removed 2026-09-07, PROD Build #4,
+      // DB16/DB1 correlation investigation; see
+      // `DashboardPage`'s own comment where that method used to live for
+      // the full evidence): live-confirmed for BOTH roles that deleting the
+      // account's currently-primary dashboard makes the app automatically
+      // fall back to Default Dashboard as primary — no explicit restore
+      // needed. An earlier version of this teardown tried to restore first
+      // and only delete if that succeeded; for the sibling restricted-role
+      // test (DB26) that restore is confirmed to ALWAYS fail (a genuine,
+      // by-design 403 — restricted users cannot self-mark an admin-owned
+      // dashboard as primary), and skipping the delete on that failure
+      // actively prevented the one action that reliably self-heals the
+      // account's primary state. Kept role-agnostic and this simple on
+      // purpose — deleting unconditionally is what both live investigations
+      // confirmed actually works.
       await dashboardPage.deleteDashboardByName(data.name).catch((error) => {
         logger.warn(`DB14 teardown: failed to delete dashboard "${data.name}": ${String(error)}`);
       });

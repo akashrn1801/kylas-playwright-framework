@@ -402,7 +402,10 @@ export class DealsPage extends BasePage {
   }
 
   private async waitForDealListPage(): Promise<void> {
-    await this.waitForUrl(/deals\/list/);
+    // WHY waitForUrlWithNavigationRetry, not a bare waitForUrl (2026-09-07):
+    // see BasePage.waitForUrlWithNavigationRetry()'s own comment — a
+    // genuine navigation stall to this URL previously had zero recovery.
+    await this.waitForUrlWithNavigationRetry(`${config.appUrl}/sales/deals/list`, /deals\/list/);
     await this.waitForListReady();
   }
 
@@ -521,6 +524,80 @@ export class DealsPage extends BasePage {
   // React Select Helper — contacts / company
   // ──────────────────────────────────────────────────────────
 
+  // WHY this exists, and why every option-selection path in
+  // `selectFirstOptionFromDropdown()` now calls it before returning (root-
+  // caused 2026-09-07, PROD Build #4 follow-up investigation, live-
+  // reproduced on demand): a flat, fixed-duration sleep after clicking a
+  // selected option is not a real signal that the react-select menu (and
+  // its full-viewport click-catcher backdrop, class `css-1dsbpcp` — the
+  // SAME classname already documented in this codebase for Reports' own
+  // filter-overlay bug, Cluster 2.6/`ReportsPage.closeMenuRobustly()`) has
+  // actually torn down. Confirmed live: selecting the associated CONTACT
+  // (exactName branch) and then immediately trying to open the associated
+  // COMPANY dropdown right after can hit that still-present backdrop,
+  // which intercepts pointer events — the company indicator's `.click()`
+  // (itself unbounded before this fix) then hangs for the FULL test
+  // timeout with zero diagnostic signal, surfacing 8+ minutes later as an
+  // opaque "browser has been closed"/timeout failure. Mirrors
+  // `ReportsPage.closeMenuRobustly()`'s exact, already-proven shape
+  // (wait for hidden → Escape → wait again → Escape once more → wait
+  // again, loud warning on final failure) rather than inventing a new
+  // pattern — this repo's own known-issues.md already flags this exact
+  // race as "a genuinely repo-wide risk, not module-specific."
+  private async closeIsInvalidMenuRobustly(description: string): Promise<void> {
+    const menu = this.page.locator('.is-invalid__menu');
+    const closed = await menu
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (closed) return;
+    logger.warn(`${description}: menu did not close on its own after selecting — closing via Escape`);
+    await this.page.keyboard.press('Escape');
+    // WHY this modal-visibility check (locator-reviewer finding, 2026-09-07):
+    // this whole sequence runs inside the "Add Deal" modal (`#editEntityModal`),
+    // and Escape is already proven, in this exact same file (cloneDeal()'s
+    // retry logic), to dismiss that modal — not just an open react-select
+    // menu. If the fallback Escape here closes the modal instead of the
+    // menu, every field already filled (name/date/pipeline/associated-
+    // contact) is silently discarded, and the very next locator access
+    // would throw a confusing, unrelated-looking error. Checking explicitly
+    // makes that scenario immediately self-diagnosing instead of being
+    // mistaken for a recurrence of the original leftover-backdrop bug this
+    // method exists to fix.
+    if (!(await this.editModal().isVisible().catch(() => false))) {
+      throw new Error(
+        `${description}: Escape (used to close a stuck react-select menu) closed the entire "Add Deal" ` +
+          'modal instead — all fields filled so far were discarded. This is a different failure than a ' +
+          'leftover menu backdrop; do not treat it as the same bug.'
+      );
+    }
+    const closedAfterEscape = await menu
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (closedAfterEscape) return;
+    logger.warn(`${description}: menu still open after first Escape — retrying Escape once more`);
+    await this.page.keyboard.press('Escape');
+    if (!(await this.editModal().isVisible().catch(() => false))) {
+      throw new Error(
+        `${description}: a second Escape (used to close a stuck react-select menu) closed the entire ` +
+          '"Add Deal" modal instead — all fields filled so far were discarded. This is a different ' +
+          'failure than a leftover menu backdrop; do not treat it as the same bug.'
+      );
+    }
+    const closedAfterSecondEscape = await menu
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (!closedAfterSecondEscape) {
+      logger.warn(
+        `${description}: menu STILL open after two Escape attempts — a later click on a DIFFERENT ` +
+          `dropdown may stall on its leftover backdrop; this is the pre-existing best-effort limit of ` +
+          'this recovery'
+      );
+    }
+  }
+
   private async selectFirstOptionFromDropdown(
     inputLocator: Locator,
     description: string,
@@ -535,7 +612,15 @@ export class DealsPage extends BasePage {
     const indicator = control.locator('.is-invalid__dropdown-indicator');
     await indicator.waitFor({ state: 'visible', timeout: 10000 });
     await indicator.scrollIntoViewIfNeeded();
-    await indicator.click();
+    // WHY an explicit timeout here now (root-caused 2026-09-07, rule 2 sweep
+    // alongside the closeIsInvalidMenuRobustly() fix above): this click was
+    // previously unbounded — Playwright's own default action timeout is 0
+    // (unbounded) when neither this call nor a global `actionTimeout`
+    // specifies one, confirmed repo-wide convention per known-issues.md.
+    // Bounding it turns a silent 8+ minute hang into a fast, diagnosable
+    // failure if a leftover backdrop (see above) or any other transient
+    // block ever exhausts the menu-close recovery above.
+    await indicator.click({ timeout: config.timeouts.expect });
 
     // WHY: QA async API can take up to 22s — re-click every 5s if needed
     const firstOption = this.page.locator('.is-invalid__option').first();
@@ -547,7 +632,7 @@ export class DealsPage extends BasePage {
         break;
       } catch {
         logger.info(`${description} options not visible, re-clicking (attempt ${i + 1})`);
-        await indicator.click();
+        await indicator.click({ timeout: config.timeouts.expect }).catch(() => {});
       }
     }
     if (!found) throw new Error(`${description} options did not appear after 40s`);
@@ -568,7 +653,7 @@ export class DealsPage extends BasePage {
         .first();
       await exactOption.waitFor({ state: 'visible', timeout: 10000 });
       await exactOption.click();
-      await this.page.waitForTimeout(300);
+      await this.closeIsInvalidMenuRobustly(description);
       logger.success(`${description} selected: "${exactName}" (exact match)`);
       return;
     }
@@ -616,8 +701,8 @@ export class DealsPage extends BasePage {
           .first();
         await filteredOption.waitFor({ state: 'visible', timeout: 10000 });
         await filteredOption.click({ timeout: config.timeouts.expect });
+        await this.closeIsInvalidMenuRobustly(description);
         logger.success(`${description} selected: "${pick}" (search-filtered random pick)`);
-        await this.page.waitForTimeout(300);
         return;
       } catch (error) {
         lastError = error;
@@ -1092,6 +1177,18 @@ export class DealsPage extends BasePage {
 
     // Update UTM field to verify campaign info section is editable
     await this.fill(this.utmSourceInput(), data.utmSource, 'utm source (edit)');
+    // WHY these 5 added (2026-09-08, Hide-Empty-Fields work): previously only
+    // utmSource was updatable via edit — a minimal spot-check, not full
+    // section coverage. subSource/utmCampaign/utmMedium/utmContent/utmTerm
+    // are the same plain `<input>` fills as utmSource (no react-select
+    // re-selection risk), so this is a safe, additive extension — no
+    // existing test asserts these fields stay unchanged after an edit
+    // (confirmed via grep).
+    await this.fill(this.subSourceInput(), data.subSource, 'sub source (edit)');
+    await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign (edit)');
+    await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium (edit)');
+    await this.fill(this.utmContentInput(), data.utmContent, 'utm content (edit)');
+    await this.fill(this.utmTermInput(), data.utmTerm, 'utm term (edit)');
 
     await this.fillDealCustomFields(data);
 
@@ -1715,11 +1812,12 @@ export class DealsPage extends BasePage {
 
   async clickEllipsisOption(optionText: string): Promise<void> {
     logger.info(`Clicking ellipsis option: ${optionText}`);
-    await this.openEllipsisMenu();
-    const item = this.ellipsisMenuItem(optionText);
-    await item.waitFor({ state: 'visible', timeout: 5000 });
-    await item.click();
-    logger.success(`Clicked ellipsis option: ${optionText}`);
+    await this.clickDropdownMenuItemBounded(
+      () => this.openEllipsisMenu(),
+      (text) => this.ellipsisMenuItem(text),
+      optionText,
+      'Deals ellipsis menu'
+    );
   }
 
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
@@ -1940,9 +2038,34 @@ export class DealsPage extends BasePage {
   // "Internals" TAB click, a separate concept from the inner carousel slide.
   // Assumes the caller is already on the CLONE's own detail page (matching
   // assertClonedDealName()'s own convention just above).
+  // WHY the reload-and-retry (2026-09-07, PROD Build #4, hardened based on
+  // review — root cause NOT confirmed, per rule 10): a chronic (3/8 PROD
+  // runs) failure here was investigated, and for the restricted-user variant
+  // specifically, ErrorCollector captured a genuine client-side TypeError
+  // (`Cannot read properties of undefined (reading 'toLowerCase')` in the
+  // app's own bundle) at the same timestamp — most plausibly a name field on
+  // the cross-referenced ORIGINAL deal being undefined for the restricted
+  // viewer at render time, crashing the component before it ever paints
+  // this field. A retry of the SAME already-rendered page cannot help that
+  // — but a reload forces a fresh mount and a fresh data fetch, which CAN
+  // help if the underlying data-availability race is transient (the same
+  // reasoning already proven for assertRightPanelIconVisible()'s reload-and-
+  // retry elsewhere in this codebase). This is a defensive hardening
+  // attempt for the test suite, not a substitute for the real app-side fix
+  // — see PROD_BUILD4_INVESTIGATION.md's drafted bug report for Cluster 2.4.
   async assertClonedFromFieldOnDetail(originalDealName: string): Promise<void> {
     await this.click(this.internalsDetailPageTab(), 'Internals tab');
-    await this.assertFieldOnDetailByContainerId('clonedFrom', originalDealName, 'Cloned From');
+    try {
+      await this.assertFieldOnDetailByContainerId('clonedFrom', originalDealName, 'Cloned From');
+    } catch (error) {
+      logger.warn(
+        `assertClonedFromFieldOnDetail: "Cloned From" not found on first attempt — reloading and ` +
+          `retrying once (see this method's own comment): ${String(error)}`
+      );
+      await this.reloadPage();
+      await this.click(this.internalsDetailPageTab(), 'Internals tab');
+      await this.assertFieldOnDetailByContainerId('clonedFrom', originalDealName, 'Cloned From');
+    }
   }
 
   // ──────────────────────────────────────────────────────────
@@ -2421,9 +2544,22 @@ export class DealsPage extends BasePage {
     const saveBtn = this.page
       .locator('button.save-button, #editEntityModal button[type="submit"]')
       .first();
-    await saveBtn.waitFor({ state: 'visible', timeout: 10000 });
-    await saveBtn.click();
-    await this.assertNoFormErrors('meeting create form (from deal panel)');
+    // WHY (2026-09-07, PROD Build #4): tolerate the same confirmed HTTP 422/
+    // errorCode 01503001 entity-summary-propagation-lag pattern already
+    // handled by MeetingsPage.saveMeetingRetryOnEntitySummaryLag() for the
+    // standalone meetings-list save flow — this panel-modal save path
+    // reaches the identical backend endpoint but previously had zero retry
+    // tolerance (assertNoFormErrors() threw immediately on first failure).
+    // Reuses that method directly via its pluggable saveAction param (rule 1
+    // — reuse before building) instead of duplicating its retry/backoff
+    // logic inline here, since this save is modal-based (no post-save popup
+    // to dismiss, unlike the default this.saveMeeting()).
+    await meetingsPage.saveMeetingRetryOnEntitySummaryLag(3, async () => {
+      await saveBtn.waitFor({ state: 'visible', timeout: 10000 });
+      await saveBtn.click();
+      await this.assertNoFormErrors('meeting create form (from deal panel)');
+      return null;
+    });
     await this.page
       .locator('#editEntityModal')
       .waitFor({ state: 'hidden', timeout: 15000 })

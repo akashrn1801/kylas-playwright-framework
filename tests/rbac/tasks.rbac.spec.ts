@@ -1,7 +1,12 @@
 import { test, expect } from '../../src/fixtures/index';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { logger } from '../../src/utils/logger';
-import { generateTaskData, generateAdminTaskData } from '../../src/data/factories/taskFactory';
+import { config } from '../../config/config';
+import {
+  generateTaskData,
+  generateAdminTaskData,
+  generateMinimalTaskData,
+} from '../../src/data/factories/taskFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tasks — RBAC Tests
@@ -365,5 +370,120 @@ test.describe('Tasks RBAC', () => {
     await tasksPage.updateTask(updatedData, originalData.name, taskId);
     await tasksPage.assertTaskUpdated(updatedData, taskId);
     logger.success('TK24 passed');
+  });
+
+  // ── Hide Empty Fields — TK25-TK27 (RBAC parity, restricted user's own
+  // task — mirrors tests/ui/tasks/tasks.spec.ts's TC24-TC26; same
+  // no-tab-collapse-target exception AND baseline-relative "Description"
+  // count documented there — the literal text "Description" occurs twice on
+  // this page even when the field is genuinely blank, one always-present
+  // occurrence unrelated to the toggle, confirmed live) ───────────────────
+
+  test('@regression restricted user should hide only empty fields on a task with minimal data, keeping both sections visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(restrictedPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await restrictedPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+
+    expect(
+      await restrictedPage.getByText('Description', { exact: true }).count(),
+      'Description field label should disappear (one fewer occurrence) after the Hide Empty Fields toggle'
+    ).toBe(descriptionBaseline - 1);
+
+    await tasksPage.assertTabVisible('Other Details');
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await tasksPage.assertFieldLabelHidden('Text Field');
+    await tasksPage.assertFieldLabelHidden('Paragraph Text');
+    await tasksPage.assertFieldLabelHidden('URL Field');
+    await tasksPage.assertFieldLabelVisible('Number');
+
+    logger.success('TK25 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(restrictedPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await restrictedPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await restrictedPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline - 1
+    );
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await restrictedPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline
+    );
+
+    logger.success('TK26 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(restrictedPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await restrictedPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await restrictedPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline - 1
+    );
+
+    const newDescription = `Revealed description ${Date.now()}`;
+    await tasksPage.clickEditButtonInDetailPanel();
+    await tasksPage.fillEditForm({ ...taskData, description: newDescription });
+    await tasksPage.saveEditedTask();
+
+    // WHY a plain page.reload() (mirrors tests/ui/tasks/tasks.spec.ts's
+    // TC26 — see its own comment for the full evidence, including why a
+    // second goToTaskDetailsById() call is itself flaky here): Task's
+    // in-place detail panel does not refresh its own DOM after an
+    // edit-modal save, confirmed live via direct investigation — a real,
+    // Task-specific staleness gap, not a genuine auto-reveal failure. The
+    // toggle preference persists across it (verified below), so this is
+    // not a re-toggle.
+    await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
+    // WHY no flat wait before this check (fixed 2026-09-08, pre-commit hook
+    // sweep): toHaveAttribute() is itself a polling web-first assertion —
+    // it already waits out the post-reload re-hydration on its own, up to
+    // the explicit timeout below, so a preceding blind sleep was redundant.
+    await expect(
+      restrictedPage.locator('#hide-empty-fields-toggle-btn'),
+      'Hide Empty Fields toggle should still be pressed after reloading'
+    ).toHaveAttribute('aria-pressed', 'true', { timeout: config.timeouts.navigation });
+
+    expect(await restrictedPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline
+    );
+    await expect(restrictedPage.getByText(newDescription)).toBeVisible({ timeout: 10000 });
+
+    logger.success('TK27 passed');
   });
 });

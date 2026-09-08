@@ -601,4 +601,91 @@ test.describe('Quotations — UI', () => {
 
     logger.success('Q34 passed');
   });
+
+  // ── Hide Empty Fields — Q35-Q37 ──────────────────────────────
+  // WHY only 3 tests, no tab-collapse and no mixed-section variant:
+  // confirmed live during investigation that Quotations has NO tabs at all
+  // — a flat, single-page layout, unlike every other module in this
+  // feature's coverage — so there is no tab-collapse or mixed-tab-vs-
+  // fully-empty-tab distinction to test at all, just field-level hide.
+  // Summary was investigated and REJECTED as the test field — confirmed
+  // live it's actually REQUIRED on save (a real validation error, "This is
+  // a required field", when blanked via edit), despite the create form
+  // tolerating an empty value. The Text Field custom field is used instead
+  // — confirmed optional by this repo's own custom-field environment-safety
+  // contract. Also confirmed live and must NOT be assumed elsewhere: a
+  // field explicitly set to numeric 0 (Additional Discount/Tax/Adjustment)
+  // is treated as "has a value," not empty — never assert those are hidden.
+
+  test('@regression admin should hide an empty custom Text Field after toggling Hide Empty Fields', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const quotationsPage = new QuotationsPage(adminPage);
+    const data = generateQuotationData();
+    const result = await quotationsPage.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await quotationsPage.goToQuotationDetail(result.id!);
+    await quotationsPage.clickEditButton();
+    await quotationsPage.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await quotationsPage.saveQuotation();
+
+    await quotationsPage.toggleHideEmptyFields();
+    await quotationsPage.assertFieldLabelHidden('Text Field');
+
+    logger.success('Q35 passed');
+  });
+
+  test('@regression admin should restore a hidden field after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const quotationsPage = new QuotationsPage(adminPage);
+    const data = generateQuotationData();
+    const result = await quotationsPage.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await quotationsPage.goToQuotationDetail(result.id!);
+    await quotationsPage.clickEditButton();
+    await quotationsPage.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await quotationsPage.saveQuotation();
+
+    await quotationsPage.toggleHideEmptyFields();
+    await quotationsPage.assertFieldLabelHidden('Text Field');
+
+    await quotationsPage.toggleHideEmptyFields();
+    await quotationsPage.assertFieldLabelVisible('Text Field');
+
+    logger.success('Q36 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const quotationsPage = new QuotationsPage(adminPage);
+    const data = generateQuotationData();
+    const result = await quotationsPage.createQuotation(data);
+    expect(result.id).not.toBeNull();
+
+    await quotationsPage.goToQuotationDetail(result.id!);
+    await quotationsPage.clickEditButton();
+    await quotationsPage.fillEditForm({ customFields: { ...data.customFields, textField: '' } });
+    await quotationsPage.saveQuotation();
+
+    await quotationsPage.toggleHideEmptyFields();
+    await quotationsPage.assertFieldLabelHidden('Text Field');
+
+    const newTextField = `Revealed-${Date.now()}`;
+    await quotationsPage.clickEditButton();
+    await quotationsPage.fillEditForm({ customFields: { ...data.customFields, textField: newTextField } });
+    await quotationsPage.saveQuotation();
+
+    // No re-toggle — auto-reveal must happen on its own
+    await quotationsPage.assertFieldLabelVisible('Text Field');
+    await expect(adminPage.getByText(newTextField)).toBeVisible({ timeout: 10000 });
+
+    logger.success('Q37 passed');
+  });
 });
