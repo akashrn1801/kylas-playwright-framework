@@ -69,6 +69,20 @@ export const config = {
     // WHY: Prod is slower — increase wait to 8s to handle calendar aggregation lag
     prod: { retries: 5, wait: 8000 },
   },
+  // WHY (2026-09-07, PROD Build #4) — a hardcoded `timeout: 5000` on the
+  // ellipsis-dropdown "wait for menu item visible" step (identical literal
+  // duplicated across DealsPage/LeadsPage/ContactsPage/CompaniesPage) timed
+  // out twice on PROD (Deals + Leads "Delete") with zero occurrences on
+  // QA/staging. No trace/timing data was reachable to measure the real PROD
+  // latency directly (trace.zip only exists on the Jenkins host) — these
+  // values are a reasoned default consistent with this file's other per-env
+  // ratios (searchRetry/meetingRetry), not a measured number. Revisit with
+  // real PROD timing data if it becomes available.
+  dropdownMenuItem: {
+    qa: { timeout: 5000, attempts: 2 },
+    staging: { timeout: 8000, attempts: 2 },
+    prod: { timeout: 10000, attempts: 2 },
+  },
   execution: {
     workers: Number(process.env.WORKERS) || 2,
     retryCount: Number(process.env.RETRY_COUNT) || 1,

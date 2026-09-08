@@ -1025,8 +1025,46 @@ export class DashboardPage extends BasePage {
     await this.deleteConfirmModal().waitFor({ state: 'visible', timeout: config.timeouts.expect });
   }
 
+  // WHY (2026-09-07, PROD Build #4, DB22): this previously waited only for
+  // the confirmation MODAL to close (a client-side transition) — no network
+  // confirmation the DELETE itself had completed before the caller proceeds
+  // to assertDashboardNotInSwitcher(). Same class of gap already fixed for
+  // LeadsPage.deleteLead()/DealsPage.deleteDeal() (known-issues.md's
+  // Sandbox Build #147 entry, both `DELETE /v1/<module>/<id>`) and for this
+  // exact module's own openMarkAsPrimary() (arm-before-click/await-after,
+  // mirrored here). Endpoint inferred from that pattern plus this module's
+  // own already-confirmed-live sibling (`/v1/dashboards/<id>/
+  // mark_as_preferred`) — not independently re-confirmed via live network
+  // capture in this pass (no MCP/browser access available here). WHY a
+  // bounded 15s wait, non-fatal on timeout (unlike openMarkAsPrimary's
+  // unconditional throw): if this inferred endpoint/method turns out wrong,
+  // this must degrade to the previous (already-working) modal-hidden-only
+  // behavior, not newly hang every dashboard deletion for a full
+  // config.timeouts.navigation on a guess that never matches. A genuinely
+  // observed non-2xx response is still treated as fatal — hardened based on
+  // review, root cause of DB22 not independently confirmed (rule 10).
   async confirmDelete(): Promise<void> {
+    const responsePromise = this.armResponseWaitWithRecovery(
+      (res) => /\/v1\/dashboards\/\d+$/.test(res.url()) && res.request().method() === 'DELETE',
+      'Delete Dashboard: DELETE response',
+      15000
+    );
     await this.click(this.deleteConfirmDeleteButton(), 'Delete Dashboard modal: Delete');
+    try {
+      const response = await responsePromise;
+      if (!response.ok()) {
+        const body = await response.text().catch(() => '');
+        throw new Error(
+          `confirmDelete: DELETE /v1/dashboards/<id> returned HTTP ${response.status()} — ${body || '(empty body)'}`
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('confirmDelete:')) throw error;
+      logger.warn(
+        `confirmDelete: DELETE response not observed within 15s (endpoint pattern may not match — ` +
+          `falling back to modal-close-only confirmation): ${String(error)}`
+      );
+    }
     await this.deleteConfirmModal().waitFor({ state: 'hidden', timeout: config.timeouts.navigation });
   }
 
@@ -1042,20 +1080,72 @@ export class DashboardPage extends BasePage {
   // 9. Assertions
   // ──────────────────────────────────────────────────────────
 
+  // WHY the reload-and-retry (2026-09-07, PROD Build #4, DB16 hardening):
+  // DB16 and DB1 — the only 2 callers of this method — were found via this
+  // repo's own `ci/reporting-history` ledger to fail together in every one
+  // of 8 real historical PROD/main CI runs with zero exceptions (never one
+  // without the other), correlating with an already-documented, unresolved
+  // known-issues.md symptom ("stuck dashlet on Default/Productivity
+  // Dashboard, root cause never established"). A live manual PROD
+  // reproduction (headed, by the user) found the app functioning correctly
+  // — reclassified from suspected app defect to PROD-specific intermittent
+  // slowness on that direct evidence. Applies the same, already-proven
+  // bounded reload-and-retry pattern used elsewhere for exactly this class
+  // of "a permissions/render snapshot taken once at page mount can predate
+  // real data being ready" gap (`.claude/reference-patterns.md` §5,
+  // `assertRightPanelIconVisible()` across Leads/Deals/Contacts/Companies)
+  // — a reload forces a fresh mount/fetch, which a longer wait on the stale
+  // mount cannot achieve. Every individual assertion here already used the
+  // auto-retrying `assertVisible()` before this change (confirmed, not a
+  // rule-2 gap) — this adds a second, whole-page-fresh attempt on top,
+  // for the case where the ENTIRE page's initial render is slow/stuck, not
+  // just one element within an otherwise-ready page.
   async assertDefaultSectionsVisible(): Promise<void> {
-    for (const section of DEFAULT_DASHBOARD_SECTIONS) {
-      await this.assertVisible(this.sectionHeader(section.sectionId), `${section.label} section header`);
-      await this.assertVisible(this.gridSectionByLabel(section.label), `${section.label} grid section`);
+    try {
+      for (const section of DEFAULT_DASHBOARD_SECTIONS) {
+        await this.assertVisible(this.sectionHeader(section.sectionId), `${section.label} section header`);
+        await this.assertVisible(this.gridSectionByLabel(section.label), `${section.label} grid section`);
+      }
+    } catch (error) {
+      logger.warn(
+        `assertDefaultSectionsVisible: at least one default section not visible within ` +
+          `${config.timeouts.navigation}ms — reloading and retrying once: ${String(error)}`
+      );
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await this.assertDashboardLoaded();
+      for (const section of DEFAULT_DASHBOARD_SECTIONS) {
+        await this.assertVisible(
+          this.sectionHeader(section.sectionId),
+          `${section.label} section header (after reload)`
+        );
+        await this.assertVisible(
+          this.gridSectionByLabel(section.label),
+          `${section.label} grid section (after reload)`
+        );
+      }
     }
   }
 
+  // WHY expect.poll(), not a one-shot count()+throw (2026-09-07, DB16/DB1
+  // stability investigation): `getDashletCountInSection()`'s `.count()` call
+  // resolves instantly with whatever currently matches — zero auto-retry,
+  // unlike `expect().toHaveCount()`/`toBeVisible()`. Called right after
+  // `goToDashboard()`, this can race a section's own async dashlet-render
+  // (the same class of render-timing gap already documented for Dashboard
+  // elsewhere in this codebase — known-issues.md's Grouped-Smartlists
+  // render-race), reading a transient 0 and throwing immediately instead of
+  // giving the render a real chance to finish. withSessionExpiryRecovery()
+  // only retries on session expiry, not on this ordinary race, so it
+  // provided no protection against the actual failure mode.
   async assertSectionHasDashlets(label: string): Promise<void> {
-    await this.withSessionExpiryRecovery(async () => {
-      const count = await this.getDashletCountInSection(label);
-      if (count === 0) {
-        throw new Error(`assertSectionHasDashlets: "${label}" section has zero dashlets`);
-      }
-    });
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(() => this.getDashletCountInSection(label), {
+          message: `assertSectionHasDashlets: "${label}" section has zero dashlets`,
+          timeout: config.timeouts.navigation,
+        })
+        .toBeGreaterThan(0)
+    );
   }
 
   async assertDashletVisible(title: string): Promise<void> {
@@ -1296,31 +1386,42 @@ export class DashboardPage extends BasePage {
     logger.success('Marked current dashboard as Primary');
   }
 
-  // WHY one guarded sequence, not 3 independently-`.catch()`'d steps at each
-  // test's own call site: flaky-test-auditor finding (2026-09-02) — 3
-  // separately-swallowed steps mean a failure in the FIRST (switching to
-  // Default Dashboard) doesn't stop the SECOND (Mark as Primary) from
-  // running anyway, against whatever dashboard is still active — very
-  // plausibly the disposable one about to be deleted next, which would then
-  // become this account's persistent primary. "Mark as Primary" is a real,
-  // account-persisted per-user preference (confirmed live), not session-
-  // scoped — a wrong dashboard ending up marked primary is a genuine,
-  // surprising side effect for whoever next opens this account, the same
-  // class of shared-state risk as the documented adminActive Products-
-  // fixture-corruption incident (.claude/known-issues.md). One try/catch
-  // around the whole sequence means a failed switch never reaches the
-  // mark-as-primary step at all.
-  async restorePrimaryToDefaultDashboard(): Promise<void> {
-    try {
-      await this.switchToDashboard('Default Dashboard');
-      await this.markCurrentDashboardAsPrimary();
-    } catch (error) {
-      logger.warn(
-        `restorePrimaryToDefaultDashboard: failed to restore Default Dashboard as this account's primary — ` +
-          `manual verification may be needed: ${String(error)}`
-      );
-    }
-  }
+  // WHY there is deliberately NO "restorePrimaryToDefaultDashboard()" method
+  // here (removed 2026-09-07, PROD Build #4, DB16/DB1 correlation
+  // investigation — full history kept here since a future session may
+  // otherwise be tempted to re-add it): an earlier version of this file had
+  // exactly that method, called from DB14's/DB26's `finally` blocks to
+  // explicitly switch to "Default Dashboard" and call `markCurrentDashboardAsPrimary()`
+  // before deleting the test's own disposable dashboard. Two rounds of live
+  // investigation on this exact call chain found:
+  // (1) For the RESTRICTED role, this call is not flaky — it fails
+  //     CONSISTENTLY and BY DESIGN: `POST /v1/dashboards/<id>/mark_as_preferred`
+  //     against Default Dashboard returns HTTP 403, `errorCode: "024002"`,
+  //     `"Can not read the dashboard"`, live-reproduced on demand. This is a
+  //     genuine, confirmed Kylas permission boundary (a restricted user
+  //     cannot self-mark an admin/system-owned dashboard as their own
+  //     primary via this endpoint) — NOT an app bug, NOT an environment
+  //     issue, and not fixable or worth retrying from the test side.
+  // (2) Deleting the account's currently-primary dashboard — confirmed live
+  //     for BOTH roles via a dedicated scratch investigation — makes the app
+  //     AUTOMATICALLY fall back to "Default Dashboard" becoming primary
+  //     again, with no explicit restore call needed at all. This means the
+  //     explicit restore this method existed to perform was never actually
+  //     necessary for either role: harmless-but-redundant for admin (who
+  //     CAN successfully call mark_as_preferred on Default Dashboard, no
+  //     403), and actively counterproductive for restricted (guaranteed to
+  //     fail every time, and an earlier fix attempt that skipped the
+  //     subsequent delete whenever this restore failed made things WORSE —
+  //     it prevented the one action, delete, that reliably self-heals the
+  //     account's primary dashboard state).
+  // The real, evidence-based fix: DB14's and DB26's teardown now simply
+  // delete their own disposable dashboard unconditionally (see each test's
+  // own `finally` block) — no restore step, no guard, no role branching
+  // needed. DB16/DB1/DB2/DB4/DB5/DB17 (the tests that implicitly assume
+  // Default Dashboard is primary via a bare `goToDashboard()`) needed no
+  // changes themselves — their assumption was always correct under normal
+  // conditions; the corruption source was entirely in DB14's/DB26's
+  // teardown, now removed at the source.
 
   // WHY "Assign to" is left untouched at its default: confirmed live
   // (2026-09-02 follow-up) — "Profiles" is already the modal's live default

@@ -627,4 +627,131 @@ test.describe('Call Logs', () => {
     logger.success('CL24 passed');
   });
 
+  // ── Hide Empty Fields — CL40-CL43 ────────────────────────────
+  // WHY skipOptionalFields, confirmed live via direct investigation before
+  // this test was written: Disposition/Overall Sentiment/Customer Emotion
+  // have zero representation in CallLogData at all — CallLogsPage.
+  // createCallLog()'s skipOptionalFields option (added specifically for this
+  // feature) is the only way to leave them genuinely unset. Confirmed live:
+  // Sentiment Information tab (Overall Sentiment + Customer Emotion) fully
+  // collapses; Campaign Information also fully collapses (it has no
+  // CallLogData-driven fields at all — always empty for a Call Log,
+  // regardless of test data); Basic Info stays mixed (Duration/Call
+  // Disposition/IVR Number hidden, Type/Phone Number/Date/Time/Logged By/
+  // Logged At stay visible).
+
+  test('@regression admin should hide empty fields/tabs on a call log with skipOptionalFields', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Campaign Information');
+    await callLogsPage.assertTabVisible('Basic Info');
+
+    logger.success('CL40 passed');
+  });
+
+  test('@regression admin should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabVisible('Sentiment Information');
+
+    logger.success('CL41 passed');
+  });
+
+  test('@regression admin should hide only empty fields within a mixed Basic Info section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabVisible('Basic Info');
+
+    await callLogsPage.assertFieldLabelHidden('Duration');
+    await callLogsPage.assertFieldLabelHidden('Call Disposition');
+    await callLogsPage.assertFieldLabelHidden('IVR Number');
+    await callLogsPage.assertFieldLabelVisible('Type');
+    await callLogsPage.assertFieldLabelVisible('Phone Number');
+    await callLogsPage.assertFieldLabelVisible('Date');
+
+    logger.success('CL42 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(adminPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertFieldLabelHidden('Call Disposition');
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    // Edit: set Disposition only — Overall Sentiment/Customer Emotion stay
+    // blank, confirming auto-reveal is genuinely per-field/tab-content-driven
+    await callLogsPage.clickEditButton();
+    await callLogsPage.fillDisposition();
+    await callLogsPage.saveEditedCallLog();
+
+    // No re-toggle — auto-reveal must happen on its own
+    await callLogsPage.assertFieldLabelVisible('Call Disposition');
+    // Sentiment Information stays collapsed — Overall Sentiment/Customer
+    // Emotion are still empty, confirming per-tab independence
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    logger.success('CL43 passed');
+  });
+
 });
