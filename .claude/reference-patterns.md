@@ -385,3 +385,17 @@ A 3-step wizard (`#dashlet-wizard`: Dashlet Type → Configure Dashlet → Previ
 - **Entity availability genuinely differs by dashlet type.** Smartlist and Grouped Smartlists (`multilist`) both offer `lead`/`deal`/`contact`/`company`/`email`; Report offers a DIFFERENT 7-entity set — those same 4 plus `task`/`meeting`/`call` (Call Log), and never `email`. **Call Log dashlets can only ever be added as Report type** — Smartlist/Grouped Smartlists never offer it at all.
 - **Report-type dashlets have a real cross-module dependency on the Reports module**, confirmed via live network capture (`POST /v3/reports/search?...&reportType=CALL`): Step 2's option list for a Report dashlet is **your own already-saved Reports**, filtered server-side by entity type — a Report dashlet cannot be added for an entity with zero saved Reports of that type. Any test needing a deterministic Report-type dashlet should create its own disposable Report first (via `ReportsPage`) and select it by exact name, never rely on this account's pre-existing Reports data.
 - **Grouped Smartlists' Step 2 is a genuine multi-select (checkboxes); Smartlist's and Report's own Step 2 are genuine single-select (radios)** — same row markup family (`div.row` containing an empty, unclickable `<label>` and an `input[id^="check_"]`; the real option name lives in a sibling `.col` div, not the label or the input), differing only in the input's `type` attribute. Confirmed live via `.checked` reads after sequential clicks, not visually. The app itself enforces no real minimum beyond 1 and no maximum at all for Grouped Smartlists (all of an entity's available rows could be checked simultaneously with no error and no cap) — a test suite choosing to select more than 1 (e.g. this codebase's own 2-4 range) is a deliberate test-design choice to exercise genuine multi-select behavior, not a reflection of any app-enforced constraint. A Grouped Smartlists dashlet's own rendered header is always the literal, static string "Grouped Smartlists" for every entity, regardless of selection — never a synthesized title — so any assertion identifying "the dashlet I just added" must key off one of the actually-selected row names (which appear as its own inner sub-rows), never the generic header text, especially once more than one Grouped Smartlists dashlet coexists on the same dashboard (each lands in its own dynamically-created, entity-scoped section — confirmed never merged).
+
+### 21. Hide Empty Fields toggle — per-module tab/field behavior
+
+| Module | Quirk |
+|---|---|
+| Leads | Social fully collapses; Professional/Requirement/Other Details always mixed |
+| Contacts | Social + Campaign Information fully collapse; Professional/Other Details always mixed |
+| Companies | Social fully collapses; Other Details always mixed; no Professional-equivalent tab |
+| Deals | Campaign Information can never fully collapse (Campaign/Source auto-picked) — check Sub Source/UTM Campaign fields directly |
+| Tasks | No tab ever fully collapses; edit-modal save doesn't refresh the in-place detail panel — reload to see updated state |
+| Meetings | No tab ever fully collapses; Description is structurally excluded from the toggle (never hidden) |
+| Call Logs | Sentiment Information + Campaign Information fully collapse; Basic Info always mixed |
+| Quotations | No tabs at all — field-level only |
+| All | Relationship-list cards (Related Deals, Associated Contacts, Pending Activities, Deal's pipeline card) are never hidden by the toggle; a field set to `0` counts as "has a value," not empty |

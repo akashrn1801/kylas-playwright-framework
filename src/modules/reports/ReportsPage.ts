@@ -550,7 +550,26 @@ export class ReportsPage extends BasePage {
     const attempts = 5;
     const STABILITY_WINDOW_MS = 500;
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      await this.click(trigger, `${description}: open menu (attempt ${attempt}/${attempts})`);
+      // WHY (2026-09-07, PROD Build #4): this click used to be unguarded —
+      // when the target was genuinely covered by a stuck backdrop (see
+      // closeMenuRobustly()'s own comment below for the confirmed mechanism),
+      // BasePage.click()'s internal 15s actionability wait throws, and that
+      // exception previously escaped this ENTIRE 5-attempt loop immediately
+      // on attempt 1 — zero protection against "click can't land because
+      // something else is covering the target", only against "menu opens
+      // then closes". Treat a thrown click the same as opened === false.
+      const clicked = await this.click(
+        trigger,
+        `${description}: open menu (attempt ${attempt}/${attempts})`
+      )
+        .then(() => true)
+        .catch((error) => {
+          logger.warn(
+            `${description}: click to open menu failed on attempt ${attempt}/${attempts}: ${String(error)}`
+          );
+          return false;
+        });
+      if (!clicked) continue;
       const opened = await menu
         .waitFor({ state: 'visible', timeout: 3000 })
         .then(() => true)
@@ -602,12 +621,33 @@ export class ReportsPage extends BasePage {
       .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
       .then(() => true)
       .catch(() => false);
-    if (!closed) {
-      logger.warn(`${description}: menu did not close on its own after selecting — closing via Escape`);
-      await this.page.keyboard.press('Escape');
-      await menu.waitFor({ state: 'hidden', timeout: config.timeouts.expect }).catch(() => {
-        /* best effort — the next interaction will surface any real remaining problem loudly */
-      });
+    if (closed) return;
+    logger.warn(`${description}: menu did not close on its own after selecting — closing via Escape`);
+    await this.page.keyboard.press('Escape');
+    const closedAfterEscape = await menu
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (closedAfterEscape) return;
+    // WHY (2026-09-07, PROD Build #4): confirmed live 2026-08-21 that a
+    // single Escape does not always land in time under real load — this
+    // silently swallowed that second failure entirely, leaving a genuinely
+    // still-open menu's full-viewport click-catcher backdrop in place to
+    // stall a LATER, unrelated click for its own full 15s+ actionability
+    // wait with no diagnostic trail pointing back here. One more Escape+wait
+    // cycle, and this time a loud warning either way so a recurrence is
+    // diagnosable instead of a bare downstream timeout.
+    logger.warn(`${description}: menu still open after first Escape — retrying Escape once more`);
+    await this.page.keyboard.press('Escape');
+    const closedAfterSecondEscape = await menu
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (!closedAfterSecondEscape) {
+      logger.warn(
+        `${description}: menu STILL open after two Escape attempts — a later click may stall on its ` +
+          `leftover backdrop; this is the pre-existing best-effort limit of this recovery`
+      );
     }
   }
 

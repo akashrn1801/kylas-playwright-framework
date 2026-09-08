@@ -6,6 +6,7 @@ import {
   generateAdminCompanyData,
   generateSharedCompanyData,
   generateRestrictedCompanyData,
+  generateMinimalCompanyData,
 } from '../../src/data/factories/companyFactory';
 import { generateContactData } from '../../src/data/factories/contactFactory';
 import { generateDealData } from '../../src/data/factories/dealFactory';
@@ -684,6 +685,103 @@ test.describe('Companies RBAC', () => {
     // (edit is an in-place modal, not a route change) — no re-navigation needed.
     await companiesPage.assertCompanyCustomFieldsOnDetail(updatedData);
     logger.success('COR22 passed');
+  });
+
+  // ── Hide Empty Fields — COR23-COR26 (RBAC parity, restricted user's own
+  // company — mirrors tests/ui/companies/companies.spec.ts's CO20-CO23) ──
+
+  test('@regression restricted user should hide empty fields/tabs on a company with a minimal, genuinely-empty Social tab', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+    await companiesPage.assertTabVisible('Other Details');
+
+    logger.success('COR23 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabVisible('Social');
+
+    logger.success('COR24 passed');
+  });
+
+  test('@regression restricted user should hide only empty fields within a mixed Other Details section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabVisible('Other Details');
+
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await companiesPage.assertFieldLabelHidden('Text Field');
+    await companiesPage.assertFieldLabelHidden('Paragraph Text');
+    await companiesPage.assertFieldLabelHidden('URL Field');
+    await companiesPage.assertFieldLabelVisible('Number');
+
+    logger.success('COR25 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(restrictedPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await companiesPage.clickEditIcon();
+    await companiesPage.fillEditForm({ ...companyData, facebook: newFacebook });
+    await companiesPage.saveEditedCompany();
+
+    await companiesPage.assertTabVisible('Social');
+    const socialTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Social' });
+    await socialTab.click();
+    await expect(restrictedPage.getByText(newFacebook)).toBeVisible({ timeout: 10000 });
+
+    logger.success('COR26 passed');
   });
 
 });

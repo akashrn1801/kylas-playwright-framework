@@ -360,6 +360,60 @@ export class BasePage {
     await this.page.getByText(text).click();
   }
 
+  // WHY (2026-09-07, PROD Build #4) — a hardcoded `timeout: 5000` on the
+  // "wait for ellipsis menu item visible" step was duplicated across
+  // DealsPage/LeadsPage/ContactsPage/CompaniesPage and timed out on PROD
+  // (Deals + Leads "Delete") with zero QA/staging occurrences. Reuse-before-
+  // building (rule 1): one generic, config-driven, bounded-retry helper here
+  // instead of a 5th copy. Retries the WHOLE open+find sequence (not just a
+  // bigger single wait) because a single bigger timeout can't distinguish
+  // "item slow to paint inside an already-open menu" from "menu itself
+  // closed/never opened" — the same ambiguity the proven stability-window
+  // (reference-patterns.md §18) and bounded reload-and-retry (§5) patterns
+  // already solve elsewhere in this codebase.
+  protected async clickDropdownMenuItemBounded(
+    openMenu: () => Promise<void>,
+    menuItem: (optionText: string) => Locator,
+    optionText: string,
+    description = 'ellipsis menu'
+  ): Promise<void> {
+    const { timeout, attempts } = config.dropdownMenuItem[config.env];
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      // WHY (found by locator-reviewer before this shipped): `openMenu()`
+      // clicks a Bootstrap dropdown TOGGLE, not an idempotent "open" action.
+      // If attempt 1's menu is still open when a retry fires, re-invoking
+      // openMenu() would CLOSE it instead of opening it — turning a
+      // transient race into a guaranteed failure on every retry attempt,
+      // which would have defeated the entire point of this helper. Force a
+      // known-closed state first (best-effort, bounded — never the primary
+      // wait) before every attempt after the first.
+      if (attempt > 1) {
+        await this.page.keyboard.press('Escape');
+        await this.page
+          .locator('.dropdown-menu.show')
+          .waitFor({ state: 'hidden', timeout: 2000 })
+          .catch(() => {});
+      }
+      try {
+        await openMenu();
+        const item = menuItem(optionText);
+        await item.waitFor({ state: 'visible', timeout });
+        await item.click();
+        logger.success(`${description}: clicked option "${optionText}"`);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          `${description}: option "${optionText}" not reachable on attempt ${attempt}/${attempts} — retrying`
+        );
+      }
+    }
+    throw new Error(
+      `${description}: option "${optionText}" never became clickable after ${attempts} attempts: ${String(lastError)}`
+    );
+  }
+
   // ─── Input Actions ────────────────────────────────────────
 
   // WHY (2026-07-20, real credential leakage confirmed and fixed): `fill()`
@@ -648,6 +702,33 @@ export class BasePage {
     // subclass uses, and non-BasePage code (globalSetup.ts, authManager.ts,
     // fixtures/index.ts) calls safeWaitForURL() directly for the same reason.
     await this.withSessionExpiryRecovery(() => safeWaitForURL(this.page, urlPattern, timeout));
+  }
+
+  // WHY (2026-09-07, found investigating a flaky "admin shares deal Call
+  // permission..." occurrence, deals.rbac.spec.ts): every `waitForXListPage()`
+  // across Deals/Leads/Contacts/Companies shares an identical shape — a bare
+  // `waitForUrl()` with zero retry, immediately followed by the already-
+  // hardened `waitForListReady()`. If the app's navigation to the list URL
+  // itself genuinely stalls (not a data-readiness race — the URL never
+  // matches at all), there is no recovery path, unlike
+  // `waitForEntityDetailPage()`'s proven reload-and-retry for the analogous
+  // detail-page case. A plain page reload doesn't help here (the browser
+  // may still be on the PREVIOUS page, not mid-navigation) — the real
+  // recovery is re-issuing the navigation itself once before giving up.
+  async waitForUrlWithNavigationRetry(
+    url: string,
+    urlPattern: string | RegExp | ((url: URL) => boolean),
+    timeout = config.timeouts.navigation
+  ): Promise<void> {
+    try {
+      await this.waitForUrl(urlPattern, timeout);
+    } catch (error) {
+      logger.warn(
+        `waitForUrlWithNavigationRetry: URL never matched ${String(urlPattern)} within ${timeout}ms after navigating to ${url} (possible navigation stall) — retrying navigation once: ${String(error)}`
+      );
+      await this.navigateTo(url);
+      await this.waitForUrl(urlPattern, timeout);
+    }
   }
 
   /**
@@ -2748,5 +2829,101 @@ export class BasePage {
     const name = await nameLocator.innerText();
     await this.page.keyboard.press('Escape');
     return name.trim();
+  }
+
+  // ─── Hide Empty Fields Helpers (generic — reusable across entities/modules) ─────
+  // WHY these live here, not per-module: the toggle button itself
+  // (`#hide-empty-fields-toggle-btn`, `data-original-title="Hide empty fields"`)
+  // and its two core mechanics — a tab that is 100% empty collapses entirely,
+  // while a tab with at least one populated field stays visible with only its
+  // OWN empty fields hidden — are confirmed IDENTICAL live across every
+  // module verified so far (Leads, Contacts, Companies, Deals, Tasks,
+  // Meetings, Call Logs). Quotations is a confirmed, deliberate exception:
+  // it has no tabs at all (a flat single-page layout), so only the
+  // field-level helpers apply there — never assertTabHidden/assertTabVisible.
+  // A field explicitly set to numeric 0 (e.g. Quotation's Additional
+  // Discount/Tax/Adjustment) is treated by the app as "has a value," NOT
+  // empty — never assert a 0-valued field is hidden.
+  // Relationship-list-card widgets (e.g. "Related Deals," "Associated
+  // Contacts," "Pending Activities," Deal's pipeline-attachment card) are
+  // architecturally separate from this toggle and are NEVER hidden by it,
+  // regardless of empty/populated state — these helpers only ever target
+  // genuine detail-page FIELD labels/tabs, never those cards.
+
+  async toggleHideEmptyFields(): Promise<void> {
+    const toggle = this.page.locator('#hide-empty-fields-toggle-btn');
+    await this.click(toggle, 'Hide Empty Fields toggle');
+  }
+
+  async isHideEmptyFieldsToggleOn(): Promise<boolean> {
+    const toggle = this.page.locator('#hide-empty-fields-toggle-btn');
+    const pressed = await toggle.getAttribute('aria-pressed').catch(() => null);
+    return pressed === 'true';
+  }
+
+  // WHY exact-text count rather than a single toBeHidden(): a hidden field's
+  // label is removed from the DOM entirely (not just CSS-hidden), so the most
+  // reliable "confirmed gone" check is a zero count of the exact label text —
+  // matches the pattern already proven live across all 8 modules'
+  // investigation (getByText(label, {exact:true}).count()).
+  // WHY expect.poll(), not a one-shot count (fixed 2026-09-08, found via
+  // pre-commit hook sweep): a bare `.count()` reads the DOM exactly once with
+  // no auto-retry, racing a just-fired tab-switch/toggle-click re-render —
+  // callers were papering over this with a blind fixed-duration sleep
+  // beforehand (the actual pre-commit-hook violation). Polling the count itself is the
+  // real fix, at the one shared helper, not at every call site.
+  async assertFieldLabelHidden(label: string): Promise<void> {
+    await this.withSessionExpiryRecovery(async () => {
+      await expect
+        .poll(() => this.page.getByText(label, { exact: true }).count(), {
+          timeout: config.timeouts.expect,
+          message: `Expected field label "${label}" to be hidden (0 occurrences) after the Hide Empty Fields toggle`,
+        })
+        .toBe(0);
+    });
+    logger.success(`Confirmed field "${label}" is hidden`);
+  }
+
+  async assertFieldLabelVisible(label: string): Promise<void> {
+    const locator = this.page.getByText(label, { exact: true }).first();
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        locator,
+        `Expected field label "${label}" to be visible, but it never appeared`
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    logger.success(`Confirmed field "${label}" is visible`);
+  }
+
+  // WHY a Quotation-incompatible helper (tabs only exist on the other 7
+  // modules): callers must never invoke this for Quotations — see this
+  // section's header comment.
+  private readonly hideEmptyFieldsTabLocator = (tabText: string): Locator =>
+    this.page.locator('a.nav-item.nav-link, a.nav-link').filter({ hasText: tabText });
+
+  // WHY expect.poll() — same reasoning as assertFieldLabelHidden() above: a
+  // one-shot `.count()` raced the toggle-click re-render, masked previously
+  // by a call-site blind fixed-duration sleep.
+  async assertTabHiddenWhenFullyEmpty(tabText: string): Promise<void> {
+    await this.withSessionExpiryRecovery(async () => {
+      await expect
+        .poll(() => this.hideEmptyFieldsTabLocator(tabText).count(), {
+          timeout: config.timeouts.expect,
+          message: `Expected tab "${tabText}" to be hidden (fully empty) after the Hide Empty Fields toggle`,
+        })
+        .toBe(0);
+    });
+    logger.success(`Confirmed tab "${tabText}" is hidden (fully empty)`);
+  }
+
+  async assertTabVisible(tabText: string): Promise<void> {
+    const tab = this.hideEmptyFieldsTabLocator(tabText);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        `Expected tab "${tabText}" to remain visible (has at least one populated field)`
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    logger.success(`Confirmed tab "${tabText}" remains visible`);
   }
 }

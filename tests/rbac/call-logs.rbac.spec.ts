@@ -735,4 +735,116 @@ test.describe('Call Logs — RBAC', () => {
     logger.success('CL39 passed');
   });
 
+  // ── Hide Empty Fields — CL44-CL47 (RBAC parity, restricted user's own
+  // call log — mirrors tests/ui/call-logs/call-logs.spec.ts's CL40-CL43) ──
+
+  test('@regression restricted user should hide empty fields/tabs on a call log with skipOptionalFields', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Campaign Information');
+    await callLogsPage.assertTabVisible('Basic Info');
+
+    logger.success('CL44 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabVisible('Sentiment Information');
+
+    logger.success('CL45 passed');
+  });
+
+  test('@regression restricted user should hide only empty fields within a mixed Basic Info section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertTabVisible('Basic Info');
+
+    await callLogsPage.assertFieldLabelHidden('Duration');
+    await callLogsPage.assertFieldLabelHidden('Call Disposition');
+    await callLogsPage.assertFieldLabelHidden('IVR Number');
+    await callLogsPage.assertFieldLabelVisible('Type');
+    await callLogsPage.assertFieldLabelVisible('Phone Number');
+    await callLogsPage.assertFieldLabelVisible('Date');
+
+    logger.success('CL46 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const callLogsPage = new CallLogsPage(restrictedPage);
+    const data = generateCallLogData({
+      entityType: 'Lead',
+      outcome: 'Missed Call',
+      callSummary: '',
+      notes: '',
+    });
+    await callLogsPage.goToCallLogsList();
+    const result = await callLogsPage.createCallLog(data, { skipOptionalFields: true });
+    expect(result.callLogId).not.toBeNull();
+    await callLogsPage.goToCallLogById(result.callLogId!);
+
+    await callLogsPage.toggleHideEmptyFields();
+    await callLogsPage.assertFieldLabelHidden('Call Disposition');
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    await callLogsPage.clickEditButton();
+    await callLogsPage.fillDisposition();
+    await callLogsPage.saveEditedCallLog();
+
+    await callLogsPage.assertFieldLabelVisible('Call Disposition');
+    await callLogsPage.assertTabHiddenWhenFullyEmpty('Sentiment Information');
+
+    logger.success('CL47 passed');
+  });
+
 });

@@ -621,10 +621,29 @@ test.describe('Dashboard RBAC', () => {
       expect(await dashboardPage.getCurrentDashboardName()).toBe(data.name);
       expect(await dashboardPage.isMarkAsPrimaryDisabled()).toBe(true);
     } finally {
-      // WHY a single guarded restore call, same reasoning as
-      // dashboard.spec.ts's DB14 — see restorePrimaryToDefaultDashboard()'s
-      // own WHY comment.
-      await dashboardPage.restorePrimaryToDefaultDashboard();
+      // WHY a plain, unconditional delete — no explicit "restore Default
+      // Dashboard as primary" step (removed 2026-09-07, PROD Build #4,
+      // DB16/DB1 correlation investigation): live-reproduced on demand —
+      // `POST /v1/dashboards/<id>/mark_as_preferred` against Default
+      // Dashboard as the restricted role returns HTTP 403, `errorCode:
+      // "024002"`, `"Can not read the dashboard"`, EVERY time. This is a
+      // genuine, confirmed Kylas permission boundary (a restricted user
+      // cannot self-mark an admin/system-owned dashboard as their own
+      // primary via this endpoint) — not an app bug, not flaky, not worth
+      // attempting or retrying from the test side. A dedicated live check
+      // confirmed the actual fix instead: deleting the account's currently-
+      // primary dashboard makes the app automatically fall back to Default
+      // Dashboard as primary, with no explicit restore call needed at all.
+      // An earlier version of this teardown skipped the delete whenever the
+      // (guaranteed-to-fail) restore failed — that made things WORSE, since
+      // skipping the one action (delete) that reliably self-heals this
+      // account's primary state left it stuck on this empty, dashlet-less
+      // dashboard for every subsequent test/login until manually cleaned up
+      // — the confirmed root cause connecting this exact teardown shape to
+      // DB16's/DB1's/DB2's/DB4's/DB5's/DB17's real historical failures
+      // (all 6 implicitly assume Default Dashboard is primary via a bare
+      // `goToDashboard()`; none of them needed any change themselves — this
+      // teardown was the actual corruption source).
       await dashboardPage.deleteDashboardByName(data.name).catch((error) => {
         logger.warn(`DB26 teardown: failed to delete dashboard "${data.name}": ${String(error)}`);
       });
