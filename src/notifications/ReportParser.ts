@@ -162,6 +162,17 @@ export interface ParsedReport {
   playwrightVersion?: string;
   workers?: number;
   projects: string[];
+  // WHY added 2026-09-09 (feeds RunHistory's deriveTestScope() — the
+  // "Suite Drift Detected" false-alarm fix): the RAW spec title for every
+  // test in this report, tags fully intact — deliberately NOT the same
+  // strings as results[].title above, which strips the FIRST leading tag
+  // only (`spec.title.replace(/^@\w+\s*/g, '')`, confirmed non-global in
+  // effect since `^` anchors once) for display purposes and therefore
+  // cannot be used to reconstruct a test's full tag set. Kept as its own
+  // field rather than changing results[].title's existing behavior — that
+  // field has many existing display consumers already relying on its
+  // partially-detagged shape; this is purely additive.
+  allTestTitlesRaw: string[];
 }
 
 // WHY: Playwright exports types for its live Reporter API (@playwright/test/reporter's
@@ -256,7 +267,7 @@ export class ReportParser {
       throw new Error(`Report not found: ${jsonReportPath}`);
     }
     const raw = JSON.parse(fs.readFileSync(jsonReportPath, 'utf-8')) as PlaywrightJsonReport;
-    const results = this.extractResults(raw);
+    const { results, rawTitles: allTestTitlesRaw } = this.extractResults(raw);
     const total = results.length;
     const passed = results.filter((r) => r.status === 'passed').length;
     const failed = results.filter((r) => r.status === 'failed').length;
@@ -362,16 +373,19 @@ export class ReportParser {
       playwrightVersion: raw.config?.version,
       workers: raw.config?.workers,
       projects,
+      allTestTitlesRaw,
     };
   }
 
-  private extractResults(raw: PlaywrightJsonReport): TestResult[] {
+  private extractResults(raw: PlaywrightJsonReport): { results: TestResult[]; rawTitles: string[] } {
     const results: TestResult[] = [];
+    const rawTitles: string[] = [];
     const walkSuite = (suite: PlaywrightJsonSuite, file = '') => {
       const currentFile = suite.file || file;
       if (suite.specs) {
         for (const spec of suite.specs) {
           for (const test of spec.tests || []) {
+            rawTitles.push(spec.title);
             const allResults = test.results || [];
             const retries = allResults.length - 1;
             const lastResult = allResults[allResults.length - 1];
@@ -447,7 +461,7 @@ export class ReportParser {
       for (const child of suite.suites || []) walkSuite(child, currentFile);
     };
     for (const suite of raw.suites || []) walkSuite(suite);
-    return results;
+    return { results, rawTitles };
   }
 
   // WHY: Confirmed live (2026-07-07 reporting overhaul, P3) — Playwright's own
