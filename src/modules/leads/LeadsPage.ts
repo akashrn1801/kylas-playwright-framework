@@ -483,7 +483,10 @@ export class LeadsPage extends BasePage {
   }
 
   private async waitForLeadListPage(): Promise<void> {
-    await this.waitForUrl(/leads\/list/);
+    // WHY waitForUrlWithNavigationRetry, not a bare waitForUrl (2026-09-07):
+    // see BasePage.waitForUrlWithNavigationRetry()'s own comment — a
+    // genuine navigation stall to this URL previously had zero recovery.
+    await this.waitForUrlWithNavigationRetry(`${config.appUrl}/sales/leads/list`, /leads\/list/);
 
     await this.waitForListReady();
   }
@@ -1447,6 +1450,19 @@ export class LeadsPage extends BasePage {
     // before Other Details).
     await this.fillLeadRequirement(data);
 
+    // WHY Social (facebook/twitter/linkedIn) added here (2026-09-08, Hide-
+    // Empty-Fields work): previously edit-only scoped to firstName/lastName/
+    // Salutation/Requirement/custom-fields (see this method's own historical
+    // scoping note in known-issues.md) — Social was deliberately left out
+    // because every other candidate needing edit support so far was a
+    // react-select (real re-selection risk on a pre-filled form). Social's
+    // 3 fields are plain `<input>` fills, identical risk profile to
+    // firstName/lastName/requirementName already handled above — safe,
+    // additive extension, not a react-select re-selection case.
+    await this.fill(this.facebookInput(), data.facebook, 'facebook (edit)');
+    await this.fill(this.twitterInput(), data.twitter, 'twitter (edit)');
+    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin (edit)');
+
     await this.fillLeadCustomFields(data);
 
     logger.success('Edit form updated');
@@ -1662,20 +1678,61 @@ export class LeadsPage extends BasePage {
 
   async openEllipsisMenu(): Promise<void> {
     logger.info('Opening ellipsis menu');
-    await this.ellipsisButton().scrollIntoViewIfNeeded();
-    await this.ellipsisButton().click();
-    await this.page.waitForTimeout(500);
+    // WHY check-before-click, idempotent open (2026-09-09 — confirmed live,
+    // qa Build #239 isolated re-run): ellipsisButton() is a Bootstrap
+    // `dropdown-toggle` — clicking it while its OWN menu is already open
+    // CLOSES it instead of keeping/reopening it. Confirmed real: a test
+    // calling this method explicitly, then immediately calling
+    // assertEllipsisOptionNotVisible() (which also calls this method
+    // internally, with essentially no gap in between), hung for the full
+    // 5000ms — the second click toggled the already-open menu closed, and
+    // nothing ever reopened it. This is a repo-wide pattern, not Leads-
+    // specific — the identical unconditional click exists in DealsPage.ts/
+    // ContactsPage.ts/CompaniesPage.ts's own openEllipsisMenu(), all fixed
+    // the same way in the same pass. Making this idempotent — skip the
+    // click entirely if the menu is already open — fixes it at the one
+    // shared root for every caller, rather than every caller needing to
+    // remember never to call this twice without an intervening close.
+    // WHY ellipsisButton()'s own aria-expanded, not a page-wide
+    // `.dropdown-menu.show` search (revised same day, caught by locator-
+    // reviewer before this shipped): confirmed live via direct DOM
+    // inspection that Leads' detail page has a SECOND, real Bootstrap
+    // dropdown-toggle (closeLeadToggleButton, see its own locator below) —
+    // Bootstrap adds a bare `.show` class regardless of what other classes
+    // a `.dropdown-menu` carries, so an open Close-Lead menu would ALSO
+    // satisfy a page-wide `.dropdown-menu.show` check, causing a false
+    // "already open" positive that skips a click this method actually
+    // needs to make. This exact ambiguity shape was already found and fixed
+    // once before in this codebase for DashboardPage.ts's gear/switcher
+    // toggles (CLAUDE.md rule 17) — confirmed live (aria-expanded correctly
+    // reads false/true/false across closed/open/closed) that scoping to
+    // this button's OWN state avoids the whole class of collision rather
+    // than needing to know every other dropdown that might ever coexist on
+    // the page.
+    const alreadyOpen = (await this.ellipsisButton().getAttribute('aria-expanded')) === 'true';
+    if (!alreadyOpen) {
+      await this.ellipsisButton().scrollIntoViewIfNeeded();
+      await this.ellipsisButton().click();
+    }
+    // WHY (2026-09-07, PROD Build #4): a blind fixed-duration sleep (500ms) gave zero
+    // guarantee the menu container had actually rendered before a caller
+    // went looking for a specific item inside it. Replaced with a real
+    // condition-based wait, matching DealsPage.openEllipsisMenu()'s already-
+    // correct pattern.
+    await this.page
+      .locator('.dropdown-menu.show')
+      .waitFor({ state: 'visible', timeout: config.dropdownMenuItem[config.env].timeout });
     logger.success('Ellipsis menu opened');
   }
 
   async clickEllipsisOption(optionText: string): Promise<void> {
     logger.info(`Clicking ellipsis option: ${optionText}`);
-    await this.openEllipsisMenu();
-    const item = this.ellipsisMenuItem(optionText);
-    await item.waitFor({ state: 'visible', timeout: 5000 });
-    await item.click();
-    await this.page.waitForTimeout(500);
-    logger.success(`Clicked ellipsis option: ${optionText}`);
+    await this.clickDropdownMenuItemBounded(
+      () => this.openEllipsisMenu(),
+      (text) => this.ellipsisMenuItem(text),
+      optionText,
+      'Leads ellipsis menu'
+    );
   }
 
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
@@ -1747,31 +1804,85 @@ export class LeadsPage extends BasePage {
   async cloneLead(): Promise<number | null> {
     logger.info('Cloning lead via ellipsis menu');
     await this.clickEllipsisOption('Clone');
-    // WHY: Clone opens create form pre-filled — update email and phone to avoid duplicate errors.
-    // WHY no extra wait after saveButton becomes visible (2026-07-16 fix,
-    // removed a hardcoded waitForTimeout(1000)): confirmed live — the
-    // pre-filled email/phone values are already fully populated the instant
-    // the save button itself becomes visible (checked at 0ms/300ms/1000ms,
-    // identical every time), so saveButton().waitFor() is already the
-    // correct, sufficient condition. No settling period exists to wait out.
+    // WHY the prior claim below was WRONG, disproven live (2026-09-07): this
+    // comment used to assert the pre-filled email/phone values are "already
+    // fully populated the instant the save button itself becomes visible...
+    // identical every time." An isolated 6-attempt re-run
+    // (--repeat-each=3, zero retries required as the pass bar) found this
+    // false for the email field specifically: 4 of 6 attempts proceeded to
+    // Save with the email field's pre-fill not yet landed, sent the SAME
+    // email as the original, and hit a genuine "Lead with the same Phone Or
+    // Email exists" backend rejection. saveButton() becoming visible is NOT
+    // a reliable proxy for the email field's own pre-fill having committed.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    // WHY: Change email to unique value — same email as original causes duplicate error
+    // WHY: Change email to unique value — same email as original causes
+    // duplicate error. WHY waitFor('visible') instead of a one-shot
+    // isVisible() (the bug fixed here): isVisible() returns an instant,
+    // unretried snapshot — if the field hadn't rendered yet at that exact
+    // moment, the whole email-update step was silently skipped, not
+    // retried. A bounded waitFor() gives the same field genuine time to
+    // render before falling through to "doesn't exist for this entity".
     const emailInput = this.emailInput();
-    if (await emailInput.isVisible().catch(() => false)) {
+    const emailFieldReady = await emailInput
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+    if (emailFieldReady) {
+      // WHY this second wait (mirrors DealsPage.cloneDeal()'s proven
+      // Name-field pre-fill-content check, reference-patterns.md §4): the
+      // field being VISIBLE doesn't guarantee its pre-filled VALUE has
+      // committed yet — waiting for a real, non-empty value is the actual
+      // readiness signal the original comment above incorrectly assumed
+      // was free. Non-fatal on timeout — proceeds anyway rather than
+      // blocking a genuinely slow-but-still-correct pre-fill.
+      await this.withSessionExpiryRecovery(() =>
+        expect(emailInput, 'Clone email field should be pre-filled before editing').not.toHaveValue(
+          '',
+          { timeout: 5000 }
+        )
+      ).catch(() =>
+        logger.warn('Clone email field visible but pre-fill value not observed in time — proceeding anyway')
+      );
       const timestamp = Date.now();
-      await emailInput.fill(`clone${timestamp}@testkylas.com`);
+      const newEmail = `clone${timestamp}@testkylas.com`;
+      await emailInput.fill(newEmail);
+      // WHY verified (rule 3 + the same async-commit-race class already
+      // hardened for ContactsPage.cloneContact()): confirm the fill()
+      // itself actually committed before Save can race ahead of it.
+      await this.withSessionExpiryRecovery(() =>
+        expect(emailInput, 'Clone email field should show the newly-filled value').toHaveValue(newEmail, {
+          timeout: 5000,
+        })
+      );
       logger.debug('Clone email updated to unique value');
+    } else {
+      logger.warn('Clone email field never became visible — skipping (may not exist for this entity)');
     }
-    // WHY: Change phone to unique value — same phone as original causes duplicate error
+    // WHY: Change phone to unique value — same phone as original causes
+    // duplicate error. Same waitFor('visible')-over-isVisible() fix as
+    // email above, applied identically per rule 18 (same method, same bug
+    // class, even though phone did not observe a failure in the same
+    // evidence run — no reason to leave an identical race unfixed here).
     const phoneInput = this.phoneInput();
-    if (await phoneInput.isVisible().catch(() => false)) {
+    const phoneFieldReady = await phoneInput
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+    if (phoneFieldReady) {
       const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
       const phone = ['6', '7', '8', '9'][Math.floor(Math.random() * 4)] + digits;
       await phoneInput.click({ clickCount: 3 });
       await phoneInput.press('Control+a');
       await phoneInput.fill('');
       await phoneInput.fill(phone);
+      await this.withSessionExpiryRecovery(() =>
+        expect(phoneInput, 'Clone phone field should show the newly-filled value').toHaveValue(phone, {
+          timeout: 5000,
+        })
+      );
       logger.debug(`Clone phone updated: ${phone}`);
+    } else {
+      logger.warn('Clone phone field never became visible — skipping (may not exist for this entity)');
     }
     // WHY: Capture POST response before saving
     const cloneIdPromise = this.captureLeadIdFromResponse();

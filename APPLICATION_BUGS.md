@@ -27,6 +27,8 @@ This is a `TypeError` thrown from inside the Kylas app's own minified `openCallL
 
 **Recommendation:** if this recurs, check whether `ErrorCollector`'s captured errors around the failure time include this same `openCallLogForm`/`Cannot read properties of undefined (reading 'content')` signature — if so, this is confirmed, not just correlated. Backend/frontend team should investigate why concurrent sessions triggering the Log-a-Call modal open path can race on a shared client-side object (`.content` on something `undefined` — likely a cached template/config object not properly scoped per session/tab). Outside what this client-side Playwright suite can fix directly.
 
+**Recurrence confirmed, 2026-09-09 (qa Build #239, first real sharded run, 4 concurrent shards on shared admin/restricted credentials — see `.claude/known-issues.md`'s Build #239 section):** the same call-log concurrent-access error signature was observed again under real sharded CI load. Investigated and confirmed to be this same pre-existing app bug, not a new risk introduced by sharding — timestamps correlated against shard concurrency windows the same way as the original 2026-08-09 occurrence. No fix applied (app-side, unchanged from the original finding above).
+
 ---
 
 ## 2. Reports module — removing an empty Dimension row throws a client-side `TypeError`

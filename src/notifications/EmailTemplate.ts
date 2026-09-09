@@ -128,9 +128,23 @@ const SANS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,
 
 export class EmailTemplate {
   subject(ctx: EmailContext): string {
+    // WHY routed through computeOverallVerdict() (fixed 2026-09-09, sandbox
+    // Build #167 incident) rather than deriving icon/status from
+    // ctx.report.status directly: that was the exact same
+    // banner-vs-Executive-Summary disagreement the 2026-08-24 fix
+    // (buildStatusBanner()'s own WHY comment) was built to make structurally
+    // impossible — it just never got applied to the SUBJECT LINE, which kept
+    // its own separate, unfixed derivation. Confirmed live: a run where 0 of
+    // 499 tests executed (all skipped) showed "✅ ... PASSED" in the subject
+    // while the body correctly said "Deployment not recommended". Reusing
+    // the identical ctx.health/ctx.verdict fallback pattern html() already
+    // uses (see below) guarantees the subject and body can never disagree
+    // again, by construction — not just less likely to.
+    const health = ctx.health ?? this.fallbackHealth(ctx.report);
+    const verdict = ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null);
     const icon =
-      ctx.report.status === 'passed' ? '✅' : ctx.report.status === 'failed' ? '❌' : '⚠️';
-    const status = ctx.report.status.toUpperCase();
+      verdict.bannerTone === 'success' ? '✅' : verdict.bannerTone === 'danger' ? '❌' : '⚠️';
+    const status = verdict.bannerLabel.replace(/^[^\w]+/, '').toUpperCase();
     // WHY: a stale report must be unmissable even in an inbox list view,
     // where the banner below the fold won't be seen until the email is
     // opened — prefixed here so it's visible before that.

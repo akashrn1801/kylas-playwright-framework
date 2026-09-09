@@ -220,6 +220,44 @@ export function generateDealData(overrides: Partial<DealData> = {}): DealData {
   };
 }
 
+// WHY subSource/utm* plus 3 custom fields, NOT a tab-collapse target:
+// confirmed live via DealsPage.fillDealForm() that subSource/utm* are
+// plain `<input>` fills (blankable), unlike Deal's own Name/Estimated Value
+// (the real confirmed minimum, per this investigation — Name+Estimated
+// Value only, contradicting an earlier static-analysis guess) which cannot
+// be blanked without breaking creation. REVISED after a real live-
+// verification failure: Campaign Information was originally assumed to be
+// fully-collapsible once all 6 fields here were blanked, but
+// fillDealForm()'s Campaign and Source react-selects are ALSO
+// unconditionally auto-picked (first available option, no data-driven
+// input at all) — so that tab can never actually go 100% empty. Blanking
+// subSource/utm* still keeps Campaign Information genuinely MIXED (a real,
+// confirmed test target, just not a collapse one); textField/paragraphText/
+// urlField blanked while Number/Checkbox/PickList/etc. stay populated keeps
+// Other Details mixed too — same two-mixed-target shape as Tasks/Meetings,
+// not the tab-collapse-plus-mixed shape Companies/Contacts/Leads have.
+// Relationship-card widgets (Associated Contacts/Company, the
+// pipeline-attachment card) are architecturally separate from the toggle —
+// never touched here.
+export function generateMinimalDealData(overrides: Partial<DealData> = {}): DealData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
+  return generateDealData({
+    subSource: '',
+    utmSource: '',
+    utmCampaign: '',
+    utmMedium: '',
+    utmContent: '',
+    utmTerm: '',
+    customFields: generateDealCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 // WHY: Admin deal data uses a unique timestamp prefix (ADM<timestamp>) so a
 // restricted user searching for this name will NEVER find it — guaranteed
 // no collision with any existing or previously created test data.

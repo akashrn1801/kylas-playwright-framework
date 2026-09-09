@@ -5,6 +5,7 @@ import {
   generateDealData,
   generateAdminDealData,
   generateSharedDealData,
+  generateMinimalDealData,
 } from '../../src/data/factories/dealFactory';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
@@ -1043,7 +1044,25 @@ test.describe('Deals RBAC', () => {
     adminPage,
     restrictedPage,
   }) => {
-    test.setTimeout(480000);
+    // WHY 600000, not 480000 (PROD Build #4, Cluster 2.5, second reclassification
+    // 2026-09-07): the ORIGINAL PROD failure's own raw stack trace (a "browser has
+    // been closed" kill) landed at the very LAST interaction of this test — the
+    // notes-delete dropdown click, after baseline capture + both note adds + both
+    // count assertions had already completed successfully — not stuck hanging at
+    // any single earlier step. That, plus this repo's own step-by-step arithmetic
+    // (every individual wait already genuinely bounded, no rule-2 violation found;
+    // summed legitimate worst-case ≈430s against the observed 490s, only ~13%
+    // margin against a 480s budget with zero margin left over) both point to the
+    // same conclusion: this test's real cost is legitimately cumulative across many
+    // individually-correct bounded steps under real PROD concurrent load, not one
+    // defective/hanging step — confirmed live by the user's own manual PROD
+    // reproduction finding no app-side issue. No single step can be "hardened"
+    // for this, since none of them is disproportionately slow. Matches the
+    // existing precedent this same investigation already established for
+    // comparably-complex multi-step share+create RBAC flows — see
+    // meetings.rbac.spec.ts's own `test.setTimeout(600000)` on M9/M10 — rather
+    // than inventing a new, unprecedented budget.
+    test.setTimeout(600000);
     const adminDealsPage = new DealsPage(adminPage);
     const dealData = generateSharedDealData();
     await adminDealsPage.goToDealsList();
@@ -1373,5 +1392,116 @@ test.describe('Deals RBAC', () => {
     // (edit is an in-place modal, not a route change) — no re-navigation needed.
     await dealsPage.assertDealCustomFieldsOnDetail(updatedData);
     logger.success('D40 passed');
+  });
+
+  // ── Hide Empty Fields — D51-D54 (RBAC parity, restricted user's own
+  // deal — mirrors tests/ui/deals/deals.spec.ts's D47-D50; same REVISED
+  // no-tab-collapse-target finding documented there — Campaign and Source
+  // are unconditionally auto-picked by fillDealForm(), so Campaign
+  // Information can never go fully empty, confirmed live) ─────────────────
+
+  test('@regression restricted user should hide only empty fields within a mixed Campaign Information section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    await dealsPage.assertTabVisible('Campaign Information');
+
+    const campaignTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('Sub Source');
+    await dealsPage.assertFieldLabelHidden('UTM Campaign');
+
+    logger.success('D51 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    const campaignTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('Sub Source');
+
+    await dealsPage.toggleHideEmptyFields();
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelVisible('Sub Source');
+
+    logger.success('D52 passed');
+  });
+
+  test('@regression restricted user should hide only empty fields within a mixed Other Details section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    await dealsPage.assertTabVisible('Other Details');
+
+    const otherDetailsTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await dealsPage.assertFieldLabelHidden('Text Field');
+    await dealsPage.assertFieldLabelHidden('Paragraph Text');
+    await dealsPage.assertFieldLabelHidden('URL Field');
+    await dealsPage.assertFieldLabelVisible('Number');
+
+    logger.success('D53 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const dealsPage = new DealsPage(restrictedPage);
+    const dealData = generateMinimalDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    expect(dealId).not.toBeNull();
+    await dealsPage.goToDealDetailsById(dealId!);
+
+    await dealsPage.toggleHideEmptyFields();
+    const campaignTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Campaign Information' });
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelHidden('UTM Campaign');
+
+    const newUtmCampaign = `campaign_revealed_${Date.now()}`;
+    await dealsPage.clickEditIcon();
+    await dealsPage.fillEditForm({ ...dealData, utmCampaign: newUtmCampaign });
+    await dealsPage.saveEditedDeal();
+
+    await campaignTab.click();
+    await dealsPage.assertFieldLabelVisible('UTM Campaign');
+    await expect(restrictedPage.getByText(newUtmCampaign)).toBeVisible({ timeout: 10000 });
+
+    logger.success('D54 passed');
   });
 });

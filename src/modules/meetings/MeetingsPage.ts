@@ -409,10 +409,41 @@ export class MeetingsPage extends BasePage {
 
     for (const medium of onlineMediums) {
       logger.info(`Trying medium: ${medium.label}`);
-      await this.mediumInputControl().click();
-      await this.page.waitForTimeout(500);
-      await this.page.getByText(medium.label, { exact: true }).last().click();
-      await this.page.waitForTimeout(1000);
+      // WHY this.click() instead of a bare .click() (2026-09-08, found while
+      // building Hide-Empty-Fields Meeting tests): confirmed live via direct
+      // reproduction — a persistent `is-invalid__menu-list`/`css-1dsbpcp`
+      // pointer-event-interception (the same leftover-backdrop class already
+      // documented elsewhere in this codebase, e.g. Tasks' Status dropdown)
+      // made the raw, unbounded `.click()` here retry silently for the FULL
+      // 8-minute test timeout with zero error, zero recovery attempt. Bounded
+      // + wrapped in try/catch so a genuinely stuck medium falls through to
+      // the next candidate (or Offline) instead of hanging the whole test.
+      try {
+        // WHY no wait before this click (fixed 2026-09-08, pre-commit hook
+        // sweep): this.click() already waits for the target to become
+        // visible internally (BasePage.click()) — a blind wait beforehand
+        // was pure dead weight, not a real necessity.
+        await this.click(this.mediumInputControl(), `medium control (${medium.label})`);
+        await this.click(
+          this.page.getByText(medium.label, { exact: true }).last(),
+          `medium option: ${medium.label}`
+        );
+        // WHY wait for the menu to close, not a flat 1000ms (same fix):
+        // the real condition being awaited is "the option-click has been
+        // processed" — the menu closing is that signal for every outcome
+        // (value populated, or the calendar-not-connected warning shown),
+        // unlike polling the input's own value which can legitimately stay
+        // empty in the warning case.
+        await this.page
+          .locator('.is-invalid__menu-list')
+          .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+          .catch(() => {
+            logger.warn(`Medium menu did not confirm closed after selecting ${medium.label} — proceeding anyway`);
+          });
+      } catch (error) {
+        logger.warn(`${medium.label} — click failed (${String(error)}) — trying next`);
+        continue;
+      }
 
       const newValue = await this.mediumInputValue()
         .inputValue()
@@ -431,9 +462,9 @@ export class MeetingsPage extends BasePage {
 
     // Fall back to Offline
     logger.warn('No online calendar connected — falling back to Offline');
-    await this.mediumInputControl().click();
+    await this.click(this.mediumInputControl(), 'medium control (Offline)');
     await this.page.waitForTimeout(500);
-    await this.page.getByText('Offline', { exact: true }).last().click();
+    await this.click(this.page.getByText('Offline', { exact: true }).last(), 'medium option: Offline');
     await this.page.waitForTimeout(500);
     logger.success('Selected medium: Offline (fallback)');
     return 'OFFLINE';
@@ -696,6 +727,20 @@ export class MeetingsPage extends BasePage {
       await this.page.waitForTimeout(300);
       await this.inviteesFirstOption().click();
       logger.info(`Invitee added by ${createdBy}`);
+      // WHY: confirmed live (2026-09-08) — Invitees is a multi-select
+      // (`is-invalid__menu-list--is-multi`) whose menu/backdrop can persist
+      // in the DOM after a chip is picked, intercepting pointer events on
+      // controls further down the form (confirmed: this exact leftover
+      // element blocked selectMediumWithFallback()'s medium control for the
+      // full test timeout before this fix). Escape closes the menu
+      // deterministically rather than guessing a wait duration.
+      await this.page.keyboard.press('Escape');
+      await this.page
+        .locator('.is-invalid__menu-list')
+        .waitFor({ state: 'hidden', timeout: 3000 })
+        .catch(() => {
+          logger.warn('Invitees menu did not confirm closed after Escape — proceeding anyway');
+        });
     } else {
       logger.info('Skipping invitee — no extra invitee added');
     }
@@ -791,7 +836,19 @@ export class MeetingsPage extends BasePage {
   // succeeding on retry. The check below was already generic (matches on
   // errorCode only, never the message text), so only the name needed
   // updating to stop implying this is Lead-only.
-  async saveMeetingRetryOnEntitySummaryLag(maxAttempts = 3): Promise<number | null> {
+  // WHY the optional `saveAction` param (2026-09-07, PROD Build #4): Deals'
+  // addMeetingFromPanel() reaches this exact backend endpoint and needed the
+  // identical 422/01503001 retry tolerance, but saves via a modal (click +
+  // assertNoFormErrors), not the standalone list flow's saveMeeting()
+  // (which also dismisses a post-save popup that doesn't exist in the modal
+  // flow). Rather than duplicate this method's retry/backoff logic inline
+  // in DealsPage (rule 1 — reuse before building), the save action itself
+  // is now pluggable; every existing caller is unaffected (defaults to the
+  // original this.saveMeeting()).
+  async saveMeetingRetryOnEntitySummaryLag(
+    maxAttempts = 3,
+    saveAction: () => Promise<number | null> = () => this.saveMeeting()
+  ): Promise<number | null> {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const lagResponsePromise = this.armResponseWaitWithRecovery(
         (res) =>
@@ -808,7 +865,7 @@ export class MeetingsPage extends BasePage {
         .catch(() => false);
 
       try {
-        return await this.saveMeeting();
+        return await saveAction();
       } catch (error) {
         const isKnownPropagationLag = await lagResponsePromise;
         if (isKnownPropagationLag && attempt < maxAttempts) {
@@ -1267,7 +1324,15 @@ export class MeetingsPage extends BasePage {
         await this.titleInput().fill(data.title);
         await this.page.waitForTimeout(300);
       }
-      const meetingId = await this.saveMeeting();
+      // WHY (2026-09-07, PROD Build #4): route through the entity-summary-
+      // lag-tolerant save here too — this method previously called
+      // saveMeeting() directly, meaning createMeeting()'s own callers (e.g.
+      // meetings.rbac.spec.ts's "own meeting" tests) got zero tolerance for
+      // the same HTTP 422/errorCode 01503001 pattern already handled for
+      // Leads'/Contacts' shared-entity meeting creation. Purely additive —
+      // only retries on that exact signature, otherwise behaves identically
+      // to saveMeeting().
+      const meetingId = await this.saveMeetingRetryOnEntitySummaryLag();
       logger.success(`Meeting "${data.title}" created`);
       return meetingId;
     }, 'createMeeting');

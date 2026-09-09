@@ -298,7 +298,10 @@ export class CompaniesPage extends BasePage {
   }
 
   private async waitForCompanyListPage(): Promise<void> {
-    await this.waitForUrl(/companies\/list/);
+    // WHY waitForUrlWithNavigationRetry, not a bare waitForUrl (2026-09-07):
+    // see BasePage.waitForUrlWithNavigationRetry()'s own comment — a
+    // genuine navigation stall to this URL previously had zero recovery.
+    await this.waitForUrlWithNavigationRetry(`${config.appUrl}/sales/companies/list`, /companies\/list/);
 
     await this.waitForListReady();
   }
@@ -875,19 +878,40 @@ export class CompaniesPage extends BasePage {
 
   async openEllipsisMenu(): Promise<void> {
     logger.info('Opening ellipsis menu');
-    await this.ellipsisButton().scrollIntoViewIfNeeded();
-    await this.ellipsisButton().click();
-    await this.page.waitForTimeout(500);
+    // WHY check-before-click, idempotent open (2026-09-09 — see
+    // LeadsPage.openEllipsisMenu()'s own WHY comment for the full evidence
+    // and reasoning; identical fix applied here, same repo-wide pattern):
+    // ellipsisButton() is a Bootstrap `dropdown-toggle` — clicking it while
+    // its OWN menu is already open CLOSES it instead of reopening it. Uses
+    // this button's own aria-expanded, not a page-wide `.dropdown-menu.show`
+    // search — see LeadsPage's own WHY comment for why that broader
+    // selector is a confirmed real collision risk on at least one of these
+    // 4 modules' pages, standardized here for consistency even though no
+    // second dropdown was found on this page today.
+    const alreadyOpen = (await this.ellipsisButton().getAttribute('aria-expanded')) === 'true';
+    if (!alreadyOpen) {
+      await this.ellipsisButton().scrollIntoViewIfNeeded();
+      await this.ellipsisButton().click();
+    }
+    // WHY (2026-09-07, PROD Build #4): a blind fixed-duration sleep (500ms) gave zero
+    // guarantee the menu container had actually rendered before a caller
+    // went looking for a specific item inside it. Replaced with a real
+    // condition-based wait, matching DealsPage.openEllipsisMenu()'s already-
+    // correct pattern.
+    await this.page
+      .locator('.dropdown-menu.show')
+      .waitFor({ state: 'visible', timeout: config.dropdownMenuItem[config.env].timeout });
     logger.success('Ellipsis menu opened');
   }
 
   async clickEllipsisOption(optionText: string): Promise<void> {
     logger.info(`Clicking ellipsis option: ${optionText}`);
-    await this.openEllipsisMenu();
-    const item = this.ellipsisMenuItem(optionText);
-    await item.waitFor({ state: 'visible', timeout: 5000 });
-    await item.click();
-    logger.success(`Ellipsis option clicked: ${optionText}`);
+    await this.clickDropdownMenuItemBounded(
+      () => this.openEllipsisMenu(),
+      (text) => this.ellipsisMenuItem(text),
+      optionText,
+      'Companies ellipsis menu'
+    );
   }
 
   async assertEllipsisOptionNotVisible(optionText: string): Promise<void> {
@@ -1559,17 +1583,17 @@ export class CompaniesPage extends BasePage {
       }
     }
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
-    // WHY: hardened 2026-07-19 — this exact `.includes('/deals')` substring is
-    // the SAME pattern already confirmed live (2026-07-16) to collide with an
-    // unrelated `/v4/reports/deals?...` background analytics POST when
-    // DealsPage's own captureDealIdFromResponse() had this shape — this inline
-    // copy was never updated when that one was fixed. Highest-risk of the
-    // ID-capture gaps found in this audit; not independently re-reproduced
-    // here, but the collision mechanism is already proven, just on a
-    // different call site with the identical predicate.
+    // WHY (2026-09-07, PROD Build #4): the previous `.includes('/deals')`
+    // substring only excluded the one previously-found `/v4/reports/deals`
+    // collision — narrower than the fully-versioned pattern rule 15/
+    // known-issues.md actually requires (confirmed via DealsPage.ts's own
+    // captureDealIdFromResponse(), which already uses the versioned form).
+    // Tightened to match that standard rather than leaving this call site
+    // (flagged as "highest-risk, not independently re-reproduced" on
+    // 2026-07-19) permanently narrower than its own sibling.
     const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
-        (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        (res.url().includes('/v1/deals') || res.url().includes('/v1/deal')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),
@@ -1615,11 +1639,15 @@ export class CompaniesPage extends BasePage {
         logger.debug('Estimated value filled: 50000');
       }
     }
-    // WHY: hardened 2026-07-19 — same proven '/v4/reports/deals' collision
-    // pattern as the sibling dealIdPromise above; fixed identically.
+    // WHY (2026-09-07, PROD Build #4): tightened to the fully-versioned
+    // pattern — same fix and same rationale as the sibling dealIdPromise
+    // above (this occurrence is CompaniesPage.addDealFromEllipsis(), which
+    // hit a real "Deal ID not captured after save" flake on PROD Build #4;
+    // the narrower `.includes('/deals')` predicate was demonstrably weaker
+    // than this repo's own documented versioned-path standard).
     const dealIdPromise = this.armResponseWaitWithRecovery(
       (res) =>
-        (res.url().includes('/deals') || res.url().includes('/deal')) &&
+        (res.url().includes('/v1/deals') || res.url().includes('/v1/deal')) &&
         !res.url().includes('/reports/') &&
         res.request().method() === 'POST' &&
         (res.status() === 200 || res.status() === 201),

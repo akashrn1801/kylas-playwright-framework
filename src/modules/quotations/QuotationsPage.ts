@@ -1195,9 +1195,77 @@ export class QuotationsPage extends BasePage {
     await this.page.waitForTimeout(500);
   }
 
+  // WHY this exists, and why it retries ONLY this one exact signature
+  // (PROD Build #4, Cluster 2.2, 2026-09-07): 4 confirmed HTTP 500s on
+  // POST /v1/quotations/ were captured live via ErrorCollector on PROD
+  // across 2 independent create scenarios. A direct manual reproduction of
+  // the same flows on PROD (headed, by the user) found the app functioning
+  // correctly — reclassified from "real backend bug" to "PROD-specific
+  // intermittent condition" on that live evidence, matching the same
+  // already-established precedent this codebase uses for Reports' Meeting-
+  // report-creation 500 (`ReportsPage.attemptSaveOnceAndClassify()` /
+  // APPLICATION_BUGS.md #4: first-attempt 500, immediate retry succeeds
+  // cleanly, no orphaned record left behind). This mirrors that exact
+  // structure — a single-attempt classify helper, called once for the
+  // primary attempt and, only on the confirmed narrow signature, once more
+  // as a fallback — so a genuinely different validation/business error
+  // still surfaces immediately, unmasked.
+  // WHY retrying an identical POST is safe here (not a duplicate-creation
+  // risk): the request body (quotationNumber/summary/product rows) is
+  // filled once, before this method is ever called, and is unchanged
+  // across attempts — matching the Reports precedent's own reasoning that
+  // an unstructured 500 on a create endpoint is characteristic of a crash
+  // during request processing, before the write commits, not after. Unlike
+  // the Reports case, this has not been independently re-confirmed via a
+  // dedicated "check for an ID gap across repeated attempts" experiment —
+  // flagged honestly as extending an established, evidence-backed pattern
+  // to a new endpoint, not an independently re-proven guarantee for this
+  // endpoint specifically. Scoped narrowly to POST (never PUT, so edit
+  // saves are structurally unaffected) and to this exact quotations-create
+  // path, never a blanket "retry any failed save."
+  private readonly QUOTATION_CREATE_PATH_PATTERN = /\/v1\/quotations\/?(?:\?.*)?$/;
+
+  private async attemptQuotationSaveOnceAndClassify(): Promise<
+    'done' | 'confirmedTransientServerError'
+  > {
+    const responsePromise = this.page
+      .waitForResponse(
+        (res) =>
+          res.request().method() === 'POST' &&
+          this.QUOTATION_CREATE_PATH_PATTERN.test(new URL(res.url()).pathname),
+        { timeout: config.timeouts.navigation }
+      )
+      .catch(() => null);
+    // WHY this.click(), not a raw .click() (locator-reviewer finding,
+    // 2026-09-07): this refactor centralizes the Save click into a method
+    // that can now fire up to twice per save (primary + fallback retry),
+    // doubling exposure to the already-documented "click registers but
+    // nothing visibly happens" React-timing race (rule 2) — this helper's
+    // bounded wait + built-in recovery closes that gap for both attempts.
+    await this.click(this.modalSaveButton(), 'quotation save (attempt)');
+    const response = await responsePromise;
+    if (!response || response.ok()) {
+      // Either a real success, or no matching response was captured at all
+      // (e.g. a client-side validation error that never reached the
+      // network) — either way, this isn't the confirmed transient
+      // signature, so let assertNoFormErrors()/the modal-hidden check below
+      // be the real signal, unmodified.
+      return 'done';
+    }
+    return response.status() === 500 ? 'confirmedTransientServerError' : 'done';
+  }
+
   async saveQuotation(): Promise<void> {
     logger.info('Saving quotation');
-    await this.modalSaveButton().click();
+    const primaryOutcome = await this.attemptQuotationSaveOnceAndClassify();
+    if (primaryOutcome === 'confirmedTransientServerError') {
+      logger.warn(
+        'saveQuotation: POST /v1/quotations/ returned HTTP 500 (PROD Build #4, Cluster 2.2 — ' +
+          'confirmed live via manual PROD reproduction to be a transient condition, not a ' +
+          'persistent backend defect) — retrying Save once as a fallback'
+      );
+      await this.attemptQuotationSaveOnceAndClassify();
+    }
     // WHY: For an in-place modal edit, the URL never changes on success OR
     // failure — assertSuccessToast()'s URL-based fallback (used by callers
     // afterward) cannot tell them apart in that case, which let a real save

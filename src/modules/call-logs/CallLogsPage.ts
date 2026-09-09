@@ -900,7 +900,16 @@ export class CallLogsPage extends BasePage {
   // emotion, plus custom fields — and saves, mirroring
   // QuotationsPage.fillAndSaveQuotationFromPanel()'s identical "own reduced
   // fill+save method for the panel context" pattern.
-  async fillAndSaveCallLogFromPanel(data: CallLogData): Promise<number | null> {
+  // WHY skipOptionalFields: Disposition/Overall Sentiment/Customer Emotion have
+  // no representation in CallLogData at all — they were always randomly filled
+  // from the live dropdown regardless of caller intent. A genuinely-minimal call
+  // log (for the Hide-Empty-Fields investigation) needs these left untouched —
+  // mirrors the includeNoteDuringCreate/checkCustomFieldsAbsent opt-in-boolean
+  // convention already used elsewhere in this file.
+  async fillAndSaveCallLogFromPanel(
+    data: CallLogData,
+    skipOptionalFields = false
+  ): Promise<number | null> {
     logger.info(`Filling call log form from entity panel — outcome: ${data.outcome}`);
     await this.fillPhoneNumber();
     await this.fillCallType(data.callType);
@@ -915,17 +924,21 @@ export class CallLogsPage extends BasePage {
       data.timeConfig.second,
       data.timeConfig.amPm
     );
-    await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+    if (!skipOptionalFields) {
+      await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+    }
     if (data.outcome === 'Connected' && data.recording) {
       await this.uploadRecording(data.recording);
     }
     await this.fillCallSummary(data.callSummary);
-    await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
-    await this.selectRandomFromMultiReactSelect(
-      this.customerEmotionControl(),
-      'Customer Emotion',
-      Math.random() > 0.5 ? 1 : 2
-    );
+    if (!skipOptionalFields) {
+      await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
+      await this.selectRandomFromMultiReactSelect(
+        this.customerEmotionControl(),
+        'Customer Emotion',
+        Math.random() > 0.5 ? 1 : 2
+      );
+    }
     await this.fillCallLogCustomFields(data.customFields);
     logger.success('Call log form filled from entity panel');
     return await this.saveCallLog();
@@ -965,6 +978,17 @@ export class CallLogsPage extends BasePage {
   async fillCallType(callType: string): Promise<void> {
     logger.info(`Selecting call type: ${callType}`);
     await this.selectFromDropdown('1_31_input_callType', callType);
+  }
+
+  // WHY a dedicated public method (2026-09-08, Hide-Empty-Fields work): the
+  // only prior way to set Disposition alone (leaving Sentiment/Emotion
+  // untouched) was reaching into this page object's private
+  // dispositionControl()/selectRandomFromReactSelect() from test code — an
+  // any-cast that both violates this repo's hard no-explicit-any lint rule
+  // and reaches past the class boundary. Mirrors fillCallType()/
+  // fillOutcome()'s existing thin-public-wrapper convention.
+  async fillDisposition(): Promise<void> {
+    await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
   }
 
   async fillOutcome(outcome: string): Promise<void> {
@@ -1059,7 +1083,13 @@ export class CallLogsPage extends BasePage {
     // Deal flow, Associated Deal on Contact flow). When omitted, falls back to the
     // existing searchAndSelectEntity() random-pick behavior — kept optional so
     // callers that don't need this (e.g. admin-only UI tests) are unaffected.
-    selectedSecondaryEntityName?: string
+    selectedSecondaryEntityName?: string,
+    // WHY: Disposition/Overall Sentiment/Customer Emotion have no representation
+    // in CallLogData at all — they were always randomly filled from the live
+    // dropdown regardless of caller intent. A genuinely-minimal call log (for the
+    // Hide-Empty-Fields investigation) needs these left untouched — mirrors
+    // fillAndSaveCallLogFromPanel()'s identical parameter.
+    skipOptionalFields = false
   ): Promise<{ entityName: string; selectedPhone: string; associatedDealName: string | null }> {
     logger.info(`Filling create form — entity: ${data.entityType}, outcome: ${data.outcome}`);
 
@@ -1149,8 +1179,11 @@ export class CallLogsPage extends BasePage {
       data.timeConfig.amPm
     );
 
-    // Step 10: Disposition (random from live dropdown)
-    await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+    // Step 10: Disposition (random from live dropdown) — skipped for a
+    // genuinely-minimal call log (skipOptionalFields)
+    if (!skipOptionalFields) {
+      await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+    }
 
     // Step 10b: Recording upload (only when Connected and recording provided)
     // WHY: Recording field only enabled when outcome is Connected
@@ -1160,15 +1193,16 @@ export class CallLogsPage extends BasePage {
     // Step 11: Call Summary
     await this.fillCallSummary(data.callSummary);
 
-    // Step 12: Overall Sentiment (random from live dropdown)
-    await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
-
-    // Step 13: Customer Emotion (multi-select, random from live dropdown)
-    await this.selectRandomFromMultiReactSelect(
-      this.customerEmotionControl(),
-      'Customer Emotion',
-      Math.random() > 0.5 ? 1 : 2
-    );
+    // Step 12/13: Overall Sentiment + Customer Emotion (random from live
+    // dropdown) — skipped for a genuinely-minimal call log (skipOptionalFields)
+    if (!skipOptionalFields) {
+      await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
+      await this.selectRandomFromMultiReactSelect(
+        this.customerEmotionControl(),
+        'Customer Emotion',
+        Math.random() > 0.5 ? 1 : 2
+      );
+    }
 
     // Step 14: Notes during create (optional)
     if (includeNoteDuringCreate) {
@@ -1435,9 +1469,23 @@ export class CallLogsPage extends BasePage {
   // update test would silently start mutating custom fields too, changing
   // scope beyond what those tests actually assert. Only a dedicated
   // custom-field update test passes `true`.
-  async fillEditForm(data: CallLogData, updateCustomFields = false): Promise<void> {
+  // WHY skipOptionalFields (2026-09-08, Hide-Empty-Fields work): Disposition/
+  // Overall Sentiment/Customer Emotion previously had no edit-form
+  // representation that could leave them genuinely alone — Sentiment/
+  // Emotion were unconditionally re-randomized on every edit call (same
+  // always-random class as the create-form gap fixed earlier on this same
+  // page object), and Disposition wasn't editable here at all. Adding
+  // Disposition support and gating all 3 behind this flag lets a caller set
+  // ONLY Disposition (auto-reveal-on-edit test) while proving Sentiment/
+  // Emotion staying untouched keeps Sentiment Information genuinely
+  // collapsed — the per-tab-independence check this feature's tests need.
+  async fillEditForm(
+    data: CallLogData,
+    updateCustomFields = false,
+    skipOptionalFields = false
+  ): Promise<void> {
     logger.info('Filling edit form');
-    // WHY: Only editable fields — Type, Outcome, Date, Time, Summary, Sentiment, Emotion
+    // WHY: Only editable fields — Type, Outcome, Date, Time, Summary, Disposition, Sentiment, Emotion
     await this.fillCallType(data.callType);
     await this.fillOutcome(data.outcome);
     if (data.outcome === 'Connected' && data.duration) {
@@ -1451,12 +1499,15 @@ export class CallLogsPage extends BasePage {
       data.timeConfig.amPm
     );
     await this.fillCallSummary(data.callSummary);
-    await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
-    await this.selectRandomFromMultiReactSelect(
-      this.customerEmotionControl(),
-      'Customer Emotion',
-      Math.random() > 0.5 ? 1 : 2
-    );
+    if (!skipOptionalFields) {
+      await this.selectRandomFromReactSelect(this.dispositionControl(), 'Disposition');
+      await this.selectRandomFromReactSelect(this.sentimentControl(), 'Overall Sentiment');
+      await this.selectRandomFromMultiReactSelect(
+        this.customerEmotionControl(),
+        'Customer Emotion',
+        Math.random() > 0.5 ? 1 : 2
+      );
+    }
     if (updateCustomFields) {
       // WHY the "Other Details" tab click here, NOT in fillCallLogCustomFields()
       // itself: confirmed live (2026-07-31) the EDIT form (unlike create) is
@@ -1916,6 +1967,9 @@ export class CallLogsPage extends BasePage {
       includeNoteDuringCreate?: boolean;
       selectedEntityName?: string;
       checkCustomFieldsAbsent?: boolean;
+      // WHY: see fillCreateForm()'s own skipOptionalFields comment — surfaces
+      // that same opt-in flag through the public creation entry point.
+      skipOptionalFields?: boolean;
     } = {}
   ): Promise<{
     callLogId: number | null;
@@ -1967,7 +2021,8 @@ export class CallLogsPage extends BasePage {
       data,
       resolvedEntityName,
       options.includeNoteDuringCreate ?? false,
-      resolvedSecondaryEntityName
+      resolvedSecondaryEntityName,
+      options.skipOptionalFields ?? false
     );
     const callLogId = await this.saveCallLog();
 

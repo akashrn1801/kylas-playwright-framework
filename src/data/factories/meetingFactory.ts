@@ -176,6 +176,34 @@ export function generateMeetingData(overrides: Partial<MeetingData> = {}): Meeti
   };
 }
 
+// WHY only 3 custom fields blanked, no top-level MeetingData field touched:
+// confirmed live via the Hide-Empty-Fields investigation that Meeting's
+// detail page has only 2 real tabs (Basic Info, Other Details — a 3rd,
+// Internals, is system-only) and Title/Date/Time/Timezone/Status/Medium are
+// all effectively required, so Basic Info can never go empty. Description
+// is a CONFIRMED, deliberate exception — architecturally separate from the
+// Hide Empty Fields toggle entirely (lives only in the list-row subtitle,
+// never rendered as a toggleable detail-page field) — never touched here,
+// and no test in this module should assert anything about it responding to
+// the toggle. Location is left at its normal generated value rather than
+// blanked — it drives a live GPS/manual-address lookup with unpredictable
+// behavior on an empty string, an unnecessary risk when Other Details
+// (Text Field/Paragraph Text/URL Field) already gives a clean, low-risk
+// mixed-section target, the only kind of target this module has (same
+// no-tab-collapse-available shape as Tasks, confirmed independently).
+export function generateMinimalMeetingData(overrides: Partial<MeetingData> = {}): MeetingData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
+  return generateMeetingData({
+    customFields: generateMeetingCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 /**
  * Admin-prefixed data for RBAC isolation tests.
  * The ADM<timestamp> prefix guarantees this record is unique across runs —

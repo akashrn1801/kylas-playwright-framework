@@ -143,10 +143,21 @@ export class TasksPage extends BasePage {
   // pattern still correctly distinguishes this from a bare list-page
   // navigation drift (e.g. the app dropping the id param) — a reload
   // preserves the full URL including its query string.
+  // WHY the regex changed from `\/v1\/tasks\/\d+$` (2026-09-08, found while
+  // building Hide-Empty-Fields tests): confirmed live via direct network
+  // capture — a task detail-panel load, including one with NO relation
+  // entities (skipRelation:true), never fires a bare `GET /v1/tasks/{id}`
+  // at all. The real request is `GET /v1/tasks/{id}/relation?targetEntity
+  // OwnerId=...` — the `$`-anchored regex could never match it, so this
+  // wait (and its own reload-and-retry) was silently guaranteed to fail
+  // every time, 100% reproducible. Same root-cause class as the already-
+  // documented `/v1/quotations/` and `/v1/call-logs/` versions of this
+  // exact bug (a versioned-path anchor that didn't account for a real
+  // trailing path segment/query string) — just not caught here until now.
   async waitForTaskDetailsPage(): Promise<void> {
     await this.waitForEntityDetailPage(
       /sales\/tasks\/list\?.*id=/,
-      (res) => res.url().match(/\/v1\/tasks\/\d+$/) !== null && res.request().method() === 'GET',
+      (res) => res.url().match(/\/v1\/tasks\/\d+(?:\/|\?|$)/) !== null && res.request().method() === 'GET',
       'Task details'
     );
   }
@@ -1238,17 +1249,26 @@ export class TasksPage extends BasePage {
     logger.success('Ellipsis menu opened');
   }
 
-  async clickEllipsisOption(option: string): Promise<void> {
+  // WHY (2026-09-07, PROD Build #4): previously a raw `.click()` with no
+  // wait at all for the item's own visibility (worse than the hardcoded
+  // 5000ms found elsewhere — see BasePage.clickDropdownMenuItemBounded()'s
+  // own comment) — a textbook "click registers but nothing visibly happens"
+  // race (rule 2). `taskId` is now required so a retry can re-open the
+  // menu from scratch via openListItemEllipsis(), not just re-wait on a
+  // menu that may have already closed.
+  async clickEllipsisOption(taskId: number, option: string): Promise<void> {
     logger.info(`Clicking ellipsis option: ${option}`);
-    await this.page.locator('.dropdown-menu.show .dropdown-item', { hasText: option }).click();
-    await this.page.waitForTimeout(500);
-    logger.success(`Clicked: ${option}`);
+    await this.clickDropdownMenuItemBounded(
+      () => this.openListItemEllipsis(taskId),
+      (text) => this.page.locator('.dropdown-menu.show .dropdown-item', { hasText: text }),
+      option,
+      'Tasks ellipsis menu'
+    );
   }
 
   async changeDueDateViaEllipsis(taskId: number, daysFromNow: number): Promise<void> {
     logger.info(`Changing due date for task ${taskId} to ${daysFromNow} days from now`);
-    await this.openListItemEllipsis(taskId);
-    await this.clickEllipsisOption('Change Due Date');
+    await this.clickEllipsisOption(taskId, 'Change Due Date');
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.fillDueDate(daysFromNow);
     await this.click(this.detailedTaskSaveButton(), 'save button');
@@ -1259,8 +1279,7 @@ export class TasksPage extends BasePage {
 
   async markAsCompletedViaEllipsis(taskId: number): Promise<void> {
     logger.info(`Marking task ${taskId} as completed via ellipsis`);
-    await this.openListItemEllipsis(taskId);
-    await this.clickEllipsisOption('Mark as Completed');
+    await this.clickEllipsisOption(taskId, 'Mark as Completed');
     // WHY: Refresh the list after marking complete to update status
     await this.page.locator('button[data-original-title="Refresh"]').click();
     await this.page.waitForTimeout(1500);
@@ -1270,8 +1289,7 @@ export class TasksPage extends BasePage {
 
   async cloneTaskViaEllipsis(taskId: number): Promise<number | null> {
     logger.info(`Cloning task ${taskId} via ellipsis`);
-    await this.openListItemEllipsis(taskId);
-    await this.clickEllipsisOption('Clone');
+    await this.clickEllipsisOption(taskId, 'Clone');
     // WHY: Clone opens modal with title "Clone Task" and name appended with " Copy"
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.taskNameInput().waitFor({ state: 'visible', timeout: 15000 });
