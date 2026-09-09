@@ -14,10 +14,52 @@ on:
     branches: [stage]
   workflow_dispatch:
 
+# WHY sharded across 4 parallel jobs (2026-09-09): the previous single-job,
+# no-`--grep` full-suite run was killed by GitHub Actions' hard,
+# non-configurable 6-hour-per-job execution ceiling on 2026-09-08 (run
+# 34256174792, killed at 6h02m10s elapsed, still mid-suite — GitHub's own
+# annotation read "The job has exceeded the maximum execution time of
+# 6h0m0s"). Two OLDER stage runs (2026-09-03, 2026-09-04) were also killed by
+# this same ceiling — see .claude/known-issues.md's dated 2026-09-09 entry,
+# which also explains why sharding was chosen over worker-tuning (blocked by
+# the documented --workers=1 credential-race risk — see CLAUDE.md's
+# "Concurrent-Worker Credential File Race" section) or a self-hosted runner
+# (a bigger infra change, not needed once sharding alone clears the ceiling
+# with large margin — see below).
+#
+# SHARD COUNT REASONING (verified 2026-09-09, not guessed): this workflow has
+# no isolated completed measurement of a clean full-suite run at the CURRENT
+# 515-test suite size, because the run being investigated didn't finish
+# before being killed at 362 min. Real per-test throughput was instead
+# derived from the SAME-infra, SAME-day qa.yml @regression run (499 tests /
+# 361.58 min at --workers=2 -> 1.380 tests/min) and applied to stage's real
+# 515-test total: 515 / 1.380 -> ~373 min projected — consistent with, not
+# contradicted by, the observed run still being mid-suite at the 362-min kill
+# point. 4 shards -> ~93 min/shard today, a ~3.9x margin under the 360-min
+# ceiling. Projected after +200 tests/year of organic growth (this suite grew
+# 453->515 tests in about 6 weeks around 2026-09-08's "Hide Empty Fields"
+# addition alone): ~715 tests -> ~130 min/shard, still a 2.8x margin. 4 was
+# picked to match qa.yml's own shard count (same reasoning, same margin
+# profile, easier to reason about both workflows as one consistent design)
+# rather than independently optimized to a different number.
 jobs:
   run-tests:
-    name: playwright-ci
+    name: playwright-ci (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    # WHY 180 (2026-09-09): each shard now runs ~1/4 of the suite (~93 min
+    # projected today), so 180 gives a real ~2x margin over that while still
+    # failing a genuinely stuck/hung shard in 3h instead of silently
+    # consuming the full 6h before GitHub's own hard ceiling would eventually
+    # kill it anyway with no earlier signal. stage.yml deliberately never had
+    # an explicit timeout-minutes before this change (see
+    # .claude/known-issues.md's staging-load-contention entry for why) — this
+    # is the first one it's had, sized for the NEW, sharded per-job scope,
+    # not the old full-suite one.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     permissions:
       contents: write
     steps:
@@ -36,7 +78,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run full suite
+      - name: Run full suite (shard ${{ matrix.shard }}/4)
         env:
           ENV: staging
           CI: true
@@ -58,29 +100,131 @@ jobs:
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          # WHY workers=2, not 1 (reverted 2026-09-05): --workers=1 was a
-          # speculative mitigation applied 2026-09-04 for a documented but
-          # NEVER-confirmed intermittent-staging-failures theory ("correlated,
-          # not proven" — see .claude/known-issues.md's staging-intermittency
-          # entry). It roughly doubled this workflow's real runtime (~4.6h avg
-          # at workers=2 → ~9.9h projected at workers=1, confirmed via a real
-          # killed run's own partial progress: 275/455 tests in the full
-          # 360-minute default before GitHub Actions force-killed the job as
-          # an orphan process — results.json was never written, so
-          # history:sync/notify both failed downstream of that, not as
-          # separate bugs). Reverted rather than extending the timeout to
-          # accommodate an unproven mitigation — see
-          # .claude/known-issues.md's dated entry for the full incident and
-          # revert reasoning.
-          WORKERS=2 npm run estimate-duration --silent || true
-          npx playwright test --project=chromium --workers=2 --timeout=120000
+          # WHY estimate-duration only on shard 1 (2026-09-09): the historical
+          # duration data it reads reflects a full UNSHARDED run's total time
+          # — printing it identically on all 4 shards would be redundant and
+          # would quadruple the read-only git fetch against
+          # ci/reporting-history for zero added benefit.
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            # WHY workers=2, not 1 (reverted 2026-09-05, unchanged by this
+            # sharding fix): --workers=1 was a speculative mitigation applied
+            # 2026-09-04 for a documented but NEVER-confirmed intermittent-
+            # staging-failures theory, reverted after it roughly doubled this
+            # workflow's runtime and itself caused a real 360-min timeout
+            # kill — see .claude/known-issues.md's staging-intermittency
+            # entry for the full incident. Sharding and per-shard worker
+            # count are independent levers; this fix does not revisit that
+            # decision.
+            WORKERS=2 npm run estimate-duration --silent || true
+          fi
+          # WHY --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          # instead of the config's default reporter array (verified live,
+          # 2026-09-09 — see merge.config.ts's own WHY comment for the full
+          # reasoning): html/json are deferred to the one-time
+          # "merge-and-report" job below, which replays every shard's blob
+          # data through them ONCE to produce a single consolidated report
+          # instead of 4 disconnected ones. MiscErrorReporter runs HERE, per
+          # shard, because its data comes from THIS shard's own live
+          # per-worker temp files — it cannot be usefully re-run later
+          # against replayed blob data (confirmed: a merge job's runner never
+          # had those temp files in the first place).
+          npx playwright test --project=chromium --workers=2 --timeout=120000 \
+            --shard=${{ matrix.shard }}/4 \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           MINUTES=$((ELAPSED / 60))
           SECONDS=$((ELAPSED % 60))
-          echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
+          echo "✅ Shard ${{ matrix.shard }}/4 total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
+
+      # WHY blob-report/ uploaded per shard, then merged by the job below
+      # (Playwright's own documented pattern for sharded CI): the blob format
+      # self-contains every test's attachments (traces, screenshots, videos),
+      # so the merged HTML report built from these still has fully working
+      # trace-viewer links with no need to also merge raw test-results/ dirs.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-stage-${{ matrix.shard }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      # WHY uploaded per shard, aggregated by scripts/merge-misc-errors.ts in
+      # the merge job (see that script's own WHY comment): this file is
+      # already correct for THIS shard's own workers — it just needs
+      # combining with the other 3 shards' files, not regenerating.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-stage-${{ matrix.shard }}
+          path: reports/staging/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      # WHY: trace.zip/video/screenshots for failed tests land in test-results/
+      # (playwright.config.ts outputDir), not the blob report — kept as a raw
+      # per-shard artifact for direct access. The merged HTML report above is
+      # already self-contained (blob format embeds attachments) and doesn't
+      # depend on this to display traces; this is a convenience fallback only.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-stage-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # WHY a separate job, not a step in run-tests (this IS the point of
+  # sharding): this is the ONE place that produces a single consolidated
+  # report/notification, regardless of how many shards ran or how they each
+  # individually finished — `if: always()` so a partial/failed/cancelled
+  # shard still gets a real report instead of the misleading stale-file
+  # fallback that caused the sandbox Build #167 false-"PASSED" incident (see
+  # .claude/known-issues.md's dated entry — that incident is now also
+  # separately hardened in ReportParser.ts/AutomationHealth.ts/
+  # EmailTemplate.ts regardless of this sharding change).
+  merge-and-report:
+    name: merge report + notify
+    needs: run-tests
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all shard blob reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: blob-report-stage-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge shard reports into one HTML/JSON report
+        run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
+
+      - name: Download all per-shard misc-errors reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: misc-errors-stage-*
+          path: all-misc-errors
+
+      - name: Aggregate misc-errors.json across all shards
+        run: npx ts-node scripts/merge-misc-errors.ts staging all-misc-errors
 
       # WHY: see qa.yml for the full explanation — must run before notify so its
       # delta output exists in time for the email; never fails the build.
@@ -91,9 +235,9 @@ jobs:
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
           # WHY (2026-09-04, value reverted 2026-09-05): must match the real
-          # --workers value the "Run full suite" step above just used — see
+          # --workers value the shard jobs above just used — see
           # .claude/known-issues.md's dynamic-duration-estimate entry and the
-          # separate workers=1-revert entry for why this is back to '2'.
+          # separate workers=1-revert entry for why this is '2'.
           WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
@@ -112,21 +256,10 @@ jobs:
           NOTIFY_ENABLED: 'true'
           REPORT_PATH: reports/playwright-report/results.json
         run: npm run notify || true
+
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: playwright-report-stage
           path: reports/playwright-report/
-          retention-days: 14
-
-      # WHY: trace.zip/video/screenshots for failed tests land in test-results/
-      # (playwright.config.ts outputDir), not reports/playwright-report/ — without
-      # this, they're generated on every failure but discarded when the runner
-      # tears down, leaving no way to diagnose a failure after the fact.
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: playwright-test-results-stage
-          path: test-results/
-          if-no-files-found: ignore
           retention-days: 14

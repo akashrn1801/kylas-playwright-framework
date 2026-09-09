@@ -4,22 +4,51 @@ on:
   push:
     branches: [qa]
 
+# WHY sharded across 4 parallel jobs (2026-09-09): the previous single-job
+# `--grep @regression` run was killed by GitHub Actions' hard, non-
+# configurable 6-hour-per-job execution ceiling on 2026-09-08 (run 34256019455,
+# 499 tests at --workers=2, killed at 6h01m35s — GitHub's own annotation read
+# "The job has exceeded the maximum execution time of 6h0m0s"). Critically,
+# this workflow ALREADY had `timeout-minutes: 480` set below (added
+# 2026-09-05 for a smaller, unrelated margin problem) — GitHub still killed
+# the job at 6h01m regardless, proving hosted-runner jobs cannot exceed 6
+# hours no matter what timeout-minutes is set to. Sharding is the only fix
+# that actually escapes this ceiling rather than attempting to raise it past
+# a hard platform limit. Full investigation, and why sharding was chosen over
+# worker-tuning (blocked by the documented --workers=1 credential-race risk —
+# see CLAUDE.md's "Concurrent-Worker Credential File Race" section) or a
+# self-hosted runner (a bigger infra change, not needed once sharding alone
+# clears the ceiling with large margin — see below): .claude/known-issues.md's
+# dated 2026-09-09 entry.
+#
+# SHARD COUNT REASONING (verified 2026-09-09, not guessed): the killed run
+# measured 499 tests / 361.58 min at --workers=2 (workers deliberately left
+# UNCHANGED by this fix — sharding and per-shard worker count are
+# independent levers; see the credential-race note above for why workers
+# stays at 2). 4 shards -> ~90 min/shard today, a 4x margin under the 360-min
+# ceiling. This suite grew from 453 to 499 @regression tests in about 6 weeks
+# around 2026-09-08's "Hide Empty Fields" addition alone, so projecting
+# forward at that same real throughput: +200 tests/year -> ~699 tests -> ~127
+# min/shard, still a 2.8x margin; even +500 tests (~2.5 years at that rate)
+# -> ~999 tests -> ~181 min/shard, still a 2x margin. 4 was picked as the
+# smallest shard count that clears "well under 2h per shard today" AND keeps
+# multi-year headroom, without paying for more parallel runners (each shard
+# duplicates ~5-8 min of npm ci/browser-install overhead) than the ceiling
+# actually requires.
 jobs:
   run-tests:
-    name: playwright-ci
+    name: playwright-ci (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    # WHY 480 (2026-09-05): confirmed real risk, found while investigating an
-    # unrelated stage.yml timeout kill — this workflow had no explicit
-    # timeout-minutes at all, defaulting to GitHub Actions' 360-minute job
-    # ceiling. 5 real recent completed runs measured 287-324 minutes
-    # (2026-08-24 through 2026-09-04) — as little as ~36 minutes of margin
-    # below that default, purely from this workflow's own legitimate
-    # @regression-suite runtime plus natural suite growth over time, entirely
-    # unrelated to the stage.yml workers=1 mitigation/revert. 480 gives a real
-    # ~1.5x margin over the observed max (324 min) rather than leaving this on
-    # a default that real data shows is already this close to being breached.
-    # See .claude/known-issues.md's dated entry for the full investigation.
-    timeout-minutes: 480
+    # WHY 180, not 480 (2026-09-09): each shard now runs ~1/4 of the suite
+    # (~90 min measured today), so 180 gives a real 2x margin over observed
+    # while still failing a genuinely stuck/hung shard in 3h instead of
+    # silently consuming the full 6h before GitHub's own hard ceiling would
+    # eventually kill it anyway with no earlier signal.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     permissions:
       contents: write
     steps:
@@ -38,7 +67,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run regression tests
+      - name: Run regression tests (shard ${{ matrix.shard }}/4)
         env:
           ENV: qa
           CI: true
@@ -56,36 +85,137 @@ jobs:
         run: |
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          WORKERS=2 npm run estimate-duration --silent || true
-          npx playwright test --project=chromium --grep @regression --workers=2 --timeout=120000
+          # WHY estimate-duration only on shard 1 (2026-09-09): the historical
+          # duration data it reads reflects a full UNSHARDED run's total time
+          # — printing it identically on all 4 shards would be redundant and
+          # would quadruple the read-only git fetch against
+          # ci/reporting-history for zero added benefit.
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            WORKERS=2 npm run estimate-duration --silent || true
+          fi
+          # WHY --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          # instead of the config's default reporter array (verified live,
+          # 2026-09-09 — see merge.config.ts's own WHY comment for the full
+          # reasoning): html/json are deferred to the one-time
+          # "merge-and-report" job below, which replays every shard's blob
+          # data through them ONCE to produce a single consolidated report
+          # instead of 4 disconnected ones. MiscErrorReporter runs HERE, per
+          # shard, because its data comes from THIS shard's own live
+          # per-worker temp files — it cannot be usefully re-run later
+          # against replayed blob data (confirmed: a merge job's runner never
+          # had those temp files in the first place).
+          npx playwright test --project=chromium --grep @regression --workers=2 --timeout=120000 \
+            --shard=${{ matrix.shard }}/4 \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           MINUTES=$((ELAPSED / 60))
           SECONDS=$((ELAPSED % 60))
-          echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
+          echo "✅ Shard ${{ matrix.shard }}/4 total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
+
+      # WHY blob-report/ uploaded per shard, then merged by the job below
+      # (Playwright's own documented pattern for sharded CI): the blob format
+      # self-contains every test's attachments (traces, screenshots, videos),
+      # so the merged HTML report built from these still has fully working
+      # trace-viewer links with no need to also merge raw test-results/ dirs.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-qa-${{ matrix.shard }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      # WHY uploaded per shard, aggregated by scripts/merge-misc-errors.ts in
+      # the merge job (see that script's own WHY comment): this file is
+      # already correct for THIS shard's own workers — it just needs
+      # combining with the other 3 shards' files, not regenerating.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-qa-${{ matrix.shard }}
+          path: reports/qa/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      # WHY: trace.zip/video/screenshots for failed tests land in test-results/
+      # (playwright.config.ts outputDir), not the blob report — kept as a raw
+      # per-shard artifact for direct access. The merged HTML report above is
+      # already self-contained (blob format embeds attachments) and doesn't
+      # depend on this to display traces; this is a convenience fallback only.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-qa-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # WHY a separate job, not a step in run-tests (this IS the point of
+  # sharding): this is the ONE place that produces a single consolidated
+  # report/notification, regardless of how many shards ran or how they each
+  # individually finished — `if: always()` so a partial/failed/cancelled
+  # shard still gets a real report instead of the misleading stale-file
+  # fallback that caused the sandbox Build #167 false-"PASSED" incident (see
+  # .claude/known-issues.md's dated entry — that incident is now also
+  # separately hardened in ReportParser.ts/AutomationHealth.ts/
+  # EmailTemplate.ts regardless of this sharding change).
+  merge-and-report:
+    name: merge report + notify
+    needs: run-tests
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all shard blob reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: blob-report-qa-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge shard reports into one HTML/JSON report
+        run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
+
+      - name: Download all per-shard misc-errors reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: misc-errors-qa-*
+          path: all-misc-errors
+
+      - name: Aggregate misc-errors.json across all shards
+        run: npx ts-node scripts/merge-misc-errors.ts qa all-misc-errors
 
       # WHY: Confirmed live (2026-07-07 reporting overhaul, P2) — must run BEFORE
       # notify so the delta/recurring-flaky file it writes (reports/qa/history-
       # delta.json) exists in time for the email to read it. Never fails the
       # build — syncHistory.ts catches its own errors and always exits 0; `|| true`
       # here is belt-and-suspenders for the rare case node itself fails to start.
-      # NOTE: pushing to the dedicated ci/reporting-history branch needs this
-      # workflow's checkout to have write access (either `permissions:
-      # contents: write` on this job, or a credentialed remote) — this has not
-      # been provisioned/verified against the real GitHub remote as part of this
-      # change; first real run here should be watched to confirm the push
-      # actually succeeds rather than silently no-op'ing every time.
       - name: Sync run history
         if: always()
         env:
           ENV: qa
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
-          # WHY (2026-09-04): must match the real --workers value the "Run
-          # regression tests" step above just used — see
-          # .claude/known-issues.md's dynamic-duration-estimate entry.
+          # WHY (2026-09-04): must match the real --workers value the shard
+          # jobs above just used — see .claude/known-issues.md's
+          # dynamic-duration-estimate entry.
           WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
@@ -104,21 +234,10 @@ jobs:
           NOTIFY_ENABLED: 'true'
           REPORT_PATH: reports/playwright-report/results.json
         run: npm run notify || true
+
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: playwright-report-qa
           path: reports/playwright-report/
-          retention-days: 14
-
-      # WHY: trace.zip/video/screenshots for failed tests land in test-results/
-      # (playwright.config.ts outputDir), not reports/playwright-report/ — without
-      # this, they're generated on every failure but discarded when the runner
-      # tears down, leaving no way to diagnose a failure after the fact.
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: playwright-test-results-qa
-          path: test-results/
-          if-no-files-found: ignore
           retention-days: 14
