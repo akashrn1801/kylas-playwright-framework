@@ -1804,8 +1804,21 @@ export class DealsPage extends BasePage {
 
   async openEllipsisMenu(): Promise<void> {
     logger.info('Opening ellipsis menu');
-    await this.ellipsisButton().scrollIntoViewIfNeeded();
-    await this.ellipsisButton().click();
+    // WHY check-before-click, idempotent open (2026-09-09 — see
+    // LeadsPage.openEllipsisMenu()'s own WHY comment for the full evidence
+    // and reasoning; identical fix applied here, same repo-wide pattern):
+    // ellipsisButton() is a Bootstrap `dropdown-toggle` — clicking it while
+    // its OWN menu is already open CLOSES it instead of reopening it. Uses
+    // this button's own aria-expanded, not a page-wide `.dropdown-menu.show`
+    // search — see LeadsPage's own WHY comment for why that broader
+    // selector is a confirmed real collision risk on at least one of these
+    // 4 modules' pages, standardized here for consistency even though no
+    // second dropdown was found on this page today.
+    const alreadyOpen = (await this.ellipsisButton().getAttribute('aria-expanded')) === 'true';
+    if (!alreadyOpen) {
+      await this.ellipsisButton().scrollIntoViewIfNeeded();
+      await this.ellipsisButton().click();
+    }
     await this.page.locator('.dropdown-menu.show').waitFor({ state: 'visible', timeout: 5000 });
     logger.success('Ellipsis menu opened');
   }

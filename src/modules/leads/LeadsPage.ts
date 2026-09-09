@@ -1678,8 +1678,42 @@ export class LeadsPage extends BasePage {
 
   async openEllipsisMenu(): Promise<void> {
     logger.info('Opening ellipsis menu');
-    await this.ellipsisButton().scrollIntoViewIfNeeded();
-    await this.ellipsisButton().click();
+    // WHY check-before-click, idempotent open (2026-09-09 — confirmed live,
+    // qa Build #239 isolated re-run): ellipsisButton() is a Bootstrap
+    // `dropdown-toggle` — clicking it while its OWN menu is already open
+    // CLOSES it instead of keeping/reopening it. Confirmed real: a test
+    // calling this method explicitly, then immediately calling
+    // assertEllipsisOptionNotVisible() (which also calls this method
+    // internally, with essentially no gap in between), hung for the full
+    // 5000ms — the second click toggled the already-open menu closed, and
+    // nothing ever reopened it. This is a repo-wide pattern, not Leads-
+    // specific — the identical unconditional click exists in DealsPage.ts/
+    // ContactsPage.ts/CompaniesPage.ts's own openEllipsisMenu(), all fixed
+    // the same way in the same pass. Making this idempotent — skip the
+    // click entirely if the menu is already open — fixes it at the one
+    // shared root for every caller, rather than every caller needing to
+    // remember never to call this twice without an intervening close.
+    // WHY ellipsisButton()'s own aria-expanded, not a page-wide
+    // `.dropdown-menu.show` search (revised same day, caught by locator-
+    // reviewer before this shipped): confirmed live via direct DOM
+    // inspection that Leads' detail page has a SECOND, real Bootstrap
+    // dropdown-toggle (closeLeadToggleButton, see its own locator below) —
+    // Bootstrap adds a bare `.show` class regardless of what other classes
+    // a `.dropdown-menu` carries, so an open Close-Lead menu would ALSO
+    // satisfy a page-wide `.dropdown-menu.show` check, causing a false
+    // "already open" positive that skips a click this method actually
+    // needs to make. This exact ambiguity shape was already found and fixed
+    // once before in this codebase for DashboardPage.ts's gear/switcher
+    // toggles (CLAUDE.md rule 17) — confirmed live (aria-expanded correctly
+    // reads false/true/false across closed/open/closed) that scoping to
+    // this button's OWN state avoids the whole class of collision rather
+    // than needing to know every other dropdown that might ever coexist on
+    // the page.
+    const alreadyOpen = (await this.ellipsisButton().getAttribute('aria-expanded')) === 'true';
+    if (!alreadyOpen) {
+      await this.ellipsisButton().scrollIntoViewIfNeeded();
+      await this.ellipsisButton().click();
+    }
     // WHY (2026-09-07, PROD Build #4): a blind fixed-duration sleep (500ms) gave zero
     // guarantee the menu container had actually rendered before a caller
     // went looking for a specific item inside it. Replaced with a real
