@@ -193,10 +193,32 @@ export function computeOverallVerdict(
     return { verdict: 'blocked', bannerLabel: '❌ Failed', bannerTone: 'danger', headline: 'Deployment not recommended' };
   }
   if (suiteDrift?.occurred) {
+    // WHY verdict stays 'blocked' even though report.failed === 0 here,
+    // BY DESIGN (2026-09-09) — this is deliberate, not a leftover bug to
+    // "fix" later: a genuine suite drift (fewer tests ran than a real,
+    // comparable prior run — same branch, same normalized scope, per
+    // computeSuiteDrift()'s now-scope-aware comparison) means tests
+    // silently vanished, which is frequently a broken test file or an
+    // accidentally-skipped describe block, not an intentional cleanup —
+    // see detectSuiteDrift()'s own WHY comment on why a false positive
+    // here is a far cheaper cost than a false negative. A 100%-passing
+    // run tells you nothing about tests that never ran at all, so
+    // 'blocked' here is intentionally as strong a gate as an actual test
+    // failure.
+    // WHY bannerTone is 'warning', not 'danger', THOUGH (2026-09-09 fix):
+    // before this, a clean, 0-failed run with drift rendered with the
+    // exact same ❌/red failure iconography as a genuinely broken run
+    // (EmailTemplate.ts derives its icon/colors purely from bannerTone,
+    // confirmed by reading it) — indistinguishable from "tests failed" at
+    // a glance, even though bannerLabel already said "Suite Drift
+    // Detected," not "Failed". 'warning' keeps the SAME blocking verdict
+    // but renders with the amber/⚠️ treatment this genuinely is: an
+    // anomaly worth investigating before deploying, not proof that
+    // anything actually broke this run.
     return {
       verdict: 'blocked',
       bannerLabel: '⚠️ Suite Drift Detected',
-      bannerTone: 'danger',
+      bannerTone: 'warning',
       headline: 'Deployment not recommended — suite drift detected',
     };
   }
