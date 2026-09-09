@@ -300,6 +300,13 @@ test.describe('Reports RBAC', () => {
     }) => {
       test.setTimeout(480000);
       const reportsPage = new ReportsPage(restrictedPage);
+      // WHY this skip check runs before any test-data creation (2026-09-09):
+      // see ReportsPage.skipIfQuotationEntityTypeUnavailable()'s own WHY
+      // comment — the Quotation report entity type is QA-only as of this
+      // date. Checking here, before creating anything, avoids leaving
+      // orphaned Quotation records behind on environments where the rest of
+      // this test can't complete anyway.
+      await reportsPage.skipIfQuotationEntityTypeUnavailable();
       const creators = buildEntityCreators(restrictedPage);
       await creators.Quotation();
       await creators.Quotation();
