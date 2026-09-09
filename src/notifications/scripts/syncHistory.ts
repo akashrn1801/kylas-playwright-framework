@@ -30,6 +30,7 @@ import {
   computeSlowTestTrend,
   computeSuiteDrift,
   buildPassRateSeries,
+  deriveTestScope,
   RunHistoryRecord,
   RunDelta,
   RecurringIssue,
@@ -541,9 +542,16 @@ function buildCurrentRecord(
 ): RunHistoryRecord {
   const parser = new ReportParser();
   const report = parser.parse(jsonReportPath);
+  // WHY derived here, not read from an env var (2026-09-09): see
+  // deriveTestScope()'s own WHY comment in RunHistory.ts for the full
+  // reasoning — this must work identically for any current or future
+  // branch/workflow/Jenkinsfile with zero per-pipeline configuration.
+  const { scope, basis } = deriveTestScope(report.allTestTitlesRaw, report.modules);
+  log(`[syncHistory] Derived test scope: "${scope}" (basis: ${basis})`);
   return {
     timestamp: new Date(report.startTime).toISOString(),
     env,
+    scope,
     branch,
     buildNumber,
     runSource,
