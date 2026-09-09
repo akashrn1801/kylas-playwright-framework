@@ -173,6 +173,22 @@ export function computeOverallVerdict(
   health: HealthScore,
   suiteDrift: SuiteDrift | null
 ): VerdictResult {
+  // WHY checked first, before anything else (confirmed live, sandbox Build
+  // #167, 2026-09-08): a report where 0 tests actually executed (all
+  // skipped — see ReportParser.ts's own WHY comment on 'no-tests-executed')
+  // has failed===0 and flaky===0 by construction, so it would otherwise fall
+  // all the way through to the final 'clear'/'✅ Passed' branch below — a
+  // literal false positive, not just an unhelpful one. This must never be
+  // described as a "clean run" (the health.label==='Critical' branch further
+  // down does that) because nothing ran, clean or otherwise.
+  if (report.status === 'no-tests-executed') {
+    return {
+      verdict: 'blocked',
+      bannerLabel: '🚫 No Tests Executed',
+      bannerTone: 'danger',
+      headline: `Deployment not recommended — 0 of ${report.total} tests actually ran (all reported skipped) — this run verified nothing`,
+    };
+  }
   if (report.failed > 0) {
     return { verdict: 'blocked', bannerLabel: '❌ Failed', bannerTone: 'danger', headline: 'Deployment not recommended' };
   }

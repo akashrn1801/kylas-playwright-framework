@@ -134,7 +134,7 @@ export interface ParsedReport {
   duration: number;
   startTime: string;
   endTime: string;
-  status: 'passed' | 'failed' | 'unstable';
+  status: 'passed' | 'failed' | 'unstable' | 'no-tests-executed';
   failedTests: TestResult[];
   flakyTests: TestResult[];
   // WHY added 2026-09-03: the count was always derived (`skipped` above),
@@ -273,8 +273,28 @@ export class ReportParser {
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
     const skippedTests = results.filter((r) => r.status === 'skipped');
+    // WHY 'no-tests-executed' (confirmed live, sandbox Build #167, commit
+    // f22653a2, 2026-09-08): a GitHub Actions job killed by the 6-hour job
+    // timeout mid-run can leave behind a STALE results.json from an earlier,
+    // harmless `playwright test --list` invocation in the same shell script
+    // (used only to count tests for dynamic worker selection) — reproduced
+    // live: `--list` goes through the exact same JSON reporter as a real run
+    // and writes a full results.json with every listed test marked
+    // 'skipped' and a near-zero duration, since nothing actually executed.
+    // Before this fix, `failed > 0 ? 'failed' : flaky > 0 ? 'unstable' :
+    // 'passed'` labeled that degenerate report 'passed' (0 failed, 0 flaky),
+    // so the email showed "✅ PASSED" for a run where 0 of 499 tests ever
+    // ran. A real run always has passed>0 (or failed/flaky>0) once any test
+    // executes — passed===failed===flaky===0 with total>0 is only reachable
+    // when nothing ran at all, so it must never be reported as a clean pass.
     const status: ParsedReport['status'] =
-      failed > 0 ? 'failed' : flaky > 0 ? 'unstable' : 'passed';
+      total > 0 && passed === 0 && failed === 0 && flaky === 0
+        ? 'no-tests-executed'
+        : failed > 0
+          ? 'failed'
+          : flaky > 0
+            ? 'unstable'
+            : 'passed';
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
     // WHY: Confirmed live (same incident) — raw.startTime does not exist at
     // the top level of Playwright's JSON report, only raw.stats.startTime.
