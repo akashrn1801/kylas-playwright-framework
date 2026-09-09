@@ -17,7 +17,7 @@ import { test as base, Page, BrowserContext, Browser, TestInfo } from '@playwrig
 import { config } from '../../config/config';
 import * as path from 'path';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
-import { AuthManager, registerPageForRecovery } from '../auth/authManager';
+import { AuthManager, registerPageForRecovery, isSessionExpiryPage } from '../auth/authManager';
 import { logger } from '../utils/logger';
 import { safeWaitForURL } from '../utils/navigation';
 
@@ -144,7 +144,25 @@ function attachErrorListeners(page: Page): void {
 
 // ── Role page lifecycle (shared by adminPage + restrictedPage) ────────────────
 
-type NavOutcome = 'sales' | 'signIn' | 'timeout';
+// WHY 'wrongPage' as its own named outcome, not folded into 'timeout'
+// (2026-09-09 — see .claude/known-issues.md's dated entry for the full
+// investigation and reasoning): this used to be a strict two-outcome race
+// (sales / signIn) where ANYTHING else silently became 'timeout' — correct
+// for a genuinely hung/unresponsive load, but WRONG for a page that loaded
+// successfully and is genuinely authenticated, just not on /sales/ (real,
+// confirmed case: landing on /setup, most likely the Kylas app's own
+// server-side "resume last visited section" behavior for the shared
+// account, colliding with a DIFFERENT concurrent shard's own test activity
+// under sharded CI). Those two situations need different remedies — a hung
+// page justifies createRolePage()'s existing full relogin; an authenticated
+// page on the wrong URL doesn't, and that remedy doesn't even address the
+// real cause, so it can recur. 'wrongPage' is deliberately generic (same-
+// origin, not signIn, not a recognized session-expiry symptom — see
+// navigateAndConfirmLoggedIn()'s own comment) rather than hardcoded to
+// /setup specifically, so any future new same-origin misdirect the app ever
+// introduces lands in this same bucket automatically with no code change —
+// the classification is extensible by construction, not by enumeration.
+type NavOutcome = 'sales' | 'signIn' | 'wrongPage' | 'timeout';
 
 // WHY: Confirmed live (2026-07-06) — this used to be duplicated 2x per fixture
 // (once for the "fresh" path, once for the "session expired" path), and the
@@ -248,7 +266,7 @@ async function navigateAndConfirmLoggedIn(
     MIN_GOTO_STEP_BUDGET_MS,
     Math.min(config.timeouts.navigation, deadline - Date.now())
   );
-  return Promise.race([
+  const raceOutcome = await Promise.race([
     safeWaitForURL(page, /sales\//, raceTimeout)
       .then((): NavOutcome => 'sales')
       .catch((): NavOutcome => 'timeout'),
@@ -256,6 +274,47 @@ async function navigateAndConfirmLoggedIn(
       .then((): NavOutcome => 'signIn')
       .catch((): NavOutcome => 'timeout'),
   ]);
+  if (raceOutcome !== 'timeout') return raceOutcome;
+
+  // WHY isSessionExpiryPage() checked FIRST, before ever considering
+  // 'wrongPage' (2026-09-09 — added after being asked directly whether a
+  // same-origin, non-login page could ALSO be a subtler invalid-session
+  // state, not just a genuine misdirect): confirmed yes — CLAUDE.md's own
+  // documented "Session expiry has more than one symptom" rule and
+  // authManager.ts's own isSessionExpiryPage() WHY comment both describe
+  // exactly this: a "Forbidden" bootstrap-time page rendered on a FRESH
+  // load/reload (this function's exact context) with the URL left
+  // completely unchanged — same-origin, not /signIn, easily mistaken for a
+  // genuine "authenticated but on the wrong page" case by a URL-only check.
+  // That page means the session is genuinely invalid and needs the real
+  // remedy (full relogin) — retrying plain navigation to the same URL would
+  // very likely just render the same Forbidden page again, having
+  // authenticated nothing. This reuses the SAME shared check the mid-test
+  // click()/fill() recovery path already trusts (never a second, drifting
+  // copy of the body-text pattern) — and independently, this is a genuine
+  // pre-existing gap being closed as a side effect: this fixture-setup
+  // navigation had never once checked for the Forbidden pattern before
+  // today, only the mid-test BasePage path had, meaning a Forbidden page
+  // during fixture setup was ALWAYS silently misclassified as plain
+  // 'timeout', even before 'wrongPage' existed as a concept.
+  if (await isSessionExpiryPage(page)) {
+    return 'signIn';
+  }
+
+  // WHY 'wrongPage', not 'timeout', for anything left (2026-09-09): having
+  // just ruled out both the URL-based signIn redirect (the race above) AND
+  // the body-text-based Forbidden symptom (immediately above), whatever
+  // remains that's still on this app's own origin is genuinely authenticated
+  // — just not on /sales/. See NavOutcome's own WHY comment for the full
+  // reasoning on why this is deliberately a generic, extensible bucket
+  // rather than a check hardcoded to today's one observed case (/setup).
+  const currentUrl = page.url();
+  const appOrigin = config.appUrl.replace(/\/+$/, '');
+  if (currentUrl.startsWith(appOrigin)) {
+    return 'wrongPage';
+  }
+
+  return 'timeout';
 }
 
 async function dismissStartupPopup(page: Page): Promise<void> {
@@ -353,6 +412,24 @@ async function createRolePage(
           `current URL: ${failureUrl}. This is a genuine failure, not a session-expiry false ` +
           `positive a retry could paper over — investigate the app/environment.`
       );
+    }
+
+    // WHY 'wrongPage' skips the full relogin entirely (2026-09-09 — see
+    // NavOutcome's own WHY comment): the session is genuinely valid here —
+    // forcing a relogin would be the wrong, expensive remedy for a problem
+    // it doesn't even address (the account's own server-side "last visited
+    // page" state, not an invalid token), and could plausibly land back on
+    // the same wrong page again. `continue` re-enters this same loop on the
+    // SAME still-valid page/context — navigateAndConfirmLoggedIn() already
+    // performs its own fresh page.goto() at the top every time it's called,
+    // so simply retrying the call is the correct, minimal, already-proven-
+    // correct-navigation remedy, with no new code needed to force it.
+    if (outcome === 'wrongPage') {
+      logger.warn(
+        `${role} page landed on an authenticated but unexpected page (${page.url()}) — ` +
+          `retrying plain navigation, no relogin needed (attempt ${attempt}/${maxAttempts})`
+      );
+      continue;
     }
 
     logger.warn(
