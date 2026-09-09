@@ -29,20 +29,23 @@ on:
 # WHY comment) — a correct "did anything actually run" check stays load-
 # bearing even after this fix.
 #
-# WHY sandbox is a DYNAMIC matrix, unlike qa.yml/stage.yml's fixed 4 (2026-
-# 09-09, verified via a real 4/4 clean check that `--shard=1/1` runs 100% of
-# the selected tests, identical to no sharding at all): sandbox's own
-# detect-tests.sh selects a wildly different scope run to run — anywhere
-# from a handful of module-specific tests to the full 499-test @regression
-# escalation. Unconditionally sharding every sandbox run into 4 parallel
-# jobs would waste 3 whole extra runners (each paying ~5-8 min of npm
-# ci/browser-install overhead) on the common case of a small selective run
-# that finishes in minutes on its own. The `detect` job below decides shard
-# count from the SAME condition detect-tests.sh already uses to escalate
-# (TARGET == "--grep @regression"): 4 shards when escalated (matching
-# qa.yml's shard count and reasoning exactly, since it's the identical
-# 499-test scope), else a single shard (`--shard=1/1`, a verified no-op)
-# for every other, smaller selective target.
+# WHY sandbox is a DYNAMIC matrix, unlike a fixed shard count (2026-09-09,
+# verified via a real check that `--shard=1/1` runs 100% of the selected
+# tests, identical to no sharding at all): sandbox's own detect-tests.sh
+# selects a wildly different scope run to run — anywhere from a handful of
+# module-specific tests to the full @regression escalation. Unconditionally
+# sharding every sandbox run into N parallel jobs would waste N-1 whole
+# extra runners (each paying ~5-8 min of npm ci/browser-install overhead) on
+# the common case of a small selective run that finishes in minutes on its
+# own. The `detect` job below decides shard count from the SAME condition
+# detect-tests.sh already uses to escalate (TARGET == "--grep @regression"):
+# when escalated, shard count is computed LIVE from the real test count via
+# the identical `ceil(testCount / 125)` formula qa.yml/stage.yml/main.yml
+# use (updated 2026-09-09, same day as the initial fix — this was originally
+# a hardcoded 4, found to be an inconsistency once those 3 files were made
+# dynamic and this one already had the matrix INFRASTRUCTURE to support it
+# trivially); else a single shard (`--shard=1/1`, a verified no-op) for
+# every other, smaller selective target.
 jobs:
   detect:
     name: detect target + shard plan
@@ -93,9 +96,18 @@ jobs:
           # produces a materially smaller target that has never approached
           # the timeout ceiling, so only this one case needs sharding.
           if [ "$TARGET" = "--grep @regression" ]; then
-            SHARD_TOTAL=4
-            SHARDS_JSON="[1,2,3,4]"
-            echo "Core framework file changed -> full regression escalation -> sharding into 4 (matches qa.yml's own shard count/reasoning for the identical scope)"
+            # WHY 125 tests/shard, ceiling division (2026-09-09): identical
+            # formula and derivation to qa.yml/stage.yml/main.yml's own —
+            # see this file's top-of-file WHY comment. Reuses the SAME
+            # TEST_COUNT already computed above for the WORKERS decision, no
+            # extra API call needed.
+            TARGET_TESTS_PER_SHARD=125
+            SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
+            if [ "$SHARD_TOTAL" -lt 1 ]; then
+              SHARD_TOTAL=1
+            fi
+            SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
+            echo "Core framework file changed -> full regression escalation -> sharding into $SHARD_TOTAL (dynamic: $TEST_COUNT tests / $TARGET_TESTS_PER_SHARD per shard)"
           else
             SHARD_TOTAL=1
             SHARDS_JSON="[1]"
