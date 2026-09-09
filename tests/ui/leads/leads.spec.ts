@@ -8,6 +8,7 @@ import { generateCompanyData } from '../../../src/data/factories/companyFactory'
 import {
   generateLeadData,
   generateAdminLeadData,
+  generateMinimalLeadData,
   generateLeadCustomFieldData,
   generateLeadCustomFieldInvalidTextField,
   generateLeadCustomFieldInvalidParagraphText,
@@ -600,5 +601,137 @@ test.describe('Leads', () => {
     }
 
     logger.success('L47 passed');
+  });
+
+  // ── Hide Empty Fields — L48-L51 ─────────────────────────────
+  // WHY these 4 tests, this shape, confirmed live during investigation:
+  // - Tabs are the granularity, not individual fields at the top level —
+  //   a tab with ZERO populated fields collapses entirely; a tab with AT
+  //   LEAST ONE populated field stays visible, hiding only its own empty
+  //   fields.
+  // - Social (Facebook/Twitter/LinkedIn) is the one tab this factory can
+  //   make GENUINELY, fully empty — Timezone/Country/Company Industry/
+  //   Business Type/Company Employees/Campaign/Source/Products/Currency/
+  //   PickList/MultiPickList are all confirmed live to be unconditionally
+  //   random-picked by fillLeadForm() regardless of factory input (the same
+  //   class of gap already fixed with skipOptionalFields on CallLogsPage),
+  //   so those tabs can never be driven to a true 100%-empty state without
+  //   a similar structural fix — out of scope here, not needed for this
+  //   feature's coverage.
+  // - Professional/Requirement/Other Details are the MIXED-state targets:
+  //   generateMinimalLeadData() blanks companyName/department/designation/
+  //   companyAddress/City/State/Zipcode/Website but leaves Company Industry/
+  //   Business Type/Company Employees/Annual Revenue populated (Professional
+  //   stays visible); blanks requirementName but leaves Products/Currency/
+  //   Budget populated (Requirement stays visible); blanks textField/
+  //   paragraphText/urlField but leaves Number/Checkbox/Date/DateTimePicker/
+  //   PickList/MultiPickList populated (Other Details stays visible).
+
+  test('@regression admin should hide empty fields/tabs on a lead with a minimal, genuinely-empty Social tab', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+
+    // Social tab is 100% empty — must fully collapse
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    // Professional/Requirement/Other Details are MIXED — tab stays visible
+    await leadsPage.assertTabVisible('Professional');
+    await leadsPage.assertTabVisible('Requirement');
+    await leadsPage.assertTabVisible('Other Details');
+
+    logger.success('L48 passed');
+  });
+
+  test('@regression admin should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    // Toggle OFF — Social must reappear
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabVisible('Social');
+
+    logger.success('L49 passed');
+  });
+
+  test('@regression admin should hide only empty fields within a mixed section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+
+    // Professional tab: Company Industry/Business Type/Company Employees
+    // stay populated (unconditionally random-picked), so the tab itself
+    // must stay visible — but Company Name/Department/Designation (blanked
+    // by generateMinimalLeadData()) must individually disappear.
+    await leadsPage.assertTabVisible('Professional');
+    const professionalTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Professional' });
+    await professionalTab.click();
+    await leadsPage.assertFieldLabelHidden('Company Name');
+    await leadsPage.assertFieldLabelHidden('Department');
+    await leadsPage.assertFieldLabelHidden('Designation');
+    await leadsPage.assertFieldLabelVisible('Company Industry');
+    await leadsPage.assertFieldLabelVisible('Business Type');
+    await leadsPage.assertFieldLabelVisible('Company Employees');
+
+    logger.success('L50 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const leadsPage = new LeadsPage(adminPage);
+    const leadData = generateMinimalLeadData();
+    await leadsPage.goToLeadsList();
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId).not.toBeNull();
+    await leadsPage.goToLeadDetailsById(leadId!);
+
+    await leadsPage.toggleHideEmptyFields();
+    await leadsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    // Edit: set Facebook to a real value (Twitter/LinkedIn stay blank —
+    // confirms auto-reveal is genuinely per-field/tab-content-driven, not a
+    // stale one-time snapshot)
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await leadsPage.clickEditIcon();
+    await leadsPage.fillEditForm({ ...leadData, facebook: newFacebook });
+    await leadsPage.saveEditedLead();
+
+    // No re-toggle here — auto-reveal must happen on its own. Assert the
+    // actual VALUE text (not a guessed field label) — matches the proven
+    // assertDetailTabContent() convention used elsewhere in this file.
+    await leadsPage.assertTabVisible('Social');
+    await leadsPage.assertDetailTabContent('nav-tab2-tab', [newFacebook]);
+
+    logger.success('L51 passed');
   });
 });

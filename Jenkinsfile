@@ -7,11 +7,30 @@ pipeline {
 
     options {
         timestamps()
-        // WHY: Must exceed the largest possible dynamic inner-stage timeout
-        // computed below (main branch, 235 tests → ~266 min) plus overhead for
-        // checkout/install/setup/approval — otherwise this outer ceiling kills
-        // the build before the inner timeout ever gets a chance to.
-        timeout(time: 300, unit: 'MINUTES')
+        // WHY 48 HOURS, and why this is now a last-resort backstop, not the
+        // real enforcement mechanism (redesigned 2026-09-09 — see
+        // .claude/known-issues.md's dated entry for the full investigation):
+        // this single global timeout used to be the ONLY bound on the whole
+        // pipeline, covering Checkout+Install+Setup+ClearAuth+ApprovalGate+
+        // RunTests combined — a single wall-clock budget trying to serve two
+        // fundamentally incompatible needs (a human approval wait explicitly
+        // allowed up to 24h, and a test run that must scale with suite size).
+        // It had already silently drifted stale TWICE before (60->150 min in
+        // 2026-06-30, 150->300 min in 2026-07-04, both manually recalibrated
+        // alongside the inner per-test-count formula) and was found broken a
+        // THIRD time on 2026-09-09 (300 min vs. a real 544-min computed inner
+        // timeout at 514 tests) — a repeating pattern, not a one-off. Rather
+        // than bump this number a third time (the same class of fix that
+        // already failed twice), every stage below now has its OWN
+        // appropriately-scoped timeout sized for its actual risk, so nothing
+        // stage-specific depends on this value being kept in sync with
+        // anything else ever again. This backstop's only remaining job is to
+        // catch a genuinely unforeseen hang that somehow evades every
+        // per-stage bound below (e.g. between stages) — sized comfortably
+        // above the realistic worst case (24h approval + generous margin for
+        // every other stage's own bound combined) specifically so it should
+        // essentially never fire under normal operation.
+        timeout(time: 48, unit: 'HOURS')
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
@@ -24,6 +43,15 @@ pipeline {
     stages {
 
         stage('Checkout') {
+            // WHY a per-stage timeout (2026-09-09, Option C — see
+            // .claude/known-issues.md's dated entry): this stage's own risk
+            // (a slow/hung git checkout) doesn't scale with test count, so a
+            // small fixed bound is genuinely correct here, not a guess that
+            // will need periodic recalibration the way the old shared global
+            // timeout did.
+            options {
+                timeout(time: 15, unit: 'MINUTES')
+            }
             steps {
                 echo "Branch: ${env.BRANCH_NAME}"
                 checkout scm
@@ -37,6 +65,12 @@ pipeline {
                     branch 'main'
                     triggeredBy 'UserIdCause'
                 }
+            }
+            // WHY 30 min (2026-09-09, Option C): npm ci + a browser install
+            // — generous for a cold cache/slow network, but this genuinely
+            // doesn't grow with test count, unlike Run Tests below.
+            options {
+                timeout(time: 30, unit: 'MINUTES')
             }
             steps {
                 sh 'node --version'
@@ -52,6 +86,12 @@ pipeline {
                     branch 'main'
                     triggeredBy 'UserIdCause'
                 }
+            }
+            // WHY 10 min (2026-09-09, Option C): writes one small .env file
+            // via withCredentials — should be near-instant; generous only for
+            // a slow credential-store lookup.
+            options {
+                timeout(time: 10, unit: 'MINUTES')
             }
             steps {
                 script {
@@ -106,6 +146,11 @@ REPORT_PATH=reports/playwright-report/results.json
                     triggeredBy 'UserIdCause'
                 }
             }
+            // WHY 5 min (2026-09-09, Option C): a local rm -rf/mkdir — trivial,
+            // no realistic scenario needs more than a couple of seconds.
+            options {
+                timeout(time: 5, unit: 'MINUTES')
+            }
             steps {
                 sh 'rm -rf src/auth/storageStates/'
                 sh 'mkdir -p src/auth/storageStates/'
@@ -121,6 +166,15 @@ REPORT_PATH=reports/playwright-report/results.json
                 }
             }
             steps {
+                // WHY unchanged (2026-09-09, Option C — this is the fix, not
+                // an oversight): this step-level timeout was ALREADY
+                // correctly scoped to just the human-approval wait — the bug
+                // was that the pipeline-wide options{} timeout above ALSO
+                // covered this same wall-clock window, so a slow approval
+                // could silently consume budget the Run Tests stage actually
+                // needed. Removing the old shared global timeout (see
+                // options{} above) means this 24h allowance is now genuinely
+                // independent, exactly as it always should have been.
                 timeout(time: 24, unit: 'HOURS') {
                     input message: "🚨 You are about to run tests against ${env.BRANCH_NAME}. Approve to proceed?",
                           ok: 'Yes, approve'
@@ -131,6 +185,11 @@ REPORT_PATH=reports/playwright-report/results.json
         stage('Detect Tests (sandbox only)') {
             when {
                 branch 'sandbox'
+            }
+            // WHY 10 min (2026-09-09, Option C): a git fetch plus running
+            // detect-tests.sh — fast, doesn't scale with suite size.
+            options {
+                timeout(time: 10, unit: 'MINUTES')
             }
             steps {
                 script {
@@ -234,6 +293,61 @@ REPORT_PATH=reports/playwright-report/results.json
                     def bufferMinutes = 30
                     def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
                     echo "Detected ${testCount} tests (branch: ${env.BRANCH_NAME}) — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+                    // WHY this is now the ONLY meaningful bound on this stage
+                    // (2026-09-09, Option C — see .claude/known-issues.md's
+                    // dated entry): the old pipeline-wide options{} timeout
+                    // used to ALSO cap this stage from above, and had
+                    // silently drifted smaller than this computed value
+                    // (300 min vs. a real 544 min at 514 tests) — meaning
+                    // this formula's own scaling was being overridden by a
+                    // stale, unrelated ceiling nobody was watching. That
+                    // outer timeout is now a generous 48h last-resort
+                    // backstop only (see options{} above) — this formula is
+                    // free to keep scaling correctly forever with nothing
+                    // else silently capping it.
+
+                    // WHY this check exists at all (added 2026-09-09): the
+                    // 48h backstop above CANNOT be made genuinely dynamic —
+                    // Jenkins' declarative options{} block is evaluated once,
+                    // at pipeline start, before this script runs, so it
+                    // structurally cannot read a value computed here (same
+                    // hard platform constraint documented in options{}'s own
+                    // WHY comment). That means 48h, while sized with a
+                    // multi-year real margin today (see the math in
+                    // .claude/known-issues.md's dated entry), IS still a
+                    // static number with a real, calculable expiration point
+                    // as this formula's own output keeps growing — exactly
+                    // the property that made the OLD 300-min outer timeout
+                    // fail silently, twice, over the years. Since the number
+                    // itself can't be made self-adjusting, this check makes
+                    // its eventual drift LOUD instead of silent: it computes
+                    // the real worst-case total (24h Approval Gate + every
+                    // fixed pre-stage's own bound + this stage's own
+                    // computed timeout) and fails the build with a clear,
+                    // actionable message the moment that total comes within
+                    // 2 hours of the 48h backstop — years before it could
+                    // ever actually be hit, giving a human a real chance to
+                    // raise both this stage's awareness and the options{}
+                    // value, rather than discovering it the way the original
+                    // 300-min ceiling was discovered: silently, after it had
+                    // already been wrong for weeks.
+                    def outerBackstopMinutes = 48 * 60 // must match options{}'s timeout() value above, kept in sync by hand — see that block's own WHY comment
+                    def approvalGateMinutes = 24 * 60 // Approval Gate's own full worst-case allowance
+                    def fixedStageMinutes = 15 + 30 + 10 + 5 + 10 // Checkout + Install + Setup Environment + Clear Auth State + Detect Tests, worst case if all apply
+                    def projectedWorstCaseMinutes = approvalGateMinutes + fixedStageMinutes + computedTimeoutMinutes
+                    def backstopMarginMinutes = outerBackstopMinutes - projectedWorstCaseMinutes
+                    if (backstopMarginMinutes < 120) {
+                        error(
+                            "Projected worst-case pipeline duration (${projectedWorstCaseMinutes} min = " +
+                            "${approvalGateMinutes} min Approval Gate + ${fixedStageMinutes} min fixed stages + " +
+                            "${computedTimeoutMinutes} min Run Tests, for ${testCount} tests) is within 120 min of " +
+                            "the outer pipeline timeout (${outerBackstopMinutes} min, set in this Jenkinsfile's " +
+                            "options{} block) — margin is only ${backstopMarginMinutes} min. Raise BOTH the " +
+                            "options{} timeout() value above AND this stage's outerBackstopMinutes constant now, " +
+                            "before this repeats the exact drift that silently broke the old 300-min outer ceiling " +
+                            "twice already. See .claude/known-issues.md's dated 2026-09-09 entry for the full history."
+                        )
+                    }
                     // WHY additive only, not replacing computedTimeoutMinutes above
                     // (2026-09-04) — this printed estimate is informational; the
                     // existing per-test-count timeout stays the sole safety ceiling

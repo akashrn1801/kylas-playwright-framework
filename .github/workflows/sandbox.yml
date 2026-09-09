@@ -4,10 +4,181 @@ on:
   push:
     branches: [sandbox]
 
+# WHY split into detect -> run-tests (dynamic matrix) -> merge-and-report
+# (2026-09-09): sandbox run 34217579300 (build #167, commit f22653a2,
+# 2026-09-08) was killed by GitHub Actions' hard, non-configurable 6-hour
+# job ceiling at 6h01m17s. It ran that long because detect-tests.sh
+# correctly (by design — see its own Rule 1) escalated to `--grep
+# @regression` (499 tests) after this run's src/core/BasePage.ts change, the
+# exact same scope qa.yml runs. Sharding is the only fix that actually
+# escapes the ceiling; see qa.yml's own WHY comment for the full reasoning
+# (worker-tuning blocked by the documented --workers=1 credential-race risk;
+# self-hosted runner not needed once sharding clears the ceiling with large
+# margin) and .claude/known-issues.md's dated 2026-09-09 entry for the full
+# investigation, INCLUDING a separate, related finding from the same
+# incident: the "Sync run history"/"Send notification email" steps ran
+# during GitHub's post-cancellation grace period and picked up a stale,
+# degenerate results.json left behind by this same script's own `--list`
+# test-count probe (which goes through the same JSON reporter and writes a
+# real, if trivial, "everything skipped" report) — falsely emailing
+# "PASSED" for a run that never executed a single test. That reporting bug
+# is fixed independently in ReportParser.ts/AutomationHealth.ts/
+# EmailTemplate.ts regardless of this sharding change; both fixes matter
+# because sharding does not eliminate the underlying possibility of a
+# shard being killed by ITS OWN 180-min timeout below (see run-tests' own
+# WHY comment) — a correct "did anything actually run" check stays load-
+# bearing even after this fix.
+#
+# WHY sandbox is a DYNAMIC matrix, unlike a fixed shard count (2026-09-09,
+# verified via a real check that `--shard=1/1` runs 100% of the selected
+# tests, identical to no sharding at all): sandbox's own detect-tests.sh
+# selects a wildly different scope run to run — anywhere from a handful of
+# module-specific tests to the full @regression escalation. Unconditionally
+# sharding every sandbox run into N parallel jobs would waste N-1 whole
+# extra runners (each paying ~5-8 min of npm ci/browser-install overhead) on
+# the common case of a small selective run that finishes in minutes on its
+# own. The `detect` job below decides shard count from the SAME condition
+# detect-tests.sh already uses to escalate (TARGET == "--grep @regression"):
+# when escalated, shard count is computed LIVE from the real test count via
+# the identical `ceil(testCount / 125)` formula qa.yml/stage.yml/main.yml
+# use (updated 2026-09-09, same day as the initial fix — this was originally
+# a hardcoded 4, found to be an inconsistency once those 3 files were made
+# dynamic and this one already had the matrix INFRASTRUCTURE to support it
+# trivially); else a single shard (`--shard=1/1`, a verified no-op) for
+# every other, smaller selective target.
 jobs:
-  detect-and-run:
-    name: playwright-selective
+  detect:
+    name: detect target + shard plan
     runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.decide.outputs.target }}
+      shard_total: ${{ steps.decide.outputs.shard_total }}
+      shards_json: ${{ steps.decide.outputs.shards_json }}
+      workers: ${{ steps.decide.outputs.workers }}
+      test_count: ${{ steps.decide.outputs.test_count }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Detect changed tests and decide shard/worker plan
+        id: decide
+        # WHY these secrets are here too (2026-09-09, found while fixing a
+        # real CI failure with this identical root cause in qa.yml — qa run
+        # 34331488056): `npx playwright test --list` requires
+        # playwright.config.ts, which requires config/config.ts — and that
+        # module throws synchronously at load time if the active env's
+        # APP_URL/ADMIN_EMAIL/ADMIN_PASSWORD/RESTRICTED_EMAIL/
+        # RESTRICTED_PASSWORD aren't set (its exported config object
+        # evaluates requireEnv() eagerly). This step never had them wired
+        # in — it hadn't failed loudly yet only because the old `|| echo
+        # "0"` below silently masked the crash as TEST_COUNT=0 instead of
+        # surfacing it, which would have silently forced WORKERS=1 on every
+        # real sandbox run once this dynamic-shard-count job actually
+        # executed (it never had, as of 2026-09-09 — confirmed via `gh run
+        # list`). ENV: staging matches this workflow's own run-tests step.
+        env:
+          BASE_BRANCH: dev
+          ENV: staging
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+        run: |
+          TARGET=$(bash .github/scripts/detect-tests.sh)
+          echo "Detected test target: $TARGET"
+          # WHY dynamic workers preserved unchanged from the pre-sharding
+          # design (2 for large targets, 1 for small ones) — sharding and
+          # per-shard worker count are independent levers; this fix does not
+          # revisit that decision.
+          #
+          # WHY explicit exit-code handling, not `2>/dev/null | grep -c ||
+          # echo "0"` (2026-09-09): the old version piped playwright's
+          # stderr to /dev/null and silently defaulted to "0" on ANY
+          # failure — indistinguishable from a genuine (never actually
+          # valid — detect-tests.sh always falls back to at least @smoke,
+          # confirmed via direct read) zero-test target. A silent 0 here
+          # doesn't crash the step; it just quietly forces WORKERS=1 and a
+          # 1-shard plan with zero error, zero signal. This version
+          # captures playwright's real stdout+stderr and exit code
+          # explicitly, so a genuine failure (missing secrets, broken
+          # config, a stale path in detect-tests.sh) is always printed in
+          # full and fails the step loudly instead of silently mis-sizing
+          # the run.
+          set +e
+          LIST_OUTPUT=$(npx playwright test --project=chromium --list $TARGET 2>&1)
+          LIST_EXIT_CODE=$?
+          set -e
+          if [ "$LIST_EXIT_CODE" -ne 0 ]; then
+            echo "::error::npx playwright test --list failed (exit $LIST_EXIT_CODE) for target '$TARGET' — cannot compute a real test count. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
+          TEST_COUNT=$(echo "$LIST_OUTPUT" | grep -c "chromium" || true)
+          if [ "$TEST_COUNT" -eq 0 ]; then
+            echo "::error::npx playwright test --list succeeded but matched zero tests for target '$TARGET' — detect-tests.sh should never produce a genuinely empty target (it falls back to @smoke at minimum), so this is almost certainly a broken config or a stale path. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
+          echo "Test count: $TEST_COUNT"
+          if [ "$TEST_COUNT" -gt 50 ]; then
+            WORKERS=2
+          else
+            WORKERS=1
+          fi
+          # WHY this exact string match (2026-09-09): "--grep @regression" is
+          # the literal, only string detect-tests.sh's Rule 1 (core framework
+          # file changed) emits — the same escalation that produced the
+          # 499-test, 6-hour-plus run this fix addresses. Every other branch
+          # of detect-tests.sh (smoke fallback, per-module test paths)
+          # produces a materially smaller target that has never approached
+          # the timeout ceiling, so only this one case needs sharding.
+          if [ "$TARGET" = "--grep @regression" ]; then
+            # WHY 125 tests/shard, ceiling division (2026-09-09): identical
+            # formula and derivation to qa.yml/stage.yml/main.yml's own —
+            # see this file's top-of-file WHY comment. Reuses the SAME
+            # TEST_COUNT already computed above for the WORKERS decision, no
+            # extra API call needed. No "SHARD_TOTAL < 1" floor is needed —
+            # TEST_COUNT is now guaranteed >= 1 by the check above.
+            TARGET_TESTS_PER_SHARD=125
+            SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
+            SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
+            echo "Core framework file changed -> full regression escalation -> sharding into $SHARD_TOTAL (dynamic: $TEST_COUNT tests / $TARGET_TESTS_PER_SHARD per shard)"
+          else
+            SHARD_TOTAL=1
+            SHARDS_JSON="[1]"
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "shard_total=$SHARD_TOTAL" >> "$GITHUB_OUTPUT"
+          echo "shards_json=$SHARDS_JSON" >> "$GITHUB_OUTPUT"
+          echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
+          echo "test_count=$TEST_COUNT" >> "$GITHUB_OUTPUT"
+
+  run-tests:
+    name: playwright-selective (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
+    needs: detect
+    runs-on: ubuntu-latest
+    # WHY 180 (2026-09-09): sized for the escalated (4-shard, ~90 min/shard
+    # projected — identical scope/reasoning to qa.yml's own 499-test shard)
+    # case, which is the only one that could ever approach a timeout. The
+    # common, non-escalated case finishes in minutes and never approaches
+    # this regardless of the ceiling chosen.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.detect.outputs.shards_json) }}
     permissions:
       contents: write
     steps:
@@ -27,16 +198,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Detect changed tests
-        id: detect
-        env:
-          BASE_BRANCH: dev
-        run: |
-          TARGET=$(bash .github/scripts/detect-tests.sh)
-          echo "target=$TARGET" >> $GITHUB_OUTPUT
-          echo "Detected test target: $TARGET"
-
-      - name: Run selective tests
+      - name: Run selective tests (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
         env:
           ENV: staging
           CI: true
@@ -52,63 +214,133 @@ jobs:
           # syncHistory.ts's own credential requirement below.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: |
-          TARGET="${{ steps.detect.outputs.target }}"
-          # WHY: Dynamic workers — 2 for large suites (>50 tests), 1 for small
-          TEST_COUNT=$(npx playwright test --project=chromium --list $TARGET 2>/dev/null | grep -c "chromium" || echo "0")
-          echo "Test count: $TEST_COUNT"
-          if [ "$TEST_COUNT" -gt 50 ]; then
-            WORKERS=2
-          else
-            WORKERS=1
-          fi
-          # WHY (2026-09-04): bridges this step's dynamically-computed WORKERS
-          # to the later "Sync run history" step, which needs the SAME real
-          # value to tag this run's own history record correctly (steps don't
-          # share shell state — $GITHUB_ENV is the standard GH Actions bridge,
-          # same mechanism this file already uses via $GITHUB_OUTPUT for
-          # TARGET above).
-          echo "COMPUTED_WORKERS=$WORKERS" >> $GITHUB_ENV
-          # WHY: Track start time for elapsed time reporting
+          TARGET="${{ needs.detect.outputs.target }}"
+          WORKERS="${{ needs.detect.outputs.workers }}"
+          SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
+          TEST_COUNT="${{ needs.detect.outputs.test_count }}"
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS"
-          # WHY a real historical estimate ALSO printed here (2026-09-04), not
-          # a replacement for the AVG_SECS formula below: sandbox's own test
-          # SCOPE varies wildly run to run (selective, changed-files-based —
-          # see "Sync run history"'s own WHY comment on this same caveat for
-          # the pass/fail delta feature), so a branch="sandbox"-scoped
-          # historical average blends together runs of very different sizes
-          # under the same workers value — expect a wide range here, that's
-          # inherent to this branch's own selective-run design, not a bug in
-          # the estimate mechanism itself.
-          BRANCH_NAME=sandbox WORKERS=$WORKERS npm run estimate-duration --silent || true
-          # WHY: Estimate completion time — avg 30s per test divided by workers
-          AVG_SECS=30
-          ESTIMATED_SECS=$(( (TEST_COUNT * AVG_SECS + WORKERS - 1) / WORKERS ))
-          ESTIMATED_MINS=$(( ESTIMATED_SECS / 60 ))
-          ESTIMATED_END=$(date -d "+${ESTIMATED_SECS} seconds" '+%H:%M:%S' 2>/dev/null || date -v +${ESTIMATED_SECS}S '+%H:%M:%S')
-          echo "🕐  Test-count-based estimate: ~${ESTIMATED_MINS} min | ETA: ${ESTIMATED_END}"
-          echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET"
-
-          npx playwright test --project=chromium --workers=$WORKERS $TARGET
+          echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS | Shard: ${{ matrix.shard }}/$SHARD_TOTAL"
+          # WHY estimate-duration only on shard 1 (2026-09-09): the historical
+          # duration data it reads reflects a full UNSHARDED run's total time
+          # — printing it identically on every shard of an escalated run
+          # would be redundant and would quadruple the read-only git fetch
+          # against ci/reporting-history for zero added benefit. Still runs
+          # unconditionally for the common, non-escalated (single-shard)
+          # case, unchanged from before this fix.
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            BRANCH_NAME=sandbox WORKERS=$WORKERS npm run estimate-duration --silent || true
+          fi
+          echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET --shard=${{ matrix.shard }}/$SHARD_TOTAL"
+          # WHY --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          # instead of the config's default reporter array (verified live,
+          # 2026-09-09 — see merge.config.ts's own WHY comment for the full
+          # reasoning): html/json are deferred to the one-time
+          # "merge-and-report" job below, which replays every shard's blob
+          # data through them ONCE to produce a single consolidated report —
+          # this applies even to the common single-shard case, so ALL
+          # sandbox runs go through one consistent, uniform reporting path
+          # rather than two different ones depending on whether escalation
+          # happened. MiscErrorReporter runs HERE, per shard, because its
+          # data comes from THIS shard's own live per-worker temp files.
+          npx playwright test --project=chromium --workers=$WORKERS $TARGET \
+            --shard=${{ matrix.shard }}/$SHARD_TOTAL \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           EXIT_CODE=$?
-
-          # WHY: Report actual elapsed time after tests complete
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           MINUTES=$((ELAPSED / 60))
           SECONDS=$((ELAPSED % 60))
           echo ""
           echo "⏱️  Finished at: $(date '+%H:%M:%S')"
-          echo "✅ Total time: ${MINUTES}m ${SECONDS}s"
-          echo "📊 Tests: $TEST_COUNT | Workers: $WORKERS | Time: ${MINUTES}m ${SECONDS}s"
+          echo "✅ Shard ${{ matrix.shard }}/$SHARD_TOTAL total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
+      # WHY blob-report/ uploaded per shard, then merged by the job below
+      # (Playwright's own documented pattern for sharded CI): the blob format
+      # self-contains every test's attachments (traces, screenshots, videos),
+      # so the merged HTML report built from these still has fully working
+      # trace-viewer links with no need to also merge raw test-results/ dirs.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-sandbox-${{ matrix.shard }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      # WHY uploaded per shard, aggregated by scripts/merge-misc-errors.ts in
+      # the merge job (see that script's own WHY comment): this file is
+      # already correct for THIS shard's own workers — it just needs
+      # combining with any other shards' files, not regenerating.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-sandbox-${{ matrix.shard }}
+          path: reports/staging/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-sandbox-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # WHY a separate job, not a step in run-tests (this IS the point of
+  # sharding, and applies uniformly whether this run had 1 shard or 4): this
+  # is the ONE place that produces a single consolidated report/notification
+  # — `if: always()` so a partial/failed/cancelled shard still gets a real
+  # report instead of the misleading stale-file fallback that caused the
+  # Build #167 false-"PASSED" incident.
+  merge-and-report:
+    name: merge report + notify
+    needs: [detect, run-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all shard blob reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: blob-report-sandbox-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge shard reports into one HTML/JSON report
+        run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
+
+      - name: Download all per-shard misc-errors reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: misc-errors-sandbox-*
+          path: all-misc-errors
+
+      - name: Aggregate misc-errors.json across all shards
+        run: npx ts-node scripts/merge-misc-errors.ts staging all-misc-errors
+
       # WHY: see qa.yml for the full explanation. NOTE: sandbox runs a different,
-      # dynamically-selected test subset each time (see Detect Changed Tests
-      # above), so its total/passed/failed delta is not apples-to-apples run to
-      # run the way a fixed-suite branch's is — the recurring-flaky callout is
-      # still meaningful here, but treat the raw pass/fail delta with that caveat.
+      # dynamically-selected test subset each time (see the detect job above),
+      # so its total/passed/failed delta is not apples-to-apples run to run
+      # the way a fixed-suite branch's is — the recurring-flaky callout is
+      # still meaningful here, but treat the raw pass/fail delta with that
+      # caveat.
       - name: Sync run history
         if: always()
         env:
@@ -116,13 +348,11 @@ jobs:
           BRANCH_NAME: sandbox
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
-          # WHY (2026-09-04): the real value computed by "Run selective
-          # tests" above, bridged via $GITHUB_ENV — see that step's own WHY
-          # comment. Falls through to empty (omitted from the record — see
-          # syncHistory.ts's own WORKERS-parsing WHY comment) if that step
-          # never ran (e.g. "Detect changed tests" itself failed) — never a
-          # guessed value.
-          WORKERS: ${{ env.COMPUTED_WORKERS }}
+          # WHY (2026-09-04): the real value the detect job computed above,
+          # bridged via job outputs — see that job's own WHY comment. Empty
+          # (omitted from the record) if detect itself never produced one,
+          # never a guessed value.
+          WORKERS: ${{ needs.detect.outputs.workers }}
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
           # credential — see .claude/known-issues.md's "CI reporting-history
           # ledger" section for the confirmed root cause.

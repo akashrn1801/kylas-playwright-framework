@@ -4,6 +4,7 @@ import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateCompanyData,
   generateSharedCompanyData,
+  generateMinimalCompanyData,
 } from '../../../src/data/factories/companyFactory';
 import { generateContactData } from '../../../src/data/factories/contactFactory';
 import { generateDealData } from '../../../src/data/factories/dealFactory';
@@ -467,6 +468,107 @@ test.describe('Companies', () => {
     // (edit is an in-place modal, not a route change) — no re-navigation needed.
     await companiesPage.assertCompanyCustomFieldsOnDetail(updatedData);
     logger.success('CO19 passed');
+  });
+
+  // ── Hide Empty Fields — CO20-CO23 ────────────────────────────
+  // WHY only Social + Other Details targets: confirmed live Company has no
+  // "Professional"-equivalent tab at all (confirmed tab set: Communication/
+  // Location/Social/Other Details/Internals) — numberOfEmployees/industry/
+  // businessType are literal-string-union types (can never be `''`), so
+  // there's no third mixed-section target available the way Lead/Contact
+  // have one. Two targets (one fully-collapsible, one mixed) is the same
+  // shape already proven sufficient for those modules' coverage.
+
+  test('@regression admin should hide empty fields/tabs on a company with a minimal, genuinely-empty Social tab', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+    await companiesPage.assertTabVisible('Other Details');
+
+    logger.success('CO20 passed');
+  });
+
+  test('@regression admin should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabVisible('Social');
+
+    logger.success('CO21 passed');
+  });
+
+  test('@regression admin should hide only empty fields within a mixed Other Details section, keeping the section itself visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabVisible('Other Details');
+
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await companiesPage.assertFieldLabelHidden('Text Field');
+    await companiesPage.assertFieldLabelHidden('Paragraph Text');
+    await companiesPage.assertFieldLabelHidden('URL Field');
+    await companiesPage.assertFieldLabelVisible('Number');
+
+    logger.success('CO22 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const companiesPage = new CompaniesPage(adminPage);
+    const companyData = generateMinimalCompanyData();
+    await companiesPage.goToCompaniesList();
+    const companyId = await companiesPage.createCompany(companyData);
+    expect(companyId).not.toBeNull();
+    await companiesPage.goToCompanyDetailsById(companyId!);
+
+    await companiesPage.toggleHideEmptyFields();
+    await companiesPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await companiesPage.clickEditIcon();
+    await companiesPage.fillEditForm({ ...companyData, facebook: newFacebook });
+    await companiesPage.saveEditedCompany();
+
+    await companiesPage.assertTabVisible('Social');
+    const socialTab = adminPage.locator('a.nav-item.nav-link, a.nav-link').filter({ hasText: 'Social' });
+    await socialTab.click();
+    await expect(adminPage.getByText(newFacebook)).toBeVisible({ timeout: 10000 });
+
+    logger.success('CO23 passed');
   });
 
 });

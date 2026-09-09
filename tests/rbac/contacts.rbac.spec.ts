@@ -5,6 +5,7 @@ import {
   generateAdminContactData,
   generateSharedContactData,
   generateRestrictedContactData,
+  generateMinimalContactData,
 } from '../../src/data/factories/contactFactory';
 import { logger } from '../../src/utils/logger';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
@@ -794,6 +795,104 @@ test.describe('Contacts RBAC', () => {
     await contactsPage.goToContactDetailsById(contactId!);
     await contactsPage.assertContactCustomFieldsOnDetail(contactData);
     logger.success('CR20 passed');
+  });
+
+  // ── Hide Empty Fields — CR21-CR24 (RBAC parity, restricted user's own
+  // contact — mirrors tests/ui/contacts/contacts.spec.ts's C20-C23) ────────
+
+  test('@regression restricted user should hide empty fields/tabs on a contact with minimal, genuinely-empty Social and Campaign Information tabs', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Campaign Information');
+    await contactsPage.assertTabVisible('Professional');
+    await contactsPage.assertTabVisible('Other Details');
+
+    logger.success('CR21 passed');
+  });
+
+  test('@regression restricted user should restore all hidden fields/tabs after toggling Hide Empty Fields off', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabVisible('Social');
+
+    logger.success('CR22 passed');
+  });
+
+  test('@regression restricted user should hide only empty fields within a mixed section, keeping the section itself visible', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabVisible('Professional');
+
+    const professionalTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Professional' });
+    await professionalTab.click();
+    await contactsPage.assertFieldLabelHidden('Department');
+    await contactsPage.assertFieldLabelHidden('Designation');
+    await contactsPage.assertFieldLabelVisible('Company');
+
+    logger.success('CR23 passed');
+  });
+
+  test('@regression restricted user should auto-reveal a hidden field/tab immediately after editing it, without re-toggling', async ({
+    restrictedPage,
+  }) => {
+    test.setTimeout(480000);
+    const contactsPage = new ContactsPage(restrictedPage);
+    const contactData = generateMinimalContactData();
+    await contactsPage.goToContactsList();
+    const contactId = await contactsPage.createContact(contactData);
+    expect(contactId).not.toBeNull();
+    await contactsPage.goToContactDetailsById(contactId!);
+
+    await contactsPage.toggleHideEmptyFields();
+    await contactsPage.assertTabHiddenWhenFullyEmpty('Social');
+
+    const newFacebook = `https://facebook.com/revealed.${Date.now()}`;
+    await contactsPage.clickEditIcon();
+    await contactsPage.fillEditForm({ ...contactData, facebook: newFacebook });
+    await contactsPage.saveEditedContact();
+
+    await contactsPage.assertTabVisible('Social');
+    const socialTab = restrictedPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Social' });
+    await socialTab.click();
+    await expect(restrictedPage.getByText(newFacebook)).toBeVisible({ timeout: 10000 });
+
+    logger.success('CR24 passed');
   });
 
 });

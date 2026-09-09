@@ -114,6 +114,33 @@ export function generateTaskData(overrides: Partial<TaskData> = {}): TaskData {
   };
 }
 
+// WHY no fully-collapsible tab target for Task, unlike every other module
+// in this feature's coverage so far — confirmed live via direct code read
+// of TasksPage.fillDetailedTaskForm()/fillEditForm(): Type/Status/Priority/
+// Reminder are all real, data-driven react-selects with no blankable
+// placeholder (literal-union types, always populated), and PickList is
+// unconditionally random-picked by the custom-field fill method regardless
+// of the `''` default — so neither Basic Info nor Other Details can ever be
+// driven to a genuine 100%-empty state through this form. Description
+// (Basic Info) and Text Field/Paragraph Text/URL Field (Other Details) are
+// the only genuinely blankable fields — this factory blanks exactly those,
+// giving Task a MIXED-section-only test surface (both tabs always stay
+// visible; only individual fields hide) — a real, confirmed exception to
+// document explicitly, not a gap to force-fit the tab-collapse pattern onto.
+export function generateMinimalTaskData(overrides: Partial<TaskData> = {}): TaskData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
+  return generateTaskData({
+    description: '',
+    customFields: generateTaskCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 // WHY: Admin task data uses a unique timestamp prefix to avoid collision
 // with old test data in staging/qa databases from previous test runs.
 // Restricted user searching for "ADM1234567890 Task" will NEVER find

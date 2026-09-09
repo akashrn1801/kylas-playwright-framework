@@ -157,6 +157,33 @@ export function generateCompanyData(overrides: Partial<CompanyData> = {}): Compa
   };
 }
 
+// WHY only Social + Other Details, not a third mixed section: confirmed
+// live via the Hide-Empty-Fields investigation that Company's detail page
+// has no "Professional"-equivalent tab at all (its confirmed tab set is
+// Communication/Location/Social/Other Details/Internals) — numberOfEmployees/
+// industry/businessType are literal-string-union types (never `''`) filled
+// via CompaniesPage.fillCompanyForm()'s selectPicklistOption(), which is
+// data-driven but requires a real, valid option, so they can't be left
+// blank via a factory override at all. Social (Facebook/Twitter/LinkedIn)
+// is the one genuinely, fully-blankable tab; Other Details (custom fields)
+// is the one mixed-state target — same two-target shape already proven
+// sufficient for Leads/Contacts.
+export function generateMinimalCompanyData(overrides: Partial<CompanyData> = {}): CompanyData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
+  return generateCompanyData({
+    facebook: '',
+    twitter: '',
+    linkedIn: '',
+    customFields: generateCompanyCustomFieldData({
+      textField: '',
+      paragraphText: '',
+      urlField: '',
+      ...customFieldOverrides,
+    }),
+    ...restOverrides,
+  });
+}
+
 // WHY: Admin company data uses a unique timestamp prefix to avoid collision
 // with old test data in staging/qa databases from previous test runs.
 // Restricted user searching for "ADM1234567890 Corp" will NEVER find

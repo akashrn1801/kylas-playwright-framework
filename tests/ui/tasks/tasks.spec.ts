@@ -1,7 +1,12 @@
 import { test, expect } from '../../../src/fixtures/index';
 import { TasksPage } from '../../../src/modules/tasks/TasksPage';
 import { logger } from '../../../src/utils/logger';
-import { generateTaskData, generateTaskCustomFieldData } from '../../../src/data/factories/taskFactory';
+import { config } from '../../../config/config';
+import {
+  generateTaskData,
+  generateTaskCustomFieldData,
+  generateMinimalTaskData,
+} from '../../../src/data/factories/taskFactory';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tasks — UI Tests
@@ -338,5 +343,148 @@ test.describe('Tasks', () => {
     await tasksPage.updateTask(editData, quickTaskData.name, taskId);
     await tasksPage.assertTaskUpdated(editData, taskId);
     logger.success('TC23 passed');
+  });
+
+  // ── Hide Empty Fields — TC24-TC26 ────────────────────────────
+  // WHY only 3 tests, no tab-collapse variant: confirmed live via direct
+  // code read of TasksPage.fillDetailedTaskForm()/fillTaskCustomFields()
+  // that Type/Status/Priority/Reminder are always-populated react-selects
+  // (no blankable placeholder) and PickList is unconditionally random-picked
+  // regardless of input — so neither General Information nor Other Details
+  // can ever be driven to a genuine 100%-empty state through this form.
+  // This is a real, confirmed structural exception (not a coverage gap) —
+  // Task's surface is mixed-section-only. Description and Text Field/
+  // Paragraph Text/URL Field are the only genuinely blankable fields.
+  // WHY a baseline-relative "Description" count, not assertFieldLabelHidden
+  // (confirmed live via direct investigation, matching this repo's already-
+  // established baseline-relative-count pattern — reference-patterns.md
+  // §6): the literal text "Description" occurs TWICE on this page even with
+  // the field genuinely blank — the real field label (which DOES respond to
+  // the toggle) plus one separate, always-present occurrence elsewhere in
+  // the page's UI chrome, unrelated to the toggle. Toggling ON reliably
+  // drops the count by exactly 1 (2→1), never to 0 — asserting exact zero
+  // would be asserting something never actually true for this module.
+  // WHY the navigation fix in TasksPage.waitForTaskDetailsPage() (bundled
+  // here, not a separate change): confirmed live via direct network capture
+  // while building these tests — goToTaskDetailsById() failed 100% of the
+  // time (a real, reproducible bug, not a scratch-script artifact) because
+  // its GET-response regex was anchored with `$` right after the ID, but
+  // the real request is `GET /v1/tasks/{id}/relation?targetEntityOwnerId=
+  // ...` — a trailing path segment the anchor could never match. Same root-
+  // cause class as the already-documented `/v1/quotations/`/`/v1/call-logs/`
+  // versions of this exact bug.
+
+  test('@regression admin should hide only empty fields on a task with minimal data, keeping both sections visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(adminPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await adminPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+
+    const descriptionAfterHide = await adminPage.getByText('Description', { exact: true }).count();
+    expect(
+      descriptionAfterHide,
+      'Description field label should disappear (one fewer occurrence) after the Hide Empty Fields toggle'
+    ).toBe(descriptionBaseline - 1);
+
+    // Other Details: Text Field/Paragraph Text/URL Field blanked — hidden;
+    // Number/Checkbox/Pick List stay populated — tab itself stays visible.
+    await tasksPage.assertTabVisible('Other Details');
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await tasksPage.assertFieldLabelHidden('Text Field');
+    await tasksPage.assertFieldLabelHidden('Paragraph Text');
+    await tasksPage.assertFieldLabelHidden('URL Field');
+    await tasksPage.assertFieldLabelVisible('Number');
+
+    logger.success('TC24 passed');
+  });
+
+  test('@regression admin should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(adminPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await adminPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await adminPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline - 1
+    );
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await adminPage.getByText('Description', { exact: true }).count()).toBe(descriptionBaseline);
+
+    logger.success('TC25 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const tasksPage = new TasksPage(adminPage);
+    const taskData = generateMinimalTaskData();
+    await tasksPage.goToTasksList();
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
+    expect(taskId).not.toBeNull();
+    await tasksPage.goToTaskDetailsById(taskId!);
+
+    const descriptionBaseline = await adminPage.getByText('Description', { exact: true }).count();
+
+    await tasksPage.toggleHideEmptyFields();
+    expect(await adminPage.getByText('Description', { exact: true }).count()).toBe(
+      descriptionBaseline - 1
+    );
+
+    const newDescription = `Revealed description ${Date.now()}`;
+    await tasksPage.clickEditButtonInDetailPanel();
+    await tasksPage.fillEditForm({ ...taskData, description: newDescription });
+    await tasksPage.saveEditedTask();
+
+    // WHY a plain page.reload(), not a second goToTaskDetailsById() call
+    // (confirmed live via direct investigation, matching this repo's own
+    // "verify via stable end-state, not a transient UI snapshot" principle
+    // — known-issues.md): the edit DID genuinely persist (confirmed present
+    // after a fresh reload), but Task's in-place detail panel does not
+    // refresh its own DOM after an edit-modal save — a real, Task-specific
+    // staleness gap, not a genuine auto-reveal failure. A second
+    // goToTaskDetailsById() call is itself flaky here — confirmed live that
+    // re-navigating to an already-visited task's URL does not reliably
+    // re-fire the `/relation` GET that method waits on (client-side
+    // caching), so it's not a safe way to force a refetch. A hard reload
+    // always re-boots the SPA from scratch, sidestepping that wait
+    // entirely. The "Hide Empty Fields" preference is confirmed to persist
+    // across it (verified below), so this is not a re-toggle.
+    await adminPage.reload({ waitUntil: 'domcontentloaded' });
+    // WHY no flat wait before this check (fixed 2026-09-08, pre-commit hook
+    // sweep): toHaveAttribute() is itself a polling web-first assertion —
+    // it already waits out the post-reload re-hydration on its own, up to
+    // the explicit timeout below, so a preceding blind sleep was redundant.
+    await expect(
+      adminPage.locator('#hide-empty-fields-toggle-btn'),
+      'Hide Empty Fields toggle should still be pressed after reloading — proves this check is genuine auto-reveal, not a reset toggle'
+    ).toHaveAttribute('aria-pressed', 'true', { timeout: config.timeouts.navigation });
+
+    // No re-toggle — auto-reveal must happen on its own
+    expect(await adminPage.getByText('Description', { exact: true }).count()).toBe(descriptionBaseline);
+    await expect(adminPage.getByText(newDescription)).toBeVisible({ timeout: 10000 });
+
+    logger.success('TC26 passed');
   });
 });

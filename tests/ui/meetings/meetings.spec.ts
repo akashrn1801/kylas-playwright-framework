@@ -8,6 +8,7 @@ import { logger } from '../../../src/utils/logger';
 import {
   generateMeetingData,
   generateMeetingCustomFieldData,
+  generateMinimalMeetingData,
 } from '../../../src/data/factories/meetingFactory';
 import { generateLeadData } from '../../../src/data/factories/leadFactory';
 import { generateDealData } from '../../../src/data/factories/dealFactory';
@@ -514,5 +515,132 @@ test.describe('Meetings', () => {
     }
 
     logger.success('M22 passed');
+  });
+
+  // ── Hide Empty Fields — M23-M26 ──────────────────────────────
+  // WHY only 3 tests + a dedicated exclusion test, no tab-collapse variant:
+  // confirmed live Meeting has only 2 real tabs (Basic Info, Other Details)
+  // and neither can ever go 100% empty (Title/Date/Time/Timezone/Status/
+  // Medium are effectively required on Basic Info; PickList is
+  // unconditionally random-picked on Other Details) — same confirmed
+  // structural shape as Tasks. Description is a CONFIRMED, distinct
+  // exception from every other module in this feature's coverage:
+  // architecturally separate from the toggle entirely (lives only in the
+  // meetings list-row subtitle, never rendered as a toggleable detail-page
+  // field at all) — M26 explicitly proves this rather than silently
+  // skipping it.
+
+  test('@regression admin should hide only empty fields on a meeting with minimal custom-field data, keeping Other Details visible', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+
+    await meetingsPage.assertTabVisible('Other Details');
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+    await meetingsPage.assertFieldLabelHidden('Paragraph Text');
+    await meetingsPage.assertFieldLabelHidden('URL Field');
+    await meetingsPage.assertFieldLabelVisible('Number');
+
+    logger.success('M23 passed');
+  });
+
+  test('@regression admin should restore all hidden fields after toggling Hide Empty Fields off', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+
+    await meetingsPage.toggleHideEmptyFields();
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelVisible('Text Field');
+
+    logger.success('M24 passed');
+  });
+
+  test('@regression admin should auto-reveal a hidden field immediately after editing it, without re-toggling', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    const meetingData = generateMinimalMeetingData();
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    await meetingsPage.toggleHideEmptyFields();
+    const otherDetailsTab = adminPage
+      .locator('a.nav-item.nav-link, a.nav-link')
+      .filter({ hasText: 'Other Details' });
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelHidden('Text Field');
+
+    const newTextField = `Revealed-${Date.now()}`;
+    await meetingsPage.clickEditFromMenu();
+    await meetingsPage.fillEditForm(meetingData.title, undefined, undefined, {
+      ...meetingData.customFields,
+      textField: newTextField,
+    });
+    await meetingsPage.saveEditedMeeting();
+
+    // No re-toggle — auto-reveal must happen on its own
+    await otherDetailsTab.click();
+    await meetingsPage.assertFieldLabelVisible('Text Field');
+    await expect(adminPage.getByText(newTextField)).toBeVisible({ timeout: 10000 });
+
+    logger.success('M25 passed');
+  });
+
+  test('@regression admin: Description is architecturally excluded from the Hide Empty Fields toggle — never hidden, never a toggleable field', async ({
+    adminPage,
+  }) => {
+    test.setTimeout(480000);
+    const meetingsPage = new MeetingsPage(adminPage);
+    // WHY blank description explicitly here (unlike generateMinimalMeetingData(),
+    // which never touches it): this test's whole point is proving that even a
+    // genuinely EMPTY description is unaffected by the toggle — the strongest
+    // possible confirmation of the exclusion, not just "toggle doesn't hide a
+    // populated one."
+    const meetingData = generateMinimalMeetingData({ description: '' });
+    await meetingsPage.goToMeetingsList();
+    const meetingId = await meetingsPage.createMeeting(meetingData, 'Admin', true, true);
+    expect(meetingId).not.toBeNull();
+    await meetingsPage.searchMeetingById(meetingId!);
+
+    const descriptionLabelCountBefore = await adminPage.getByText('Description', { exact: true }).count();
+
+    await meetingsPage.toggleHideEmptyFields();
+
+    const descriptionLabelCountAfter = await adminPage.getByText('Description', { exact: true }).count();
+    expect(
+      descriptionLabelCountAfter,
+      'Description field label presence must be unaffected by the Hide Empty Fields toggle'
+    ).toBe(descriptionLabelCountBefore);
+
+    logger.success('M26 passed');
   });
 });
