@@ -64,8 +64,55 @@ jobs:
 
       - name: Compute shard count from the real current @regression test count
         id: compute
+        # WHY this env block exists (2026-09-09, fixing a real CI failure on
+        # this fix's own first live run — qa run 34331488056): `npx
+        # playwright test --list` requires playwright.config.ts, which
+        # requires config/config.ts — and that module throws synchronously
+        # at load time (before a single test is discovered) if the active
+        # env's APP_URL/ADMIN_EMAIL/ADMIN_PASSWORD/RESTRICTED_EMAIL/
+        # RESTRICTED_PASSWORD aren't set, since its exported config object
+        # evaluates requireEnv() eagerly. This step never had these secrets
+        # wired in (only run-tests below did), so it crashed at config-load
+        # time in <1s with zero stdout — confirmed via direct local
+        # reproduction (`Error: Missing required environment variable:
+        # QA_APP_URL` at config/config.ts:27). See the run() block's own
+        # WHY comment for how that crash was made loud instead of silent.
+        env:
+          ENV: qa
+          QA_APP_URL: ${{ secrets.QA_APP_URL }}
+          QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
+          QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
         run: |
-          TEST_COUNT=$(npx playwright test --project=chromium --list --grep @regression 2>/dev/null | grep -c "chromium")
+          # WHY explicit exit-code handling, not `2>/dev/null | grep -c`
+          # (2026-09-09): the old version piped playwright's stderr to
+          # /dev/null and let grep's own exit code (1 on zero matches)
+          # decide the step's fate — under GitHub Actions' default `bash -e`
+          # step shell, that killed the step the moment playwright crashed,
+          # with the real error message thrown away and grep's non-
+          # diagnostic exit code as the only visible symptom. This version
+          # captures playwright's real stdout+stderr and exit code
+          # explicitly, so a genuine failure here (bad secrets, broken
+          # config, a broken --grep tag) is always printed in full and
+          # fails loudly — never silently swallowed, and never dependent on
+          # grep's exit-code convention to signal anything.
+          set +e
+          LIST_OUTPUT=$(npx playwright test --project=chromium --list --grep @regression 2>&1)
+          LIST_EXIT_CODE=$?
+          set -e
+          if [ "$LIST_EXIT_CODE" -ne 0 ]; then
+            echo "::error::npx playwright test --list failed (exit $LIST_EXIT_CODE) — cannot compute a real shard count. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
+          TEST_COUNT=$(echo "$LIST_OUTPUT" | grep -c "chromium" || true)
+          if [ "$TEST_COUNT" -eq 0 ]; then
+            echo "::error::npx playwright test --list succeeded but matched zero @regression tests — almost certainly a broken --grep pattern/tag, not a legitimately empty suite. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
           echo "Real @regression test count: $TEST_COUNT"
           # WHY 125 tests/shard, and why ceiling division (2026-09-09): see
           # this workflow's own top-of-file WHY comment for the full
@@ -73,11 +120,11 @@ jobs:
           # (not floor) ensures a partial remainder still gets its own
           # shard rather than being silently absorbed into shard N (which
           # would make that one shard's real runtime exceed the others').
+          # No "SHARD_TOTAL < 1" floor is needed any more — TEST_COUNT is
+          # now guaranteed >= 1 by the check above, so ceiling division
+          # always yields >= 1 on its own.
           TARGET_TESTS_PER_SHARD=125
           SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
-          if [ "$SHARD_TOTAL" -lt 1 ]; then
-            SHARD_TOTAL=1
-          fi
           SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
           echo "Computed shard_total=$SHARD_TOTAL shards_json=$SHARDS_JSON"
           echo "shard_total=$SHARD_TOTAL" >> "$GITHUB_OUTPUT"

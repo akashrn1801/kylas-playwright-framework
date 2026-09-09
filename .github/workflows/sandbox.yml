@@ -72,8 +72,29 @@ jobs:
 
       - name: Detect changed tests and decide shard/worker plan
         id: decide
+        # WHY these secrets are here too (2026-09-09, found while fixing a
+        # real CI failure with this identical root cause in qa.yml — qa run
+        # 34331488056): `npx playwright test --list` requires
+        # playwright.config.ts, which requires config/config.ts — and that
+        # module throws synchronously at load time if the active env's
+        # APP_URL/ADMIN_EMAIL/ADMIN_PASSWORD/RESTRICTED_EMAIL/
+        # RESTRICTED_PASSWORD aren't set (its exported config object
+        # evaluates requireEnv() eagerly). This step never had them wired
+        # in — it hadn't failed loudly yet only because the old `|| echo
+        # "0"` below silently masked the crash as TEST_COUNT=0 instead of
+        # surfacing it, which would have silently forced WORKERS=1 on every
+        # real sandbox run once this dynamic-shard-count job actually
+        # executed (it never had, as of 2026-09-09 — confirmed via `gh run
+        # list`). ENV: staging matches this workflow's own run-tests step.
         env:
           BASE_BRANCH: dev
+          ENV: staging
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
         run: |
           TARGET=$(bash .github/scripts/detect-tests.sh)
           echo "Detected test target: $TARGET"
@@ -81,7 +102,35 @@ jobs:
           # design (2 for large targets, 1 for small ones) — sharding and
           # per-shard worker count are independent levers; this fix does not
           # revisit that decision.
-          TEST_COUNT=$(npx playwright test --project=chromium --list $TARGET 2>/dev/null | grep -c "chromium" || echo "0")
+          #
+          # WHY explicit exit-code handling, not `2>/dev/null | grep -c ||
+          # echo "0"` (2026-09-09): the old version piped playwright's
+          # stderr to /dev/null and silently defaulted to "0" on ANY
+          # failure — indistinguishable from a genuine (never actually
+          # valid — detect-tests.sh always falls back to at least @smoke,
+          # confirmed via direct read) zero-test target. A silent 0 here
+          # doesn't crash the step; it just quietly forces WORKERS=1 and a
+          # 1-shard plan with zero error, zero signal. This version
+          # captures playwright's real stdout+stderr and exit code
+          # explicitly, so a genuine failure (missing secrets, broken
+          # config, a stale path in detect-tests.sh) is always printed in
+          # full and fails the step loudly instead of silently mis-sizing
+          # the run.
+          set +e
+          LIST_OUTPUT=$(npx playwright test --project=chromium --list $TARGET 2>&1)
+          LIST_EXIT_CODE=$?
+          set -e
+          if [ "$LIST_EXIT_CODE" -ne 0 ]; then
+            echo "::error::npx playwright test --list failed (exit $LIST_EXIT_CODE) for target '$TARGET' — cannot compute a real test count. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
+          TEST_COUNT=$(echo "$LIST_OUTPUT" | grep -c "chromium" || true)
+          if [ "$TEST_COUNT" -eq 0 ]; then
+            echo "::error::npx playwright test --list succeeded but matched zero tests for target '$TARGET' — detect-tests.sh should never produce a genuinely empty target (it falls back to @smoke at minimum), so this is almost certainly a broken config or a stale path. Full output:"
+            echo "$LIST_OUTPUT"
+            exit 1
+          fi
           echo "Test count: $TEST_COUNT"
           if [ "$TEST_COUNT" -gt 50 ]; then
             WORKERS=2
@@ -100,12 +149,10 @@ jobs:
             # formula and derivation to qa.yml/stage.yml/main.yml's own —
             # see this file's top-of-file WHY comment. Reuses the SAME
             # TEST_COUNT already computed above for the WORKERS decision, no
-            # extra API call needed.
+            # extra API call needed. No "SHARD_TOTAL < 1" floor is needed —
+            # TEST_COUNT is now guaranteed >= 1 by the check above.
             TARGET_TESTS_PER_SHARD=125
             SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
-            if [ "$SHARD_TOTAL" -lt 1 ]; then
-              SHARD_TOTAL=1
-            fi
             SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
             echo "Core framework file changed -> full regression escalation -> sharding into $SHARD_TOTAL (dynamic: $TEST_COUNT tests / $TARGET_TESTS_PER_SHARD per shard)"
           else
