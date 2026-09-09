@@ -1,4 +1,4 @@
-import { Page, Locator, Response, expect, ConsoleMessage } from '@playwright/test';
+import { Page, Locator, Response, expect, ConsoleMessage, test } from '@playwright/test';
 import * as fs from 'fs';
 import { BasePage } from '../../core/BasePage';
 import { config, buildApiUrl } from '../../../config/config';
@@ -898,6 +898,39 @@ export class ReportsPage extends BasePage {
 
   async selectEntityType(entityType: ReportEntityType): Promise<void> {
     await this.selectExactFromIsInvalidMenu(this.entityTypeControl(), entityType, 'Entity Type (reportType)');
+  }
+
+  // WHY this wrapper exists (2026-09-09, same pattern as
+  // BasePage.skipDedicatedCustomFieldTestIfAbsent() / each module's own
+  // skipIfCustomFieldsAbsent() — Rule 7): the Reports "Quotation" entity
+  // type is confirmed deployed to QA only as of this date, NOT yet to
+  // stage/prod — confirmed directly, not assumed: qa run 34333426206
+  // passed both Quotation-entity-type report tests cleanly (2.4m/2.5m,
+  // first attempt), while main run 34357689027 (ENV=prod) failed both
+  // with `.is-invalid__menu` timing out waiting for an "Quotation" option
+  // that genuinely does not exist in that environment's dropdown yet — a
+  // real config/deployment gap, not a flake or a locator bug. A LIVE
+  // presence check is used deliberately instead of a static
+  // `config.env === 'qa'` string check: it is self-healing — once
+  // Quotation reporting ships to stage/prod, this check finds the option
+  // present and stops skipping automatically, with zero code changes
+  // required anywhere. Must be called BEFORE any test-data creation (not
+  // after `verifyRunCountForEntity()` starts) so a skip on an
+  // undeployed environment doesn't leave orphaned Quotation records
+  // behind. Safe to delete this call site entirely once the team is
+  // confident Quotation reporting is live everywhere — not required for
+  // correctness, since the check is a no-op the moment the option exists.
+  async skipIfQuotationEntityTypeUnavailable(): Promise<void> {
+    await this.goToCreateReport();
+    const options = await this.getIsInvalidMenuOptionTexts(
+      this.entityTypeControl(),
+      'Entity Type (reportType)'
+    );
+    const available = options.some((opt) => opt.trim() === 'Quotation');
+    test.skip(
+      !available,
+      'Quotation report entity type not yet deployed to this environment (confirmed QA-only as of 2026-09-09) — skipping until it ships to stage/prod; see .claude/known-issues.md'
+    );
   }
 
   async selectChartTypeOnForm(chartType: ChartType): Promise<void> {
