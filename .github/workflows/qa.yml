@@ -4,7 +4,8 @@ on:
   push:
     branches: [qa]
 
-# WHY sharded across 4 parallel jobs (2026-09-09): the previous single-job
+# WHY sharded across a DYNAMICALLY-COMPUTED number of parallel jobs
+# (redesigned 2026-09-09, was a fixed 4): the previous single-job
 # `--grep @regression` run was killed by GitHub Actions' hard, non-
 # configurable 6-hour-per-job execution ceiling on 2026-09-08 (run 34256019455,
 # 499 tests at --workers=2, killed at 6h01m35s — GitHub's own annotation read
@@ -14,41 +15,90 @@ on:
 # the job at 6h01m regardless, proving hosted-runner jobs cannot exceed 6
 # hours no matter what timeout-minutes is set to. Sharding is the only fix
 # that actually escapes this ceiling rather than attempting to raise it past
-# a hard platform limit. Full investigation, and why sharding was chosen over
-# worker-tuning (blocked by the documented --workers=1 credential-race risk —
-# see CLAUDE.md's "Concurrent-Worker Credential File Race" section) or a
-# self-hosted runner (a bigger infra change, not needed once sharding alone
-# clears the ceiling with large margin — see below): .claude/known-issues.md's
-# dated 2026-09-09 entry.
+# a hard platform limit. Full investigation: .claude/known-issues.md's dated
+# 2026-09-09 entry.
 #
-# SHARD COUNT REASONING (verified 2026-09-09, not guessed): the killed run
-# measured 499 tests / 361.58 min at --workers=2 (workers deliberately left
-# UNCHANGED by this fix — sharding and per-shard worker count are
-# independent levers; see the credential-race note above for why workers
-# stays at 2). 4 shards -> ~90 min/shard today, a 4x margin under the 360-min
-# ceiling. This suite grew from 453 to 499 @regression tests in about 6 weeks
-# around 2026-09-08's "Hide Empty Fields" addition alone, so projecting
-# forward at that same real throughput: +200 tests/year -> ~699 tests -> ~127
-# min/shard, still a 2.8x margin; even +500 tests (~2.5 years at that rate)
-# -> ~999 tests -> ~181 min/shard, still a 2x margin. 4 was picked as the
-# smallest shard count that clears "well under 2h per shard today" AND keeps
-# multi-year headroom, without paying for more parallel runners (each shard
-# duplicates ~5-8 min of npm ci/browser-install overhead) than the ceiling
-# actually requires.
+# WHY dynamic, not a fixed 4 (redesigned 2026-09-09, same day as the initial
+# fix — found to be an inconsistency, not a deliberate choice, once
+# sandbox.yml's own dynamic-matrix pattern already existed in this same
+# repo): a fixed shard count has a real, calculable expiration point as the
+# suite grows (verified: 4 shards approach the hard 360-min ceiling around
+# ~1987 tests, ~3.9x today's size) — safely distant today (2.7-7+ years at
+# real observed growth rates) but not something to leave static when a fully
+# dynamic alternative is achievable with NO platform constraint blocking it
+# (unlike the Jenkins outer-timeout case — GitHub Actions' `fromJSON()`
+# matrix pattern genuinely supports this). The `plan` job below computes
+# shard count LIVE from the real current @regression test count every run,
+# via `shardCount = ceil(testCount / 125)` — 125 tests/shard was derived
+# from this exact incident's own measured throughput (499 tests / 361.58 min
+# at --workers=2 = 1.380 tests/min) targeting ~90 min/shard, and verified
+# live to reproduce today's real count (499 tests -> 4 shards, byte-for-byte
+# matching the original fixed choice) before being adopted. If the suite
+# doubles, triples, or shrinks, this recomputes correctly with ZERO manual
+# intervention — the exact property a fixed number can never have. The
+# remaining residual risk (the 125-tests/shard constant itself assumes
+# today's per-test throughput; a material slowdown in average per-test
+# duration, independent of test COUNT, could still erode the margin) is the
+# same class of risk already knowingly accepted for Jenkinsfile's own
+# `secondsPerTest` rate constant — not new, not hidden.
 jobs:
-  run-tests:
-    name: playwright-ci (shard ${{ matrix.shard }}/4)
+  plan:
+    name: compute shard plan
     runs-on: ubuntu-latest
-    # WHY 180, not 480 (2026-09-09): each shard now runs ~1/4 of the suite
-    # (~90 min measured today), so 180 gives a real 2x margin over observed
-    # while still failing a genuinely stuck/hung shard in 3h instead of
-    # silently consuming the full 6h before GitHub's own hard ceiling would
-    # eventually kill it anyway with no earlier signal.
+    timeout-minutes: 15
+    outputs:
+      shard_total: ${{ steps.compute.outputs.shard_total }}
+      shards_json: ${{ steps.compute.outputs.shards_json }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute shard count from the real current @regression test count
+        id: compute
+        run: |
+          TEST_COUNT=$(npx playwright test --project=chromium --list --grep @regression 2>/dev/null | grep -c "chromium")
+          echo "Real @regression test count: $TEST_COUNT"
+          # WHY 125 tests/shard, and why ceiling division (2026-09-09): see
+          # this workflow's own top-of-file WHY comment for the full
+          # derivation from real measured throughput. Ceiling division
+          # (not floor) ensures a partial remainder still gets its own
+          # shard rather than being silently absorbed into shard N (which
+          # would make that one shard's real runtime exceed the others').
+          TARGET_TESTS_PER_SHARD=125
+          SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
+          if [ "$SHARD_TOTAL" -lt 1 ]; then
+            SHARD_TOTAL=1
+          fi
+          SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
+          echo "Computed shard_total=$SHARD_TOTAL shards_json=$SHARDS_JSON"
+          echo "shard_total=$SHARD_TOTAL" >> "$GITHUB_OUTPUT"
+          echo "shards_json=$SHARDS_JSON" >> "$GITHUB_OUTPUT"
+
+  run-tests:
+    name: playwright-ci (shard ${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }})
+    needs: plan
+    runs-on: ubuntu-latest
+    # WHY 180, not 480 (2026-09-09): each shard now runs ~125 tests (~90 min
+    # measured/targeted), so 180 gives a real 2x margin over that while still
+    # failing a genuinely stuck/hung shard in 3h instead of silently
+    # consuming the full 6h before GitHub's own hard ceiling would eventually
+    # kill it anyway with no earlier signal. This stays correct regardless of
+    # how many shards the plan job computes, since it bounds one shard's
+    # ~125-test share, not the whole suite.
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.plan.outputs.shards_json) }}
     permissions:
       contents: write
     steps:
@@ -67,7 +117,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run regression tests (shard ${{ matrix.shard }}/4)
+      - name: Run regression tests (shard ${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }})
         env:
           ENV: qa
           CI: true
@@ -87,8 +137,8 @@ jobs:
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
           # WHY estimate-duration only on shard 1 (2026-09-09): the historical
           # duration data it reads reflects a full UNSHARDED run's total time
-          # — printing it identically on all 4 shards would be redundant and
-          # would quadruple the read-only git fetch against
+          # — printing it identically on every shard would be redundant and
+          # would multiply the read-only git fetch against
           # ci/reporting-history for zero added benefit.
           if [ "${{ matrix.shard }}" = "1" ]; then
             WORKERS=2 npm run estimate-duration --silent || true
@@ -99,20 +149,20 @@ jobs:
           # reasoning): html/json are deferred to the one-time
           # "merge-and-report" job below, which replays every shard's blob
           # data through them ONCE to produce a single consolidated report
-          # instead of 4 disconnected ones. MiscErrorReporter runs HERE, per
+          # instead of N disconnected ones. MiscErrorReporter runs HERE, per
           # shard, because its data comes from THIS shard's own live
           # per-worker temp files — it cannot be usefully re-run later
           # against replayed blob data (confirmed: a merge job's runner never
           # had those temp files in the first place).
           npx playwright test --project=chromium --grep @regression --workers=2 --timeout=120000 \
-            --shard=${{ matrix.shard }}/4 \
+            --shard=${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }} \
             --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           MINUTES=$((ELAPSED / 60))
           SECONDS=$((ELAPSED % 60))
-          echo "✅ Shard ${{ matrix.shard }}/4 total time: ${MINUTES}m ${SECONDS}s"
+          echo "✅ Shard ${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }} total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
       # WHY blob-report/ uploaded per shard, then merged by the job below
@@ -131,7 +181,7 @@ jobs:
       # WHY uploaded per shard, aggregated by scripts/merge-misc-errors.ts in
       # the merge job (see that script's own WHY comment): this file is
       # already correct for THIS shard's own workers — it just needs
-      # combining with the other 3 shards' files, not regenerating.
+      # combining with the other shards' files, not regenerating.
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -161,7 +211,8 @@ jobs:
   # fallback that caused the sandbox Build #167 false-"PASSED" incident (see
   # .claude/known-issues.md's dated entry — that incident is now also
   # separately hardened in ReportParser.ts/AutomationHealth.ts/
-  # EmailTemplate.ts regardless of this sharding change).
+  # EmailTemplate.ts/NotificationService.ts regardless of this sharding
+  # change).
   merge-and-report:
     name: merge report + notify
     needs: run-tests
