@@ -185,7 +185,30 @@ export class NotificationService {
       process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
 
     logger.info('[Notification] Parsing test report...');
-    const report = this.parser.parse(input.jsonReportPath);
+    let report: ParsedReport;
+    try {
+      report = this.parser.parse(input.jsonReportPath);
+    } catch (err) {
+      // WHY (2026-09-09, sandbox Build #167 investigation): a killed/crashed
+      // CI job (e.g. GitHub Actions' hard 6-hour job ceiling — see
+      // .claude/known-issues.md's dated entry) can leave NO results.json at
+      // all, which used to throw here uncaught — main()'s only catch just
+      // logged to the raw CI console and exited, so nobody watching only the
+      // email inbox (not raw CI logs) was ever told the run had a problem.
+      // This is the "silent failure" counterpart to the separate false-
+      // "PASSED" bug found in the same investigation (see ReportParser.ts's
+      // own WHY comment on 'no-tests-executed') — that one reported a WRONG
+      // status; this one reported NOTHING. Both are fixed together: this
+      // path now still sends a real, unambiguous alert email instead of
+      // dying silently, explicitly stating this is neither a pass nor a
+      // fail rather than staying quiet.
+      logger.error(
+        '[Notification] Could not parse test report — sending a failure alert instead of a full report',
+        err
+      );
+      await this.sendReportUnavailableAlert(input, err);
+      return;
+    }
     logger.info(
       `[Notification] Results — Total: ${report.total}, Passed: ${report.passed}, Failed: ${report.failed}, Flaky: ${report.flaky}`
     );
@@ -333,6 +356,52 @@ export class NotificationService {
     } catch (err) {
       logger.error('[Notification] Failed to send email:', err);
     }
+  }
+
+  // WHY a minimal, hand-built email rather than routing through
+  // EmailTemplate/computeOverallVerdict (2026-09-09): both require a real
+  // ParsedReport, which by definition doesn't exist in this failure mode —
+  // fabricating a fake one just to satisfy the type would risk exactly the
+  // kind of made-up-status bug this whole investigation (sandbox Build
+  // #167's false "PASSED") was about. This alert is deliberately simple and
+  // unambiguous instead: state plainly that no report could be parsed, why,
+  // and where to look — never implying a pass or a fail either way.
+  private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
+    const recipients = getRecipients(input.env, input.branch);
+    const reason = err instanceof Error ? err.message : String(err);
+    const subject = `🚫 [${input.env.toUpperCase()}] Kylas Automation — REPORT NOT AVAILABLE | Branch: ${input.branch} | Build #${input.buildNumber}`;
+    const html = `
+<div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
+  <div style="background:#B3261E;padding:16px 24px;">
+    <span style="color:#ffffff;font-weight:700;font-size:14px;letter-spacing:0.05em;text-transform:uppercase;">No Test Report Available — Not A Pass Or Fail</span>
+  </div>
+  <div style="padding:20px 24px;color:#1A1A1A;font-size:14px;line-height:1.6;">
+    <p>This run's own report file could not be found or parsed, so <strong>no pass/fail status can be reported</strong> — this is not a "passed" run and must not be treated as one.</p>
+    <p><strong>Reason:</strong> ${this.escapeHtml(reason)}</p>
+    <p>
+      <strong>Environment:</strong> ${this.escapeHtml(input.env)}<br/>
+      <strong>Branch:</strong> ${this.escapeHtml(input.branch)}<br/>
+      <strong>Build:</strong> #${this.escapeHtml(input.buildNumber)}<br/>
+      <strong>Commit:</strong> ${this.escapeHtml(input.gitCommit)}
+    </p>
+    ${
+      input.buildUrl
+        ? `<p><a href="${this.escapeHtml(input.buildUrl)}">View the raw CI run directly</a> to see what actually happened.</p>`
+        : '<p>Check the raw CI run directly (no build URL was available to this script) to see what actually happened.</p>'
+    }
+    <p>Common causes: the job was cancelled or killed before finishing (e.g. a platform timeout), or a real infrastructure failure prevented tests from running at all.</p>
+  </div>
+</div>`;
+    try {
+      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
+      logger.info(`[Notification] Report-unavailable alert sent to: ${recipients.to.join(', ')}`);
+    } catch (sendErr) {
+      logger.error('[Notification] Failed to send even the report-unavailable alert:', sendErr);
+    }
+  }
+
+  private escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   // WHY: resolves a real GitHub blob link to the ci/reporting-history ledger
