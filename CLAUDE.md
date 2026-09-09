@@ -160,7 +160,7 @@ Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported abo
 
 ## Module Status
 
-Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-02: **453 tests across 23 spec files, 12 modules** (Dashboard added since the 2026-08-22 count as its own module, split out from the former combined "Dashboard/Login" row now that Login has its own, unchanged, separate 4-test count; Dashboard's own UI count is 30, not 31, after DB3 was removed the same day — see `.claude/known-issues.md`'s Dashboard section). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
+Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-09: **515 tests across 23 spec files, 12 modules** (grown from 453 on 2026-09-02 — the +62 is almost entirely the 2026-09-08 "Hide Empty Fields" feature adding one UI+RBAC test pair to each of 8 modules; module/spec-file counts themselves are unchanged). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
 
 **Last full regression evidence (2026-07-28):** all 10 UI+RBAC spec files touched by that session's work (Companies, Contacts, Deals, Leads, Tasks) run in full on stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (193 total). Two unrelated network-connectivity drops and one memory-pressure process kill occurred mid-verification (confirmed via direct `curl`/`free -h` evidence) — each discarded its own polluted partial data and was re-run clean.
 

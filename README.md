@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 393 tests across 11 modules (21 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 515 tests across 12 modules (23 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -37,25 +37,25 @@ This document is written so a new engineer — or any of us in six months — ca
 
 **Modules covered** (12): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, Dashboard, and Login. Every module except Login has both a UI spec and an RBAC spec. (Dashboard was split out from the former combined "Dashboard/Login" row on 2026-09-02, once it grew into a full module with its own page object, factory, and RBAC coverage — Login remains its own small, separate spec, deliberately not using the shared fixture system since it tests the login UI itself.)
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-02, do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-09 — per-module breakdown verified the same day via `npx playwright test --project=chromium --list tests/ui/<module>/` and `tests/rbac/<module>.rbac.spec.ts` individually; do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
-| Call Logs | 26 | 24 | 50 |
-| Companies | 19 | 22 | 41 |
-| Contacts | 19 | 19 | 38 |
+| Call Logs | 30 | 28 | 58 |
+| Companies | 23 | 26 | 49 |
+| Contacts | 23 | 23 | 46 |
 | Dashboard | 30 | 29 | 59 |
-| Deals | 21 | 25 | 46 |
-| Leads | 21 | 27 | 48 |
+| Deals | 26 | 30 | 56 |
+| Leads | 25 | 31 | 56 |
 | Login | 4 | — | 4 |
-| Meetings | 15 | 8 | 23 |
+| Meetings | 19 | 12 | 31 |
 | Products & Services | 9 | 7 | 16 |
-| Quotations | 21 | 14 | 35 |
+| Quotations | 24 | 17 | 41 |
 | Reports | 38 | 27 | 65 |
-| Tasks | 15 | 13 | 28 |
-| **Total** | **238** | **215** | **453** |
+| Tasks | 18 | 16 | 34 |
+| **Total** | **269** | **246** | **515** |
 
-Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
+Grew from 453 (2026-09-02) to 515 (2026-09-09) — the +62 is almost entirely 8 modules (Call Logs, Companies, Contacts, Deals, Leads, Meetings, Quotations, Tasks) each gaining a UI+RBAC test pair for the 2026-09-08 "Hide Empty Fields" feature; Dashboard, Login, Products & Services, and Reports are unchanged. Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
 
 Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 
@@ -293,15 +293,15 @@ npm run format         # prettier --write .
 
 ## Test Tags
 
-Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 393-test suite (tags overlap, so these don't sum to 393):
+Every test carries at least one tag in its title (`@smoke`, `@regression`, `@prodSafe`); many carry two. Verified counts across the current 515-test suite (tags overlap, so these don't sum to 515) via `npx playwright test --project=chromium --list --grep @<tag>` on 2026-09-09:
 
 | Tag | Count | Meaning | Runs on |
 |---|---:|---|---|
-| `@smoke` | 29 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
-| `@regression` | 379 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
-| `@prodSafe` | 34 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
+| `@smoke` | 33 | Navigation/happy-path only — "does the page load and the core flow work" | `dev` branch (every push) |
+| `@regression` | 499 | The full functional + RBAC suite | `qa` branch (every push), and manually via `main.yml` |
+| `@prodSafe` | 37 | Read-only — safe to run against real production data (no creates/edits/deletes) | `prod` branch (Jenkins primary; `prod.yml` manual fallback) |
 
-`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 393-test suite.
+`stage` and the base `Jenkinsfile` (for `prod`/`main`) run with **no `--grep` filter at all** — the entire 515-test suite. **`qa.yml`/`stage.yml`, and `sandbox.yml`'s own full-regression-escalation path, are designed (2026-09-09) to shard this across 4 parallel jobs — pending review, not yet merged/live as of this writing.** See the Known Limitations note below and `.claude/known-issues.md`'s dated entry for why: at 499-515 tests and workers=2, all three were being killed mid-run by GitHub Actions' hard, non-configurable 6-hour-per-job execution ceiling.
 
 ---
 
@@ -326,7 +326,7 @@ Feature branches are cut from `dev`. Before opening a PR into `dev`, push to `sa
 | `qa` | GitHub Actions (`qa.yml`) | push | `@regression` | 2 (`Jenkinsfile.qa` is explicitly commented "NOT the primary CI for qa branch" — kept only for manual runs, also `--workers=2`) |
 | `stage` | GitHub Actions (`stage.yml`) | push (+ manual) | Full suite, no `--grep` | 2 (`Jenkinsfile.staging` is explicitly commented "NOT the primary CI for stage branch" — manual only, also `--workers=2`) |
 | `prod` | **Jenkins** (base `Jenkinsfile` — its own `branch 'prod'` condition is what actually triggers; `Jenkinsfile.prod` has no branch trigger of its own and is a manual-only fallback, consistent with `CLAUDE.md`) | Jenkins: branch push (via the base `Jenkinsfile`). `prod.yml`/`Jenkinsfile.prod`: manual only | `@prodSafe` | 2 |
-| `main` | **Jenkins** (base `Jenkinsfile`, its own `branch 'main'` condition — commented "primary CI for prod and main only") | Jenkins: branch push/manual. `main.yml`: manual only | Full suite — both the base `Jenkinsfile` and `main.yml` run with no `--grep` at all; they're equivalent in scope today, not divergent | 2 |
+| `main` | **Jenkins** (base `Jenkinsfile`, its own `branch 'main'` condition — commented "primary CI for prod and main only") | Jenkins: branch push/manual. `main.yml`: manual only | Full suite — both the base `Jenkinsfile` and `main.yml` run with no `--grep` at all; they're equivalent in scope today, not divergent. **`main.yml` sharded 4 ways 2026-09-09** (same fix/reasoning as `qa.yml`/`stage.yml` — it already had `timeout-minutes: 480` from 2026-09-05, which real evidence proved doesn't actually help on GitHub-hosted runners; projected ~373min unsharded at the current 515-test suite size, already past the true ceiling). **The base `Jenkinsfile` — the PRIMARY CI path for main, per this row — was NOT evaluated or sharded as part of this fix**; Jenkins' own execution-time limits depend on its agent infrastructure, not GitHub Actions' specific hosted-runner ceiling, and this is flagged as a genuinely open question, not assumed safe. | 2 |
 | — | `staging-promotion-gate.yml` | manual only (`workflow_dispatch`) | Full suite against **`STAGING_*`** secrets, then gates an approval-based auto-merge of `staging`→`prod` | 2 (this is the one CI path where the `WORKERS` env var is actually read by `playwright.config.ts`, since no `--workers` CLI flag is passed) |
 
 **Two similarly-named files, deliberately disambiguated in their own headers (added 2026-07-07):**
@@ -675,7 +675,8 @@ Cross-checked against `CLAUDE.md`'s own audit notes and re-verified directly aga
 - **Several additional known flakiness/open-code items are tracked in detail in `.claude/known-issues.md` rather than duplicated here** — including the unresolved Deals Call-permission-on-shared-deal flake, `DealsPage.fillDealForm()`'s intentional associated-contact/company randomization (pass `associatedContactName`/`associatedCompanyName` on `DealData` when a new Deals test needs a known, not-random, associated entity instead), and `CallLogsPage.searchAndSelectEntity()`'s thinner staging retry margin (plus its silent fallback-to-first-option on exhaustion). See that file's relevant sections for full evidence and current status.
 - **Recently built, not yet proven under a real live CI run at the time of writing:** the P0–P5 reporting overhaul (tiered error classification, run-history/trend tracking, trace-linking fixes, the `staging-promotion-gate.yml` rename) and the two sandbox-CI bug fixes (`tsconfig.json`'s `"types": ["node"]` fix for `ts-node`'s intermittent `@types/node` resolution failure; the `createRolePage()` browser-context leak fix) were all verified via isolated local execution and real (non-push) script runs, but not yet exercised end-to-end by an actual CI pipeline run against real GitHub/Jenkins infrastructure. Treat the very first live CI run after this work lands as still partially a verification step, not a routine run.
 - **The 2026-07-14 email/reporting redesign** (restrained-enterprise `EmailTemplate.ts` rewrite, `FailureAnalyzer.ts`, `AutomationHealth.ts`, the extended `RunHistory.ts` schema, the freshness check, the local-git fallback) compiles cleanly (`tsc --noEmit`, `eslint`, zero errors) and has now been run end-to-end multiple times: a combined pass exercising every feature at once (real Playwright execution, real failure clusters, real recurring-issue and freshness penalties stacking together, real git-derived branch/commit) against a throwaway `ci/reporting-history` ledger, plus one real send via the actual SMTP path (recipient temporarily scoped to one address for that test, reverted immediately after — confirmed via empty `git diff`). What's genuinely still open: **the real `ci/reporting-history` branch itself has never been touched by any of this verification** (by design, to avoid polluting it) — the first real CI run after this ships is effectively run #1 for that branch. The automation-health weights, the 4-hour staleness threshold, and the slow-test 20%-regression threshold are all documented in source as starting heuristics, not statistically-tuned constants — expect to revisit them once real multi-run data accumulates. Real Outlook desktop rendering was verified structurally (literal HTML `width` attributes, solid non-`rgba()` colors — the specific things Word's engine is documented to require) but never captured from an actual Outlook client; likewise, email dark-mode support is best-effort CSS (`prefers-color-scheme`) never verified against a real Gmail/Outlook dark-mode render.
-- **A related, deliberately unresolved architectural question:** whether long CI jobs (`qa`/`stage`, ~220+ tests on 2 workers) should be split into parallel shards is flagged but intentionally not implemented — it was raised while investigating a browser-context resource-exhaustion incident, but splitting job topology is a bigger, separate decision than the incident's actual fix warranted.
+- **UPDATE 2026-09-09 — the sharding question below is no longer open; it forced itself onto the agenda.** `qa`/`stage` (now 499/515 tests, not the ~220 this note originally described) and `sandbox`'s own full-regression-escalation path were all actually killed mid-run by GitHub Actions' hard 6-hour job ceiling on 2026-09-08 — not a hypothetical risk anymore. A 4-way `--shard`-based split (via Playwright's native sharding, with a `merge-reports`-based consolidation job so the result is still one report, not four) was designed the same day and is pending review — see `.claude/known-issues.md`'s dated entry for the full reasoning, evidence, and why sharding was chosen over worker-tuning or a self-hosted runner. The original note is preserved below for history:
+  - *(original, 2026-07-xx)* whether long CI jobs (`qa`/`stage`, ~220+ tests on 2 workers) should be split into parallel shards is flagged but intentionally not implemented — it was raised while investigating a browser-context resource-exhaustion incident, but splitting job topology is a bigger, separate decision than the incident's actual fix warranted.
 - **Lead's edit form (`fillEditForm()`) does NOT update Timezone, Country, or the 5 Professional fields — Contact's edit form DOES update its Timezone/Company.** This is a real, pre-existing asymmetry: Lead's `fillEditForm()` was deliberately scoped to fill only firstName/lastName/Salutation/Requirement/custom-fields, so those 7 fields are create-only on Lead; Contact's `fillEditForm()` re-fills its Timezone/Company. The detail-page assertions accommodate this — Lead's create-only fields are asserted on create only. **Open decision for a maintainer:** either extend Lead's `fillEditForm()` to also update these fields (fuller update coverage, but a riskier change to a heavily-used shared method — react-select re-selection on a pre-filled edit form is exactly where subtle bugs live), or accept them as create-only. Left as create-only as the lower-risk choice, flagged rather than silently changed.
 - **The same unbounded-click dropdown risk fixed elsewhere in this codebase is still present, unfixed, in `LeadsPage.ts` (close-reason radio selection, convert-to-deal product selection) and `QuotationsPage.ts` (several random-option pickers)** — confirmed via code read, not yet verified as actually broken in either module, but the identical shape (a raw, unbounded `.click()` on a randomly-indexed option in a list that can still be populating) is present.
 - **A `[id*="..."]` substring-locator pattern — the same shape that caused the (fixed) Company Phones collision — still appears in `QuotationsPage.ts` (`[id*="input_products"][id*="quantity"]`, a compound match).** Not confirmed broken. (Re-verified 2026-08-12: this bullet previously also named `CompaniesPage.ts`/`DealsPage.ts`/`ContactsPage.ts` — Companies and Contacts have no such locator at all, and Deals' own copy was already hardened on 2026-08-10 specifically to eliminate this exact risk, so only the Quotations instance remains today.)
