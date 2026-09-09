@@ -32,6 +32,97 @@ export interface ModuleHistoryStats {
   duration: number;
 }
 
+export interface DerivedTestScope {
+  scope: string;
+  // WHY this exists (2026-09-09): every non-comparison path this feature
+  // can take must be explainable from the log, never a silent guess — see
+  // deriveTestScope()'s own WHY comment for what each basis value means.
+  basis: 'common-tag' | 'module-set' | 'empty-report';
+}
+
+// WHY this function exists, and why it DERIVES a category rather than
+// reading one supplied by whatever CI system produced the run (2026-09-09
+// — fixes the "Suite Drift Detected" false alarm on a clean dev run, and
+// the identically-rooted "+449 passed" meaningless delta line; see
+// RunHistoryRecord.scope's own WHY comment for the full incident and
+// evidence): a design where every workflow/Jenkinsfile explicitly declares
+// its own scope string would fail the moment a new branch, a new
+// selective-module sandbox target, or a changed tag convention shows up
+// without a human remembering to register it there — exactly the kind of
+// narrow, enumeration-based fix that already failed once for this same
+// bug class (the 2026-09-03 fix only covered `sandbox:reset` runs sharing
+// dev's exact commit SHA, leaving every other branch on the old, unscoped
+// comparison — which is why this resurfaced today). Deriving the category
+// from what a run's own results ACTUALLY contain means a brand-new branch,
+// a brand-new module, or sandbox's ever-changing selective target all
+// classify correctly with ZERO configuration, forever — the same
+// self-updating property `modules` (per-run module stats) and this repo's
+// own tag-based test selection already have.
+//
+// Two real derivation paths, tried in order, plus one degenerate case:
+//  1. 'common-tag' — if every single executed test's title shares EXACTLY
+//     ONE `@tag` in common (extracted via a generic `/@[A-Za-z]\w*/g` scan
+//     — deliberately NOT a hardcoded list of this repo's known tag names,
+//     so a future 4th tagging convention is picked up automatically with
+//     no code change), that tag IS the scope (e.g. "smoke", "regression",
+//     "prodSafe"). This is what a `--grep @X` run produces by
+//     construction, on any branch, on any CI system (GitHub Actions or
+//     Jenkins) — no per-pipeline wiring needed to get this right.
+//  2. 'module-set' — used whenever no single common tag exists, which
+//     happens both for a genuine full-suite run (mixes @smoke-only,
+//     @regression-only, @prodSafe-only tests — no tag is common to ALL of
+//     them, so this path correctly catches "no filter was applied" without
+//     ever comparing against a hardcoded total test count) and for a
+//     selective multi-module run with mixed tags (sandbox's own
+//     detect-tests.sh target). Derived as the sorted, deduplicated
+//     `${type}:${name}` list of every module that actually contributed at
+//     least one test — reusing the SAME module stats every report already
+//     builds, nothing new to compute. This is also what makes healthy
+//     suite growth a non-event: a full-suite run's module-set is "every
+//     module that exists today," so the day a brand-new module ships, that
+//     run's module-set genuinely differs from every prior run's — it
+//     correctly finds no comparable prior record (an honest "not
+//     comparable yet," never a false alarm) until two runs exist under the
+//     new, larger set. Adding more TESTS to an existing module never
+//     changes that module's presence in the set, so ordinary growth within
+//     existing modules never breaks a match either.
+//  3. 'empty-report' — the one degenerate case (0 tests executed) — never
+//     crashes, returns an explicit, unmistakable scope string that can
+//     never coincidentally collide with a real derived one, so it degrades
+//     to "no comparable prior run" rather than matching something it
+//     shouldn't.
+//
+// Deliberately NOT based on the raw `--grep` string or detect-tests.sh's
+// raw file-path target verbatim (see RunHistoryRecord.scope's own WHY
+// comment) — those fragment into near-uniqueness (a file-path target like
+// "tests/ui/leads/ tests/rbac/leads.rbac.spec.ts" is only one of dozens of
+// possible shapes) and would almost never repeat identically.
+export function deriveTestScope(
+  rawTitles: string[],
+  modules: Array<{ name: string; type: string; total: number }>
+): DerivedTestScope {
+  if (rawTitles.length === 0) {
+    return { scope: 'empty-report', basis: 'empty-report' };
+  }
+  const TAG_PATTERN = /@[A-Za-z][A-Za-z0-9]*/g;
+  const tagSets = rawTitles.map((title) => new Set(title.match(TAG_PATTERN) ?? []));
+  const firstTagSet = tagSets[0] ?? new Set<string>();
+  const commonTags = [...firstTagSet].filter((tag) => tagSets.every((set) => set.has(tag)));
+  if (commonTags.length === 1) {
+    return { scope: commonTags[0].slice(1), basis: 'common-tag' };
+  }
+  // WHY `.total > 0`, not just "every module in the array": ReportParser
+  // only ever adds a module to the map when a test from it was actually
+  // seen, so this filter is currently always a no-op — kept explicit
+  // anyway as a defensive guarantee against a future ReportParser change
+  // that pre-populates the module list, which would otherwise silently
+  // widen this run's derived scope to include modules it never touched.
+  const moduleSet = [
+    ...new Set(modules.filter((m) => m.total > 0).map((m) => `${m.type}:${m.name}`)),
+  ].sort();
+  return { scope: `modules:${moduleSet.join(',')}`, basis: 'module-set' };
+}
+
 export interface RunHistoryRecord {
   timestamp: string; // ISO 8601
   env: string;
@@ -96,6 +187,41 @@ export interface RunHistoryRecord {
   // behavior a real worker-count change (like stage.yml's 2→1 mitigation)
   // needs, for free, with no special-casing.
   workers?: number;
+  // WHY optional, added 2026-09-09 (fixes the "Suite Drift Detected" false
+  // alarm on a clean dev run, and the identically-rooted "+449 passed"
+  // meaningless delta line — same underlying bug, one fix): computeDelta()/
+  // computeSuiteDrift() previously compared a run against "whatever ran
+  // immediately before it in this env-keyed history file" with no filter
+  // beyond that — and `history/${env}.jsonl` is keyed by the app ENVIRONMENT
+  // (qa/staging/prod), not by branch, because dev.yml/qa.yml both set
+  // `ENV: qa` (dev's tests genuinely target the QA app). Confirmed live via
+  // the real ci/reporting-history branch: dev's own 33-test @smoke runs and
+  // qa's own 499-test @regression runs interleave in the SAME history/
+  // qa.jsonl file. A dev run's "previous run" was frequently a qa run (or
+  // vice versa) — comparing 33 against 499 always looks like either a
+  // catastrophic drop or a meaningless +466 jump, regardless of whether
+  // anything actually changed. `scope` is a NORMALIZED category — either a
+  // bare tag name (e.g. 'smoke', 'regression', 'prodSafe') or
+  // 'modules:<type:name>,<type:name>,...' — computed by `deriveTestScope()`
+  // (below) from what the run's own results actually contain: the real
+  // tags present on every executed test's title, and which modules
+  // actually contributed tests. See that function's own WHY comment for
+  // the full derivation and why this is computed, not configured per
+  // workflow/Jenkinsfile — a per-pipeline declaration would need a human to
+  // register every new branch/target by hand, exactly the class of narrow
+  // fix that already failed once for this same bug (2026-09-03 only
+  // covered `sandbox:reset` runs specifically). Never the raw --grep
+  // string or detect-tests.sh's raw file-path target verbatim — a raw path
+  // target would almost never repeat identically (sandbox.yml's own
+  // selective scoping means "tests/ui/leads/ tests/rbac/leads.rbac.spec.ts"
+  // is only one of many possible shapes) and would fragment comparisons
+  // into uselessness. Optional for the identical backward-compatibility
+  // reason as `workers`: every
+  // existing record lacks it, so `r.scope === current.scope` correctly
+  // never matches an old record (undefined !== a real string), degrading
+  // safely to "no comparable prior run found" — never an alarm, never an
+  // error — until enough new-schema runs accumulate per branch+scope.
+  scope?: string;
 }
 
 export interface RunDelta {
@@ -175,17 +301,28 @@ export function appendAndPrune(existingJsonl: string, record: RunHistoryRecord):
 }
 
 /**
- * Delta against the single most recent prior record (before the current run
- * was appended). Returns previousRun: null on the very first run for an
- * environment — callers must render "no prior run to compare" in that case,
- * not a misleading "+N from 0."
+ * Delta against the most recent prior record with the SAME branch AND the
+ * same normalized scope (before the current run was appended) — not simply
+ * "whatever ran immediately before this one," which was the root cause of
+ * both a false "Suite Drift Detected" alarm on a clean dev run and a
+ * meaningless "+449 passed" delta line: `history/${env}.jsonl` is keyed by
+ * app environment, not branch, so dev's 33-test @smoke runs and qa's
+ * 499-test @regression runs (for example) interleave in the same file — see
+ * RunHistoryRecord.scope's own WHY comment for the full evidence. Returns
+ * previousRun: null both on the very first run for an environment AND when
+ * no record with a matching branch+scope exists yet (including every
+ * pre-2026-09-09 record, which lacks `scope` entirely and can therefore
+ * never match) — callers must render "no prior run to compare" in either
+ * case, not a misleading "+N from 0."
  */
 export function computeDelta(
   historyBeforeAppend: RunHistoryRecord[],
   current: RunHistoryRecord
 ): RunDelta {
   const previousRun =
-    historyBeforeAppend.length > 0 ? historyBeforeAppend[historyBeforeAppend.length - 1] : null;
+    [...historyBeforeAppend]
+      .reverse()
+      .find((r) => r.branch === current.branch && r.scope === current.scope) ?? null;
   if (!previousRun) {
     return {
       previousRun: null,
@@ -432,7 +569,18 @@ export function computeSuiteDrift(
   if (!current.isDevEquivalentRun) {
     return detectSuiteDrift(computeDelta(historyBeforeAppend, current));
   }
-  const lastReset = [...historyBeforeAppend].reverse().find((r) => r.isDevEquivalentRun);
+  // WHY `r.scope === current.scope` added here too (2026-09-09): a
+  // sandbox:reset run still goes through sandbox.yml's own selective
+  // detect-tests.sh scoping like any other sandbox run, so two reset runs
+  // are not automatically comparable to each other either — a reset run
+  // scoped to Leads only should never be compared against an earlier
+  // reset run that happened to run the full suite. Same backward-
+  // compatible degrade as computeDelta() above: an old record lacking
+  // `scope` simply never matches, falling through to the
+  // 'no-reset-baseline-yet' branch below.
+  const lastReset = [...historyBeforeAppend]
+    .reverse()
+    .find((r) => r.isDevEquivalentRun && r.scope === current.scope);
   if (!lastReset) {
     return { occurred: false, decreaseBy: 0, basis: 'no-reset-baseline-yet' };
   }
