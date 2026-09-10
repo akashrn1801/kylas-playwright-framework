@@ -5,6 +5,14 @@ pipeline {
   options {
     ansiColor('xterm')
     timestamps()
+    // WHY (2026-09-10): this job's own Approval Gate already assumes one
+    // human-gated run at a time; without this, a second manual trigger while
+    // a first build waits at (or has cleared) approval would run concurrently
+    // against the SAME shared STAGING credentials — the Jenkins-job-level
+    // version of the risk CLAUDE.md's "Concurrent-Worker Credential File
+    // Race" section documents at the Playwright-worker level. Not an
+    // intentional use case for this pipeline.
+    disableConcurrentBuilds()
     timeout(time: 150, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
