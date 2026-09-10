@@ -2438,10 +2438,35 @@ export class ReportsPage extends BasePage {
     // admin.
     await this.switchChartType('Table');
     const ownerName = await this.getLoggedInUserName(role);
-    const reportBucketCount = await this.getDimensionValueCount(ownerName);
-    const popup = await this.clickDrillThroughForDimensionValue(ownerName);
-    const destinationListCount = await this.getDestinationListTotalCount(popup);
+    let reportBucketCount = await this.getDimensionValueCount(ownerName);
+    let popup = await this.clickDrillThroughForDimensionValue(ownerName);
+    let destinationListCount = await this.getDestinationListTotalCount(popup);
     await popup.close();
+
+    // WHY a retry loop here too (2026-09-10, confirmed live on a main-branch/
+    // prod run — Lead entity, bucket=105 vs destinationList=106, first
+    // attempt only): this comparison used to be read exactly once, with no
+    // re-check, unlike the reportTotal-vs-apiTotal comparison a few lines
+    // above in this same method — which DOES retry, precisely because a
+    // single read of two independently-computed counts can catch one still
+    // settling relative to the other. The bucket count and the destination
+    // list count are two SEPARATE reads (a Table-view aggregation vs. a
+    // fresh drill-through list query) taken a few seconds apart, so the same
+    // settling window applies here — confirmed by this exact case recovering
+    // with no code change on Playwright's own automatic retry a few minutes
+    // later. Mirrors the loop above: re-open the drill-through and re-read
+    // both counts up to `retries` times before accepting a genuine
+    // under-count, rather than throwing on the very first read.
+    for (let attempt = 1; attempt < retries && reportBucketCount < destinationListCount; attempt++) {
+      logger.info(
+        `verifyRunCountForEntity(${entityType}): drill-through undercount on attempt ${attempt}/${retries} ` +
+          `(bucket=${reportBucketCount}, destinationList=${destinationListCount}) — re-checking`
+      );
+      reportBucketCount = await this.getDimensionValueCount(ownerName);
+      popup = await this.clickDrillThroughForDimensionValue(ownerName);
+      destinationListCount = await this.getDestinationListTotalCount(popup);
+      await popup.close();
+    }
 
     // WHY the same ">= tolerance" direction as the report/API check above,
     // not strict equality: confirmed live (2026-08-21) that the Reports
@@ -2457,8 +2482,8 @@ export class ReportsPage extends BasePage {
     // under-count.
     if (reportBucketCount < destinationListCount) {
       throw new Error(
-        `verifyRunCountForEntity(${entityType}): drill-through undercounts — report bucket for ` +
-          `"${ownerName}" shows ${reportBucketCount}, destination list shows ${destinationListCount}`
+        `verifyRunCountForEntity(${entityType}): drill-through undercounts after ${retries} attempt(s) — ` +
+          `report bucket for "${ownerName}" shows ${reportBucketCount}, destination list shows ${destinationListCount}`
       );
     }
     if (reportBucketCount > destinationListCount) {
