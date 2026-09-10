@@ -773,7 +773,34 @@ export class TasksPage extends BasePage {
       }
     }
 
-    await this.assertNoFormErrors('task create form');
+    // WHY wrapped, not a bare call (2026-09-10, confirmed live on a main-
+    // branch/prod GitHub Actions run — "admin should clone a task via
+    // ellipsis menu" failed twice in a row with real toast text "Error
+    // Contact not found✕"): assertNoFormErrors() is a generic BasePage
+    // scrape of ANY visible toast/inline-error, with no way to know this
+    // exact text is the SAME "randomly-selected Relation entity became
+    // inaccessible between search and save" race classifyTaskInaccessible-
+    // EntityError() above already anticipates and recovers from — it just
+    // only ever inspected the create-POST response body for it. On this
+    // occurrence the race surfaced as a toast instead (or in addition to,
+    // but too late for the response listener above to classify), so it hit
+    // this generic check first and threw a plain, unclassified Error —
+    // which createDetailedTask()'s catch block below doesn't recognize as
+    // InaccessibleRelationError, so its already-built skipRelation retry
+    // never ran. Re-classifying the SAME message pattern here (now matching
+    // the plain-English toast form, not just the API's dotted
+    // "<entity>.not.found" shape) closes that gap without duplicating the
+    // retry logic itself — createDetailedTask() already knows what to do
+    // once it sees the right error type.
+    try {
+      await this.assertNoFormErrors('task create form');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/\b(lead|deal|contact|company)\b[^a-z0-9]{0,20}not found/i.test(message)) {
+        throw new InaccessibleRelationError(message);
+      }
+      throw err;
+    }
     const id = await idPromise;
     if (!id) {
       throw new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)');
