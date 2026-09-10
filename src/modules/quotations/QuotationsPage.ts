@@ -471,6 +471,67 @@ export class QuotationsPage extends BasePage {
     }
   }
 
+  // WHY this helper exists (2026-09-10, confirmed live on a main-branch/prod
+  // GitHub Actions run): `createQuotationWithOwner()` and `searchAndOpenQuotation()`
+  // each had their own copy of the identical unbounded shape —
+  // `performSearch()` then an immediate `.locator('.rt-tr-group').filter({
+  // hasText }).first().click()` with no waitFor/timeout/retry at all. When
+  // the target row hadn't propagated to the list yet (confirmed: a restricted
+  // user's own quotations list not yet reflecting an admin-set ownership
+  // reassignment), the click just sat on Playwright's default actionability
+  // wait until the whole TEST's 480s timeout killed it — "Test timeout of
+  // 480000ms exceeded" / "Target page, context or browser has been closed",
+  // no earlier, clearer failure ever surfaced. Mirrors `retryFindInList()`
+  // just below (same retryConfig convention, same re-search-and-recheck
+  // shape) but ALSO clicks the row once found, instead of only confirming
+  // presence — the two callers need the row opened, not just verified.
+  private async searchAndClickQuotationRow(searchValue: string): Promise<void> {
+    const { retries, wait } = this.retryConfig;
+    const row = this.page.locator('.rt-tr-group').filter({ hasText: searchValue }).first();
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      logger.info(`searchAndClickQuotationRow: attempt ${attempt}/${retries} for "${searchValue}"`);
+      await this.goToQuotationsList();
+      await this.performSearch(searchValue);
+      // WHY `timeout: wait` here, not a short fixed poll plus a separate
+      // blind sleep between attempts (redesigned 2026-09-10): the original
+      // version polled for the row for a short fixed window, then — on a
+      // miss — slept for `wait` ms unconditionally before the next attempt.
+      // That sleep never checked anything; it just burned time whether or
+      // not the row was already there. Folding `wait` into THIS waitFor's
+      // own timeout means the same real time budget is spent condition-
+      // polling for the actual signal (the row appearing) instead of
+      // sleeping blind — this resolves the instant the row shows up rather
+      // than always waiting the full duration, and preserves the exact same
+      // per-env worst-case total (retries × wait) config.searchRetry already
+      // defines, just spent correctly.
+      const found = await row
+        .waitFor({ state: 'visible', timeout: wait })
+        .then(() => true)
+        .catch(() => false);
+      if (found) {
+        await row.click();
+        return;
+      }
+      logger.warn(`searchAndClickQuotationRow: no matching row on attempt ${attempt}/${retries}`);
+    }
+    // WHY a clear, named failure here, not a silent fall-through (the exact
+    // gap this fix closes): a caller with no result from this method used to
+    // get a bare Playwright actionability timeout with no indication of
+    // WHICH row/search was involved, 480s later. This fires immediately once
+    // retries are genuinely exhausted, naming the search term and the real
+    // budget spent — actionable in a CI log without needing a trace.
+    throw new Error(
+      `searchAndClickQuotationRow: no row matching "${searchValue}" found after ${retries} attempt(s) ` +
+        // WHY `retries * wait`, not `(retries - 1) * wait`: the previous
+        // version's math matched a structure where only the between-attempt
+        // sleep counted toward the budget (the final attempt had no trailing
+        // sleep). Now every attempt, including the last, spends up to `wait`
+        // ms in its own waitFor — the real worst-case total is retries * wait.
+        `(~${(retries * wait) / 1000}s of retry wait) — the quotation may not exist, may not yet be ` +
+        'visible to this user (e.g. an ownership/share change still propagating), or the search returned no results'
+    );
+  }
+
   private async retryFindInList(searchValue: string): Promise<boolean> {
     const { retries, wait } = this.retryConfig;
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -1626,9 +1687,7 @@ export class QuotationsPage extends BasePage {
       await this.goToQuotationDetail(id);
       return;
     }
-    await this.goToQuotationsList();
-    await this.performSearch(quotationNumber);
-    await this.page.locator('.rt-tr-group').filter({ hasText: quotationNumber }).first().click();
+    await this.searchAndClickQuotationRow(quotationNumber);
     // WHY: Use the canonical wait (URL + domcontentloaded + GET-response) instead
     // of a bare URL wait — confirms the entity data actually loaded.
     await this.waitForQuotationDetailPage();
@@ -2103,9 +2162,7 @@ export class QuotationsPage extends BasePage {
     await this.saveQuotation();
     await this.assertSuccessToast();
     await this.assertOnListPage();
-    await this.page.waitForTimeout(2000);
-    await this.performSearch(data.summary);
-    await this.page.locator('.rt-tr-group').filter({ hasText: data.summary }).first().click();
+    await this.searchAndClickQuotationRow(data.summary);
     await this.waitForUrl(/\/quotations\/details\/\d+/, 15000);
     const id = await this.captureIdFromUrl();
     await this.goToQuotationsList();

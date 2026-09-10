@@ -7,6 +7,27 @@ pipeline {
 
     options {
         timestamps()
+        // WHY (2026-09-10): this is a multibranch job — disableConcurrentBuilds()
+        // scopes per-branch, so it prevents two overlapping builds of the SAME
+        // branch (e.g. two rapid pushes to 'main', or a manual re-trigger while
+        // an automatic one is still waiting at the Approval Gate) without
+        // blocking different branches from building at the same time. That
+        // per-branch overlap was never intentional here — the Approval Gate
+        // below already assumes a single human-gated run at a time, and an
+        // unguarded second build is exactly what produces the extra "@2"-style
+        // workspace and the false "NO TEST REPORT AVAILABLE" alert investigated
+        // in .claude/known-issues.md (2026-09-10 entry). NOTE: this does NOT
+        // fully close the credential-race risk documented in CLAUDE.md's
+        // "Concurrent-Worker Credential File Race" section for 'main' and
+        // 'prod' specifically — both branches resolve to the SAME PROD
+        // credentials in the Setup Environment stage below, and
+        // disableConcurrentBuilds() cannot prevent a 'main' build and a 'prod'
+        // build from running concurrently against each other (different
+        // branches, different per-branch job). Closing that cross-branch gap
+        // would need a cross-job lock (e.g. the Lockable Resources plugin) —
+        // out of scope for this fix, flagged here so it isn't silently assumed
+        // solved.
+        disableConcurrentBuilds()
         // WHY 48 HOURS, and why this is now a last-resort backstop, not the
         // real enforcement mechanism (redesigned 2026-09-09 — see
         // .claude/known-issues.md's dated entry for the full investigation):
@@ -217,6 +238,21 @@ REPORT_PATH=reports/playwright-report/results.json
             }
             steps {
                 script {
+                    // WHY set as the very first statement of this stage (2026-09-10):
+                    // marks that this specific build's branch/trigger combination
+                    // WAS eligible to run tests (this stage's own `when` above
+                    // passed) and this stage was genuinely entered — as opposed to
+                    // a build that never got here at all (when-gated out, or
+                    // stopped earlier at the Approval Gate/an upstream stage
+                    // failure). post{always{}} below reads this flag to decide
+                    // whether a missing results.json means "tests were never
+                    // supposed to run for this build" (skip notification, no
+                    // alert) vs. "tests were attempted but something genuinely
+                    // prevented a report" (a real infra failure — still alert,
+                    // preserving the original 2026-09-09 intent of
+                    // sendReportUnavailableAlert()). See .claude/known-issues.md's
+                    // 2026-09-10 entry for the full investigation this fixes.
+                    env.TESTS_ATTEMPTED = 'true'
                     // WHY: Dynamic timeout — scales automatically as the suite grows.
                     // Previously calibrated at ~20 sec/test, but a real full-suite local
                     // run (235 tests, workers=2, 2.9 hours) measured ~44.4 sec/test —
@@ -426,10 +462,31 @@ REPORT_PATH=reports/playwright-report/results.json
                 } catch (e) {
                     echo 'History sync failed — continuing'
                 }
-                try {
-                    sh 'npm run notify || true'
-                } catch (e) {
-                    echo 'Notification failed — continuing'
+                // WHY gated on TESTS_ATTEMPTED, not unconditional (2026-09-10):
+                // this used to run on EVERY build regardless of whether 'Run
+                // Tests' above ever executed — an automatic dev/qa/stage/sandbox
+                // build (Jenkins isn't the primary CI for those; see 'Run Tests'
+                // when{}'s own WHY comment), or any build that stopped at/before
+                // the Approval Gate (declined, timed out, or aborted), reached
+                // this point with no results.json ever created, and
+                // NotificationService correctly threw "Report not found" —
+                // which by design (2026-09-09 sandbox Build #167 fix) sends a
+                // loud "NO TEST REPORT AVAILABLE" alert. That alert is the
+                // right behavior for a genuine crashed/killed test run, but a
+                // false alarm for a build that was never supposed to produce a
+                // report in the first place. Gating on the flag set at the top
+                // of 'Run Tests' preserves the real-crash alert (TESTS_ATTEMPTED
+                // is set the moment that stage is entered, before anything can
+                // fail) while skipping the false one. Full investigation:
+                // .claude/known-issues.md's 2026-09-10 entry.
+                if (env.TESTS_ATTEMPTED == 'true') {
+                    try {
+                        sh 'npm run notify || true'
+                    } catch (e) {
+                        echo 'Notification failed — continuing'
+                    }
+                } else {
+                    echo 'Run Tests never started for this build (branch/trigger not eligible, or the pipeline stopped before reaching it — e.g. Approval Gate declined/timed out, or an earlier stage failed) — skipping notification to avoid a false "no report" alert for a build that was never supposed to produce one.'
                 }
             }
             cleanWs()

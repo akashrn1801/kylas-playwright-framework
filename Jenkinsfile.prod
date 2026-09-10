@@ -5,6 +5,19 @@ pipeline {
   options {
     ansiColor('xterm')
     timestamps()
+    // WHY (2026-09-10): this job's own Approval Gate already assumes one
+    // human-gated run at a time against PRODUCTION; without this, a second
+    // manual trigger could run concurrently against the SAME shared PROD
+    // credentials — the Jenkins-job-level version of the risk CLAUDE.md's
+    // "Concurrent-Worker Credential File Race" section documents at the
+    // Playwright-worker level, and the highest-stakes place in this repo for
+    // that race to happen. Not an intentional use case for this pipeline.
+    // NOTE: this does not close the cross-pipeline overlap between THIS job
+    // and the base Jenkinsfile's 'main'/'prod' branches, which resolve to the
+    // same PROD credentials but are separate Jenkins jobs — see the base
+    // Jenkinsfile's own disableConcurrentBuilds() WHY comment for that
+    // residual, out-of-scope gap.
+    disableConcurrentBuilds()
     timeout(time: 150, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }

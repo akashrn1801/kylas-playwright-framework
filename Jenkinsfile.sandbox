@@ -12,6 +12,15 @@ pipeline {
   options {
     ansiColor('xterm')
     timestamps()
+    // WHY (2026-09-10): this job always targets the SAME STAGING credentials
+    // (see 'Setup Environment' below) — two overlapping builds would race the
+    // same shared admin/restricted accounts, the same credential-file class of
+    // risk already documented in CLAUDE.md's "Concurrent-Worker Credential
+    // File Race" section, just at the Jenkins-job level. No trigger in this
+    // file makes concurrent runs likely, but nothing prevented a human from
+    // triggering a second "Build Now" while one is still in flight either —
+    // not an intentional use case here.
+    disableConcurrentBuilds()
     timeout(time: 60, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
@@ -104,6 +113,17 @@ REPORT_PATH=reports/playwright-report/results.json
     stage('Run Selective Tests') {
       steps {
         script {
+          // WHY set as the very first statement of this stage (2026-09-10):
+          // marks that this build genuinely reached test execution, as
+          // opposed to being cancelled/failing during an earlier stage
+          // (Install/Setup Environment/Detect Changed Tests). post{always{}}
+          // below reads this flag to decide whether a missing results.json
+          // means "tests never got a chance to run" (skip notification) vs.
+          // "tests were attempted but something genuinely prevented a
+          // report" (a real infra failure — still alert). Same fix as the
+          // base Jenkinsfile — see its own identical WHY comment and
+          // .claude/known-issues.md's 2026-09-10 entry.
+          env.TESTS_ATTEMPTED = 'true'
           echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
           // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
           // this is NOT a multibranch job — env.BRANCH_NAME is not
@@ -181,10 +201,21 @@ REPORT_PATH=reports/playwright-report/results.json
         } catch (e) {
           echo 'History sync failed — continuing'
         }
-        try {
-          sh 'npm run notify || true'
-        } catch (e) {
-          echo 'Notification failed — continuing'
+        // WHY gated on TESTS_ATTEMPTED, not unconditional (2026-09-10): see
+        // the base Jenkinsfile's identical WHY comment — without this, a
+        // build that never reached 'Run Selective Tests' (cancelled/failed
+        // during Install/Setup Environment/Detect Changed Tests) still hits
+        // NotificationService's "Report not found" alert, even though no
+        // report was ever supposed to exist for that build. Full
+        // investigation: .claude/known-issues.md's 2026-09-10 entry.
+        if (env.TESTS_ATTEMPTED == 'true') {
+          try {
+            sh 'npm run notify || true'
+          } catch (e) {
+            echo 'Notification failed — continuing'
+          }
+        } else {
+          echo 'Run Selective Tests never started for this build — skipping notification to avoid a false "no report" alert for a build that never reached test execution.'
         }
       }
       cleanWs()
