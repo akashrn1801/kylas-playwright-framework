@@ -101,7 +101,17 @@ export interface TaskData {
 
 // ─── Factories ────────────────────────────────────────────────────────────────
 
+// WHY destructure customFields out before spreading the rest of overrides —
+// otherwise a partial customFields override would replace the whole
+// generated object below instead of merging into it. Matches the identical,
+// already-proven convention in leadFactory/dealFactory/contactFactory/
+// companyFactory (generateLeadData() etc.) — this was a genuine gap here
+// (found 2026-09-18 building the char-limit feature's Task adapter): zero
+// existing callers in this codebase pass a `customFields` override to
+// generateTaskData() (confirmed via grep), so this fix is purely additive —
+// it changes behavior only for a code path nothing currently exercises.
 export function generateTaskData(overrides: Partial<TaskData> = {}): TaskData {
+  const { customFields: customFieldOverrides, ...restOverrides } = overrides;
   return {
     name: `${faker.company.buzzVerb()} ${faker.company.buzzNoun()} Task`,
     type: faker.helpers.arrayElement(TASK_TYPE_OPTIONS),
@@ -109,8 +119,8 @@ export function generateTaskData(overrides: Partial<TaskData> = {}): TaskData {
     status: 'Open',
     priority: faker.helpers.arrayElement(TASK_PRIORITY_OPTIONS),
     reminder: '1 hour before the due date and time',
-    customFields: generateTaskCustomFieldData(),
-    ...overrides,
+    customFields: generateTaskCustomFieldData(customFieldOverrides),
+    ...restOverrides,
   };
 }
 
