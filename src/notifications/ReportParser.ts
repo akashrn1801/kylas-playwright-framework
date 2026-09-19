@@ -23,39 +23,12 @@ function stripAnsi(text: string): string {
 // Module Analytics already labels every other test — reusing this function
 // keeps both in agreement by construction instead of risking two
 // independently-maintained copies of the same regex drifting apart.
-// WHY the `formFields/contracts` special case (added 2026-09-18, found live
-// while auditing docs for the new Custom Field Char Limits module): its
-// tests are registered via 3 shared contract functions in
-// `src/modules/formFields/contracts/*.contract.ts`, called from inside each
-// of 6 entities' own `tests/ui/<module>/<module>.spec.ts` files — but
-// Playwright's own JSON report records the FILE WHERE `test()` WAS ACTUALLY
-// CALLED (the contract file), not the importing entry file (confirmed live
-// via `--list` output: `src/modules/formFields/contracts/
-// textFieldLimit.contract.ts:227:7` for a test invoked from
-// `leads.spec.ts`). Without this check, the regex below finds no `ui/`/
-// `rbac/` segment in that path at all and every one of these 144 tests
-// would silently collapse into a generic, unhelpful "Other" bucket in the
-// notification email's Module Analytics table — never attributed to this
-// module by name. The RBAC half of this module (`tests/rbac/
-// formFields.rbac.spec.ts`) already matches the normal path convention
-// below with no special-casing needed; both are given the identical display
-// name here so the email shows "UI: Custom Field Char Limits" and
-// "RBAC: Custom Field Char Limits" as two rows for the same module, exactly
-// matching every other module's existing UI/RBAC row-pair convention.
-const CHAR_LIMIT_CONTRACT_PATH = /formFields[\\/]contracts[\\/]/;
-
 export function deriveModuleFromFile(file: string): { name: string; type: 'UI' | 'RBAC' | 'Other' } {
   const fp = file || '';
-  if (CHAR_LIMIT_CONTRACT_PATH.test(fp)) {
-    return { name: 'Custom Field Char Limits', type: 'UI' };
-  }
   const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac') ? 'RBAC' : fp.includes('ui') ? 'UI' : 'Other';
   const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
   const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
-  const name =
-    rawName === 'formFields'
-      ? 'Custom Field Char Limits'
-      : rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
   return { name, type };
 }
 
