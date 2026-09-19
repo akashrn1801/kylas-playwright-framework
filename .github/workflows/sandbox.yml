@@ -85,16 +85,27 @@ jobs:
         # surfacing it, which would have silently forced WORKERS=1 on every
         # real sandbox run once this dynamic-shard-count job actually
         # executed (it never had, as of 2026-09-09 — confirmed via `gh run
-        # list`). ENV: staging matches this workflow's own run-tests step.
+        # list`). ENV: qa matches this workflow's own run-tests step (switched
+        # from staging 2026-09-19 — reversing the 2026-07-28 switch made in
+        # commit c85a7b3, which moved sandbox to stage because "qa has
+        # proven repeatedly unstable... making it hard to distinguish real
+        # code regressions from environmental noise" at the time. Re-checked
+        # before reversing, not assumed stale: the last 15 qa.yml runs
+        # (2026-07-20 through 2026-09-10, ~7 weeks) show 13 successes and
+        # exactly 2 non-successes, both with an already-confirmed,
+        # non-environmental root cause — a real code bug (Build #239, fixed
+        # and re-verified the same day) and GitHub Actions' own hard 6-hour
+        # job ceiling (a platform limit, not qa-environment flakiness). Zero
+        # raw environment-instability failures found in that window.
         env:
           BASE_BRANCH: dev
-          ENV: staging
-          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
-          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
-          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
-          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
-          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
-          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          ENV: qa
+          QA_APP_URL: ${{ secrets.QA_APP_URL }}
+          QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
+          QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
         run: |
           TARGET=$(bash .github/scripts/detect-tests.sh)
           echo "Detected test target: $TARGET"
@@ -200,15 +211,15 @@ jobs:
 
       - name: Run selective tests (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
         env:
-          ENV: staging
+          ENV: qa
           CI: true
           NAVIGATION_TIMEOUT: 120000
-          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
-          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
-          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
-          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
-          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
-          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          QA_APP_URL: ${{ secrets.QA_APP_URL }}
+          QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
+          QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
           # WHY (2026-09-04): estimate-duration's own git fetch of
           # ci/reporting-history needs this — same root cause as
           # syncHistory.ts's own credential requirement below.
@@ -277,7 +288,7 @@ jobs:
         if: always()
         with:
           name: misc-errors-sandbox-${{ matrix.shard }}
-          path: reports/staging/misc-errors.json
+          path: reports/qa/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
 
@@ -333,7 +344,7 @@ jobs:
           path: all-misc-errors
 
       - name: Aggregate misc-errors.json across all shards
-        run: npx ts-node scripts/merge-misc-errors.ts staging all-misc-errors
+        run: npx ts-node scripts/merge-misc-errors.ts qa all-misc-errors
 
       # WHY: see qa.yml for the full explanation. NOTE: sandbox runs a different,
       # dynamically-selected test subset each time (see the detect job above),
@@ -344,7 +355,7 @@ jobs:
       - name: Sync run history
         if: always()
         env:
-          ENV: staging
+          ENV: qa
           BRANCH_NAME: sandbox
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
@@ -362,7 +373,7 @@ jobs:
       - name: Send notification email
         if: always()
         env:
-          ENV: staging
+          ENV: qa
           BRANCH_NAME: sandbox
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
