@@ -272,12 +272,34 @@ export class ProductsAndServicesPage extends BasePage {
     // this was the one option-click left unrouted (flagged by
     // locator-reviewer, 2026-08-10).
     await this.click(exactOption, `${description}: option "${exactTextOrRandom}"`);
-    await this.page
+    // WHY an explicit Escape fallback, not just a silent .catch() (real code
+    // bug, root-caused and fixed 2026-09-18 — reproduced live via a failing
+    // screenshot): Units is a genuine multi-select with `closeMenuOnSelect:
+    // false` (see this method's own chip-clearing comment above) — its menu
+    // reliably stays open after picking exactly one option, unlike Country/
+    // Category's single-select menus which close automatically. The
+    // previous silent `.catch()` here treated "still open" as an acceptable
+    // no-op, leaving the menu's own dropdown panel rendered directly over
+    // whatever control sits below it in the form (confirmed live: it
+    // physically overlapped the Active toggle, intercepting that click with
+    // a 15s timeout in a completely unrelated test). Every current caller of
+    // this method wants exactly the one option just picked, never an
+    // open-for-more-picks menu, so closing it explicitly is correct
+    // regardless of field type — mirrors the identical
+    // check-then-Escape shape already used in the chip-clearing loop above.
+    const menuStillOpen = await this.page
       .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+      .isVisible({ timeout: config.timeouts.expect })
+      .catch(() => false);
+    if (menuStillOpen) {
+      await this.page.keyboard.press('Escape');
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+        .catch(() => {
+          /* menu may already be gone */
+        });
+    }
     // WHY confirm the CONTROL's rendered text, not the anchor input's own
     // value, before logging success (flagged by locator-reviewer,
     // 2026-08-10): confirmed live — react-select clears/reuses the filter
@@ -680,11 +702,36 @@ export class ProductsAndServicesPage extends BasePage {
    * app navigates to the list page, identical to the create form's own save
    * behavior. The real edit endpoint is confirmed live to be
    * `PUT /v1/products/{id}`, sending the full record (read-modify-write),
-   * not a partial patch — captured for reference, not required by this
-   * method itself since it only needs to observe the UI outcome, not the
-   * request shape.
+   * not a partial patch.
+   *
+   * WHY blur + `networkidle` before the Save click (real code bug, root-
+   * caused and fixed 2026-09-18, confirmed via direct PUT-body network
+   * capture — not a guessed timeout): this app's edit form only finishes
+   * serializing the currently-focused field into its `customFieldValues`
+   * save-model on blur, with a real settle delay afterward that has no
+   * observable DOM signal (confirmed via a live MutationObserver — only the
+   * input's own `value` attribute and the Save button's `disabled` state
+   * change, both within ~80ms; nothing else fires). Clicking Save
+   * immediately after `fill()` (Playwright's `.fill()` never blurs) — the
+   * exact shape every "accept boundary, edit form" test uses (fill ONE
+   * custom field, save right away, no other field fill to incidentally
+   * blur it first) — races ahead of that serialization: captured live via
+   * `req.postData()`, the resulting PUT body's `customFieldValues` came
+   * back completely EMPTY (`{}`), silently wiping every previously-saved
+   * custom field on the record, not just failing to add the new value.
+   * Reproduced identically 3/3 without this fix; adding `blur()` +
+   * `waitForLoadState('networkidle')` (a real Playwright condition, not
+   * a blind fixed-duration sleep) produced a fully correct, fully-populated
+   * `customFieldValues` body 3/3. This is scoped to Products & Services
+   * only — Lead/Deal/Contact/Company/Task never exhibit this because their
+   * own edit flows always fill multiple fields before Save, which
+   * incidentally blurs the prior field naturally; this module's dedicated
+   * char-limit tests are the one real caller that fills exactly one field
+   * and saves immediately, exposing the race.
    */
   async saveEditedProduct(): Promise<void> {
+    await this.page.locator(':focus').blur().catch(() => undefined);
+    await this.page.waitForLoadState('networkidle');
     await this.click(this.saveButton(), 'Save (product edit)');
     await this.assertNoFormErrors('product edit form');
     await this.waitForUrl(/\/products-services\/list/, config.timeouts.navigation);
