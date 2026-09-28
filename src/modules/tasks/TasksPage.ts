@@ -2,7 +2,12 @@ import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
-import { TaskData, TaskCustomFieldData, TASK_CUSTOM_FIELD_NAMES } from '@data/factories/taskFactory';
+import {
+  TaskData,
+  TaskCustomFieldData,
+  TASK_CUSTOM_FIELD_NAMES,
+  TaskCustomFieldKey,
+} from '@data/factories/taskFactory';
 class InaccessibleRelationError extends Error {}
 
 // WHY: the shape of a task-save error response body — a dynamic API response,
@@ -581,42 +586,80 @@ export class TasksPage extends BasePage {
     logger.success('Detailed Task form opened');
   }
 
+  // WHY this exists as its own public method (2026-09-23, Form Field Limit
+  // feature, Task rollout): confirmed live that Task's Name field is
+  // `[id="0_11_input_name"]`, NOT `input[name="name"]` — the same trap
+  // already confirmed for Company (BasePage's generic fillStandardField()
+  // hangs indefinitely against it). Extracted so a caller needing to fill
+  // ONLY the Name field directly (e.g. this feature's own live-in-form-
+  // correction test) has a correct, working alternative to the generic
+  // helper.
+  async fillTaskName(name: string): Promise<void> {
+    await this.fill(this.taskNameInput(), name, 'task name');
+  }
+
+  // WHY the optional `options` param — mirrors CompaniesPage.fillCompanyForm()'s
+  // own, more-detailed WHY comment (LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // §5): `options.minimal` skips Description/Due-Date-change/Reminder —
+  // but, confirmed live via direct reproduction (a real 3-step diagnostic:
+  // Name alone -> "This is a required field"; Name+Type -> still required;
+  // Name+Type+Status+Priority -> HTTP 200), Task's own true save-required
+  // minimum is FOUR fields, not one — Type/Status/Priority have no
+  // pre-selected default (their own react-select controls show the
+  // "Choose" placeholder on a fresh form, confirmed live), unlike Reminder
+  // (which IS pre-filled with a real default, "1 hour before the due date
+  // and time", confirmed live) — so minimal mode still fills Type/Status/
+  // Priority unconditionally, skipping only what's genuinely optional.
+  // Every existing caller omits `options` and gets byte-for-byte the
+  // original full-form-fill behavior.
   async fillDetailedTaskForm(
     data: TaskData,
     assignedToName?: string,
-    skipRelation = false
+    skipRelation = false,
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
   ): Promise<void> {
     logger.info(`Filling Detailed Task form: "${data.name}"`);
+    const minimal = options?.minimal === true;
 
     // Task Name (required)
-    await this.fill(this.taskNameInput(), data.name, 'task name');
+    await this.fillTaskName(data.name);
 
-    // Type
+    // Type (required — no pre-selected default, confirmed live)
     await this.selectReactSelectOption('0_12_input_type', data.type);
 
-    // Description
-    await this.fill(this.taskDescriptionInput(), data.description, 'description');
+    if (!minimal) {
+      // Description
+      await this.fill(this.taskDescriptionInput(), data.description, 'description');
+    }
 
-    // Status
+    // Status (required — no pre-selected default, confirmed live)
     await this.selectReactSelectOption('0_31_input_status', data.status);
 
-    // Priority
+    // Priority (required — no pre-selected default, confirmed live)
     await this.selectReactSelectOption('0_32_input_priority', data.priority);
 
-    // Due Date — leave default (pre-filled as tomorrow)
-    logger.info('Due date left as default (tomorrow)');
+    if (!minimal) {
+      // Due Date — leave default (pre-filled as tomorrow)
+      logger.info('Due date left as default (tomorrow)');
 
-    // Reminder
-    await this.selectReactSelectOption('0_51_input_reminder', data.reminder);
+      // Reminder — already has a real, valid default ("1 hour before the
+      // due date and time", confirmed live) — re-selecting it in minimal
+      // mode would be redundant work, not a correctness requirement.
+      await this.selectReactSelectOption('0_51_input_reminder', data.reminder);
 
-    // Assigned To (optional — used in RBAC tests to assign to restricted user)
-    if (assignedToName) {
-      await this.fillAssignedTo(assignedToName);
+      // Assigned To (optional — used in RBAC tests to assign to restricted user)
+      if (assignedToName) {
+        await this.fillAssignedTo(assignedToName);
+      }
     }
 
     // Relation — add one entity of each type (Lead, Deal, Contact, Company)
     // WHY: Same pattern as MeetingsPage.fillRelatedTo — search each entity type
-    // and pick a random result
+    // and pick a random result. WHY skipRelation stays caller-controlled
+    // rather than folded into `minimal`: every one of this feature's own
+    // call sites always passes skipRelation=true explicitly (Relation is
+    // expensive — 4 entity-type searches — and irrelevant to a field-limit
+    // check), documented at each call site rather than assumed here.
     if (!skipRelation) {
       await this.fillRelation();
     } else {
@@ -624,7 +667,11 @@ export class TasksPage extends BasePage {
     }
 
     // Custom Fields
-    await this.fillTaskCustomFields(data.customFields);
+    // WHY conditional, not unconditional: mirrors CompaniesPage.fillCompanyForm()'s
+    // identical, more-detailed WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField);
+    }
 
     logger.success('Detailed Task form filled');
   }
@@ -858,19 +905,41 @@ export class TasksPage extends BasePage {
     logger.success('Edit modal opened from detail panel');
   }
 
-  async fillEditForm(data: TaskData): Promise<void> {
+  // WHY the optional `options` param, and WHY minimal EDIT skips Type/
+  // Status/Priority entirely (a genuine, deliberate ASYMMETRY from minimal
+  // CREATE, which must still supply all three — see fillDetailedTaskForm()'s
+  // own WHY comment): on EDIT, the form opens PRE-FILLED with the task's own
+  // already-valid, already-saved Type/Status/Priority — unlike CREATE, which
+  // starts every one of these three at a blank "Choose" placeholder with no
+  // default. Leaving them untouched on edit keeps them at their existing,
+  // already-valid values; there is no "blank required field" risk to guard
+  // against here the way there is on create.
+  async fillEditForm(
+    data: TaskData,
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
+  ): Promise<void> {
     logger.info('Filling edit form');
-    await this.fill(this.taskNameInput(), data.name, 'task name');
-    await this.selectReactSelectOption('0_12_input_type', data.type);
-    await this.fill(this.taskDescriptionInput(), data.description, 'description');
-    await this.selectReactSelectOption('0_31_input_status', data.status);
-    await this.selectReactSelectOption('0_32_input_priority', data.priority);
-    // Due date — set to 3 days from today
-    await this.fillDueDate(3);
-    await this.selectReactSelectOption('0_51_input_reminder', data.reminder);
+    const minimal = options?.minimal === true;
+
+    await this.fillTaskName(data.name);
+
+    if (!minimal) {
+      await this.selectReactSelectOption('0_12_input_type', data.type);
+      await this.fill(this.taskDescriptionInput(), data.description, 'description');
+      await this.selectReactSelectOption('0_31_input_status', data.status);
+      await this.selectReactSelectOption('0_32_input_priority', data.priority);
+      // Due date — set to 3 days from today
+      await this.fillDueDate(3);
+      await this.selectReactSelectOption('0_51_input_reminder', data.reminder);
+    }
     // WHY: Relation NOT touched — belongs to task owner
+
     // Custom Fields
-    await this.fillTaskCustomFields(data.customFields);
+    // WHY conditional — see fillDetailedTaskForm()'s identical, more-detailed
+    // WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField);
+    }
     logger.success('Edit form filled');
   }
 
@@ -972,8 +1041,29 @@ export class TasksPage extends BasePage {
     }
   }
 
-  private async fillTaskCustomFields(cf: TaskCustomFieldData): Promise<void> {
+  // WHY the optional `onlyField` param (2026-09-23, Form Field Limit
+  // feature, Task rollout — reusing the exact reusable architecture proven
+  // for Lead/Contact/Company, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // §5): the pre-existing per-field truthy checks below (`if (cf.textField)`
+  // etc.) already made Text/Paragraph/Number/URL safely skippable via an
+  // empty-string override, but Checkbox/Date/DateTimePicker/PickList had NO
+  // such guard at all (a boolean/Date is never falsy from
+  // generateTaskCustomFieldData()'s own random defaults, and PickList was
+  // unconditional) — meaning every call, even with a "mostly blank" data
+  // object, still touched all 4 of those fields regardless of what the
+  // caller actually wanted. Harmless for THIS feature specifically (it only
+  // ever configures constraints on Text/Number/Paragraph, never on
+  // Checkbox/PickList/Date/DateTimePicker), but inconsistent with the
+  // explicit, uniform `wants(onlyField)` gating every other entity in this
+  // feature already uses — replaced here for the same clarity and
+  // maintainability, not because the old shape was unsafe for this
+  // specific feature's own scope.
+  private async fillTaskCustomFields(
+    cf: TaskCustomFieldData,
+    onlyField?: TaskCustomFieldKey
+  ): Promise<void> {
     logger.info('Filling Task custom fields');
+    const wants = (key: TaskCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
     // WHY 'legacy' (default, no suffixStyle passed) — CORRECTED 2026-08-06,
     // real evidence contradicts the previous claim below. Live DOM inspection
@@ -989,44 +1079,54 @@ export class TasksPage extends BasePage {
     // this correction was based on for whether QA was actually affected too).
 
     // TextField
-    if (cf.textField) {
+    if (wants('textField') && cf.textField) {
       await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField');
     }
 
     // ParagraphText
-    if (cf.paragraphText) {
+    if (wants('paragraphText') && cf.paragraphText) {
       await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText');
     }
 
     // Number
-    if (cf.number !== undefined) {
+    if (wants('number') && cf.number !== undefined) {
       await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number');
     }
 
     // PickList
-    const pickListSelected = await this.selectPicklistCustomField(TASK_CUSTOM_FIELD_NAMES.pickList, 'Task custom field: pickList');
-    if (pickListSelected) {
-      cf.pickList = pickListSelected;
+    if (wants('pickList')) {
+      const pickListSelected = await this.selectPicklistCustomField(TASK_CUSTOM_FIELD_NAMES.pickList, 'Task custom field: pickList');
+      if (pickListSelected) {
+        cf.pickList = pickListSelected;
+      }
     }
 
     // Checkbox
-    if (cf.checkbox !== undefined) {
+    if (wants('checkbox') && cf.checkbox !== undefined) {
       await this.setCheckboxCustomField(TASK_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Task custom field: checkbox');
     }
 
     // Date
-    if (cf.date) {
+    if (wants('date') && cf.date) {
       await this.selectDateCustomField(TASK_CUSTOM_FIELD_NAMES.date, cf.date, 'Task custom field: date');
     }
 
     // DateTimePicker
-    if (cf.dateTimePicker) {
+    if (wants('dateTimePicker') && cf.dateTimePicker) {
       await this.selectDateTimeCustomField(TASK_CUSTOM_FIELD_NAMES.dateTimePicker, cf.dateTimePicker, 'Task custom field: dateTimePicker');
     }
 
     // URLField
-    if (cf.urlField) {
+    if (wants('urlField') && cf.urlField) {
       await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'Task custom field: urlField');
+    }
+
+    // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
+    // LeadsPage.fillLeadCustomFields()'s/ContactsPage.fillContactCustomFields()'s/
+    // CompaniesPage.fillCompanyCustomFields()'s identical, incident-driven
+    // fix (LEAD_FEATURE_RETROSPECTIVE.md §2.8).
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     }
 
     logger.success('Task custom fields filled');
@@ -1399,15 +1499,21 @@ export class TasksPage extends BasePage {
     }, 'createQuickTask');
   }
 
+ // WHY the optional `options` param (2026-09-23, Form Field Limit feature):
+ // threaded straight through to fillDetailedTaskForm() — see that method's
+ // own WHY comment. createDetailedTask()'s own retry/save control flow is
+ // completely untouched; only what gets FILLED changes. Every existing
+ // caller omits `options` and gets the original behavior.
  async createDetailedTask(
     data: TaskData,
     assignedToName?: string,
-    skipRelation = false
+    skipRelation = false,
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Creating detailed task: "${data.name}"`);
       await this.openDetailedTaskForm();
-      await this.fillDetailedTaskForm(data, assignedToName, skipRelation);
+      await this.fillDetailedTaskForm(data, assignedToName, skipRelation, options);
       try {
         return await this.saveDetailedTask();
       } catch (error) {
@@ -1428,7 +1534,7 @@ export class TasksPage extends BasePage {
           .waitFor({ state: 'hidden', timeout: 5000 })
           .catch(() => {});
         await this.openDetailedTaskForm();
-        await this.fillDetailedTaskForm(data, assignedToName, true);
+        await this.fillDetailedTaskForm(data, assignedToName, true, options);
         return await this.saveDetailedTask();
       }
     }, 'createDetailedTask');

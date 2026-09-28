@@ -146,6 +146,14 @@ Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported abo
 19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
 20. Dashboard's Add-Dashlet wizard — per-dashlet-type entity availability, a cross-module dependency on Reports, and Grouped Smartlists' genuine multi-select (test-imposed 2-4 cap, no real app cap)
 21. Hide Empty Fields toggle — per-module tab-collapse vs. field-only behavior, exclusions (relationship cards, Meetings' Description, Quotations' 0-values)
+22. `layoutCache` key is per-entity and NOT derivable — hand-verify before adding a new entity's key (Products & Services' `products-services` breaks any lowercase-plural rule)
+23. Number custom field validates DIGIT-COUNT of the typed value, not numeric magnitude — a genuinely counter-intuitive, easy-to-re-break-by-assumption fact
+24. Real, confirmed CI worker counts across every GitHub Actions workflow and Jenkinsfile — why shared/global-state-mutating test suites need process-level (cross-process file) locking, not just in-file `.serial`
+25. RBAC design for a "list visible, edit blocked" boundary — avoid the Forbidden-page / `isSessionExpiryPage()` collision entirely rather than working around it
+26. A single test's own recurring failure can actually be shared cross-process test infrastructure failing (a lock, a fixture retry path) — check whether unrelated tests sharing that same infrastructure ever show the identical symptom before concluding the one test has its own isolated bug or an unreliable backend dependency
+27. Minimal-fill `{minimal, onlyCustomField}` architecture — isolating one field's validation on a form that requires much more to save, and why "Save resolves but no request ever fires" is a client-side validation block, not a backend/timing bug
+28. `BasePage.waitForClickTargetUnobstructed()` — verify the real click-target via `document.elementFromPoint()` before a click, not a guessed overlay-class selector
+29. Heartbeat-based cross-process lock staleness — a holder-refreshed timestamp beats a fixed-age check for judging whether a lock is genuinely abandoned
 
 ---
 
@@ -160,7 +168,7 @@ Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported abo
 
 ## Module Status
 
-Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-09: **515 tests across 23 spec files, 12 modules** (grown from 453 on 2026-09-02 — the +62 is almost entirely the 2026-09-08 "Hide Empty Fields" feature adding one UI+RBAC test pair to each of 8 modules; module/spec-file counts themselves are unchanged). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
+Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-21: **574 tests across 25 spec files, 13 modules** (grown from 515 on 2026-09-09 — the entire +59 is the new Form Fields module, added in one pass: 55 UI + 4 RBAC, 2 new spec files, `tests/ui/formFields/leadFieldLimits.spec.ts` + `tests/rbac/formFields.rbac.spec.ts`; every other module's count is unchanged. 515 itself had grown from 453 on 2026-09-02 — the +62 was almost entirely the 2026-09-08 "Hide Empty Fields" feature adding one UI+RBAC test pair to each of 8 modules). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
 
 **Last full regression evidence (2026-07-28):** all 10 UI+RBAC spec files touched by that session's work (Companies, Contacts, Deals, Leads, Tasks) run in full on stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (193 total). Two unrelated network-connectivity drops and one memory-pressure process kill occurred mid-verification (confirmed via direct `curl`/`free -h` evidence) — each discarded its own polluted partial data and was re-run clean.
 

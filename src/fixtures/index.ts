@@ -210,7 +210,30 @@ const MIN_RECOVERY_BUDGET_MS = 15000;
 async function navigateAndConfirmLoggedIn(
   page: Page,
   role: 'admin' | 'restricted',
-  deadline: number
+  deadline: number,
+  // WHY this parameter exists at all, defaulting to config.appUrl (real,
+  // confirmed live bug, 2026-09-21 — found while investigating a
+  // consistently-reproducing Form Fields test failure): the 'wrongPage'
+  // retry below used to always re-navigate to this exact same bare
+  // config.appUrl (the generic app origin, e.g. "https://app-qa.sling-
+  // dev.com") — a reasonable remedy IF landing away from /sales/ were a
+  // one-off timing race, but proven wrong for a genuinely STABLE cause:
+  // the Kylas app's own "resume last visited section" behavior can
+  // deterministically keep sending a generic-entry-URL navigation to
+  // /setup for as long as that account's server-side last-visited state
+  // stays pointed there (confirmed live: 5 of 6 consecutive real attempts
+  // all landed on /setup, all from the exact same plain re-navigation,
+  // after this account's admin role had spent the session repeatedly
+  // exercising the Form Fields settings pages — the first feature in this
+  // codebase to do so this heavily). Retrying the IDENTICAL navigation
+  // against a stable cause reproduces the IDENTICAL wrong outcome, not a
+  // different one — the existing 2-attempt loop below was structurally
+  // unable to ever succeed once this state was reached. Passing a more
+  // specific, forcing target (`/sales/home`) on the wrongPage-triggered
+  // retry sidesteps whatever "resume last section" logic a bare origin
+  // navigation invokes, without touching the FIRST attempt's own
+  // behavior (still the plain config.appUrl entry point, unchanged).
+  navigationTargetUrl: string = config.appUrl
 ): Promise<NavOutcome> {
   // WHY: QA env has intermittent TCP timeouts under parallel load — retry the
   // raw navigation itself before ever judging where it landed. Each attempt's
@@ -227,7 +250,7 @@ async function navigateAndConfirmLoggedIn(
       return 'timeout';
     }
     try {
-      await page.goto(config.appUrl, { waitUntil: 'domcontentloaded', timeout: Math.min(60000, budget) });
+      await page.goto(navigationTargetUrl, { waitUntil: 'domcontentloaded', timeout: Math.min(60000, budget) });
       break;
     } catch (e) {
       if (gotoAttempt === 3) throw e;
@@ -374,8 +397,16 @@ async function createRolePage(
 
   const maxAttempts = 2;
   let landed = false;
+  // WHY mutable, starting at config.appUrl (see navigateAndConfirmLoggedIn()'s
+  // own WHY comment on its navigationTargetUrl parameter for the full
+  // incident): only the wrongPage branch below ever changes this, to a more
+  // specific, forcing URL — every other path (a fresh context after a full
+  // relogin) intentionally goes back to the generic entry point, since a
+  // full relogin already addresses a different failure class entirely and
+  // has no reason to assume the same "resume last section" state applies.
+  let navigationTargetUrl = config.appUrl;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const outcome = await navigateAndConfirmLoggedIn(page, role, setupDeadline);
+    const outcome = await navigateAndConfirmLoggedIn(page, role, setupDeadline, navigationTargetUrl);
     if (outcome === 'sales') {
       landed = true;
       break;
@@ -425,9 +456,20 @@ async function createRolePage(
     // so simply retrying the call is the correct, minimal, already-proven-
     // correct-navigation remedy, with no new code needed to force it.
     if (outcome === 'wrongPage') {
+      // WHY forcing a specific /sales/home target here, not repeating the
+      // same bare config.appUrl navigation (real, confirmed live bug,
+      // 2026-09-21 — see navigateAndConfirmLoggedIn()'s own WHY comment on
+      // its navigationTargetUrl parameter): a plain re-navigation to the
+      // generic entry point only helps if landing on /setup was a one-off
+      // timing race — proven insufficient for a STABLE "resume last visited
+      // section" state, which reproduces the identical wrong landing every
+      // time the identical generic URL is requested. A specific target
+      // sidesteps whatever redirect logic a bare origin navigation invokes.
+      navigationTargetUrl = `${config.appUrl.replace(/\/+$/, '')}/sales/home`;
       logger.warn(
         `${role} page landed on an authenticated but unexpected page (${page.url()}) — ` +
-          `retrying plain navigation, no relogin needed (attempt ${attempt}/${maxAttempts})`
+          `retrying with a specific target (${navigationTargetUrl}) instead of repeating the same ` +
+          `generic navigation, no relogin needed (attempt ${attempt}/${maxAttempts})`
       );
       continue;
     }

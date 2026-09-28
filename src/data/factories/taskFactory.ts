@@ -34,6 +34,59 @@ export const TASK_CUSTOM_FIELD_NAMES = {
 
 export type TaskCustomFieldKey = keyof typeof TASK_CUSTOM_FIELD_NAMES;
 
+// WHY this constant, and why it must NOT be derived from TASK_CUSTOM_FIELD_
+// NAMES or the entity name (2026-09-23, Form Field Limit feature, Task
+// rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY/CONTACT_LAYOUT_CACHE_KEY/
+// COMPANY_LAYOUT_CACHE_KEY): the app's IndexedDB `layoutCache` key is not a
+// fixed transformation of the entity name. This is Task's own hand-verified
+// key, confirmed live via a direct IndexedDB dump, for
+// BasePage.clearApplicationCache() — never guess this value.
+export const TASK_LAYOUT_CACHE_KEY = 'tasks';
+
+// ── Invalid values for negative testing (Form Field Limit feature) ──────
+export const generateTaskCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
+export const generateTaskCustomFieldInvalidParagraphText = (max = 2550): string =>
+  'B'.repeat(max + 1);
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY duplicated here rather than imported from lead/contact/companyFactory.ts:
+// mirrors this file's own top-of-file "never import another module's
+// constants" reasoning — each module owns its own field-name/value-shape
+// constants so they can diverge safely later. Every value here is still
+// cross-checked against the pattern read LIVE off the config page at
+// test-run time (never trusted from the generator alone).
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
+
 export interface TaskCustomFieldData {
   textField: string;
   paragraphText: string;

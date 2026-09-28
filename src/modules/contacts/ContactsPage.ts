@@ -1,7 +1,11 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { faker } from '@faker-js/faker';
 import { BasePage } from '../../core/BasePage';
-import { ContactData, CONTACT_CUSTOM_FIELD_NAMES } from '../../data/factories/contactFactory';
+import {
+  ContactData,
+  CONTACT_CUSTOM_FIELD_NAMES,
+  ContactCustomFieldKey,
+} from '../../data/factories/contactFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
 import { QuotationsPage } from '../quotations/QuotationsPage';
@@ -379,48 +383,94 @@ export class ContactsPage extends BasePage {
   // are read from the DOM at fill time, so the caller's `data` object needs
   // to be updated to reflect reality before it's used for later
   // verification.
-  private async fillContactCustomFields(data: ContactData): Promise<void> {
+  // WHY the optional `onlyField` param (2026-09-22, Form Field Limit
+  // feature, Contact rollout — reusing the exact reusable architecture
+  // proven for Lead, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5 and
+  // LEAD_FEATURE_RETROSPECTIVE.md §1): this method's unconditional fill of
+  // all 9 custom fields is the exact same root-cause shape confirmed live
+  // for Lead — a test that configures a narrow min/max/regex constraint on
+  // ONE field must not also fill every OTHER field with a random default
+  // that could violate some OTHER, unrelated test's still-active constraint
+  // on a DIFFERENT field. `onlyField`, when provided, fills ONLY that one
+  // field and skips the other 8 entirely — every existing caller omits it
+  // and gets byte-for-byte the same fill-everything behavior as before.
+  private async fillContactCustomFields(
+    data: ContactData,
+    onlyField?: ContactCustomFieldKey
+  ): Promise<void> {
     const cf = data.customFields;
+    const wants = (key: ContactCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
-    await this.fillTextLikeCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field'
-    );
-    await this.fillTextLikeCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text'
-    );
-    await this.fillTextLikeCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.number,
-      String(cf.number),
-      'Number'
-    );
-    await this.fillTextLikeCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.urlField,
-      cf.urlField,
-      'URL Field'
-    );
-    await this.setCheckboxCustomField(CONTACT_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
-    await this.selectDateCustomField(CONTACT_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
-    await this.selectDateTimeCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker'
-    );
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number'
+      );
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.urlField,
+        cf.urlField,
+        'URL Field'
+      );
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(CONTACT_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(CONTACT_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+    if (wants('multiPickList')) {
+      const pickedValues = await this.selectMultiPicklistCustomField(
+        CONTACT_CUSTOM_FIELD_NAMES.multiPickList,
+        'Multi Pick List'
+      );
+      if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    }
 
-    const pickedValue = await this.selectPicklistCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
-
-    const pickedValues = await this.selectMultiPicklistCustomField(
-      CONTACT_CUSTOM_FIELD_NAMES.multiPickList,
-      'Multi Pick List'
-    );
-    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
+    // LeadsPage.fillLeadCustomFields()'s identical, incident-driven fix
+    // (LEAD_FEATURE_RETROSPECTIVE.md §2.8): a Tab press removes focus from
+    // the just-filled field but also ADVANCES it to whatever's next in DOM
+    // tab order, which can land on and open an unrelated react-select
+    // control (Pick List/Multi Pick List sit immediately after these
+    // fields in DOM order here too). `.blur()` on whatever currently holds
+    // focus removes focus with no side effect on any other field.
+    // WHY `onlyField !== undefined` still gates this: only needed in the
+    // single-field minimal-fill path — a full fill already blurs every
+    // field for free via the next field's own interaction.
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   private async performSearch(searchText: string): Promise<void> {
@@ -596,82 +646,114 @@ export class ContactsPage extends BasePage {
   // 6. Form Actions
   // ──────────────────────────────────────────────────────────
 
-  async fillContactForm(data: ContactData): Promise<void> {
+  // WHY the optional `options` param (2026-09-22, Form Field Limit feature,
+  // Contact rollout — reusing the exact reusable architecture proven for
+  // Lead, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5): `options.minimal`,
+  // when true, skips every field this method fills EXCEPT Last Name (the
+  // one field confirmed live, via a real minimal-fill save, to be the true
+  // save-required minimum for Contact — Contact has no Lead-equivalent
+  // "Pipeline" dependency) plus Salutation (kept even in minimal mode —
+  // cheap, a standard field with no length/format constraint to violate,
+  // matching LeadsPage's own identical reasoning for the same field).
+  // Combined with `options.onlyCustomField` (threaded to
+  // fillContactCustomFields()), this lets a caller create/update a Contact
+  // with ONLY the one field it actually cares about ever filled, so a
+  // narrow account-wide field-length constraint configured on a DIFFERENT
+  // field can never block this specific save. Every existing caller omits
+  // `options` and gets byte-for-byte the original full-form-fill behavior.
+  async fillContactForm(
+    data: ContactData,
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+  ): Promise<void> {
     logger.info('Filling contact form');
+    const minimal = options?.minimal === true;
     await this.disableRequiredFieldsToggle();
     if (data.salutation) {
       await this.selectFromContactDropdown('0_11_input_salutation', data.salutation);
     }
-    await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    if (!minimal) {
+      await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    }
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
-    await this.click(this.addEmailButton(), 'add email button');
-    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
-    await this.fill(this.emailInput(), data.email, 'email');
-    await this.click(this.addPhoneButton(), 'add phone button');
-    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
-    await this.fill(this.phoneInput(), data.phone, 'phone');
-    // WHY: Timezone sits at the same Communication/Location DOM boundary as
-    // Lead's, filled here to match top-to-bottom form order. Mutated in
-    // place with whatever was actually selected, same reasoning as
-    // salutation/campaign/source.
-    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
-    // WHY: mutate data.address in place with whatever actually ended up in
-    // the field — a live GPS/autocomplete lookup when available, the
-    // manual value otherwise — so later detail-page verification checks
-    // reality, not the pre-fill guess. Same reasoning as PickList/Campaign
-    // fields elsewhere in this method.
-    //
-    // WHY pass the Location section container explicitly (2026-07-16
-    // hardening): Contact only has one "Get GPS Address" trigger today, but
-    // scoping to its own section keeps this robust even if a second
-    // GPS-enabled field is ever added to this form — the same helper Lead
-    // now depends on for its two triggers.
-    data.address = await this.fillAddressViaGpsOrManual(
-      this.addressInput(),
-      data.address,
-      'address',
-      this.getFormSectionContainer('Location')
-    );
-    await this.fill(this.cityInput(), data.city, 'city');
-    await this.fill(this.stateInput(), data.state, 'state');
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
-    await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
-    // WHY: Company sits right after LinkedIn and before Department (confirmed
-    // live DOM order). A live async lookup, not a static picklist — searched
-    // and selected within THIS page's own current role/session, so the
-    // result set is naturally role-scoped without any explicit branching.
-    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
-    // data.company with a known, freshly-created company name (e.g. so it
-    // can independently share that exact company too) gets that exact
-    // company selected instead of a random pick; passing '' (the default
-    // placeholder) preserves the original random-pick behavior unchanged.
-    data.company = await this.selectRandomFromSearchableReactSelect(
-      this.companyControl(),
-      this.companyInput(),
-      'com',
-      'Company',
-      data.company || undefined
-    );
-    await this.fill(this.departmentInput(), data.department, 'department');
-    await this.fill(this.designationInput(), data.designation, 'designation');
-    // WHY: UTM fields sit below address and may be off-screen.
-    // scrollIntoViewIfNeeded ensures fill doesn't silently fail
-    await this.utmSourceInput().scrollIntoViewIfNeeded();
-    await this.fill(this.subSourceInput(), data.subSource, 'sub source');
-    if (data.campaign) {
-      await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+
+    if (!minimal) {
+      await this.click(this.addEmailButton(), 'add email button');
+      await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
+      await this.fill(this.emailInput(), data.email, 'email');
+      await this.click(this.addPhoneButton(), 'add phone button');
+      await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
+      await this.fill(this.phoneInput(), data.phone, 'phone');
+      // WHY: Timezone sits at the same Communication/Location DOM boundary as
+      // Lead's, filled here to match top-to-bottom form order. Mutated in
+      // place with whatever was actually selected, same reasoning as
+      // salutation/campaign/source.
+      data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
+      // WHY: mutate data.address in place with whatever actually ended up in
+      // the field — a live GPS/autocomplete lookup when available, the
+      // manual value otherwise — so later detail-page verification checks
+      // reality, not the pre-fill guess. Same reasoning as PickList/Campaign
+      // fields elsewhere in this method.
+      //
+      // WHY pass the Location section container explicitly (2026-07-16
+      // hardening): Contact only has one "Get GPS Address" trigger today, but
+      // scoping to its own section keeps this robust even if a second
+      // GPS-enabled field is ever added to this form — the same helper Lead
+      // now depends on for its two triggers.
+      data.address = await this.fillAddressViaGpsOrManual(
+        this.addressInput(),
+        data.address,
+        'address',
+        this.getFormSectionContainer('Location')
+      );
+      await this.fill(this.cityInput(), data.city, 'city');
+      await this.fill(this.stateInput(), data.state, 'state');
+      await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
+      await this.fill(this.facebookInput(), data.facebook, 'facebook');
+      await this.fill(this.twitterInput(), data.twitter, 'twitter');
+      await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+      // WHY: Company sits right after LinkedIn and before Department (confirmed
+      // live DOM order). A live async lookup, not a static picklist — searched
+      // and selected within THIS page's own current role/session, so the
+      // result set is naturally role-scoped without any explicit branching.
+      // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+      // data.company with a known, freshly-created company name (e.g. so it
+      // can independently share that exact company too) gets that exact
+      // company selected instead of a random pick; passing '' (the default
+      // placeholder) preserves the original random-pick behavior unchanged.
+      data.company = await this.selectRandomFromSearchableReactSelect(
+        this.companyControl(),
+        this.companyInput(),
+        'com',
+        'Company',
+        data.company || undefined
+      );
+      await this.fill(this.departmentInput(), data.department, 'department');
+      await this.fill(this.designationInput(), data.designation, 'designation');
+      // WHY: UTM fields sit below address and may be off-screen.
+      // scrollIntoViewIfNeeded ensures fill doesn't silently fail
+      await this.utmSourceInput().scrollIntoViewIfNeeded();
+      await this.fill(this.subSourceInput(), data.subSource, 'sub source');
+      if (data.campaign) {
+        await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+      }
+      if (data.source) {
+        await this.selectFromContactDropdown('5_12_input_source', data.source);
+      }
+      await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
+      await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
+      await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
+      await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
+      await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
     }
-    if (data.source) {
-      await this.selectFromContactDropdown('5_12_input_source', data.source);
+
+    // WHY conditional, not unconditional (2026-09-22): in minimal mode with
+    // no `onlyCustomField` named (a plain edit-target Contact with no field
+    // under test), filling zero custom fields is the correct, intended
+    // behavior — not an oversight. Mirrors LeadsPage.fillLeadForm()'s
+    // identical, more-detailed WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillContactCustomFields(data, options?.onlyCustomField);
     }
-    await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
-    await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
-    await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
-    await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
-    await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
-    await this.fillContactCustomFields(data);
     logger.success('Contact form filled');
   }
 
@@ -842,71 +924,93 @@ export class ContactsPage extends BasePage {
     logger.success('Edit modal opened');
   }
 
-  async fillEditForm(data: ContactData): Promise<void> {
+  // WHY the optional `options` param — mirrors fillContactForm()'s own,
+  // more-detailed WHY comment above, and LeadsPage.fillEditForm()'s
+  // identical shape: `options.minimal` skips First Name/Communication/
+  // Location/Social/Professional/Campaign Information, keeping only Last
+  // Name/Salutation/the one custom field named by `options.onlyCustomField`.
+  // Every existing caller omits `options` and is unaffected.
+  async fillEditForm(
+    data: ContactData,
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+  ): Promise<void> {
     logger.info('Updating contact form');
+    const minimal = options?.minimal === true;
     if (data.salutation) {
       await this.selectFromContactDropdown('0_11_input_salutation', data.salutation);
     }
-    await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    if (!minimal) {
+      await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    }
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
-    // WHY: Update email — id="1_11_input_email_0"
-    await this.fill(this.page.locator('[id="1_11_input_email_0"]'), data.email, 'email');
-    // WHY: Update phone — id="1_12_input_phone_0"
-    await this.fill(this.page.locator('[id="1_12_input_phone_0"]'), data.phone, 'phone');
-    // WHY: Update timezone — same field/mutate-in-place reasoning as create
-    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
-    // WHY: Update address fields — same GPS-or-manual mutate-in-place
-    // reasoning as fillContactForm() above, including the section-scoped
-    // GPS trigger (2026-07-16 hardening).
-    data.address = await this.fillAddressViaGpsOrManual(
-      this.addressInput(),
-      data.address,
-      'address',
-      this.getFormSectionContainer('Location')
-    );
-    await this.fill(this.cityInput(), data.city, 'city');
-    await this.fill(this.stateInput(), data.state, 'state');
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
-    // WHY: Update social fields
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
-    await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
-    // WHY: Update company — same live, role-scoped lookup reasoning as create
-    // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
-    // data.company with a known, freshly-created company name (e.g. so it
-    // can independently share that exact company too) gets that exact
-    // company selected instead of a random pick; passing '' (the default
-    // placeholder) preserves the original random-pick behavior unchanged.
-    data.company = await this.selectRandomFromSearchableReactSelect(
-      this.companyControl(),
-      this.companyInput(),
-      'com',
-      'Company',
-      data.company || undefined
-    );
-    // WHY: Update professional fields
-    await this.fill(this.departmentInput(), data.department, 'department');
-    await this.fill(this.designationInput(), data.designation, 'designation');
-    if (data.campaign) {
-      await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+
+    if (!minimal) {
+      // WHY: Update email — id="1_11_input_email_0"
+      await this.fill(this.page.locator('[id="1_11_input_email_0"]'), data.email, 'email');
+      // WHY: Update phone — id="1_12_input_phone_0"
+      await this.fill(this.page.locator('[id="1_12_input_phone_0"]'), data.phone, 'phone');
+      // WHY: Update timezone — same field/mutate-in-place reasoning as create
+      data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
+      // WHY: Update address fields — same GPS-or-manual mutate-in-place
+      // reasoning as fillContactForm() above, including the section-scoped
+      // GPS trigger (2026-07-16 hardening).
+      data.address = await this.fillAddressViaGpsOrManual(
+        this.addressInput(),
+        data.address,
+        'address',
+        this.getFormSectionContainer('Location')
+      );
+      await this.fill(this.cityInput(), data.city, 'city');
+      await this.fill(this.stateInput(), data.state, 'state');
+      await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
+      // WHY: Update social fields
+      await this.fill(this.facebookInput(), data.facebook, 'facebook');
+      await this.fill(this.twitterInput(), data.twitter, 'twitter');
+      await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
+      // WHY: Update company — same live, role-scoped lookup reasoning as create
+      // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
+      // data.company with a known, freshly-created company name (e.g. so it
+      // can independently share that exact company too) gets that exact
+      // company selected instead of a random pick; passing '' (the default
+      // placeholder) preserves the original random-pick behavior unchanged.
+      data.company = await this.selectRandomFromSearchableReactSelect(
+        this.companyControl(),
+        this.companyInput(),
+        'com',
+        'Company',
+        data.company || undefined
+      );
+      // WHY: Update professional fields
+      await this.fill(this.departmentInput(), data.department, 'department');
+      await this.fill(this.designationInput(), data.designation, 'designation');
+      if (data.campaign) {
+        await this.selectFromContactDropdown('5_11_input_campaign', data.campaign);
+      }
+      if (data.source) {
+        await this.selectFromContactDropdown('5_12_input_source', data.source);
+      }
+      // WHY: Update campaign fields
+      await this.fill(this.page.locator('[id="5_21_input_subSource"]'), data.subSource, 'subSource');
+      await this.fill(this.page.locator('[id="5_22_input_utmSource"]'), data.utmSource, 'utmSource');
+      await this.fill(this.page.locator('[id="5_31_input_utmCampaign"]'), data.utmCampaign, 'utmCampaign');
+      await this.fill(this.page.locator('[id="5_32_input_utmMedium"]'), data.utmMedium, 'utmMedium');
+      await this.fill(this.page.locator('[id="5_41_input_utmContent"]'), data.utmContent, 'utmContent');
+      await this.fill(this.page.locator('[id="5_42_input_utmTerm"]'), data.utmTerm, 'utmTerm');
     }
-    if (data.source) {
-      await this.selectFromContactDropdown('5_12_input_source', data.source);
-    }
-    // WHY: Update campaign fields
-    await this.fill(this.page.locator('[id="5_21_input_subSource"]'), data.subSource, 'subSource');
-    await this.fill(this.page.locator('[id="5_22_input_utmSource"]'), data.utmSource, 'utmSource');
-    await this.fill(this.page.locator('[id="5_31_input_utmCampaign"]'), data.utmCampaign, 'utmCampaign');
-    await this.fill(this.page.locator('[id="5_32_input_utmMedium"]'), data.utmMedium, 'utmMedium');
-    await this.fill(this.page.locator('[id="5_41_input_utmContent"]'), data.utmContent, 'utmContent');
-    await this.fill(this.page.locator('[id="5_42_input_utmTerm"]'), data.utmTerm, 'utmTerm');
+
     // WHY: Bug fix (2026-07-14) — fillEditForm() never called this at all
     // before, unlike LeadsPage's edit path, so "Other Details"/custom fields
     // were unreachable on update. disableRequiredFieldsToggle() is now
     // idempotent (see its own comment) so calling it here is safe even if a
-    // prior action in this session already turned the toggle off.
+    // prior action in this session already turned the toggle off. Always
+    // called, even in minimal mode — custom fields (including the one
+    // named by onlyCustomField) live behind this same toggle.
     await this.disableRequiredFieldsToggle();
-    await this.fillContactCustomFields(data);
+    // WHY conditional — see fillContactForm()'s identical, more-detailed
+    // WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillContactCustomFields(data, options?.onlyCustomField);
+    }
     logger.success('Edit form updated');
   }
 
@@ -1530,7 +1634,15 @@ export class ContactsPage extends BasePage {
   // created), never a duplicate. `attemptData` is a fresh clone per attempt
   // — see cloneContactDataForRetry()'s own comment for why a shallow clone
   // alone isn't enough here.
-  async createContact(data: ContactData): Promise<number | null> {
+  // WHY the optional `options` param (2026-09-22, Form Field Limit
+  // feature): threaded straight through to fillContactForm() — see that
+  // method's own WHY comment. createContact()'s own retry/save control
+  // flow is completely untouched; only what gets FILLED changes. Every
+  // existing caller omits `options` and gets the original behavior.
+  async createContact(
+    data: ContactData,
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+  ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22, same pattern as
       // CompaniesPage.createCompany/LeadsPage.createLead): saveContact() now
@@ -1544,7 +1656,7 @@ export class ContactsPage extends BasePage {
         const attemptData = this.cloneContactDataForRetry(data);
         try {
           await this.clickAddContact();
-          await this.fillContactForm(attemptData);
+          await this.fillContactForm(attemptData, options);
           return await this.saveContact();
         } catch (error) {
           if (error instanceof TransientContactSaveError && attempt < maxAttempts) {

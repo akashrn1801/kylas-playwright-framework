@@ -27,7 +27,29 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   const fp = file || '';
   const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac') ? 'RBAC' : fp.includes('ui') ? 'UI' : 'Other';
   const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
-  const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
+  let rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
+
+  // WHY (2026-09-28, Form Field Limit feature): unlike every other module,
+  // this feature's UI specs all share ONE directory
+  // (tests/ui/formFields/<entity>FieldLimits.spec.ts) instead of each
+  // entity getting its own tests/ui/<entity>/ directory — so the
+  // directory-derived name above is the generic feature name "formFields",
+  // not a real per-entity module. Confirmed live: an 18-test run spanning
+  // all 6 entities collapsed into one indistinguishable "UI:FormFields"
+  // row. When the directory-derived name is exactly "formFields", fall
+  // back to the FILENAME itself (which still carries the real entity name)
+  // — generic, not hardcoded to any one entity, so it also covers any
+  // future entity added the same way.
+  if (rawName.toLowerCase() === 'formfields' && match) {
+    const filenameOnly = fp.split('/').pop() || '';
+    rawName = filenameOnly.replace(/\.(rbac\.)?spec\.ts$/, '');
+  }
+  // Strip the feature-specific filename suffix so the UI side
+  // ("leadFieldLimits") and RBAC side ("leadFormFields") of the SAME
+  // entity normalize to the identical bare name ("lead") — otherwise the
+  // two sides of one entity would still show as separate module rows.
+  rawName = rawName.replace(/(FieldLimits|FormFields)$/i, '');
+
   const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
   return { name, type };
 }

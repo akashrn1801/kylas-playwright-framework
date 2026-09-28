@@ -1,7 +1,11 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { faker } from '@faker-js/faker';
 import { BasePage } from '../../core/BasePage';
-import { CompanyData, COMPANY_CUSTOM_FIELD_NAMES } from '../../data/factories/companyFactory';
+import {
+  CompanyData,
+  COMPANY_CUSTOM_FIELD_NAMES,
+  CompanyCustomFieldKey,
+} from '../../data/factories/companyFactory';
 import { ContactData } from '../../data/factories/contactFactory';
 import { DealData } from '../../data/factories/dealFactory';
 import { DealsPage } from '../deals/DealsPage';
@@ -569,48 +573,82 @@ export class CompaniesPage extends BasePage {
   // whatever was actually selected live — PickList/MultiPickList options are
   // read from the DOM at fill time, so the caller's `data` object needs to
   // be updated to reflect reality before it's used for later verification.
-  private async fillCompanyCustomFields(data: CompanyData): Promise<void> {
+  // WHY the optional `onlyField` param (2026-09-22, Form Field Limit
+  // feature, Company rollout — reusing the exact reusable architecture
+  // proven for Lead/Contact, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5
+  // and LEAD_FEATURE_RETROSPECTIVE.md §1): fills ONLY the one field under
+  // test and skips the other 8 entirely when provided — every existing
+  // caller omits it and gets byte-for-byte the same fill-everything
+  // behavior as before.
+  private async fillCompanyCustomFields(
+    data: CompanyData,
+    onlyField?: CompanyCustomFieldKey
+  ): Promise<void> {
     const cf = data.customFields;
+    const wants = (key: CompanyCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
-    await this.fillTextLikeCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field'
-    );
-    await this.fillTextLikeCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text'
-    );
-    await this.fillTextLikeCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.number,
-      String(cf.number),
-      'Number'
-    );
-    await this.fillTextLikeCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.urlField,
-      cf.urlField,
-      'URL Field'
-    );
-    await this.setCheckboxCustomField(COMPANY_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
-    await this.selectDateCustomField(COMPANY_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
-    await this.selectDateTimeCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker'
-    );
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number'
+      );
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.urlField,
+        cf.urlField,
+        'URL Field'
+      );
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(COMPANY_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(COMPANY_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+    if (wants('multiPickList')) {
+      const pickedValues = await this.selectMultiPicklistCustomField(
+        COMPANY_CUSTOM_FIELD_NAMES.multiPickList,
+        'Multi Pick List'
+      );
+      if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    }
 
-    const pickedValue = await this.selectPicklistCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
-
-    const pickedValues = await this.selectMultiPicklistCustomField(
-      COMPANY_CUSTOM_FIELD_NAMES.multiPickList,
-      'Multi Pick List'
-    );
-    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
+    // LeadsPage.fillLeadCustomFields()'s/ContactsPage.fillContactCustomFields()'s
+    // identical, incident-driven fix (LEAD_FEATURE_RETROSPECTIVE.md §2.8).
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   // WHY: thin wrapper around BasePage's generic dedicated-test skip
@@ -633,56 +671,87 @@ export class CompaniesPage extends BasePage {
     );
   }
 
-  async fillCompanyForm(data: CompanyData): Promise<void> {
+  // WHY this exists as its own public method (2026-09-22, Form Field Limit
+  // feature, Company rollout): confirmed live that Company's Name field is
+  // `[id="0_11_input_name"]`, NOT `input[name="name"]` — BasePage's generic
+  // `fillStandardField()` (keyed on the real HTML `name` attribute) hangs
+  // indefinitely against this field, confirmed via a live 120s timeout
+  // reproduction. Extracted from fillCompanyForm()'s own inline call so a
+  // caller needing to fill/re-fill ONLY the Name field directly (e.g. the
+  // Form Field Limit feature's own live-in-form-correction test, mirroring
+  // Lead's FFL22/Contact's FFC22) has a correct, working alternative to the
+  // generic helper — never use fillStandardField('name', ...) for this
+  // entity.
+  async fillCompanyName(name: string): Promise<void> {
+    await this.fill(this.nameInput(), name, 'company name');
+  }
+
+  // WHY the optional `options` param — mirrors ContactsPage.fillContactForm()'s
+  // own, more-detailed WHY comment (LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // §5): `options.minimal` skips every field except Name (confirmed live to
+  // be the true save-required minimum for Company — no Pipeline-equivalent
+  // dependency, no toggle needed). Every existing caller omits `options` and
+  // gets byte-for-byte the original full-form-fill behavior.
+  async fillCompanyForm(
+    data: CompanyData,
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+  ): Promise<void> {
     logger.info('Filling company form');
+    const minimal = options?.minimal === true;
 
     await this.disableRequiredFieldsToggle();
 
-    await this.fill(this.nameInput(), data.name, 'company name');
+    await this.fillCompanyName(data.name);
 
-    await this.selectPicklistOption(
-      '0_12_input_numberOfEmployees',
-      data.numberOfEmployees,
-      'number of employees'
-    );
-    await this.selectPicklistOption('0_31_input_industry', data.industry, 'industry');
-    await this.selectPicklistOption('0_32_input_businessType', data.businessType, 'business type');
+    if (!minimal) {
+      await this.selectPicklistOption(
+        '0_12_input_numberOfEmployees',
+        data.numberOfEmployees,
+        'number of employees'
+      );
+      await this.selectPicklistOption('0_31_input_industry', data.industry, 'industry');
+      await this.selectPicklistOption('0_32_input_businessType', data.businessType, 'business type');
 
-    await this.fill(this.annualRevenueInput(), data.annualRevenue.toString(), 'annual revenue');
+      await this.fill(this.annualRevenueInput(), data.annualRevenue.toString(), 'annual revenue');
 
-    await this.fill(this.websiteInput(), data.website, 'website');
+      await this.fill(this.websiteInput(), data.website, 'website');
 
-    await this.fill(this.uniqueText1Input(), data.uniqueText1, 'unique text 1');
+      await this.fill(this.uniqueText1Input(), data.uniqueText1, 'unique text 1');
 
-    await this.fill(this.uniqueText2Input(), data.uniqueText2, 'unique text 2');
+      await this.fill(this.uniqueText2Input(), data.uniqueText2, 'unique text 2');
 
-    await this.click(this.addEmailButton(), 'add email button');
+      await this.click(this.addEmailButton(), 'add email button');
 
-    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
+      await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
 
-    await this.fill(this.emailInput(), data.email, 'email');
+      await this.fill(this.emailInput(), data.email, 'email');
 
-    await this.click(this.addPhoneButton(), 'add phone button');
+      await this.click(this.addPhoneButton(), 'add phone button');
 
-    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
+      await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
 
-    await this.fill(this.phoneInput(), data.phone, 'phone');
+      await this.fill(this.phoneInput(), data.phone, 'phone');
 
-    await this.fill(this.addressInput(), data.address, 'address');
+      await this.fill(this.addressInput(), data.address, 'address');
 
-    await this.fill(this.cityInput(), data.city, 'city');
+      await this.fill(this.cityInput(), data.city, 'city');
 
-    await this.fill(this.stateInput(), data.state, 'state');
+      await this.fill(this.stateInput(), data.state, 'state');
 
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
+      await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
 
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
+      await this.fill(this.facebookInput(), data.facebook, 'facebook');
 
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
+      await this.fill(this.twitterInput(), data.twitter, 'twitter');
 
-    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+      await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+    }
 
-    await this.fillCompanyCustomFields(data);
+    // WHY conditional, not unconditional: mirrors ContactsPage.fillContactForm()'s
+    // identical, more-detailed WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillCompanyCustomFields(data, options?.onlyCustomField);
+    }
 
     logger.success('Company form filled');
   }
@@ -945,32 +1014,48 @@ export class CompaniesPage extends BasePage {
     logger.success('Edit modal opened');
   }
 
-  async fillEditForm(data: CompanyData): Promise<void> {
+  // WHY the optional `options` param — mirrors fillCompanyForm()'s own,
+  // more-detailed WHY comment, and ContactsPage.fillEditForm()'s identical
+  // shape: `options.minimal` skips every field except Name. Every existing
+  // caller omits `options` and is unaffected.
+  async fillEditForm(
+    data: CompanyData,
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+  ): Promise<void> {
     logger.info('Updating company form');
+    const minimal = options?.minimal === true;
 
-    await this.fill(this.nameInput(), data.name, 'company name');
-    await this.fill(this.annualRevenueInput(), data.annualRevenue.toString(), 'annual revenue');
-    await this.fill(this.websiteInput(), data.website, 'website');
-    await this.fill(this.uniqueText1Input(), data.uniqueText1, 'unique text 1');
-    await this.fill(this.uniqueText2Input(), data.uniqueText2, 'unique text 2');
-    await this.fill(this.emailInput(), data.email, 'email');
-    await this.fill(this.phoneInput(), data.phone, 'phone');
-    await this.fill(this.addressInput(), data.address, 'address');
-    await this.fill(this.cityInput(), data.city, 'city');
-    await this.fill(this.stateInput(), data.state, 'state');
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
-    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+    await this.fillCompanyName(data.name);
+
+    if (!minimal) {
+      await this.fill(this.annualRevenueInput(), data.annualRevenue.toString(), 'annual revenue');
+      await this.fill(this.websiteInput(), data.website, 'website');
+      await this.fill(this.uniqueText1Input(), data.uniqueText1, 'unique text 1');
+      await this.fill(this.uniqueText2Input(), data.uniqueText2, 'unique text 2');
+      await this.fill(this.emailInput(), data.email, 'email');
+      await this.fill(this.phoneInput(), data.phone, 'phone');
+      await this.fill(this.addressInput(), data.address, 'address');
+      await this.fill(this.cityInput(), data.city, 'city');
+      await this.fill(this.stateInput(), data.state, 'state');
+      await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
+      await this.fill(this.facebookInput(), data.facebook, 'facebook');
+      await this.fill(this.twitterInput(), data.twitter, 'twitter');
+      await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+    }
 
     // WHY: mirrors ContactsPage.fillEditForm()'s own fix (2026-07-14) for the
     // identical gap — without this, "Other Details"/custom fields would be
     // unreachable on update whenever the toggle happens to be in its ON
     // state. disableRequiredFieldsToggle() is idempotent (see its own
     // comment) so calling it here is safe even if a prior action in this
-    // session already turned the toggle off.
+    // session already turned the toggle off. Always called, even in minimal
+    // mode — custom fields live behind this same toggle.
     await this.disableRequiredFieldsToggle();
-    await this.fillCompanyCustomFields(data);
+    // WHY conditional — see fillCompanyForm()'s identical, more-detailed
+    // WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillCompanyCustomFields(data, options?.onlyCustomField);
+    }
 
     logger.success('Edit form updated')
   }
@@ -1943,7 +2028,15 @@ export class CompaniesPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
-  async createCompany(data: CompanyData): Promise<number | null> {
+  // WHY the optional `options` param (2026-09-22, Form Field Limit
+  // feature): threaded straight through to fillCompanyForm() — see that
+  // method's own WHY comment. createCompany()'s own retry/save control
+  // flow is completely untouched; only what gets FILLED changes. Every
+  // existing caller omits `options` and gets the original behavior.
+  async createCompany(
+    data: CompanyData,
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+  ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (root-caused 2026-07-21 from a real
       // failure): the create POST intermittently returns a transient backend
@@ -1963,7 +2056,7 @@ export class CompaniesPage extends BasePage {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           await this.clickAddCompany();
-          await this.fillCompanyForm(data);
+          await this.fillCompanyForm(data, options);
           return await this.saveCompany();
         } catch (error) {
           if (error instanceof TransientCompanySaveError && attempt < maxAttempts) {

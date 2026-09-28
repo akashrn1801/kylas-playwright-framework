@@ -31,6 +31,18 @@ export const CONTACT_CUSTOM_FIELD_NAMES = {
 
 export type ContactCustomFieldKey = keyof typeof CONTACT_CUSTOM_FIELD_NAMES;
 
+// WHY this constant, and why it must NOT be derived from CONTACT_CUSTOM_
+// FIELD_NAMES or the entity name (2026-09-22, Form Field Limit feature,
+// Contact rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY in
+// leadFactory.ts, confirmed live independently for Contact via
+// REMAINING_ENTITIES_INVESTIGATION.md's own live IndexedDB dump): the app's
+// IndexedDB `layoutCache` key is not a fixed transformation of the entity
+// name — Lead/Deal/Contact/Company happen to be the simple lowercase
+// plural, but Products & Services' real key is "products-services". This is
+// Contact's own hand-verified key, confirmed live, for
+// BasePage.clearApplicationCache() — never guess this value.
+export const CONTACT_LAYOUT_CACHE_KEY = 'contacts';
+
 export interface ContactCustomFieldData {
   textField: string;
   paragraphText: string;
@@ -78,9 +90,72 @@ export function generateContactCustomFieldData(
 // no realistic UI path to trigger this case.
 // generated programmatically at call time (string repetition), never
 // stored as a literal block of text in this file.
-export const generateContactCustomFieldInvalidTextField = (): string => 'A'.repeat(256);
-export const generateContactCustomFieldInvalidParagraphText = (): string => 'B'.repeat(2551);
+// WHY an optional `max` param, defaulting to the field type's own absolute
+// ceiling (2026-09-22, Form Field Limit feature, Contact rollout — mirrors
+// leadFactory.ts's identical fix): the existing 2 callers (both in
+// contacts.spec.ts) call this with zero arguments and must keep getting the
+// exact same 256/2551-char value as before — the default preserves that
+// byte-for-byte (confirmed via grep, only 2 real call sites, both
+// zero-arg). This feature's own tests need "one character over whatever
+// max THEY configured" instead, which can be anywhere in 0-255/0-2550.
+export const generateContactCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
+export const generateContactCustomFieldInvalidParagraphText = (max = 2550): string =>
+  'B'.repeat(max + 1);
 export const generateContactCustomFieldInvalidUrl = (): string => 'not a valid url###';
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY duplicated here rather than imported from leadFactory.ts (2026-09-22,
+// Contact rollout — deliberate, matching this file's own established
+// convention, not an oversight): CLAUDE.md's Custom Fields pattern already
+// establishes "never import one module's [field] constants into another's —
+// each module owns its own... field sets diverge over time"
+// (reference-patterns.md §9) for exactly this reason. These generators
+// encode the Text field's Regex dropdown's real pattern SHAPES — confirmed
+// live (REMAINING_ENTITIES_INVESTIGATION.md) to be identical across every
+// entity today, but there is no guarantee that holds forever, and this
+// module should not silently start emitting a different (Lead's own) value
+// shape the moment Lead's own investigation is updated for a Lead-specific
+// reason. Every value here is still cross-checked against the pattern read
+// LIVE off the config page at test-run time (never trusted from the
+// generator alone) — see contactFieldLimits.spec.ts's own
+// assertGeneratedValueMatchesLivePattern().
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+// WHY the fixed, real `example.com` domain, not a random fake one: mirrors
+// leadFactory.ts's own generateValidEmailFormatValue() and its documented
+// reasoning (a random-domain value was the confirmed trigger for a
+// load-dependent Lead create-POST timeout, FFL36) — applied here
+// preemptively rather than waiting for the identical symptom to recur on
+// Contact's own create form.
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
 
 export interface ContactData {
   firstName: string;

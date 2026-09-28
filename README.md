@@ -1,6 +1,6 @@
 # Kylas Playwright Framework
 
-End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 515 tests across 12 modules (23 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
+End-to-end test automation for **Kylas Sales CRM**, built on Playwright + TypeScript. 574 tests across 13 modules (25 spec files), split between functional UI coverage and RBAC (role-based access control) permission testing, running across a 6-branch CI/CD pipeline with its own reporting and email-notification system.
 
 This document is written so a new engineer — or any of us in six months — can get productive in a day without digging through source or chat history. Where something is genuinely unresolved or fragile, it's called out explicitly in [Known Limitations](#known-limitations--open-items) rather than glossed over.
 
@@ -35,9 +35,9 @@ This document is written so a new engineer — or any of us in six months — ca
 | **CI** | GitHub Actions (primary for most branches) + Jenkins (primary for `prod`/`main`, manual fallback elsewhere) |
 | **Runtime** | Node `>=20.0.0`, npm `>=10.0.0` |
 
-**Modules covered** (12): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, Dashboard, and Login. Every module except Login has both a UI spec and an RBAC spec. (Dashboard was split out from the former combined "Dashboard/Login" row on 2026-09-02, once it grew into a full module with its own page object, factory, and RBAC coverage — Login remains its own small, separate spec, deliberately not using the shared fixture system since it tests the login UI itself.)
+**Modules covered** (13): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, Dashboard, Login, and Form Fields. Every module except Login has both a UI spec and an RBAC spec. (Dashboard was split out from the former combined "Dashboard/Login" row on 2026-09-02, once it grew into a full module with its own page object, factory, and RBAC coverage — Login remains its own small, separate spec, deliberately not using the shared fixture system since it tests the login UI itself. Form Fields was added 2026-09-21 — a shared, entity-parameterized `/setup/fields/<entity>/list` configuration screen, Lead-only in this first pass; see `.claude/reference-patterns.md` §22-25 for the durable findings from building it.)
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-09 — per-module breakdown verified the same day via `npx playwright test --project=chromium --list tests/ui/<module>/` and `tests/rbac/<module>.rbac.spec.ts` individually; do not trust any older number without re-running this):
+**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-21 — per-module breakdown verified the same day via `npx playwright test --project=chromium --list tests/ui/<module>/` and `tests/rbac/<module>.rbac.spec.ts` individually; do not trust any older number without re-running this):
 
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
@@ -46,6 +46,7 @@ This document is written so a new engineer — or any of us in six months — ca
 | Contacts | 23 | 23 | 46 |
 | Dashboard | 30 | 29 | 59 |
 | Deals | 26 | 30 | 56 |
+| Form Fields | 55 | 4 | 59 |
 | Leads | 25 | 31 | 56 |
 | Login | 4 | — | 4 |
 | Meetings | 19 | 12 | 31 |
@@ -53,9 +54,9 @@ This document is written so a new engineer — or any of us in six months — ca
 | Quotations | 24 | 17 | 41 |
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
-| **Total** | **269** | **246** | **515** |
+| **Total** | **324** | **250** | **574** |
 
-Grew from 453 (2026-09-02) to 515 (2026-09-09) — the +62 is almost entirely 8 modules (Call Logs, Companies, Contacts, Deals, Leads, Meetings, Quotations, Tasks) each gaining a UI+RBAC test pair for the 2026-09-08 "Hide Empty Fields" feature; Dashboard, Login, Products & Services, and Reports are unchanged. Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
+Grew from 515 (2026-09-09) to 574 (2026-09-21) — the entire +59 is the new Form Fields module (55 UI + 4 RBAC), added in one pass; every other module's count is unchanged since 2026-09-09. Grew from 453 (2026-09-02) to 515 (2026-09-09) — the +62 is almost entirely 8 modules (Call Logs, Companies, Contacts, Deals, Leads, Meetings, Quotations, Tasks) each gaining a UI+RBAC test pair for the 2026-09-08 "Hide Empty Fields" feature; Dashboard, Login, Products & Services, and Reports are unchanged. Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
 
 Leads gained 4 tests on 2026-07-21/22: L46/L47 (UI, renumbered from L20/L21 on 2026-08-11) and L30/L31 (RBAC) cover the new Company Lookup/Contact Lookup custom fields — see `CLAUDE.md`'s Known Issues for the full story, including 9 real bugs found and fixed while building and verifying them.
 

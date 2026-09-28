@@ -4,6 +4,7 @@ import {
   DealData,
   formatDateForCalendarLabel,
   DEAL_CUSTOM_FIELD_NAMES,
+  DealCustomFieldKey,
 } from '../../data/factories/dealFactory';
 import { TasksPage } from '../tasks/TasksPage';
 import { MeetingsPage } from '../meetings/MeetingsPage';
@@ -809,40 +810,69 @@ export class DealsPage extends BasePage {
   // whatever was actually selected live — PickList/MultiPickList options are
   // read from the DOM at fill time, so the caller's `data` object needs to
   // be updated to reflect reality before it's used for later verification.
-  private async fillDealCustomFields(data: DealData): Promise<void> {
+  // WHY the optional `onlyField` param (2026-09-23, Form Field Limit
+  // feature, Deal rollout): mirrors CompaniesPage.fillCompanyCustomFields()'s/
+  // TasksPage.fillTaskCustomFields()'s identical, already-proven
+  // `wants(onlyField)` architecture — fills ONLY the one field under test
+  // and skips the other 8 entirely when provided. Every existing caller
+  // omits it and gets byte-for-byte the original fill-everything behavior.
+  // The blur-fix below mirrors the same incident-driven fix documented in
+  // LEAD_FEATURE_RETROSPECTIVE.md §2.8.
+  private async fillDealCustomFields(data: DealData, onlyField?: DealCustomFieldKey): Promise<void> {
     const cf = data.customFields;
+    const wants = (key: DealCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
-    await this.fillTextLikeCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field'
-    );
-    await this.fillTextLikeCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text'
-    );
-    await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
-    await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
-    await this.setCheckboxCustomField(DEAL_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
-    await this.selectDateCustomField(DEAL_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
-    await this.selectDateTimeCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker'
-    );
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        DEAL_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(DEAL_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(DEAL_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        DEAL_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        DEAL_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+    if (wants('multiPickList')) {
+      const pickedValues = await this.selectMultiPicklistCustomField(
+        DEAL_CUSTOM_FIELD_NAMES.multiPickList,
+        'Multi Pick List'
+      );
+      if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    }
 
-    const pickedValue = await this.selectPicklistCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
-
-    const pickedValues = await this.selectMultiPicklistCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.multiPickList,
-      'Multi Pick List'
-    );
-    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   // WHY: thin wrapper around BasePage's generic dedicated-test skip
@@ -856,14 +886,37 @@ export class DealsPage extends BasePage {
     await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(DEAL_CUSTOM_FIELD_NAMES), 'Deal');
   }
 
-  async fillDealForm(data: DealData): Promise<void> {
+  // WHY the optional `options` param (2026-09-23, Form Field Limit feature,
+  // Deal rollout): confirmed live via direct incremental reproduction that
+  // Deal's own true save-required minimum is Name + Pipeline + Estimated
+  // Value — Pipeline must be selected FIRST (confirmed live: the Estimated
+  // Value input is not even visible/enabled until a Pipeline is chosen),
+  // after which Estimated Value can be filled manually with no Product row
+  // needed at all (Name-only, and Name+Estimated-Value-with-no-Pipeline,
+  // were both directly reproduced as still-blocked/still-open-modal states
+  // before this was confirmed). This is a genuine correction to this
+  // factory's own dealFactory.ts comment ("Name+Estimated Value only") —
+  // Pipeline selection turned out to be a real prerequisite for Estimated
+  // Value to even become fillable, not something separately optional.
+  // `minimal: true` therefore fills Name + Pipeline + a manual Estimated
+  // Value, skipping Associated Contact/Company, every Product row, Part
+  // Payments, Campaign/Source, and every UTM field entirely. Every existing
+  // caller omits `options` and gets byte-for-byte the original
+  // fill-everything behavior.
+  async fillDealForm(
+    data: DealData,
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+  ): Promise<void> {
     logger.info('Filling deal form');
+    const minimal = options?.minimal === true;
 
     // Name
     await this.fill(this.nameInput(), data.name, 'deal name');
 
-    // Estimated Closure Date
-    await this.selectDateInPicker(data.estimatedClosureDate);
+    if (!minimal) {
+      // Estimated Closure Date
+      await this.selectDateInPicker(data.estimatedClosureDate);
+    }
 
     // Pipeline
     logger.info('Selecting pipeline');
@@ -884,9 +937,10 @@ export class DealsPage extends BasePage {
     logger.success('Pipeline selected');
 
     // Associated Contacts + Company
-    // WHY: Skip when skipAssociatedEntities=true — used in RBAC tests to create
-    // deals with no linked entities so restricted user cannot see related quotations.
-    if (!data.skipAssociatedEntities) {
+    // WHY: Skip when skipAssociatedEntities=true OR minimal=true — used in
+    // RBAC tests (skipAssociatedEntities) and now also in this feature's own
+    // minimal-fill mode to create deals with no linked entities.
+    if (!data.skipAssociatedEntities && !minimal) {
       await this.selectFirstOptionFromDropdown(
         this.associatedContactsInput(),
         'associated contact',
@@ -898,17 +952,23 @@ export class DealsPage extends BasePage {
         data.associatedCompanyName
       );
     } else {
-      logger.info('Skipping associated contact and company (skipAssociatedEntities=true)');
+      logger.info('Skipping associated contact and company (skipAssociatedEntities or minimal)');
     }
 
-    // WHY: Add random number of products (1-3) to exercise product table
-    const productCount = Math.floor(Math.random() * 3) + 1;
-    logger.info(`Adding ${productCount} product(s)`);
-    for (let i = 0; i < productCount; i++) {
-      await this.addProductRow();
+    if (!minimal) {
+      // WHY: Add random number of products (1-3) to exercise product table
+      const productCount = Math.floor(Math.random() * 3) + 1;
+      logger.info(`Adding ${productCount} product(s)`);
+      for (let i = 0; i < productCount; i++) {
+        await this.addProductRow();
+      }
     }
 
-    // Estimated Value — fill manually if not auto-populated by product
+    // Estimated Value — fill manually if not auto-populated by product.
+    // WHY unconditional even in minimal mode: this IS part of the confirmed
+    // true minimum (Name + Pipeline + Estimated Value) — see this method's
+    // own WHY comment above. With no product rows in minimal mode, this
+    // input is never disabled, so the manual-fill branch always runs.
     logger.info('Filling estimated value');
     const estValue = this.estimatedValueInput();
     await estValue.waitFor({ state: 'visible', timeout: 10000 });
@@ -921,49 +981,56 @@ export class DealsPage extends BasePage {
       logger.info('Estimated value auto-filled by product');
     }
 
-    // WHY: Add part payments immediately after product/estimated value
-    // so the installment rows exist before save. Doing it later risks
-    // the form losing context or the payment section not being visible.
-    logger.info('Adding part payments');
-    await this.addPartPayments(data.numberOfInstallments);
-    await this.assertPartPaymentsEqualSplit(data.numberOfInstallments, '');
-    logger.success('Part payments added and verified');
+    if (!minimal) {
+      // WHY: Add part payments immediately after product/estimated value
+      // so the installment rows exist before save. Doing it later risks
+      // the form losing context or the payment section not being visible.
+      logger.info('Adding part payments');
+      await this.addPartPayments(data.numberOfInstallments);
+      await this.assertPartPaymentsEqualSplit(data.numberOfInstallments, '');
+      logger.success('Part payments added and verified');
 
-    // Campaign (optional)
-    logger.info('Selecting campaign');
-    try {
-      await this.campaignControl().waitFor({ state: 'visible', timeout: 5000 });
-      await this.campaignControl().click();
-      const firstCampaign = this.page.locator('.is-invalid__option').first();
-      await firstCampaign.waitFor({ state: 'visible', timeout: 5000 });
-      await firstCampaign.click();
-      logger.success('Campaign selected');
-    } catch {
-      logger.info('No campaign options available — skipping');
+      // Campaign (optional)
+      logger.info('Selecting campaign');
+      try {
+        await this.campaignControl().waitFor({ state: 'visible', timeout: 5000 });
+        await this.campaignControl().click();
+        const firstCampaign = this.page.locator('.is-invalid__option').first();
+        await firstCampaign.waitFor({ state: 'visible', timeout: 5000 });
+        await firstCampaign.click();
+        logger.success('Campaign selected');
+      } catch {
+        logger.info('No campaign options available — skipping');
+      }
+
+      // Source (optional)
+      logger.info('Selecting source');
+      try {
+        await this.sourceControl().waitFor({ state: 'visible', timeout: 5000 });
+        await this.sourceControl().click();
+        const firstSource = this.page.locator('.is-invalid__option').first();
+        await firstSource.waitFor({ state: 'visible', timeout: 5000 });
+        await firstSource.click();
+        logger.success('Source selected');
+      } catch {
+        logger.info('No source options available — skipping');
+      }
+
+      // UTM fields
+      await this.fill(this.subSourceInput(), data.subSource, 'sub source');
+      await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
+      await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
+      await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
+      await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
+      await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
     }
 
-    // Source (optional)
-    logger.info('Selecting source');
-    try {
-      await this.sourceControl().waitFor({ state: 'visible', timeout: 5000 });
-      await this.sourceControl().click();
-      const firstSource = this.page.locator('.is-invalid__option').first();
-      await firstSource.waitFor({ state: 'visible', timeout: 5000 });
-      await firstSource.click();
-      logger.success('Source selected');
-    } catch {
-      logger.info('No source options available — skipping');
+    // Custom Fields
+    // WHY conditional, not unconditional: mirrors CompaniesPage.fillCompanyForm()'s
+    // identical, more-detailed WHY comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillDealCustomFields(data, options?.onlyCustomField);
     }
-
-    // UTM fields
-    await this.fill(this.subSourceInput(), data.subSource, 'sub source');
-    await this.fill(this.utmSourceInput(), data.utmSource, 'utm source');
-    await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign');
-    await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium');
-    await this.fill(this.utmContentInput(), data.utmContent, 'utm content');
-    await this.fill(this.utmTermInput(), data.utmTerm, 'utm term');
-
-    await this.fillDealCustomFields(data);
 
     logger.success('Deal form filled');
   }
@@ -1124,73 +1191,113 @@ export class DealsPage extends BasePage {
     logger.success('Edit modal opened');
   }
 
-  async fillEditForm(data: DealData): Promise<void> {
+  // WHY the optional `options` param, and WHY minimal EDIT skips the
+  // payment-status-change block entirely — not just "extra work to save",
+  // a genuine CORRECTNESS requirement (2026-09-23, Form Field Limit
+  // feature, Deal rollout): this method's own pre-existing payment-status
+  // block unconditionally targets `partPayments.0.status`, which only
+  // exists on a deal that already has part-payment installments —
+  // confirmed by reading fillDealForm()'s own minimal-mode changes above,
+  // which deliberately skip Part Payments entirely. Running this block
+  // against a bare minimal deal would find no such row and fail outright,
+  // not just do unneeded work — a stronger reason than any other entity's
+  // own minimal-edit asymmetry needed so far in this feature. UTM fields
+  // are skipped for the same "not needed, not safe to assume present"
+  // reasoning Task's/Company's own minimal EDIT already established.
+  async fillEditForm(
+    data: DealData,
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+  ): Promise<void> {
     logger.info('Updating deal in edit form');
+    const minimal = options?.minimal === true;
 
     // Update deal name
     await this.fill(this.nameInput(), data.name, 'deal name');
 
-    // WHY: Scroll to part payments and mark first installment as Received.
-    logger.info('Updating first payment status to Received');
+    if (!minimal) {
+      // WHY: Scroll to part payments and mark first installment as Received.
+      logger.info('Updating first payment status to Received');
 
-    // Click the dropdown indicator arrow — more reliable than clicking input
-    const firstPaymentStatusControl = this.page
-      .locator('[id="2_04_input_partPayments.0.status"]')
-      .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-    await firstPaymentStatusControl.scrollIntoViewIfNeeded();
-    const statusIndicator = firstPaymentStatusControl.locator('.is-invalid__dropdown-indicator');
-    await statusIndicator.waitFor({ state: 'visible', timeout: 10000 });
-    await statusIndicator.click();
+      // Click the dropdown indicator arrow — more reliable than clicking input
+      const firstPaymentStatusControl = this.page
+        .locator('[id="2_04_input_partPayments.0.status"]')
+        .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+      await firstPaymentStatusControl.scrollIntoViewIfNeeded();
+      const statusIndicator = firstPaymentStatusControl.locator('.is-invalid__dropdown-indicator');
+      await statusIndicator.waitFor({ state: 'visible', timeout: 10000 });
+      await statusIndicator.click();
 
-    // Wait for options then click Received by text
-    const receivedOption = this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: 'Received' })
-      .first();
-    await receivedOption.waitFor({ state: 'visible', timeout: 10000 });
-    // WHY: Use dispatchEvent for reliable click — dropdown may close
-    // before a normal click registers on slower CI environments
-    await receivedOption.dispatchEvent('mousedown');
-    await this.page.waitForTimeout(100);
-    await receivedOption.dispatchEvent('mouseup');
-    await receivedOption.dispatchEvent('click');
-    logger.info('Clicked Received option');
-
-    // WHY: Two #confirm buttons exist in DOM — one hidden (pipeline warning modal)
-    // one visible (payment received confirmation modal). We must click the visible one.
-    await this.page.waitForTimeout(800);
-    try {
-      // Locate the visible confirm button inside the payment confirmation modal
-      const visibleConfirmBtn = this.page
-        .locator('.modal.show.d-block #confirm')
-        .filter({ hasText: 'Yes' })
+      // Wait for options then click Received by text
+      const receivedOption = this.page
+        .locator('.is-invalid__option')
+        .filter({ hasText: 'Received' })
         .first();
-      await visibleConfirmBtn.waitFor({ state: 'visible', timeout: 5000 });
-      logger.info('Confirm modal appeared — clicking Yes');
-      await visibleConfirmBtn.click();
-      logger.success('Payment status change confirmed');
-      await this.page.waitForTimeout(500);
-    } catch {
-      logger.info('Confirm modal not shown — already dismissed previously');
+      await receivedOption.waitFor({ state: 'visible', timeout: 10000 });
+      // WHY: Use dispatchEvent for reliable click — dropdown may close
+      // before a normal click registers on slower CI environments
+      await receivedOption.dispatchEvent('mousedown');
+      // WHY a real next-paint-frame wait, not a guessed duration: lets any
+      // React state update from the mousedown flush before mouseup/click
+      // fire, the same gap a native pointer gesture would naturally have —
+      // bounded by the browser's own rendering pipeline, not an arbitrary ms.
+      await this.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      await receivedOption.dispatchEvent('mouseup');
+      await receivedOption.dispatchEvent('click');
+      logger.info('Clicked Received option');
+
+      // WHY: Two #confirm buttons exist in DOM — one hidden (pipeline warning modal)
+      // one visible (payment received confirmation modal). We must click the visible one.
+      // No pre-wait needed here: waitFor() below already polls for the real
+      // condition (the visible modal appearing) and the catch block already
+      // handles "it never appears" — a blind sleep before it added nothing.
+      try {
+        // Locate the visible confirm button inside the payment confirmation modal
+        const visibleConfirmBtn = this.page
+          .locator('.modal.show.d-block #confirm')
+          .filter({ hasText: 'Yes' })
+          .first();
+        await visibleConfirmBtn.waitFor({ state: 'visible', timeout: 5000 });
+        logger.info('Confirm modal appeared — clicking Yes');
+        await visibleConfirmBtn.click();
+        logger.success('Payment status change confirmed');
+        // WHY: wait for the real condition (the modal actually closing)
+        // instead of a guessed duration — best-effort, since some builds may
+        // dismiss it without a visible transition.
+        await visibleConfirmBtn.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+      } catch {
+        logger.info('Confirm modal not shown — already dismissed previously');
+      }
+      // WHY: confirm the option's own dropdown menu has fully closed before
+      // touching an unrelated field, rather than guessing how long that
+      // takes — best-effort, since the menu is normally already closed by
+      // this point (a real option was just selected).
+      await this.page
+        .locator('.is-invalid__menu')
+        .waitFor({ state: 'hidden', timeout: 3000 })
+        .catch(() => {});
+
+      // Update UTM field to verify campaign info section is editable
+      await this.fill(this.utmSourceInput(), data.utmSource, 'utm source (edit)');
+      // WHY these 5 added (2026-09-08, Hide-Empty-Fields work): previously only
+      // utmSource was updatable via edit — a minimal spot-check, not full
+      // section coverage. subSource/utmCampaign/utmMedium/utmContent/utmTerm
+      // are the same plain `<input>` fills as utmSource (no react-select
+      // re-selection risk), so this is a safe, additive extension — no
+      // existing test asserts these fields stay unchanged after an edit
+      // (confirmed via grep).
+      await this.fill(this.subSourceInput(), data.subSource, 'sub source (edit)');
+      await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign (edit)');
+      await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium (edit)');
+      await this.fill(this.utmContentInput(), data.utmContent, 'utm content (edit)');
+      await this.fill(this.utmTermInput(), data.utmTerm, 'utm term (edit)');
     }
-    await this.page.waitForTimeout(300);
 
-    // Update UTM field to verify campaign info section is editable
-    await this.fill(this.utmSourceInput(), data.utmSource, 'utm source (edit)');
-    // WHY these 5 added (2026-09-08, Hide-Empty-Fields work): previously only
-    // utmSource was updatable via edit — a minimal spot-check, not full
-    // section coverage. subSource/utmCampaign/utmMedium/utmContent/utmTerm
-    // are the same plain `<input>` fills as utmSource (no react-select
-    // re-selection risk), so this is a safe, additive extension — no
-    // existing test asserts these fields stay unchanged after an edit
-    // (confirmed via grep).
-    await this.fill(this.subSourceInput(), data.subSource, 'sub source (edit)');
-    await this.fill(this.utmCampaignInput(), data.utmCampaign, 'utm campaign (edit)');
-    await this.fill(this.utmMediumInput(), data.utmMedium, 'utm medium (edit)');
-    await this.fill(this.utmContentInput(), data.utmContent, 'utm content (edit)');
-    await this.fill(this.utmTermInput(), data.utmTerm, 'utm term (edit)');
-
-    await this.fillDealCustomFields(data);
+    // Custom Fields
+    // WHY conditional — see fillDealForm()'s identical, more-detailed WHY
+    // comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillDealCustomFields(data, options?.onlyCustomField);
+    }
 
     logger.success('Edit form updated');
   }
@@ -1541,10 +1648,18 @@ export class DealsPage extends BasePage {
   // Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
-  async createDeal(data: DealData): Promise<number | null> {
+  // WHY the optional `options` param — threaded straight through to
+  // fillDealForm() — see that method's own WHY comment (2026-09-23, Form
+  // Field Limit feature). createDeal()'s own control flow is untouched;
+  // only what gets FILLED changes. Every existing caller omits `options`
+  // and gets the original behavior.
+  async createDeal(
+    data: DealData,
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+  ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       await this.clickAddDeal();
-      await this.fillDealForm(data);
+      await this.fillDealForm(data, options);
       return await this.saveDeal();
     }, 'createDeal');
   }
@@ -2719,6 +2834,37 @@ export class DealsPage extends BasePage {
   // environment already confirmed (via skipIfCustomFieldsAbsent()) to have
   // these fields, so a missing tab here means verification genuinely failed
   // to run, not a legitimate environment-absence case.
+  // WHY this single-field variant exists (2026-09-23, Form Field Limit
+  // feature): assertDealCustomFieldsOnDetail() below asserts all 9 fields
+  // unconditionally — this feature's own tests only ever set ONE field at a
+  // time (Text/Number/Paragraph) and need to verify just that one. Mirrors
+  // that method's own tab-click + assertCustomFieldOnDetail() shape exactly,
+  // narrowed to a single field. `otherDetailsDetailPageTab()` is Deal's own
+  // dedicated locator (`#nav-tab2-tab`) — confirmed live this session that
+  // Deal does NOT use the generic `data-targetid="Other Details"` attribute
+  // convention every other entity in this feature uses, so
+  // BasePage.clickDetailPageTab() would not work here.
+  async assertDealCustomFieldOnDetail(
+    fieldName: string,
+    expectedValue: string,
+    description = fieldName
+  ): Promise<void> {
+    const tab = this.otherDetailsDetailPageTab();
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        tab,
+        '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
+      ).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await tab.click();
+    // WHY: waitForCustomFieldToSettle() (BasePage.ts) is the shared,
+    // already-proven bounded wait for a custom field to actually attach to
+    // the DOM after a tab reveals its section — the real condition here,
+    // not a guessed render-settle duration.
+    await this.waitForCustomFieldToSettle(fieldName);
+    await this.assertCustomFieldOnDetail(fieldName, expectedValue, description);
+  }
+
   async assertDealCustomFieldsOnDetail(data: DealData): Promise<void> {
     logger.info('Asserting all 9 custom field values on deal detail page');
     const tab = this.otherDetailsDetailPageTab();

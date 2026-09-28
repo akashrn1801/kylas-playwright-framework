@@ -23,6 +23,20 @@ export class BasePage {
     this.page = page;
   }
 
+  // WHY a public getter, not just leaving `page` protected (added
+  // 2026-09-22): a small, deliberate, additive exception to normally never
+  // reaching into a page object's internals from a test file — needed
+  // specifically so test-file-level diagnostic instrumentation (e.g.
+  // attaching temporary request/response listeners around one specific
+  // action to capture live network evidence for an intermittent,
+  // not-yet-root-caused failure) can access the underlying Page without
+  // page objects needing to expose a new method for every possible
+  // diagnostic need. Read-only, changes nothing about the page object's
+  // own behavior.
+  getPage(): Page {
+    return this.page;
+  }
+
   // ─── Navigation ───────────────────────────────────────────
 
   // WHY mid-test session recovery lives here too (added 2026-07-20): this is
@@ -476,6 +490,48 @@ export class BasePage {
       await locator.clear();
       await locator.fill(value);
     }
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // that every standard (non-custom) field across this app's create/edit
+  // forms is addressable by its real HTML `name` attribute (e.g.
+  // `input[name="lastName"]`, `input[name="firstName"]`) — the exact same
+  // convention LeadsPage's own private lastNameInput()/firstNameInput()
+  // locators already use internally. This feature's own tests need to
+  // fill exactly ONE standard field (Last Name — required before a Lead
+  // can be saved at all) without going through LeadsPage.fillLeadForm(),
+  // which fills the entire form (GPS address lookups, multiple react-
+  // selects, campaign fields) and would make 40+ narrow custom-field
+  // boundary tests dramatically slower and exposed to unrelated failure
+  // modes that have nothing to do with what those tests actually verify.
+  // Generalized here, not added as a one-off in a test file, because (a)
+  // CLAUDE.md's own convention forbids locators in test files — every
+  // locator must live in a page object — and (b) this mechanism is
+  // genuinely entity-agnostic (every module's standard fields share this
+  // same `name`-attribute convention), not specific to Lead or to this
+  // feature, so it belongs here rather than as a Lead-specific addition.
+  async fillStandardField(name: string, value: string, description = name): Promise<void> {
+    await this.fill(this.page.locator(`input[name="${name}"]`), value, description);
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // that an entity's detail-page tab strip is addressable by the real,
+  // semantic `data-targetid` HTML attribute (e.g.
+  // `a[data-targetid="Other Details"]`) — the exact same convention
+  // LeadsPage's own private otherDetailsDetailPageTab()/
+  // requirementDetailPageTab() locators already use internally, confirmed
+  // to generalize across every entity with this tabbed-detail-page shape
+  // (not something newly invented for this feature). This feature's own
+  // tests need to reach the "Other Details" tab (where every Lead custom
+  // field renders) to verify a persisted value via
+  // BasePage.assertCustomFieldOnDetail() — confirmed live that this tab's
+  // content is not present in the DOM until clicked (unlike this file's
+  // own carousel-slide handling, which keeps every slide mounted but
+  // CSS-hidden — a genuinely different mechanism), so skipping this click
+  // is not a safe shortcut. Generalized here rather than duplicated per
+  // module for the same reasoning as fillStandardField() just above.
+  async clickDetailPageTab(tabName: string, description = `"${tabName}" tab`): Promise<void> {
+    await this.click(this.page.locator(`a[data-targetid="${tabName}"]`), description);
   }
 
   async selectOption(locator: Locator, value: string, description = 'dropdown'): Promise<void> {
@@ -1055,7 +1111,22 @@ export class BasePage {
       : `_input_customFieldValues.cf${fieldName}`;
   }
 
-  private customFieldInputLocator(
+  // WHY 'protected', not 'private' (2026-09-23, Products & Services rollout
+  // of the Form Field Limit feature): Products & Services has no detail
+  // page at all (edit doubles as the only per-record view, confirmed live —
+  // see ProductsAndServicesPage's own class-level comment), so verifying a
+  // custom field's persisted value after save must read it back from the
+  // still-open EDIT FORM's own input, not a rendered detail-page display
+  // the way assertCustomFieldOnDetail() does for every other module. No
+  // other module needs this — every other entity has a real detail page.
+  // Widening access (never narrowing, never changing behavior) is the
+  // minimal, purely-additive way to let ProductsAndServicesPage reuse this
+  // exact same suffix-matching locator logic rather than duplicating it —
+  // per CLAUDE.md rule 1 ("build once, generically, in BasePage"). Zero
+  // impact on any existing caller: every current use of this method is
+  // still `this.customFieldInputLocator(...)` from inside BasePage itself
+  // or a subclass, unchanged.
+  protected customFieldInputLocator(
     fieldName: string,
     suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Locator {
@@ -1145,6 +1216,50 @@ export class BasePage {
       value,
       `custom field: ${description}`
     );
+  }
+
+  // WHY this exists (real, confirmed live bug, 2026-09-21 — found via a
+  // FormFields feature test, FFL18, that reproduced 3/3 in TRUE isolation,
+  // --workers=1, zero other load, ruling out backend flakiness): a caller
+  // that has just revealed the custom-field section via
+  // disableRequiredFieldsToggle() can hit that method's "already disabled,
+  // skip click" fast path (its state persists across sessions — confirmed
+  // live 2026-07-08) — which, unlike its own "click to disable" path,
+  // provides NO settling wait at all before returning. A caller that
+  // immediately calls fillTextLikeCustomField()/isCustomFieldPresent()
+  // right after can catch the custom-field section before it has genuinely
+  // finished rendering — the field then gets silently treated as "absent
+  // in this environment" (that method's own correct, by-design
+  // environment-safety contract for a GENUINELY missing field), when it is
+  // actually just not rendered YET. Confirmed via direct log evidence:
+  // "Custom field "Number" (cfNumber) not found in this environment —
+  // skipping fill" on a test where the field is known to exist and had
+  // been successfully filled moments earlier by an adjacent test in the
+  // same suite. This method gives a bounded, best-effort settling wait —
+  // NOT a hard requirement, since the field might be genuinely absent in
+  // some environment — the existing presence-checked fill/assert methods
+  // still make the authoritative absent-vs-present call afterward; this
+  // only removes the specific "checked before render completed" false
+  // negative. Deliberately scoped as a new, additive method rather than
+  // modifying disableRequiredFieldsToggle() itself, which is duplicated
+  // per-module (Leads/Companies/Contacts each own a private copy) and used
+  // by every existing test in those modules — changing its own timing
+  // behavior would be a much higher-blast-radius change than adding one
+  // new, opt-in wait a caller can choose to use.
+  async waitForCustomFieldToSettle(
+    fieldName: string,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy',
+    timeoutMs = 5000
+  ): Promise<void> {
+    await this.customFieldInputLocator(fieldName, suffixStyle)
+      .first()
+      .waitFor({ state: 'attached', timeout: timeoutMs })
+      .catch(() => {
+        /* genuinely absent, or still not rendered after this bounded
+           wait — either way, the caller's own presence-checked method
+           (e.g. fillTextLikeCustomField()) makes the final determination,
+           not this best-effort settle. */
+      });
   }
 
   async setCheckboxCustomField(
@@ -1275,6 +1390,153 @@ export class BasePage {
       return null;
     }
     return result.data;
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // (FORM_FIELD_LIMIT_INVESTIGATION.md §2.4, FORM_FIELD_LIMIT_INVESTIGATION_
+  // FOLLOWUP.md §1) that this app caches every entity's create/edit/list
+  // field layout (including custom-field min/max/regex config) in
+  // IndexedDB (`kylasStorage` → `layoutCache` object store, one key per
+  // entity), fetched once per browser session and never auto-refreshed —
+  // not on page reload, not on the list's own "Refresh" button. The only
+  // way to force a fresh fetch, confirmed live, is to clear that one
+  // entity's own cache entry. A full logout/login round-trip also works
+  // (confirmed) but is far slower and clears the entire session, not just
+  // this one cache entry — the scoped IndexedDB delete below was confirmed
+  // (follow-up doc §1) to be a clean, working, much faster equivalent: it
+  // leaves the auth token and every other cache store completely
+  // untouched, and was proven correct with a real before/after
+  // config-value round-trip (not saved → cleared → refetched → correct
+  // new value), not just a "still blank" check.
+  //
+  // WHY this takes the raw layoutCache key STRING, not an entity name to
+  // derive it from: confirmed live (follow-up doc §3.2) that this key is
+  // NOT a fixed transformation of the entity's name — Lead/Deal/Contact
+  // all happen to be the simple lowercase plural ("leads"/"deals"/
+  // "contacts"), but Products & Services' real key is "products-services",
+  // which no single derivation rule predicts (its own inner layout data
+  // separately uses "PRODUCT" singular, and its real API layout path uses
+  // yet a third shape — three different identifiers for one entity, none
+  // mechanically derivable from another). `IDBObjectStore.delete()` on a
+  // nonexistent key does not error — it silently deletes nothing — so a
+  // wrong guess here would fail silently, not loudly, surfacing only much
+  // later as an unrelated-looking flaky test. Each entity module must own
+  // and pass its own hand-verified key (e.g. LEAD_LAYOUT_CACHE_KEY in
+  // leadFactory.ts) — this method must never contain entity-name-to-key
+  // derivation logic or a per-entity lookup table of its own; that
+  // per-entity knowledge belongs with each entity's own factory/constants,
+  // the same place LEAD_CUSTOM_FIELD_NAMES already lives, keeping this
+  // file itself entity-agnostic — its own established convention (see
+  // fetchAuthenticatedApiData() just above).
+  //
+  // WHY a typed discriminated-union result, not a bare Promise<void>
+  // (following fetchAuthenticatedApiData()'s own shape above): a caller
+  // needs to distinguish "already absent" (key-not-found — arguably fine,
+  // idempotent) from a genuine failure (db/store missing, or a thrown
+  // exception) rather than a single opaque success/failure boolean.
+  async clearApplicationCache(layoutCacheKey: string): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        reason: 'db-not-found' | 'store-not-found' | 'key-not-found' | 'exception';
+        message?: string;
+      }
+  > {
+    type Result =
+      | { ok: true }
+      | {
+          ok: false;
+          reason: 'db-not-found' | 'store-not-found' | 'key-not-found' | 'exception';
+          message?: string;
+        };
+    const result: Result = await this.page.evaluate(async (key): Promise<Result> => {
+      const DB_NAME = 'kylasStorage';
+      const STORE_NAME = 'layoutCache';
+      try {
+        const dbs = (await indexedDB.databases?.()) ?? [];
+        if (!dbs.some((d) => d.name === DB_NAME)) {
+          return { ok: false, reason: 'db-not-found' };
+        }
+        return await new Promise<Result>((resolve) => {
+          const openReq = indexedDB.open(DB_NAME);
+          openReq.onerror = () =>
+            resolve({ ok: false, reason: 'exception', message: String(openReq.error) });
+          openReq.onsuccess = () => {
+            const db = openReq.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+              resolve({ ok: false, reason: 'store-not-found' });
+              return;
+            }
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const getReq = store.get(key);
+            getReq.onerror = () =>
+              resolve({ ok: false, reason: 'exception', message: String(getReq.error) });
+            getReq.onsuccess = () => {
+              if (getReq.result === undefined) {
+                resolve({ ok: false, reason: 'key-not-found' });
+                return;
+              }
+              const delReq = store.delete(key);
+              delReq.onsuccess = () => resolve({ ok: true });
+              delReq.onerror = () =>
+                resolve({ ok: false, reason: 'exception', message: String(delReq.error) });
+            };
+          };
+        });
+      } catch (e) {
+        return { ok: false, reason: 'exception', message: String(e) };
+      }
+    }, layoutCacheKey);
+
+    // WHY 'key-not-found' logs at info, not warn (real, confirmed live noise
+    // — 2026-09-22): this method's own WHY comment above already establishes
+    // that an absent key is an expected, idempotent no-op, not a failure —
+    // callers (e.g. tests/ui/formFields/leadFieldLimits.spec.ts's
+    // clearLeadApplicationCache()) already honor that by never failing on
+    // it. Logging it via logger.warn() alongside genuine failures
+    // ('db-not-found', 'store-not-found', 'exception') contradicted that
+    // documented contract and produced a misleading WARN on every run
+    // touching a session that has never cached this key yet — routinely
+    // true for every restricted-role test in that file, so it fired on
+    // effectively every run rather than only on a real problem. Every other
+    // reason is still a genuine, unexpected condition and stays at warn.
+    if (result.ok) {
+      logger.success(`clearApplicationCache: cleared layoutCache key "${layoutCacheKey}"`);
+    } else if (result.reason === 'key-not-found') {
+      logger.info(
+        `clearApplicationCache: layoutCache key "${layoutCacheKey}" was already absent — nothing to clear`
+      );
+    } else {
+      logger.warn(
+        `clearApplicationCache: failed to clear layoutCache key "${layoutCacheKey}" (${result.reason}` +
+          `${result.message ? ` — ${result.message}` : ''})`
+      );
+    }
+    return result;
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): every entity's
+  // create/edit modal shares the same `#editEntityModal` structure and the
+  // same `.save-button` class — already treated as shared, generic markup
+  // elsewhere in this file (see getFormSectionContainer()'s own default
+  // `this.page.locator('#editEntityModal')`). Custom-field validation
+  // tests for this feature need to click Save and observe whether a
+  // network request fires at all. Going through e.g. LeadsPage.saveLead()'s
+  // own response-wait wrapper is wrong for this specific need: that method
+  // waits up to config.timeouts.navigation for a create/update response
+  // and, finding none, classifies the miss as a TRANSIENT backend error
+  // and retries the whole create — exactly the wrong interpretation for a
+  // value that's permanently, correctly blocked client-side (confirmed
+  // live, FORM_FIELD_LIMIT_INVESTIGATION.md §2.7/§2.8) and would make
+  // every such test wait a full navigation timeout for nothing. This is a
+  // thin, generic, modal-only click — callers decide for themselves
+  // whether/how to wait for a network response, or to assert none fires.
+  async clickModalSaveButton(context = 'entity modal'): Promise<void> {
+    await this.click(
+      this.page.locator('#editEntityModal button.save-button'),
+      `Save (${context})`
+    );
   }
 
   // WHY this exists (2026-07-30, found via a real CI failure): every
@@ -1728,6 +1990,86 @@ export class BasePage {
     }
   }
 
+  // WHY this exists (real, confirmed live 2026-09-22 — direct evidence from a
+  // headed reproduction, exact Playwright error text captured): the reopen
+  // click on a multi-select's own <input> below was observed blocked for a
+  // full 15s (Playwright's own internal actionability retry loop, ~26
+  // attempts) by a react-select-internal element (`css-<hash>` — an emotion-
+  // generated class, NOT the app's own `.is-invalid__menu` BEM class this
+  // method already checks) that was still sitting over the input and
+  // "intercepting pointer events". Checking `.is-invalid__menu` visibility
+  // alone (as the two call sites below already did before this fix) is
+  // therefore insufficient — it can read "closed" while a DIFFERENT, unnamed
+  // wrapper element still physically covers the click target. Rather than
+  // guessing the wrapper's own class name (emotion hashes are build-
+  // specific, not a stable selector to key off) or blindly lengthening the
+  // click timeout (delays the same failure, doesn't fix it), this polls the
+  // REAL element actually sitting at the click point via
+  // document.elementFromPoint() and proceeds only once it genuinely resolves
+  // to the intended target (or a descendant of it) — the same direct,
+  // ground-truth check `locator.click()`'s own actionability logic uses
+  // internally, just performed BEFORE committing to the click so a still-
+  // lingering wrapper is waited out instead of retried-and-failed against.
+  // Bounded and best-effort: if the target never clears, this simply returns
+  // early and lets the real click below run (and fail with its own clear,
+  // diagnostic "intercepts pointer events" error) rather than hanging
+  // indefinitely.
+  //
+  // WHY `protected`, not `private` (2026-09-22): the ORIGINAL theory that
+  // this was specifically react-select's own menu-close-transition wrapper
+  // is now confirmed too narrow — the identical `css-1dsbpcp` class (from
+  // the identical `css-qh6yz6` subtree) was independently observed live
+  // blocking a completely unrelated element (LeadsPage's Save button, which
+  // has no react-select menu anywhere nearby) the same day. Whatever this
+  // overlay actually is, it is not scoped to one widget or one page — this
+  // helper needed to become reusable by a subclass (LeadsPage) for its own,
+  // unrelated click site rather than staying a BasePage-internal-only
+  // implementation detail of one react-select helper.
+  // WHY compared against the locator's OWN resolved element, not a
+  // hardcoded selector list (corrected 2026-09-22, same day as the
+  // `protected` visibility change above — see that WHY comment): the
+  // original `target?.closest('input, [class*="__control"]')` check only
+  // ever matched a react-select input, so it silently did nothing useful
+  // when this method was reused for LeadsPage's Save button (a `<button>`,
+  // matching neither pattern) — confirmed live: LeadsPage's Save-button
+  // click-site hit the identical `css-1dsbpcp` overlay this method exists to
+  // wait out, and adding the call without first fixing this match logic
+  // would have been a no-op fix. Grabbing the locator's real ElementHandle
+  // and comparing it directly against whatever `document.elementFromPoint()`
+  // returns (an exact match, or a containment check either direction, to
+  // tolerate the point resolving to a child/ancestor of the real target)
+  // works identically for any element type — a button, an input, a
+  // react-select control — with no per-caller selector guessing needed.
+  protected async waitForClickTargetUnobstructed(
+    locator: Locator,
+    timeoutMs = 5000
+  ): Promise<void> {
+    const handle = await locator.elementHandle().catch(() => null);
+    if (!handle) return;
+    try {
+      const box = await locator.boundingBox().catch(() => null);
+      if (!box) return;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      await this.page
+        .waitForFunction(
+          ({ el, cx, cy }: { el: Element; cx: number; cy: number }) => {
+            const atPoint = document.elementFromPoint(cx, cy);
+            if (!atPoint) return false;
+            return atPoint === el || el.contains(atPoint) || atPoint.contains(el);
+          },
+          { el: handle, cx, cy },
+          { timeout: timeoutMs }
+        )
+        .catch(() => {
+          /* best-effort — the real click immediately after this still runs and
+             surfaces its own clear error if something is genuinely still stuck. */
+        });
+    } finally {
+      await handle.dispose().catch(() => {});
+    }
+  }
+
   async selectRandomFromMultiValueReactSelect(
     control: Locator,
     description: string
@@ -1803,6 +2145,7 @@ export class BasePage {
         .isVisible()
         .catch(() => false);
       if (!menuOpen) {
+        await this.waitForClickTargetUnobstructed(controlInput);
         await this.click(controlInput, `multi-select control: ${description}`);
         await this.page
           .locator('.is-invalid__menu .is-invalid__option')
@@ -1840,6 +2183,7 @@ export class BasePage {
           .isVisible()
           .catch(() => false);
         if (!menuOpenForRetry) {
+          await this.waitForClickTargetUnobstructed(controlInput);
           await this.click(controlInput, `multi-select control: ${description}`);
           await this.page
             .locator('.is-invalid__menu .is-invalid__option')
@@ -1861,6 +2205,29 @@ export class BasePage {
       selected.push(optionText);
     }
     await this.page.keyboard.press('Escape');
+    // WHY wait for the menu to actually become hidden here, not just
+    // press Escape and move on (real, confirmed live finding, 2026-09-22 —
+    // found while investigating a Lead-create Save click that fires its
+    // real React handler yet produces no request): `press('Escape')` only
+    // guarantees the key EVENT was dispatched — it says nothing about
+    // whether the resulting React state update (closing this menu,
+    // committing the final selection into whatever parent form state a
+    // Save handler later reads) has actually completed by the time the
+    // very next statement runs. Live log evidence showed this method
+    // returning and the caller's own Save click firing within the SAME
+    // millisecond with zero gap in between — a timing a real user clicking
+    // through the UI could never produce (moving a mouse from this control
+    // to a Save button always costs real, perceptible time). Waiting for a
+    // real, observable signal that the menu has genuinely closed — not an
+    // arbitrary sleep — gives React's own state update the same natural
+    // settling time a human's normal pace would have provided for free.
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* already hidden, or never opened this specific instance — either
+           way, nothing further to wait for here. */
+      });
 
     // WHY: confirmed live (2026-07-08) — every individual chip can verify as
     // landed at the moment it's clicked (the per-click check above), yet a

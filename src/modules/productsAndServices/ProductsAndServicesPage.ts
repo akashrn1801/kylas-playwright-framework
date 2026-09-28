@@ -3,6 +3,7 @@ import { BasePage } from '../../core/BasePage';
 import {
   ProductsAndServicesData,
   ProductsCustomFieldData,
+  ProductsCustomFieldKey,
   PRODUCTS_CUSTOM_FIELD_NAMES,
 } from '../../data/factories/productsAndServicesFactory';
 import { config } from '../../../config/config';
@@ -422,32 +423,48 @@ export class ProductsAndServicesPage extends BasePage {
   // custom-field test supplies it. Mirrors
   // `QuotationsPage.fillAndSaveQuotationFromPanel()`'s identical
   // additive-optional-param precedent.
+  // WHY the optional `options` param (2026-09-23, Form Field Limit feature,
+  // Products & Services rollout): mirrors every other entity's identical
+  // `{minimal, onlyCustomField}` architecture (see
+  // LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5) — confirmed live via direct
+  // incremental reproduction (Name alone -> "This is a required field";
+  // Name+Price -> HTTP 200/redirect to list) that Products & Services' own
+  // true save-required minimum is just Name + Price, genuinely simpler than
+  // every other entity built so far in this feature. `minimal: true`
+  // therefore skips Description/HSN-SAC/Country/Category/Units/Active
+  // entirely — all six are already optional server-side, confirmed by this
+  // same live test. Every existing caller omits `options` and gets
+  // byte-for-byte the original fill-everything behavior.
   async fillProductsAndServicesForm(
     data: ProductsAndServicesData,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    options?: { minimal?: boolean; onlyCustomField?: ProductsCustomFieldKey }
   ): Promise<void> {
+    const minimal = options?.minimal === true;
     await this.fill(this.nameInput(), data.name, 'product name');
     await this.fill(this.priceInput(), String(data.price), 'price');
-    await this.setDescriptionViaCkEditor(data.description);
-    if (data.hsnSacCode) {
-      await this.fill(this.hsnSacInput(), data.hsnSacCode, 'HSN/SAC code');
+    if (!minimal) {
+      await this.setDescriptionViaCkEditor(data.description);
+      if (data.hsnSacCode) {
+        await this.fill(this.hsnSacInput(), data.hsnSacCode, 'HSN/SAC code');
+      }
+      if (data.countryOfOrigin) {
+        await this.selectFromReactSelect(
+          this.countryOfOriginAnchor(),
+          data.countryOfOrigin,
+          'Country of Origin'
+        );
+      }
+      if (data.category) {
+        await this.selectFromReactSelect(this.categoryAnchor(), data.category, 'Category');
+      }
+      if (data.units) {
+        await this.selectFromReactSelect(this.unitsAnchor(), data.units, 'Units');
+      }
+      await this.setIsActive(data.isActive);
     }
-    if (data.countryOfOrigin) {
-      await this.selectFromReactSelect(
-        this.countryOfOriginAnchor(),
-        data.countryOfOrigin,
-        'Country of Origin'
-      );
-    }
-    if (data.category) {
-      await this.selectFromReactSelect(this.categoryAnchor(), data.category, 'Category');
-    }
-    if (data.units) {
-      await this.selectFromReactSelect(this.unitsAnchor(), data.units, 'Units');
-    }
-    await this.setIsActive(data.isActive);
-    if (customFields) {
-      await this.fillProductsCustomFields(customFields);
+    if (customFields && (!minimal || options?.onlyCustomField)) {
+      await this.fillProductsCustomFields(customFields, options?.onlyCustomField);
     }
     logger.success('Products & Services form filled');
   }
@@ -474,50 +491,86 @@ export class ProductsAndServicesPage extends BasePage {
    * `CompaniesPage.fillCompanyCustomFields()`'s structure exactly, adjusted
    * for the 2 fields Products doesn't have.
    */
-  private async fillProductsCustomFields(cf: ProductsCustomFieldData): Promise<void> {
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.number,
-      String(cf.number),
-      'Number',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.urlField,
-      cf.urlField,
-      'URL Field',
-      'plain'
-    );
-    await this.setCheckboxCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.checkbox,
-      cf.checkbox,
-      'Checkbox',
-      'plain'
-    );
-    await this.selectDateCustomField(PRODUCTS_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
-    await this.selectDateTimeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker',
-      'plain'
-    );
-    const pickedValue = await this.selectPicklistCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List',
-      'plain'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
+  // WHY the optional `onlyField` param (2026-09-23, Form Field Limit
+  // feature, Products & Services rollout): mirrors
+  // CompaniesPage.fillCompanyCustomFields()'s/TasksPage.fillTaskCustomFields()'s
+  // identical, already-proven `wants(onlyField)` architecture — fills ONLY
+  // the one field under test and skips the other 7 entirely when provided.
+  // Every existing caller omits it and gets byte-for-byte the original
+  // fill-everything behavior. The blur-fix below (document.activeElement.
+  // blur(), not a Tab keypress) mirrors the same incident-driven fix
+  // documented in LEAD_FEATURE_RETROSPECTIVE.md §2.8 — a Tab keypress after
+  // a single minimal-fill custom-field fill can advance focus into an
+  // unrelated react-select and silently open it.
+  private async fillProductsCustomFields(
+    cf: ProductsCustomFieldData,
+    onlyField?: ProductsCustomFieldKey
+  ): Promise<void> {
+    const wants = (key: ProductsCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
+
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field',
+        'plain'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text',
+        'plain'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number',
+        'plain'
+      );
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.urlField,
+        cf.urlField,
+        'URL Field',
+        'plain'
+      );
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.checkbox,
+        cf.checkbox,
+        'Checkbox',
+        'plain'
+      );
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(PRODUCTS_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker',
+        'plain'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List',
+        'plain'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   /**
@@ -638,9 +691,18 @@ export class ProductsAndServicesPage extends BasePage {
   // any test. Leaving `name` out of this method's own parameter surface
   // makes that guardrail structurally true here, rather than relying purely
   // on test-level discipline to never pass it.
+  // WHY the optional `onlyCustomField` param (2026-09-23, Form Field Limit
+  // feature): `changes` being a Partial already gives this method a
+  // "minimal edit" capability every other entity's fillEditForm() had to be
+  // newly built to get — a caller passing `{}` already touches nothing but
+  // custom fields. `onlyCustomField` extends that same minimality down into
+  // the custom-field fill itself, matching every other entity's identical
+  // capability. Every existing caller omits it and gets byte-for-byte the
+  // original fill-every-provided-custom-field behavior.
   async fillEditForm(
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    onlyCustomField?: ProductsCustomFieldKey
   ): Promise<void> {
     if (changes.price !== undefined) {
       await this.fill(this.priceInput(), String(changes.price), 'price (edit)');
@@ -668,7 +730,7 @@ export class ProductsAndServicesPage extends BasePage {
       await this.setIsActive(changes.isActive);
     }
     if (customFields) {
-      await this.fillProductsCustomFields(customFields);
+      await this.fillProductsCustomFields(customFields, onlyCustomField);
     }
     logger.success('Product edit form filled');
   }
@@ -684,9 +746,45 @@ export class ProductsAndServicesPage extends BasePage {
    * method itself since it only needs to observe the UI outcome, not the
    * request shape.
    */
+  // WHY this now waits for the real PUT response before declaring success
+  // (real bug found live, 2026-09-23 — final verification run for the Form
+  // Field Limit feature): this method previously had no network wait at
+  // all, only a client-side "no error toast" check and a URL-redirect
+  // check, both satisfiable before the actual PUT /v1/products/{id}
+  // request finishes persisting server-side. A caller that immediately
+  // re-opens the edit page and reads a just-saved custom field's value
+  // (this feature's own assertCustomFieldValueOnEditPage()) can race the
+  // real database write — confirmed live: 4 failures in the same run
+  // (FFPS8/FFPS18/FFPS21/FFRPS5), each reading back an empty or not-yet-
+  // rendered field immediately after saveEditedProduct() returned. This is
+  // the SAME bug class already found and fixed for
+  // CompaniesPage.saveEditedCompany()/LeadsPage.saveEditedLead() (rule
+  // 18 — a bug class fixed in one place is not fixed everywhere) — never
+  // applied here until now. Capture and await the real update response
+  // BEFORE declaring success, mirroring saveEditedCompany()'s exact
+  // pattern.
   async saveEditedProduct(): Promise<void> {
+    const updateResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        /\/v1\/products\/\d+$/.test(new URL(res.url()).pathname) && res.request().method() === 'PUT',
+      'product update response',
+      config.timeouts.navigation
+    ).catch(() => null);
+
     await this.click(this.saveButton(), 'Save (product edit)');
     await this.assertNoFormErrors('product edit form');
+
+    const updateResponse = await updateResponsePromise;
+    // WHY fail-fast, not silently proceed: same convention as
+    // saveEditedCompany() — a failed/slow update that never persisted
+    // server-side must not be silently reported as success, letting
+    // callers proceed as if the edit took effect.
+    if (!updateResponse) {
+      throw new Error(
+        'Product update (PUT /v1/products/{id}) response not captured after save — cannot proceed (update likely failed silently or did not persist in time)'
+      );
+    }
+
     await this.waitForUrl(/\/products-services\/list/, config.timeouts.navigation);
     logger.success('Product edit saved');
   }
@@ -916,17 +1014,107 @@ export class ProductsAndServicesPage extends BasePage {
     logger.success('Product fields verified on edit page');
   }
 
+  /**
+   * Asserts a single custom field's persisted VALUE by reading it back from
+   * the still-open EDIT FORM's own input — the only verification mechanism
+   * available for this module (2026-09-23, Form Field Limit feature).
+   *
+   * WHY this cannot reuse BasePage.assertCustomFieldOnDetail() the way
+   * every other entity in this feature does: that method reads a rendered,
+   * read-only DETAIL-page display — Products & Services has no detail page
+   * at all (edit doubles as the only per-record view, confirmed live, see
+   * this class's own header comment). The value must instead be read back
+   * from the field's own `<input>`/`<textarea>` via `.inputValue()`, using
+   * the exact same suffix-matching locator BasePage's other custom-field
+   * helpers already use (widened from `private` to `protected` specifically
+   * to enable this reuse rather than duplicating the locator logic here —
+   * see that method's own WHY comment in BasePage.ts).
+   *
+   * @param nameOrId Same contract as openProductForEdit() — call this with
+   *                 the edit page ALREADY open (mirrors
+   *                 assertProductFieldsOnEditPage()'s own convention).
+   * @param reloadRetryId WHY this optional param (real bug found live,
+   *                 2026-09-23 — a --workers=2-only run against JUST this
+   *                 module's own tests, no other entity concurrently
+   *                 competing for its lock, still reproduced 4-5 failures
+   *                 out of ~70 tests: the custom field's own `<input>`
+   *                 exists and is genuinely attached, but its value reads
+   *                 back EMPTY moments after a real, already-accepted
+   *                 create/edit save — confirmed via a dedicated live
+   *                 diagnostic that the IDENTICAL create+immediate-read
+   *                 sequence succeeds on the very first attempt, 1/1, in
+   *                 true `--workers=1` isolation (zero concurrent load).
+   *                 This is the same class of real, load-dependent
+   *                 read-after-write lag already documented and fixed
+   *                 elsewhere in this codebase via a bounded reload-and-
+   *                 retry (assertRightPanelIconVisible()'s own fix,
+   *                 reference-patterns.md §5 — "a fresh mount re-fetches
+   *                 the snapshot") — not a guess, the same proven
+   *                 mechanism applied to a new instance of the same bug
+   *                 class (rule 18). When provided, a failed value-match
+   *                 triggers up to 2 additional attempts, each starting
+   *                 with a fresh `openProductForEdit(reloadRetryId)`
+   *                 (a real navigation + re-fetch, not just re-reading the
+   *                 same stale DOM). Omitted by no current caller — every
+   *                 call site that can supply an id now does, since every
+   *                 one of them is exposed to this same race; left
+   *                 optional only so a future caller without an id at
+   *                 hand still compiles and gets the single-attempt
+   *                 behavor, matching this method's original contract.
+   */
+  async assertCustomFieldValueOnEditPage(
+    fieldName: string,
+    expectedValue: string,
+    description = fieldName,
+    reloadRetryId?: string
+  ): Promise<void> {
+    const input = this.customFieldInputLocator(fieldName, 'plain');
+    const maxAttempts = reloadRetryId ? 3 : 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && reloadRetryId) {
+        logger.warn(
+          `${description} read back empty/mismatched on attempt ${attempt - 1}/${maxAttempts} — ` +
+            `reloading the edit page and retrying (suspected concurrent-load read-after-write lag)`
+        );
+        await this.openProductForEdit(reloadRetryId);
+      }
+
+      const matched = await this.withSessionExpiryRecovery(() =>
+        expect(input)
+          .toHaveValue(expectedValue, { timeout: config.timeouts.expect })
+          .then(() => true)
+          .catch(() => false)
+      );
+
+      if (matched) {
+        logger.success(`Confirmed ${description} = "${expectedValue}" on the product edit form`);
+        return;
+      }
+
+      if (attempt === maxAttempts) {
+        await this.withSessionExpiryRecovery(() =>
+          expect(
+            input,
+            `Expected ${description} to hold "${expectedValue}" on the edit form (after ${maxAttempts} attempt(s))`
+          ).toHaveValue(expectedValue, { timeout: config.timeouts.expect })
+        );
+      }
+    }
+  }
+
   // ─── 10. Workflow wrappers ──────────────────────────────────────────────────
 
   async createProduct(
     data: ProductsAndServicesData,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    options?: { minimal?: boolean; onlyCustomField?: ProductsCustomFieldKey }
   ): Promise<{ id: string | null }> {
     return this.withSessionExpiryRetry(async () => {
       const attemptData = { ...data };
       await this.goToProductsAndServicesList();
       await this.goToCreateProductForm();
-      await this.fillProductsAndServicesForm(attemptData, customFields);
+      await this.fillProductsAndServicesForm(attemptData, customFields, options);
       const result = await this.saveProduct();
       logger.success(`Product created: ${attemptData.name} (id: ${result.id})`);
       return result;
@@ -936,12 +1124,13 @@ export class ProductsAndServicesPage extends BasePage {
   async updateProduct(
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
     nameOrId: string,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    onlyCustomField?: ProductsCustomFieldKey
   ): Promise<void> {
     return this.withSessionExpiryRetry(async () => {
       const attemptChanges = { ...changes };
       await this.openProductForEdit(nameOrId);
-      await this.fillEditForm(attemptChanges, customFields);
+      await this.fillEditForm(attemptChanges, customFields, onlyCustomField);
       await this.saveEditedProduct();
       logger.success(`Product updated: ${nameOrId}`);
     }, 'updateProduct');
