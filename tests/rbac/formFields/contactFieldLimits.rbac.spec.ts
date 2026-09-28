@@ -3,7 +3,7 @@ import { Page } from '@playwright/test';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  CONTACT_CUSTOM_FIELD_NAMES,
+  CONTACT_FORM_FIELD_LIMIT_NAMES,
   CONTACT_LAYOUT_CACHE_KEY,
   generateContactData,
   ContactData,
@@ -49,9 +49,9 @@ import { logger } from '../../../src/utils/logger';
 // shape. Restricted-user RBAC here is proven entirely through the LIST
 // page (visible, read-only, no Add Field button, rows not clickable).
 
-const CONTACT_TEXT_FIELD_INTERNAL_NAME = `cf${CONTACT_CUSTOM_FIELD_NAMES.textField}`;
-const CONTACT_NUMBER_FIELD_INTERNAL_NAME = `cf${CONTACT_CUSTOM_FIELD_NAMES.number}`;
-const CONTACT_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${CONTACT_CUSTOM_FIELD_NAMES.paragraphText}`;
+const CONTACT_TEXT_FIELD_INTERNAL_NAME = `cf${CONTACT_FORM_FIELD_LIMIT_NAMES.textField}`;
+const CONTACT_NUMBER_FIELD_INTERNAL_NAME = `cf${CONTACT_FORM_FIELD_LIMIT_NAMES.number}`;
+const CONTACT_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
 // WHY this checks an inline error, not a toast: live reproduction confirmed
 // Text field min/max is validated CLIENT-SIDE, inline, on blur — the exact
@@ -132,9 +132,9 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
   type SupportedCustomFieldKey = 'textField' | 'paragraphText' | 'number';
 
   function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-    if (fieldName === CONTACT_CUSTOM_FIELD_NAMES.textField) return 'textField';
-    if (fieldName === CONTACT_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-    if (fieldName === CONTACT_CUSTOM_FIELD_NAMES.number) return 'number';
+    if (fieldName === CONTACT_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+    if (fieldName === CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+    if (fieldName === CONTACT_FORM_FIELD_LIMIT_NAMES.number) return 'number';
     throw new Error(
       `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
     );
@@ -177,6 +177,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     const contactId = await contactsPage.createContact(contactData, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     expect(
       contactId,
@@ -207,6 +208,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await contactsPage.fillEditForm(buildContactDataWithFieldOverride(lastName, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     await contactsPage.saveEditedContact();
   }
@@ -220,6 +222,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await contactsPage.fillContactForm(buildContactDataWithFieldOverride(lastName, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -234,6 +237,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await contactsPage.fillEditForm(buildContactDataWithFieldOverride(lastName, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -351,6 +355,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.fillContactForm(contactData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
     });
     await assertInlineErrorPresent(
       restrictedContactsPage,
@@ -426,6 +431,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     const contactId = await restrictedContactsPage.createContact(acceptData, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
     });
     expect(
       contactId,
@@ -434,7 +440,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.searchAndOpenContact('', contactId as number);
     await restrictedContactsPage.clickDetailPageTab('Other Details');
     await restrictedContactsPage.assertCustomFieldOnDetail(
-      CONTACT_CUSTOM_FIELD_NAMES.number,
+      CONTACT_FORM_FIELD_LIMIT_NAMES.number,
       acceptValue,
       'Number field'
     );
@@ -446,6 +452,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.fillContactForm(rejectData, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
     });
     await assertInlineErrorPresent(
       restrictedContactsPage,
@@ -492,6 +499,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     const contactId = await restrictedContactsPage.createContact(acceptData, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     expect(
       contactId,
@@ -500,7 +508,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.searchAndOpenContact('', contactId as number);
     await restrictedContactsPage.clickDetailPageTab('Other Details');
     await restrictedContactsPage.assertCustomFieldOnDetail(
-      CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+      CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
       acceptValue,
       'Paragraph field'
     );
@@ -512,6 +520,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.fillContactForm(rejectData, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     await assertInlineErrorPresent(
       restrictedContactsPage,
@@ -559,6 +568,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     const contactId = await restrictedContactsPage.createContact(acceptData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
     });
     expect(
       contactId,
@@ -567,7 +577,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.searchAndOpenContact('', contactId as number);
     await restrictedContactsPage.clickDetailPageTab('Other Details');
     await restrictedContactsPage.assertCustomFieldOnDetail(
-      CONTACT_CUSTOM_FIELD_NAMES.textField,
+      CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
       acceptValue,
       'Text field'
     );
@@ -579,6 +589,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     await restrictedContactsPage.fillContactForm(rejectData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
     });
     await assertInlineErrorPresent(
       restrictedContactsPage,
@@ -602,7 +613,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC8 Add Contact — Text under min');
@@ -628,13 +639,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -661,13 +672,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactId = await createBareContact(contactsPage, lastName);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
       await updateContactExpectingAccept(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -693,7 +704,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const lastName = faker.person.lastName();
       const contactId = await createBareContact(contactsPage, lastName);
       await openEditContactFormExpectingRejection(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value: generateContactCustomFieldInvalidTextField(TEXT_MAX),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC11 Edit Contact — Text over max');
@@ -716,7 +727,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC12 Add Contact — Number under min');
@@ -742,13 +753,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -775,13 +786,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactId = await createBareContact(contactsPage, lastName);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       await updateContactExpectingAccept(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -807,7 +818,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const lastName = faker.person.lastName();
       const contactId = await createBareContact(contactsPage, lastName);
       await openEditContactFormExpectingRejection(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC15 Edit Contact — Number over max');
@@ -832,15 +843,15 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await contactsPage.goToContactsList();
       const lastName = faker.person.lastName();
       await openContactFormExpectingRejection(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC16 Add Contact — Number initially invalid');
       const validValue = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       await contactsPage.fillTextLikeCustomField(
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         validValue,
-        CONTACT_CUSTOM_FIELD_NAMES.number
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number
       );
       await contactsPage.fillStandardField('lastName', lastName, 'Last Name');
       const errorStillPresent = await hasInlineFormError(
@@ -867,7 +878,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         validValue,
         'Number field'
       );
@@ -892,13 +903,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -922,7 +933,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateContactCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC18 Add Contact — Paragraph over max');
@@ -949,13 +960,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactId = await createBareContact(contactsPage, lastName);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       await updateContactExpectingAccept(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -981,7 +992,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const lastName = faker.person.lastName();
       const contactId = await createBareContact(contactsPage, lastName);
       await openEditContactFormExpectingRejection(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateContactCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC20 Edit Contact — Paragraph over max');
@@ -1009,13 +1020,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await contactsPage.goToContactsList();
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1043,7 +1054,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC22 Add Contact — invalid PAN Card');
@@ -1071,7 +1082,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC23 Add Contact — invalid Email');
@@ -1100,13 +1111,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await contactsPage.goToContactsList();
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1134,7 +1145,7 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const contactsPage = new ContactsPage(restrictedPage);
       await contactsPage.goToContactsList();
       await openContactFormExpectingRejection(contactsPage, faker.person.lastName(), {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(contactsPage, 'FFRC25 Add Contact — invalid Voting Card');
@@ -1163,13 +1174,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await contactsPage.goToContactsList();
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1199,13 +1210,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const lastName = faker.person.lastName();
       const contactId = await createBareContact(contactsPage, lastName);
       await updateContactExpectingAccept(contactsPage, contactId, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1240,13 +1251,13 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       const value = repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS);
       const lastName = faker.person.lastName();
       const contactId = await createContactExpectingAccept(contactsPage, lastName, {
-        fieldName: CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldName: CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         contactsPage,
         contactId,
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        CONTACT_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );

@@ -31,6 +31,18 @@ export const CONTACT_CUSTOM_FIELD_NAMES = {
 
 export type ContactCustomFieldKey = keyof typeof CONTACT_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see CompanyFactory.ts's COMPANY_FORM_FIELD_LIMIT_NAMES for
+// the full incident): dedicated fields, confirmed live on QA (internal
+// names cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph).
+// This feature's own test files must use ONLY this constant, never
+// CONTACT_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const CONTACT_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
 // WHY this constant, and why it must NOT be derived from CONTACT_CUSTOM_
 // FIELD_NAMES or the entity name (2026-09-22, Form Field Limit feature,
 // Contact rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY in

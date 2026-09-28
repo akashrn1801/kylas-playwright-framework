@@ -580,30 +580,39 @@ export class CompaniesPage extends BasePage {
   // test and skips the other 8 entirely when provided — every existing
   // caller omits it and gets byte-for-byte the same fill-everything
   // behavior as before.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see COMPANY_FORM_FIELD_LIMIT_NAMES's
+  // own comment in companyFactory.ts for the full incident): lets a caller
+  // fill the ONE field `onlyField` selects using a DIFFERENT real internal
+  // name than COMPANY_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Company test). Every existing caller omits this and gets byte-for-byte
+  // the original behavior.
   private async fillCompanyCustomFields(
     data: CompanyData,
-    onlyField?: CompanyCustomFieldKey
+    onlyField?: CompanyCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     const cf = data.customFields;
     const wants = (key: CompanyCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
     if (wants('textField')) {
       await this.fillTextLikeCustomField(
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldNameOverride ?? COMPANY_CUSTOM_FIELD_NAMES.textField,
         cf.textField,
         'Text Field'
       );
     }
     if (wants('paragraphText')) {
       await this.fillTextLikeCustomField(
-        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldNameOverride ?? COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
         cf.paragraphText,
         'Paragraph Text'
       );
     }
     if (wants('number')) {
       await this.fillTextLikeCustomField(
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldNameOverride ?? COMPANY_CUSTOM_FIELD_NAMES.number,
         String(cf.number),
         'Number'
       );
@@ -694,7 +703,7 @@ export class CompaniesPage extends BasePage {
   // gets byte-for-byte the original full-form-fill behavior.
   async fillCompanyForm(
     data: CompanyData,
-    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Filling company form');
     const minimal = options?.minimal === true;
@@ -750,7 +759,7 @@ export class CompaniesPage extends BasePage {
     // WHY conditional, not unconditional: mirrors ContactsPage.fillContactForm()'s
     // identical, more-detailed WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillCompanyCustomFields(data, options?.onlyCustomField);
+      await this.fillCompanyCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Company form filled');
@@ -1020,7 +1029,7 @@ export class CompaniesPage extends BasePage {
   // caller omits `options` and is unaffected.
   async fillEditForm(
     data: CompanyData,
-    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Updating company form');
     const minimal = options?.minimal === true;
@@ -1054,7 +1063,7 @@ export class CompaniesPage extends BasePage {
     // WHY conditional — see fillCompanyForm()'s identical, more-detailed
     // WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillCompanyCustomFields(data, options?.onlyCustomField);
+      await this.fillCompanyCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Edit form updated')
@@ -2035,7 +2044,7 @@ export class CompaniesPage extends BasePage {
   // existing caller omits `options` and gets the original behavior.
   async createCompany(
     data: CompanyData,
-    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: CompanyCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (root-caused 2026-07-21 from a real

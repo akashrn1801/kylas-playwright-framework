@@ -10,7 +10,7 @@ import {
   FormFieldsEntityConfig,
 } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  PRODUCTS_CUSTOM_FIELD_NAMES,
+  PRODUCTS_FORM_FIELD_LIMIT_NAMES,
   PRODUCTS_LAYOUT_CACHE_KEY,
   generateProductsAndServicesData,
   generateProductsCustomFieldData,
@@ -80,9 +80,9 @@ const PRODUCTS_ENTITY: FormFieldsEntityConfig = {
   urlSlug: 'products-services',
 };
 
-const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.textField}`;
-const PS_NUMBER_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.number}`;
-const PS_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText}`;
+const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField}`;
+const PS_NUMBER_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.number}`;
+const PS_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
 const TEXT_MIN = 3;
 const TEXT_MAX = 6;
@@ -124,9 +124,9 @@ async function clearProductsApplicationCache(targetPage: Page): Promise<void> {
 type SupportedCustomFieldKey = Extract<ProductsCustomFieldKey, 'textField' | 'paragraphText' | 'number'>;
 
 function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-  if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.textField) return 'textField';
-  if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-  if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.number) return 'number';
+  if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+  if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+  if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.number) return 'number';
   throw new Error(
     `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
   );
@@ -195,6 +195,7 @@ async function createProductExpectingAccept(
     const result = await psPage.createProduct(data, cf, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     expect(
       result.id,
@@ -238,7 +239,7 @@ async function updateProductExpectingAccept(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await psPage.openProductForEdit(id);
     const cf = buildProductCustomFieldsWithOverride(field);
-    await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName));
+    await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName), field.fieldName);
     await psPage.saveEditedProduct();
     try {
       await assertCustomFieldPersistedOnEdit(psPage, id, field.fieldName, field.value, field.fieldName);
@@ -267,6 +268,7 @@ async function openProductFormExpectingRejection(
   await psPage.fillProductsAndServicesForm(data, cf, {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
 }
 
@@ -277,7 +279,7 @@ async function openEditProductFormExpectingRejection(
 ): Promise<void> {
   await psPage.openProductForEdit(id);
   const cf = buildProductCustomFieldsWithOverride(field);
-  await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName));
+  await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName), field.fieldName);
 }
 
 async function assertCustomFieldPersistedOnEdit(
@@ -397,10 +399,10 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
       const id = await createProductExpectingAccept(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS5 passed');
     });
 
@@ -413,7 +415,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       await openProductFormExpectingRejection(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
         value: generateProductsCustomFieldInvalidTextField(TEXT_MAX),
       });
       await assertInlineErrorPresent(psPage, 'FFPS6 Add Product — Text over max');
@@ -430,7 +432,7 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
       await openEditProductFormExpectingRejection(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
         value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
       });
       await assertInlineErrorPresent(psPage, 'FFPS7 Edit Product — Text under min');
@@ -448,10 +450,10 @@ test.describe('Products & Services Field Limits', () => {
       const id = await createBareProduct(psPage);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
       await updateProductExpectingAccept(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS8 passed');
     });
   }); // end describe('Text field limits')
@@ -485,10 +487,10 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       const id = await createProductExpectingAccept(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
       logger.success('FFPS10 passed');
     });
 
@@ -501,7 +503,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       await openProductFormExpectingRejection(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(psPage, 'FFPS11 Add Product — Number over max');
@@ -518,7 +520,7 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
       await openEditProductFormExpectingRejection(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
       });
       await assertInlineErrorPresent(psPage, 'FFPS12 Edit Product — Number under min');
@@ -536,10 +538,10 @@ test.describe('Products & Services Field Limits', () => {
       const id = await createBareProduct(psPage);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
       await updateProductExpectingAccept(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
       logger.success('FFPS13 passed');
     });
   }); // end describe('Number field limits')
@@ -581,10 +583,10 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       const id = await createProductExpectingAccept(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
       logger.success('FFPS15 passed');
     });
 
@@ -601,7 +603,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       await openProductFormExpectingRejection(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateProductsCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(psPage, 'FFPS16 Add Product — Paragraph over max');
@@ -622,7 +624,7 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
       await openEditProductFormExpectingRejection(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
       });
       await assertInlineErrorPresent(psPage, 'FFPS17 Edit Product — Paragraph under min');
@@ -644,10 +646,10 @@ test.describe('Products & Services Field Limits', () => {
       const id = await createBareProduct(psPage);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
       await updateProductExpectingAccept(psPage, id, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
       logger.success('FFPS18 passed');
     });
   }); // end describe('Paragraph field limits')
@@ -694,7 +696,7 @@ test.describe('Products & Services Field Limits', () => {
       await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, false, 'PAN Card');
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
-      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
       await assertInlineErrorPresent(psPage, 'FFPS20 Add Product — invalid PAN Card');
       logger.success('FFPS20 passed');
     });
@@ -710,8 +712,8 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
-      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS21 passed');
     });
 
@@ -735,8 +737,8 @@ test.describe('Products & Services Field Limits', () => {
       await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, true, 'Email');
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
-      const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS23 passed');
     });
 
@@ -751,7 +753,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
-      await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+      await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
       await assertInlineErrorPresent(psPage, 'FFPS24 Edit Product — invalid Email');
       logger.success('FFPS24 passed');
     });
@@ -776,7 +778,7 @@ test.describe('Products & Services Field Limits', () => {
       await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, false, 'Driver Licence');
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
-      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
       await assertInlineErrorPresent(psPage, 'FFPS26 Add Product — invalid Driver Licence');
       logger.success('FFPS26 passed');
     });
@@ -792,8 +794,8 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
-      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS27 passed');
     });
 
@@ -817,8 +819,8 @@ test.describe('Products & Services Field Limits', () => {
       await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, true, 'Voting Card');
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
-      const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS29 passed');
     });
 
@@ -833,7 +835,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
-      await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+      await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
       await assertInlineErrorPresent(psPage, 'FFPS30 Edit Product — invalid Voting Card');
       logger.success('FFPS30 passed');
     });
@@ -858,7 +860,7 @@ test.describe('Products & Services Field Limits', () => {
       await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, false, 'Passport');
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
-      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+      await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
       await assertInlineErrorPresent(psPage, 'FFPS32 Add Product — invalid Passport');
       logger.success('FFPS32 passed');
     });
@@ -874,8 +876,8 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       const id = await createBareProduct(psPage);
-      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS33 passed');
     });
 
@@ -953,7 +955,7 @@ test.describe('Products & Services Field Limits', () => {
       await clearProductsApplicationCache(adminPage);
       const psPage = new ProductsAndServicesPage(adminPage);
       await openProductFormExpectingRejection(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_STALE_MIN),
       });
       await psPage.assertNoFormErrors('FFPS37 seed Add Product');
@@ -964,7 +966,7 @@ test.describe('Products & Services Field Limits', () => {
       );
       await psPage.goToProductsAndServicesList();
       await openProductFormExpectingRejection(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS),
       });
       await assertInlineErrorPresent(
@@ -1013,10 +1015,10 @@ test.describe('Products & Services Field Limits', () => {
       const psPage = new ProductsAndServicesPage(adminPage);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX + 5);
       const id = await createProductExpectingAccept(psPage, {
-        fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFPS39 passed');
     });
   }); // end describe('Cleanup')

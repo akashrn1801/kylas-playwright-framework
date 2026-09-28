@@ -3,7 +3,7 @@ import { Page } from '@playwright/test';
 import { TasksPage } from '../../../src/modules/tasks/TasksPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  TASK_CUSTOM_FIELD_NAMES,
+  TASK_FORM_FIELD_LIMIT_NAMES,
   TASK_LAYOUT_CACHE_KEY,
   generateTaskData,
   TaskData,
@@ -88,9 +88,9 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
   const TASK_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Task', urlSlug: 'tasks' };
   const OTHER_DETAILS_TAB = 'Other Details';
 
-  const TK_TEXT_FIELD_INTERNAL_NAME = `cf${TASK_CUSTOM_FIELD_NAMES.textField}`;
-  const TK_NUMBER_FIELD_INTERNAL_NAME = `cf${TASK_CUSTOM_FIELD_NAMES.number}`;
-  const TK_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${TASK_CUSTOM_FIELD_NAMES.paragraphText}`;
+  const TK_TEXT_FIELD_INTERNAL_NAME = `cf${TASK_FORM_FIELD_LIMIT_NAMES.textField}`;
+  const TK_NUMBER_FIELD_INTERNAL_NAME = `cf${TASK_FORM_FIELD_LIMIT_NAMES.number}`;
+  const TK_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${TASK_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
   // WHY these constants/helpers are duplicated here from
   // taskFieldLimits.spec.ts rather than imported: mirrors the Contact/
@@ -130,9 +130,9 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
   type SupportedCustomFieldKey = Extract<TaskCustomFieldKey, 'textField' | 'paragraphText' | 'number'>;
 
   function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-    if (fieldName === TASK_CUSTOM_FIELD_NAMES.textField) return 'textField';
-    if (fieldName === TASK_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-    if (fieldName === TASK_CUSTOM_FIELD_NAMES.number) return 'number';
+    if (fieldName === TASK_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+    if (fieldName === TASK_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+    if (fieldName === TASK_FORM_FIELD_LIMIT_NAMES.number) return 'number';
     throw new Error(
       `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
     );
@@ -175,6 +175,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await tasksPage.createDetailedTask(taskData, undefined, true, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     expect(
       taskId,
@@ -202,6 +203,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.fillEditForm(buildTaskDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     await tasksPage.saveEditedTask();
   }
@@ -215,6 +217,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.fillDetailedTaskForm(buildTaskDataWithFieldOverride(name, field), undefined, true, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -229,6 +232,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.fillEditForm(buildTaskDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -323,6 +327,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.fillDetailedTaskForm(taskData, undefined, true, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
     });
     const errorPresent1 = await hasInlineFormError(
       restrictedTasksPage,
@@ -357,6 +362,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await restrictedTasksPage.createDetailedTask(acceptData, undefined, true, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
     });
     expect(
       taskId,
@@ -365,7 +371,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.openTaskInDetailPanel('', taskId as number);
     await restrictedTasksPage.clickDetailPageTab('Other Details');
     await restrictedTasksPage.assertCustomFieldOnDetail(
-      TASK_CUSTOM_FIELD_NAMES.number,
+      TASK_FORM_FIELD_LIMIT_NAMES.number,
       acceptValue,
       'Number field'
     );
@@ -377,6 +383,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.fillDetailedTaskForm(rejectData, undefined, true, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
     });
     const errorPresent2 = await hasInlineFormError(
       restrictedTasksPage,
@@ -411,6 +418,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await restrictedTasksPage.createDetailedTask(acceptData, undefined, true, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     expect(
       taskId,
@@ -419,7 +427,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.openTaskInDetailPanel('', taskId as number);
     await restrictedTasksPage.clickDetailPageTab('Other Details');
     await restrictedTasksPage.assertCustomFieldOnDetail(
-      TASK_CUSTOM_FIELD_NAMES.paragraphText,
+      TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
       acceptValue,
       'Paragraph field'
     );
@@ -431,6 +439,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.fillDetailedTaskForm(rejectData, undefined, true, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     const errorPresent3 = await hasInlineFormError(
       restrictedTasksPage,
@@ -463,6 +472,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await restrictedTasksPage.createDetailedTask(acceptData, undefined, true, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
     });
     expect(
       taskId,
@@ -471,7 +481,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.openTaskInDetailPanel('', taskId as number);
     await restrictedTasksPage.clickDetailPageTab('Other Details');
     await restrictedTasksPage.assertCustomFieldOnDetail(
-      TASK_CUSTOM_FIELD_NAMES.textField,
+      TASK_FORM_FIELD_LIMIT_NAMES.textField,
       acceptValue,
       'Text field'
     );
@@ -483,6 +493,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await restrictedTasksPage.fillDetailedTaskForm(rejectData, undefined, true, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
     });
     const errorPresent4 = await hasInlineFormError(
       restrictedTasksPage,
@@ -503,7 +514,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const tasksPage = new TasksPage(restrictedPage);
     await tasksPage.goToTasksList();
     await openTaskFormExpectingRejection(tasksPage, uniqueTaskName(), {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK8 Add Task — Text under min');
@@ -523,10 +534,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK9 passed');
   });
 
@@ -544,10 +555,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await createBareTask(tasksPage, name);
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
     await updateTaskExpectingAccept(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK10 passed');
   });
 
@@ -564,7 +575,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value: generateTaskCustomFieldInvalidTextField(TEXT_MAX),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK11 Edit Task — Text over max');
@@ -582,7 +593,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const tasksPage = new TasksPage(restrictedPage);
     await tasksPage.goToTasksList();
     await openTaskFormExpectingRejection(tasksPage, uniqueTaskName(), {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK12 Add Task — Number under min');
@@ -602,10 +613,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRTK13 passed');
   });
 
@@ -623,10 +634,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await createBareTask(tasksPage, name);
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
     await updateTaskExpectingAccept(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRTK14 passed');
   });
 
@@ -643,7 +654,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK15 Edit Task — Number over max');
@@ -662,15 +673,15 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.goToTasksList();
     const name = uniqueTaskName();
     await openTaskFormExpectingRejection(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK16 Add Task — Number initially invalid');
     const validValue = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
     await tasksPage.fillTextLikeCustomField(
-      TASK_CUSTOM_FIELD_NAMES.number,
+      TASK_FORM_FIELD_LIMIT_NAMES.number,
       validValue,
-      TASK_CUSTOM_FIELD_NAMES.number
+      TASK_FORM_FIELD_LIMIT_NAMES.number
     );
     await tasksPage.fillTaskName(name);
     const errorStillPresent = await hasInlineFormError(
@@ -684,7 +695,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const savedTaskId = await tasksPage.saveDetailedTask();
     expect(savedTaskId, 'Expected the corrected Number value to save successfully').not.toBeNull();
     const taskId = savedTaskId as number;
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.number, validValue, 'Number field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.number, validValue, 'Number field');
     logger.success('FFRTK16 passed');
   });
 
@@ -699,7 +710,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const tasksPage = new TasksPage(restrictedPage);
     await tasksPage.goToTasksList();
     await openTaskFormExpectingRejection(tasksPage, uniqueTaskName(), {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK17 Add Task — Paragraph under min');
@@ -719,10 +730,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRTK18 passed');
   });
 
@@ -740,10 +751,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const taskId = await createBareTask(tasksPage, name);
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
     await updateTaskExpectingAccept(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRTK19 passed');
   });
 
@@ -760,7 +771,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: generateTaskCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK20 Edit Task — Paragraph over max');
@@ -781,10 +792,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.goToTasksList();
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK21 passed');
   });
 
@@ -803,7 +814,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK22 Edit Task — invalid PAN Card');
@@ -823,7 +834,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const tasksPage = new TasksPage(restrictedPage);
     await tasksPage.goToTasksList();
     await openTaskFormExpectingRejection(tasksPage, uniqueTaskName(), {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK23 Add Task — invalid Email');
@@ -845,10 +856,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await updateTaskExpectingAccept(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK24 passed');
   });
 
@@ -866,10 +877,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.goToTasksList();
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK25 passed');
   });
 
@@ -888,7 +899,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK26 Edit Task — invalid Driver Licence');
@@ -908,7 +919,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const tasksPage = new TasksPage(restrictedPage);
     await tasksPage.goToTasksList();
     await openTaskFormExpectingRejection(tasksPage, uniqueTaskName(), {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK27 Add Task — invalid Voting Card');
@@ -930,10 +941,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await updateTaskExpectingAccept(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK28 passed');
   });
 
@@ -951,10 +962,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await tasksPage.goToTasksList();
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRTK29 passed');
   });
 
@@ -973,7 +984,7 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const name = uniqueTaskName();
     const taskId = await createBareTask(tasksPage, name);
     await openEditTaskFormExpectingRejection(tasksPage, taskId, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.textField,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.textField,
       value,
     });
     await assertInlineErrorPresent(tasksPage, 'FFRTK30 Edit Task — invalid Passport');
@@ -1000,10 +1011,10 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     const value = repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS);
     const name = uniqueTaskName();
     const taskId = await createTaskExpectingAccept(tasksPage, name, {
-      fieldName: TASK_CUSTOM_FIELD_NAMES.number,
+      fieldName: TASK_FORM_FIELD_LIMIT_NAMES.number,
       value,
     });
-    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRTK31 passed');
   });
 });

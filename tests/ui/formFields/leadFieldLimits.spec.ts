@@ -6,7 +6,7 @@ import {
   FormFieldsEntityConfig,
 } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  LEAD_CUSTOM_FIELD_NAMES,
+  LEAD_FORM_FIELD_LIMIT_NAMES,
   LEAD_LAYOUT_CACHE_KEY,
   generateLeadData,
   LeadData,
@@ -95,9 +95,9 @@ import * as path from 'path';
 const LEAD_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Lead', urlSlug: 'leads' };
 const OTHER_DETAILS_TAB = 'Other Details';
 
-const TEXT_FIELD_INTERNAL_NAME = `cf${LEAD_CUSTOM_FIELD_NAMES.textField}`;
-const NUMBER_FIELD_INTERNAL_NAME = `cf${LEAD_CUSTOM_FIELD_NAMES.number}`;
-const PARAGRAPH_FIELD_INTERNAL_NAME = `cf${LEAD_CUSTOM_FIELD_NAMES.paragraphText}`;
+const TEXT_FIELD_INTERNAL_NAME = `cf${LEAD_FORM_FIELD_LIMIT_NAMES.textField}`;
+const NUMBER_FIELD_INTERNAL_NAME = `cf${LEAD_FORM_FIELD_LIMIT_NAMES.number}`;
+const PARAGRAPH_FIELD_INTERNAL_NAME = `cf${LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
 // WHY these specific min/max pairs, not the field type's absolute ceiling:
 // small, fast-to-type values are sufficient to exercise the real
@@ -238,9 +238,9 @@ async function clearLeadApplicationCache(targetPage: Page): Promise<void> {
 type SupportedCustomFieldKey = 'textField' | 'paragraphText' | 'number';
 
 function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-  if (fieldName === LEAD_CUSTOM_FIELD_NAMES.textField) return 'textField';
-  if (fieldName === LEAD_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-  if (fieldName === LEAD_CUSTOM_FIELD_NAMES.number) return 'number';
+  if (fieldName === LEAD_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+  if (fieldName === LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+  if (fieldName === LEAD_FORM_FIELD_LIMIT_NAMES.number) return 'number';
   throw new Error(
     `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
   );
@@ -372,6 +372,7 @@ async function createLeadExpectingAccept(
   const leadId = await leadsPage.createLead(leadData, {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
   expect(
     leadId,
@@ -422,6 +423,7 @@ async function updateLeadExpectingAccept(
   await leadsPage.fillEditForm(buildLeadDataWithFieldOverride(lastName, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
   await leadsPage.saveEditedLead();
 }
@@ -444,6 +446,7 @@ async function openLeadFormExpectingRejection(
   await leadsPage.fillLeadForm(buildLeadDataWithFieldOverride(lastName, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
 }
 
@@ -464,6 +467,7 @@ async function openEditLeadFormExpectingRejection(
   await leadsPage.fillEditForm(buildLeadDataWithFieldOverride(lastName, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
 }
 
@@ -686,13 +690,13 @@ test.describe('Lead Field Limits', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.textField,
+        LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -715,7 +719,7 @@ test.describe('Lead Field Limits', () => {
       const leadsPage = new LeadsPage(adminPage);
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value: generateLeadCustomFieldInvalidTextField(TEXT_MAX),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL8 Add Lead — Text over max');
@@ -738,7 +742,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL9 Edit Lead — Text under min');
@@ -764,13 +768,13 @@ test.describe('Lead Field Limits', () => {
       const leadId = await createBareLead(leadsPage, lastName);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.textField,
+        LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -823,13 +827,13 @@ test.describe('Lead Field Limits', () => {
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.number,
+        LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -852,7 +856,7 @@ test.describe('Lead Field Limits', () => {
       const leadsPage = new LeadsPage(adminPage);
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL17 Add Lead — Number over max');
@@ -875,7 +879,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL18 Edit Lead — Number under min');
@@ -901,13 +905,13 @@ test.describe('Lead Field Limits', () => {
       const leadId = await createBareLead(leadsPage, lastName);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.number,
+        LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -965,7 +969,7 @@ test.describe('Lead Field Limits', () => {
       const leadsPage = new LeadsPage(adminPage);
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL24 Add Lead — Paragraph under min');
@@ -990,13 +994,13 @@ test.describe('Lead Field Limits', () => {
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -1024,13 +1028,13 @@ test.describe('Lead Field Limits', () => {
       const leadId = await createBareLead(leadsPage, lastName);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -1055,7 +1059,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateLeadCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(leadsPage, 'FFL31 Edit Lead — Paragraph over max');
@@ -1197,7 +1201,7 @@ test.describe('Lead Field Limits', () => {
       const leadsPage = new LeadsPage(adminPage);
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL40 Add Lead — invalid Driver Licence');
@@ -1239,13 +1243,13 @@ test.describe('Lead Field Limits', () => {
       await leadsPage.goToLeadsList();
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.textField,
+        LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1290,7 +1294,7 @@ test.describe('Lead Field Limits', () => {
       const leadsPage = new LeadsPage(adminPage);
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL46 Add Lead — invalid Passport');
@@ -1326,7 +1330,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL48 Edit Lead — invalid PAN Card');
@@ -1428,10 +1432,10 @@ test.describe('Lead Field Limits', () => {
       await leadsPage.goToLeadsList();
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFL56 passed');
     });
 
@@ -1449,10 +1453,10 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFL57 passed');
     });
 
@@ -1470,7 +1474,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL58 Edit Lead — invalid Email');
@@ -1491,10 +1495,10 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFL59 passed');
     });
 
@@ -1512,7 +1516,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL60 Edit Lead — invalid Driver Licence');
@@ -1533,10 +1537,10 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFL61 passed');
     });
 
@@ -1554,7 +1558,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL62 Edit Lead — invalid Voting Card');
@@ -1575,10 +1579,10 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await updateLeadExpectingAccept(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
-      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+      await assertCustomFieldPersistedOnDetail(leadsPage, leadId, LEAD_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
       logger.success('FFL63 passed');
     });
 
@@ -1596,7 +1600,7 @@ test.describe('Lead Field Limits', () => {
       const lastName = faker.person.lastName();
       const leadId = await createBareLead(leadsPage, lastName);
       await openEditLeadFormExpectingRejection(leadsPage, leadId, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(leadsPage, 'FFL64 Edit Lead — invalid Passport');
@@ -1660,7 +1664,7 @@ test.describe('Lead Field Limits', () => {
       // first place — confirmed live (follow-up doc §1.6) the layout is
       // fetched lazily, on first need, not eagerly on page load.
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_STALE_MIN),
       });
       await leadsPage.assertNoFormErrors('FFL52 seed Add Lead');
@@ -1674,7 +1678,7 @@ test.describe('Lead Field Limits', () => {
       );
       await leadsPage.goToLeadsList();
       await openLeadFormExpectingRejection(leadsPage, faker.person.lastName(), {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS),
       });
       await assertInlineErrorPresent(
@@ -1748,13 +1752,13 @@ test.describe('Lead Field Limits', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX + 5);
       const lastName = faker.person.lastName();
       const leadId = await createLeadExpectingAccept(leadsPage, lastName, {
-        fieldName: LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldName: LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         leadsPage,
         leadId,
-        LEAD_CUSTOM_FIELD_NAMES.textField,
+        LEAD_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );

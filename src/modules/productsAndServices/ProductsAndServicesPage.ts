@@ -438,7 +438,11 @@ export class ProductsAndServicesPage extends BasePage {
   async fillProductsAndServicesForm(
     data: ProductsAndServicesData,
     customFields?: ProductsCustomFieldData,
-    options?: { minimal?: boolean; onlyCustomField?: ProductsCustomFieldKey }
+    options?: {
+      minimal?: boolean;
+      onlyCustomField?: ProductsCustomFieldKey;
+      onlyCustomFieldName?: string;
+    }
   ): Promise<void> {
     const minimal = options?.minimal === true;
     await this.fill(this.nameInput(), data.name, 'product name');
@@ -464,7 +468,7 @@ export class ProductsAndServicesPage extends BasePage {
       await this.setIsActive(data.isActive);
     }
     if (customFields && (!minimal || options?.onlyCustomField)) {
-      await this.fillProductsCustomFields(customFields, options?.onlyCustomField);
+      await this.fillProductsCustomFields(customFields, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
     logger.success('Products & Services form filled');
   }
@@ -502,15 +506,27 @@ export class ProductsAndServicesPage extends BasePage {
   // documented in LEAD_FEATURE_RETROSPECTIVE.md §2.8 — a Tab keypress after
   // a single minimal-fill custom-field fill can advance focus into an
   // unrelated react-select and silently open it.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see
+  // PRODUCTS_FORM_FIELD_LIMIT_NAMES's own comment in
+  // productsAndServicesFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than PRODUCTS_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Products & Services test). Every existing caller omits this and gets
+  // byte-for-byte the original behavior. Still always passes `'plain'` —
+  // this override changes WHICH field is targeted, never the suffix
+  // convention, which is a property of this entity, not of the field.
   private async fillProductsCustomFields(
     cf: ProductsCustomFieldData,
-    onlyField?: ProductsCustomFieldKey
+    onlyField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     const wants = (key: ProductsCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
     if (wants('textField')) {
       await this.fillTextLikeCustomField(
-        PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.textField,
         cf.textField,
         'Text Field',
         'plain'
@@ -518,7 +534,7 @@ export class ProductsAndServicesPage extends BasePage {
     }
     if (wants('paragraphText')) {
       await this.fillTextLikeCustomField(
-        PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
         cf.paragraphText,
         'Paragraph Text',
         'plain'
@@ -526,7 +542,7 @@ export class ProductsAndServicesPage extends BasePage {
     }
     if (wants('number')) {
       await this.fillTextLikeCustomField(
-        PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.number,
         String(cf.number),
         'Number',
         'plain'
@@ -699,10 +715,18 @@ export class ProductsAndServicesPage extends BasePage {
   // the custom-field fill itself, matching every other entity's identical
   // capability. Every existing caller omits it and gets byte-for-byte the
   // original fill-every-provided-custom-field behavior.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see PRODUCTS_FORM_FIELD_LIMIT_NAMES's
+  // own comment in productsAndServicesFactory.ts): mirrors this method's own
+  // existing `onlyCustomField` standalone-parameter convention (not nested
+  // in an options object, unlike every other entity's fillEditForm()) —
+  // threaded straight through to fillProductsCustomFields() below. Every
+  // existing caller omits it and gets byte-for-byte the original behavior.
   async fillEditForm(
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
     customFields?: ProductsCustomFieldData,
-    onlyCustomField?: ProductsCustomFieldKey
+    onlyCustomField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     if (changes.price !== undefined) {
       await this.fill(this.priceInput(), String(changes.price), 'price (edit)');
@@ -730,7 +754,7 @@ export class ProductsAndServicesPage extends BasePage {
       await this.setIsActive(changes.isActive);
     }
     if (customFields) {
-      await this.fillProductsCustomFields(customFields, onlyCustomField);
+      await this.fillProductsCustomFields(customFields, onlyCustomField, fieldNameOverride);
     }
     logger.success('Product edit form filled');
   }
@@ -1108,7 +1132,11 @@ export class ProductsAndServicesPage extends BasePage {
   async createProduct(
     data: ProductsAndServicesData,
     customFields?: ProductsCustomFieldData,
-    options?: { minimal?: boolean; onlyCustomField?: ProductsCustomFieldKey }
+    options?: {
+      minimal?: boolean;
+      onlyCustomField?: ProductsCustomFieldKey;
+      onlyCustomFieldName?: string;
+    }
   ): Promise<{ id: string | null }> {
     return this.withSessionExpiryRetry(async () => {
       const attemptData = { ...data };
@@ -1125,12 +1153,13 @@ export class ProductsAndServicesPage extends BasePage {
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
     nameOrId: string,
     customFields?: ProductsCustomFieldData,
-    onlyCustomField?: ProductsCustomFieldKey
+    onlyCustomField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     return this.withSessionExpiryRetry(async () => {
       const attemptChanges = { ...changes };
       await this.openProductForEdit(nameOrId);
-      await this.fillEditForm(attemptChanges, customFields, onlyCustomField);
+      await this.fillEditForm(attemptChanges, customFields, onlyCustomField, fieldNameOverride);
       await this.saveEditedProduct();
       logger.success(`Product updated: ${nameOrId}`);
     }, 'updateProduct');

@@ -27,6 +27,18 @@ export const DEAL_CUSTOM_FIELD_NAMES = {
 
 export type DealCustomFieldKey = keyof typeof DEAL_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see CompanyFactory.ts's COMPANY_FORM_FIELD_LIMIT_NAMES for
+// the full incident): dedicated fields, confirmed live on QA (internal
+// names cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph).
+// This feature's own test files must use ONLY this constant, never
+// DEAL_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const DEAL_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
 // WHY this constant, and why it must NOT be derived from the entity name
 // (Form Field Limit feature, Deal rollout, 2026-09-23): same reasoning as
 // LEAD_LAYOUT_CACHE_KEY/CONTACT_LAYOUT_CACHE_KEY/COMPANY_LAYOUT_CACHE_KEY/

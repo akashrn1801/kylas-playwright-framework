@@ -27,6 +27,33 @@ export const COMPANY_CUSTOM_FIELD_NAMES = {
 
 export type CompanyCustomFieldKey = keyof typeof COMPANY_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant exists, not reusing COMPANY_CUSTOM_FIELD_NAMES's
+// own textField/paragraphText/number values (2026-09-28, post-sandbox-CI
+// cross-shard collision fix): COMPANY_CUSTOM_FIELD_NAMES's cfTextField/
+// cfParagraphText/cfNumber are real, shared, account-wide fields that every
+// OTHER Company test (not just this feature) also fills with realistic,
+// unconstrained random data. The Form Field Limit feature's own tests
+// transiently set/clear Regex and Min/Max Length constraints on whichever
+// field they target — confirmed live via a real 8-shard sandbox CI run
+// (160/898 unrelated test failures, spread across 10 modules) that any other
+// concurrently-running test filling the SAME shared field can catch it
+// mid-mutation and fail validation, with no cross-shard mutual exclusion
+// possible (the config lock is a local-filesystem lock, scoped to one CI
+// runner — see formFieldLockFactory.ts's own header comment). The human
+// operator created 3 brand-new, dedicated custom fields per entity
+// (confirmed live on QA, 2026-09-28: internal names exactly
+// cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph,
+// types Text Field/Number/Paragraph Text, rendering correctly on the real
+// create form) that NOTHING else in this codebase touches — eliminating the
+// collision at its root instead of trying to synchronize around it. This
+// feature's own test files must use ONLY this constant, never
+// COMPANY_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const COMPANY_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
 // WHY this constant, and why it must NOT be derived from COMPANY_CUSTOM_
 // FIELD_NAMES or the entity name (2026-09-22, Form Field Limit feature,
 // Company rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY/

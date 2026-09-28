@@ -298,6 +298,21 @@ export const PRODUCTS_CUSTOM_FIELD_NAMES = {
 
 export type ProductsCustomFieldKey = keyof typeof PRODUCTS_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see CompanyFactory.ts's COMPANY_FORM_FIELD_LIMIT_NAMES for
+// the full incident): dedicated fields, confirmed live on QA (internal
+// names cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph
+// — Products & Services uses the "plain" DOM suffix convention on the
+// create/edit form, `_input_cf<name>`, unlike the other 5 entities' legacy
+// `_input_customFieldValues.cf<name>`, confirmed live and unchanged by this
+// field swap). This feature's own test files must use ONLY this constant,
+// never PRODUCTS_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const PRODUCTS_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
 // WHY this constant, and why it must NOT be derived from the entity name
 // (Form Field Limit feature, Products & Services rollout, 2026-09-23): the
 // app's IndexedDB `layoutCache` key is not a fixed transformation of the

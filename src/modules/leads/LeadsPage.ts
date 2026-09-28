@@ -773,9 +773,18 @@ export class LeadsPage extends BasePage {
   // when provided, fills ONLY that one field and skips the other 8 entirely
   // — every existing caller omits it and gets byte-for-byte the same
   // fill-everything behavior as before.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see LEAD_FORM_FIELD_LIMIT_NAMES's
+  // own comment in leadFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than LEAD_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Lead test). Every existing caller omits this and gets byte-for-byte the
+  // original behavior.
   private async fillLeadCustomFields(
     data: LeadData,
-    onlyField?: LeadCustomFieldKey
+    onlyField?: LeadCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     await this.openOtherDetailsFormSection();
     const cf = data.customFields;
@@ -783,21 +792,21 @@ export class LeadsPage extends BasePage {
 
     if (wants('textField')) {
       await this.fillTextLikeCustomField(
-        LEAD_CUSTOM_FIELD_NAMES.textField,
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.textField,
         cf.textField,
         'Text Field'
       );
     }
     if (wants('paragraphText')) {
       await this.fillTextLikeCustomField(
-        LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.paragraphText,
         cf.paragraphText,
         'Paragraph Text'
       );
     }
     if (wants('number')) {
       await this.fillTextLikeCustomField(
-        LEAD_CUSTOM_FIELD_NAMES.number,
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.number,
         String(cf.number),
         'Number'
       );
@@ -1343,7 +1352,7 @@ export class LeadsPage extends BasePage {
   // `options` and gets byte-for-byte the original full-form-fill behavior.
   async fillLeadForm(
     data: LeadData,
-    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Filling lead form');
     const minimal = options?.minimal === true;
@@ -1536,7 +1545,7 @@ export class LeadsPage extends BasePage {
     // oversight. Every other combination (non-minimal, or minimal WITH a
     // named field) still reaches fillLeadCustomFields() exactly as before.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillLeadCustomFields(data, options?.onlyCustomField);
+      await this.fillLeadCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Lead form filled');
@@ -1810,7 +1819,7 @@ export class LeadsPage extends BasePage {
   // to exercise. Every existing caller omits `options` and is unaffected.
   async fillEditForm(
     data: LeadData,
-    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Updating lead form');
     const minimal = options?.minimal === true;
@@ -1855,7 +1864,7 @@ export class LeadsPage extends BasePage {
     // WHY conditional — see fillLeadForm()'s identical, more-detailed WHY
     // comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillLeadCustomFields(data, options?.onlyCustomField);
+      await this.fillLeadCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Edit form updated');
@@ -1974,7 +1983,7 @@ export class LeadsPage extends BasePage {
   // caller omits `options` and gets the original, unmodified behavior.
   async createLead(
     data: LeadData,
-    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22 from

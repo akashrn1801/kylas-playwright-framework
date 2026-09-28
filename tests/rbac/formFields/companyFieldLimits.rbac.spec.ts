@@ -3,7 +3,7 @@ import { Page } from '@playwright/test';
 import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  COMPANY_CUSTOM_FIELD_NAMES,
+  COMPANY_FORM_FIELD_LIMIT_NAMES,
   COMPANY_LAYOUT_CACHE_KEY,
   generateCompanyData,
   CompanyData,
@@ -87,9 +87,9 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
   const COMPANY_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Company', urlSlug: 'companies' };
   const OTHER_DETAILS_TAB = 'Other Details';
 
-  const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.textField}`;
-  const CO_NUMBER_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.number}`;
-  const CO_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.paragraphText}`;
+  const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.textField}`;
+  const CO_NUMBER_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.number}`;
+  const CO_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
   // WHY these constants/helpers are duplicated here from
   // companyFieldLimits.spec.ts rather than imported: mirrors the Contact
@@ -129,9 +129,9 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
   type SupportedCustomFieldKey = 'textField' | 'paragraphText' | 'number';
 
   function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-    if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.textField) return 'textField';
-    if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-    if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.number) return 'number';
+    if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+    if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+    if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.number) return 'number';
     throw new Error(
       `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
     );
@@ -174,6 +174,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     const companyId = await companiesPage.createCompany(companyData, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     expect(
       companyId,
@@ -204,6 +205,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await companiesPage.fillEditForm(buildCompanyDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     await companiesPage.saveEditedCompany();
   }
@@ -217,6 +219,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await companiesPage.fillCompanyForm(buildCompanyDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -231,6 +234,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await companiesPage.fillEditForm(buildCompanyDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -327,6 +331,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.fillCompanyForm(companyData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
     });
     const errorPresent1 = await hasInlineFormError(
       restrictedCompaniesPage,
@@ -361,6 +366,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     const companyId = await restrictedCompaniesPage.createCompany(acceptData, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
     });
     expect(
       companyId,
@@ -369,7 +375,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.searchAndOpenCompany('', companyId as number);
     await restrictedCompaniesPage.clickDetailPageTab('Other Details');
     await restrictedCompaniesPage.assertCustomFieldOnDetail(
-      COMPANY_CUSTOM_FIELD_NAMES.number,
+      COMPANY_FORM_FIELD_LIMIT_NAMES.number,
       acceptValue,
       'Number field'
     );
@@ -381,6 +387,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.fillCompanyForm(rejectData, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
     });
     const errorPresent2 = await hasInlineFormError(
       restrictedCompaniesPage,
@@ -419,6 +426,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     const companyId = await restrictedCompaniesPage.createCompany(acceptData, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     expect(
       companyId,
@@ -427,7 +435,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.searchAndOpenCompany('', companyId as number);
     await restrictedCompaniesPage.clickDetailPageTab('Other Details');
     await restrictedCompaniesPage.assertCustomFieldOnDetail(
-      COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+      COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
       acceptValue,
       'Paragraph field'
     );
@@ -439,6 +447,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.fillCompanyForm(rejectData, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     const errorPresent3 = await hasInlineFormError(
       restrictedCompaniesPage,
@@ -471,6 +480,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     const companyId = await restrictedCompaniesPage.createCompany(acceptData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
     });
     expect(
       companyId,
@@ -479,7 +489,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.searchAndOpenCompany('', companyId as number);
     await restrictedCompaniesPage.clickDetailPageTab('Other Details');
     await restrictedCompaniesPage.assertCustomFieldOnDetail(
-      COMPANY_CUSTOM_FIELD_NAMES.textField,
+      COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
       acceptValue,
       'Text field'
     );
@@ -491,6 +501,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     await restrictedCompaniesPage.fillCompanyForm(rejectData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
     });
     const errorPresent4 = await hasInlineFormError(
       restrictedCompaniesPage,
@@ -515,7 +526,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companiesPage = new CompaniesPage(restrictedPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO8 Add Company — Text under min');
@@ -539,13 +550,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -570,13 +581,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -600,7 +611,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value: generateCompanyCustomFieldInvalidTextField(TEXT_MAX),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO11 Edit Company — Text over max');
@@ -622,7 +633,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companiesPage = new CompaniesPage(restrictedPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO12 Add Company — Number under min');
@@ -646,13 +657,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -677,13 +688,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -707,7 +718,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO15 Edit Company — Number over max');
@@ -730,15 +741,15 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       await openCompanyFormExpectingRejection(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO16 Add Company — Number initially invalid');
       const validValue = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       await companiesPage.fillTextLikeCustomField(
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         validValue,
-        COMPANY_CUSTOM_FIELD_NAMES.number
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number
       );
       await companiesPage.fillCompanyName(name);
       const errorStillPresent = await hasInlineFormError(
@@ -758,7 +769,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         validValue,
         'Number field'
       );
@@ -780,7 +791,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companiesPage = new CompaniesPage(restrictedPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO17 Add Company — Paragraph under min');
@@ -804,13 +815,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -835,13 +846,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -865,7 +876,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateCompanyCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO20 Edit Company — Paragraph over max');
@@ -892,13 +903,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -926,7 +937,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO22 Edit Company — invalid PAN Card');
@@ -952,7 +963,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companiesPage = new CompaniesPage(restrictedPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO23 Add Company — invalid Email');
@@ -980,13 +991,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1013,13 +1024,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1047,7 +1058,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO26 Edit Company — invalid Driver Licence');
@@ -1073,7 +1084,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const companiesPage = new CompaniesPage(restrictedPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO27 Add Company — invalid Voting Card');
@@ -1101,13 +1112,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1134,13 +1145,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1168,7 +1179,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFRCO30 Edit Company — invalid Passport');
@@ -1196,13 +1207,13 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     const value = repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS);
     const name = uniqueCompanyName();
     const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-      fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+      fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
       value,
     });
     await assertCustomFieldPersistedOnDetail(
       companiesPage,
       companyId,
-      COMPANY_CUSTOM_FIELD_NAMES.number,
+      COMPANY_FORM_FIELD_LIMIT_NAMES.number,
       value,
       'Number field'
     );

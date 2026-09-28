@@ -6,7 +6,7 @@ import {
   FormFieldsEntityConfig,
 } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  COMPANY_CUSTOM_FIELD_NAMES,
+  COMPANY_FORM_FIELD_LIMIT_NAMES,
   COMPANY_LAYOUT_CACHE_KEY,
   generateCompanyData,
   CompanyData,
@@ -76,9 +76,9 @@ import * as path from 'path';
 const COMPANY_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Company', urlSlug: 'companies' };
 const OTHER_DETAILS_TAB = 'Other Details';
 
-const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.textField}`;
-const CO_NUMBER_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.number}`;
-const CO_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${COMPANY_CUSTOM_FIELD_NAMES.paragraphText}`;
+const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.textField}`;
+const CO_NUMBER_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.number}`;
+const CO_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
 const TEXT_MIN = 3;
 const TEXT_MAX = 6;
@@ -127,9 +127,9 @@ async function clearCompanyApplicationCache(targetPage: Page): Promise<void> {
 type SupportedCustomFieldKey = 'textField' | 'paragraphText' | 'number';
 
 function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-  if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.textField) return 'textField';
-  if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-  if (fieldName === COMPANY_CUSTOM_FIELD_NAMES.number) return 'number';
+  if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+  if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+  if (fieldName === COMPANY_FORM_FIELD_LIMIT_NAMES.number) return 'number';
   throw new Error(
     `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
   );
@@ -182,6 +182,7 @@ async function createCompanyExpectingAccept(
   const companyId = await companiesPage.createCompany(companyData, {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
   expect(
     companyId,
@@ -212,6 +213,7 @@ async function updateCompanyExpectingAccept(
   await companiesPage.fillEditForm(buildCompanyDataWithFieldOverride(name, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
   await companiesPage.saveEditedCompany();
 }
@@ -227,6 +229,7 @@ async function openCompanyFormExpectingRejection(
   await companiesPage.fillCompanyForm(buildCompanyDataWithFieldOverride(name, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
 }
 
@@ -241,6 +244,7 @@ async function openEditCompanyFormExpectingRejection(
   await companiesPage.fillEditForm(buildCompanyDataWithFieldOverride(name, field), {
     minimal: true,
     onlyCustomField: customFieldNameToDataKey(field.fieldName),
+    onlyCustomFieldName: field.fieldName,
   });
 }
 
@@ -371,13 +375,13 @@ test.describe('Company Field Limits', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -398,7 +402,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value: generateCompanyCustomFieldInvalidTextField(TEXT_MAX),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO6 Add Company — Text over max');
@@ -421,7 +425,7 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO7 Edit Company — Text under min');
@@ -445,13 +449,13 @@ test.describe('Company Field Limits', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -498,13 +502,13 @@ test.describe('Company Field Limits', () => {
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -525,7 +529,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO11 Add Company — Number over max');
@@ -548,7 +552,7 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO12 Edit Company — Number under min');
@@ -572,13 +576,13 @@ test.describe('Company Field Limits', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.number,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value,
         'Number field'
       );
@@ -625,13 +629,13 @@ test.describe('Company Field Limits', () => {
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -652,7 +656,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: generateCompanyCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO16 Add Company — Paragraph over max');
@@ -675,7 +679,7 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO17 Edit Company — Paragraph under min');
@@ -699,13 +703,13 @@ test.describe('Company Field Limits', () => {
       const companyId = await createBareCompany(companiesPage, name);
       const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.paragraphText,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText,
         value,
         'Paragraph field'
       );
@@ -771,7 +775,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO20 Add Company — invalid PAN Card');
@@ -798,13 +802,13 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -844,13 +848,13 @@ test.describe('Company Field Limits', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -877,7 +881,7 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO24 Edit Company — invalid Email');
@@ -916,7 +920,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO26 Add Company — invalid Driver Licence');
@@ -943,13 +947,13 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -989,13 +993,13 @@ test.describe('Company Field Limits', () => {
       await companiesPage.goToCompaniesList();
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1022,7 +1026,7 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await openEditCompanyFormExpectingRejection(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO30 Edit Company — invalid Voting Card');
@@ -1061,7 +1065,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertInlineErrorPresent(companiesPage, 'FFCO32 Add Company — invalid Passport');
@@ -1088,13 +1092,13 @@ test.describe('Company Field Limits', () => {
       const name = uniqueCompanyName();
       const companyId = await createBareCompany(companiesPage, name);
       await updateCompanyExpectingAccept(companiesPage, companyId, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );
@@ -1181,7 +1185,7 @@ test.describe('Company Field Limits', () => {
       const companiesPage = new CompaniesPage(adminPage);
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_STALE_MIN),
       });
       await companiesPage.assertNoFormErrors('FFCO37 seed Add Company');
@@ -1192,7 +1196,7 @@ test.describe('Company Field Limits', () => {
       );
       await companiesPage.goToCompaniesList();
       await openCompanyFormExpectingRejection(companiesPage, uniqueCompanyName(), {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.number,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.number,
         value: repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS),
       });
       await assertInlineErrorPresent(
@@ -1243,13 +1247,13 @@ test.describe('Company Field Limits', () => {
       const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX + 5);
       const name = uniqueCompanyName();
       const companyId = await createCompanyExpectingAccept(companiesPage, name, {
-        fieldName: COMPANY_CUSTOM_FIELD_NAMES.textField,
+        fieldName: COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
       });
       await assertCustomFieldPersistedOnDetail(
         companiesPage,
         companyId,
-        COMPANY_CUSTOM_FIELD_NAMES.textField,
+        COMPANY_FORM_FIELD_LIMIT_NAMES.textField,
         value,
         'Text field'
       );

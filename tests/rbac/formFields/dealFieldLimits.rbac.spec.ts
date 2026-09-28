@@ -3,7 +3,7 @@ import { Page } from '@playwright/test';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  DEAL_CUSTOM_FIELD_NAMES,
+  DEAL_FORM_FIELD_LIMIT_NAMES,
   DEAL_LAYOUT_CACHE_KEY,
   generateDealData,
   DealData,
@@ -87,9 +87,9 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
 
   const DEAL_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Deal', urlSlug: 'deals' };
 
-  const D_TEXT_FIELD_INTERNAL_NAME = `cf${DEAL_CUSTOM_FIELD_NAMES.textField}`;
-  const D_NUMBER_FIELD_INTERNAL_NAME = `cf${DEAL_CUSTOM_FIELD_NAMES.number}`;
-  const D_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${DEAL_CUSTOM_FIELD_NAMES.paragraphText}`;
+  const D_TEXT_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.textField}`;
+  const D_NUMBER_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.number}`;
+  const D_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
   // WHY these constants/helpers are duplicated here from
   // dealFieldLimits.spec.ts rather than imported: mirrors every other
@@ -128,9 +128,9 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
   type SupportedCustomFieldKey = Extract<DealCustomFieldKey, 'textField' | 'paragraphText' | 'number'>;
 
   function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-    if (fieldName === DEAL_CUSTOM_FIELD_NAMES.textField) return 'textField';
-    if (fieldName === DEAL_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-    if (fieldName === DEAL_CUSTOM_FIELD_NAMES.number) return 'number';
+    if (fieldName === DEAL_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+    if (fieldName === DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+    if (fieldName === DEAL_FORM_FIELD_LIMIT_NAMES.number) return 'number';
     throw new Error(
       `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
     );
@@ -173,6 +173,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealId = await dealsPage.createDeal(dealData, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     expect(
       dealId,
@@ -200,6 +201,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.fillEditForm(buildDealDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
     await dealsPage.saveEditedDeal();
   }
@@ -213,6 +215,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.fillDealForm(buildDealDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -227,6 +230,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.fillEditForm(buildDealDataWithFieldOverride(name, field), {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -314,7 +318,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealData = generateDealData({ name, skipAssociatedEntities: true });
     dealData.customFields.textField = 'A'.repeat(max + 1);
-    await restrictedDealsPage.fillDealForm(dealData, { minimal: true, onlyCustomField: 'textField' });
+    await restrictedDealsPage.fillDealForm(dealData, {
+      minimal: true,
+      onlyCustomField: 'textField',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField,
+    });
     const errorPresent1 = await hasInlineFormError(
       restrictedDealsPage,
       'FFRD4 Add Deal — restricted, over admin-set max'
@@ -348,6 +356,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealId = await restrictedDealsPage.createDeal(acceptData, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number,
     });
     expect(
       dealId,
@@ -355,7 +364,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     ).not.toBeNull();
     await restrictedDealsPage.searchAndOpenDeal('', dealId as number);
     await restrictedDealsPage.assertDealCustomFieldOnDetail(
-      DEAL_CUSTOM_FIELD_NAMES.number,
+      DEAL_FORM_FIELD_LIMIT_NAMES.number,
       acceptValue,
       'Number field'
     );
@@ -364,7 +373,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await restrictedDealsPage.clickAddDeal();
     const rejectData = generateDealData({ name: uniqueDealName(), skipAssociatedEntities: true });
     rejectData.customFields.number = Number('1'.repeat(max + 1));
-    await restrictedDealsPage.fillDealForm(rejectData, { minimal: true, onlyCustomField: 'number' });
+    await restrictedDealsPage.fillDealForm(rejectData, {
+      minimal: true,
+      onlyCustomField: 'number',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number,
+    });
     const errorPresent2 = await hasInlineFormError(
       restrictedDealsPage,
       'FFRD5 Add Deal — restricted, Number over admin-set max'
@@ -398,6 +411,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealId = await restrictedDealsPage.createDeal(acceptData, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     expect(
       dealId,
@@ -405,7 +419,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     ).not.toBeNull();
     await restrictedDealsPage.searchAndOpenDeal('', dealId as number);
     await restrictedDealsPage.assertDealCustomFieldOnDetail(
-      DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+      DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText,
       acceptValue,
       'Paragraph field'
     );
@@ -414,7 +428,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await restrictedDealsPage.clickAddDeal();
     const rejectData = generateDealData({ name: uniqueDealName(), skipAssociatedEntities: true });
     rejectData.customFields.paragraphText = 'B'.repeat(max + 1);
-    await restrictedDealsPage.fillDealForm(rejectData, { minimal: true, onlyCustomField: 'paragraphText' });
+    await restrictedDealsPage.fillDealForm(rejectData, {
+      minimal: true,
+      onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText,
+    });
     const errorPresent3 = await hasInlineFormError(
       restrictedDealsPage,
       'FFRD6 Add Deal — restricted, Paragraph over admin-set max'
@@ -442,6 +460,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealId = await restrictedDealsPage.createDeal(acceptData, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField,
     });
     expect(
       dealId,
@@ -449,7 +468,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     ).not.toBeNull();
     await restrictedDealsPage.searchAndOpenDeal('', dealId as number);
     await restrictedDealsPage.assertDealCustomFieldOnDetail(
-      DEAL_CUSTOM_FIELD_NAMES.textField,
+      DEAL_FORM_FIELD_LIMIT_NAMES.textField,
       acceptValue,
       'Text field'
     );
@@ -458,7 +477,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await restrictedDealsPage.clickAddDeal();
     const rejectData = generateDealData({ name: uniqueDealName(), skipAssociatedEntities: true });
     rejectData.customFields.textField = generateInvalidPanCardValueD();
-    await restrictedDealsPage.fillDealForm(rejectData, { minimal: true, onlyCustomField: 'textField' });
+    await restrictedDealsPage.fillDealForm(rejectData, {
+      minimal: true,
+      onlyCustomField: 'textField',
+      onlyCustomFieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField,
+    });
     const errorPresent4 = await hasInlineFormError(
       restrictedDealsPage,
       'FFRD7 Add Deal — restricted, invalid PAN Card'
@@ -478,7 +501,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     await openDealFormExpectingRejection(dealsPage, uniqueDealName(), {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.textField,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField,
       value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD8 Add Deal — Text under min');
@@ -497,8 +520,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD9 passed');
   });
 
@@ -515,8 +538,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
-    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD10 passed');
   });
 
@@ -533,7 +556,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     await openEditDealFormExpectingRejection(dealsPage, dealId, name, {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.textField,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField,
       value: generateDealCustomFieldInvalidTextField(TEXT_MAX),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD11 Edit Deal — Text over max');
@@ -551,7 +574,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     await openDealFormExpectingRejection(dealsPage, uniqueDealName(), {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.number,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD12 Add Deal — Number under min');
@@ -570,8 +593,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRD13 passed');
   });
 
@@ -588,8 +611,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
-    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRD14 passed');
   });
 
@@ -606,7 +629,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     await openEditDealFormExpectingRejection(dealsPage, dealId, name, {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.number,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD15 Edit Deal — Number over max');
@@ -625,15 +648,15 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     await openDealFormExpectingRejection(dealsPage, name, {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.number,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD16 Add Deal — Number initially invalid');
     const validValue = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
     await dealsPage.fillTextLikeCustomField(
-      DEAL_CUSTOM_FIELD_NAMES.number,
+      DEAL_FORM_FIELD_LIMIT_NAMES.number,
       validValue,
-      DEAL_CUSTOM_FIELD_NAMES.number
+      DEAL_FORM_FIELD_LIMIT_NAMES.number
     );
     await restrictedPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     const errorStillPresent = await hasInlineFormError(dealsPage, 'FFRD16 Add Deal — Number corrected to valid');
@@ -644,7 +667,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const savedDealId = await dealsPage.saveDeal();
     expect(savedDealId, 'Expected the corrected Number value to save successfully').not.toBeNull();
     const dealId = savedDealId as number;
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.number, validValue, 'Number field');
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.number, validValue, 'Number field');
     logger.success('FFRD16 passed');
   });
 
@@ -659,7 +682,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     await openDealFormExpectingRejection(dealsPage, uniqueDealName(), {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD17 Add Deal — Paragraph under min');
@@ -678,8 +701,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.paragraphText, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRD18 passed');
   });
 
@@ -696,8 +719,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
-    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.paragraphText, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRD19 passed');
   });
 
@@ -714,7 +737,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
     await openEditDealFormExpectingRejection(dealsPage, dealId, name, {
-      fieldName: DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: generateDealCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
     });
     await assertInlineErrorPresent(dealsPage, 'FFRD20 Edit Deal — Paragraph over max');
@@ -734,8 +757,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD21 passed');
   });
 
@@ -753,7 +776,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
-    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(dealsPage, 'FFRD22 Edit Deal — invalid PAN Card');
     logger.success('FFRD22 passed');
   });
@@ -770,7 +793,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await clearDealApplicationCache(restrictedPage);
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
-    await openDealFormExpectingRejection(dealsPage, uniqueDealName(), { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
+    await openDealFormExpectingRejection(dealsPage, uniqueDealName(), { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(dealsPage, 'FFRD23 Add Deal — invalid Email');
     logger.success('FFRD23 passed');
   });
@@ -789,8 +812,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
-    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD24 passed');
   });
 
@@ -807,8 +830,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD25 passed');
   });
 
@@ -826,7 +849,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
-    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(dealsPage, 'FFRD26 Edit Deal — invalid Driver Licence');
     logger.success('FFRD26 passed');
   });
@@ -843,7 +866,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await clearDealApplicationCache(restrictedPage);
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
-    await openDealFormExpectingRejection(dealsPage, uniqueDealName(), { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
+    await openDealFormExpectingRejection(dealsPage, uniqueDealName(), { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(dealsPage, 'FFRD27 Add Deal — invalid Voting Card');
     logger.success('FFRD27 passed');
   });
@@ -862,8 +885,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
-    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateDealExpectingAccept(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD28 passed');
   });
 
@@ -880,8 +903,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealsPage = new DealsPage(restrictedPage);
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRD29 passed');
   });
 
@@ -899,7 +922,7 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const name = uniqueDealName();
     const dealId = await createBareDeal(dealsPage, name);
-    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditDealFormExpectingRejection(dealsPage, dealId, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(dealsPage, 'FFRD30 Edit Deal — invalid Passport');
     logger.success('FFRD30 passed');
   });
@@ -923,8 +946,8 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await dealsPage.goToDealsList();
     const value = repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS);
     const name = uniqueDealName();
-    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRD31 passed');
   });
 });

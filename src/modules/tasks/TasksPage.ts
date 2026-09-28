@@ -616,7 +616,7 @@ export class TasksPage extends BasePage {
     data: TaskData,
     assignedToName?: string,
     skipRelation = false,
-    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info(`Filling Detailed Task form: "${data.name}"`);
     const minimal = options?.minimal === true;
@@ -670,7 +670,7 @@ export class TasksPage extends BasePage {
     // WHY conditional, not unconditional: mirrors CompaniesPage.fillCompanyForm()'s
     // identical, more-detailed WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField);
+      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Detailed Task form filled');
@@ -916,7 +916,7 @@ export class TasksPage extends BasePage {
   // against here the way there is on create.
   async fillEditForm(
     data: TaskData,
-    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Filling edit form');
     const minimal = options?.minimal === true;
@@ -938,7 +938,7 @@ export class TasksPage extends BasePage {
     // WHY conditional — see fillDetailedTaskForm()'s identical, more-detailed
     // WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField);
+      await this.fillTaskCustomFields(data.customFields, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
     logger.success('Edit form filled');
   }
@@ -1058,9 +1058,18 @@ export class TasksPage extends BasePage {
   // feature already uses — replaced here for the same clarity and
   // maintainability, not because the old shape was unsafe for this
   // specific feature's own scope.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see TASK_FORM_FIELD_LIMIT_NAMES's
+  // own comment in taskFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than TASK_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Task test). Every existing caller omits this and gets byte-for-byte the
+  // original behavior.
   private async fillTaskCustomFields(
     cf: TaskCustomFieldData,
-    onlyField?: TaskCustomFieldKey
+    onlyField?: TaskCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     logger.info('Filling Task custom fields');
     const wants = (key: TaskCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
@@ -1080,17 +1089,17 @@ export class TasksPage extends BasePage {
 
     // TextField
     if (wants('textField') && cf.textField) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField');
+      await this.fillTextLikeCustomField(fieldNameOverride ?? TASK_CUSTOM_FIELD_NAMES.textField, cf.textField, 'Task custom field: textField');
     }
 
     // ParagraphText
     if (wants('paragraphText') && cf.paragraphText) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText');
+      await this.fillTextLikeCustomField(fieldNameOverride ?? TASK_CUSTOM_FIELD_NAMES.paragraphText, cf.paragraphText, 'Task custom field: paragraphText');
     }
 
     // Number
     if (wants('number') && cf.number !== undefined) {
-      await this.fillTextLikeCustomField(TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number');
+      await this.fillTextLikeCustomField(fieldNameOverride ?? TASK_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Task custom field: number');
     }
 
     // PickList
@@ -1508,7 +1517,7 @@ export class TasksPage extends BasePage {
     data: TaskData,
     assignedToName?: string,
     skipRelation = false,
-    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: TaskCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Creating detailed task: "${data.name}"`);

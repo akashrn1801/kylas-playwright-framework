@@ -114,6 +114,22 @@ export const LEAD_CUSTOM_FIELD_NAMES = {
 
 export type LeadCustomFieldKey = keyof typeof LEAD_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant, not reusing LEAD_CUSTOM_FIELD_NAMES's own
+// textField/paragraphText/number (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see COMPANY_FORM_FIELD_LIMIT_NAMES's identical comment in
+// companyFactory.ts for the full incident, applied here unchanged): the
+// human operator created 3 dedicated custom fields per entity, confirmed
+// live on QA (internal names exactly cfFormFieldLimitText/
+// cfFormFieldLimitNumber/cfFormFieldLimitParagraph, types Text Field/Number/
+// Paragraph Text). This feature's own test files must use ONLY this
+// constant, never LEAD_CUSTOM_FIELD_NAMES, for the 3 field types it
+// exercises.
+export const LEAD_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
 // WHY this constant, and why it must NOT be derived from LEAD_CUSTOM_FIELD_
 // NAMES or the entity name (2026-09-21, Form Field Limit feature): confirmed
 // live (FORM_FIELD_LIMIT_INVESTIGATION_FOLLOWUP.md §3.2) that the app's

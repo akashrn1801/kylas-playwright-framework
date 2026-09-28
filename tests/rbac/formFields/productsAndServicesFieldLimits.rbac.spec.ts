@@ -3,7 +3,7 @@ import { Page } from '@playwright/test';
 import { ProductsAndServicesPage } from '../../../src/modules/productsAndServices/ProductsAndServicesPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
 import {
-  PRODUCTS_CUSTOM_FIELD_NAMES,
+  PRODUCTS_FORM_FIELD_LIMIT_NAMES,
   PRODUCTS_LAYOUT_CACHE_KEY,
   generateProductsAndServicesData,
   generateProductsCustomFieldData,
@@ -90,9 +90,9 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     urlSlug: 'products-services',
   };
 
-  const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.textField}`;
-  const PS_NUMBER_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.number}`;
-  const PS_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText}`;
+  const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField}`;
+  const PS_NUMBER_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.number}`;
+  const PS_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
   // WHY these constants/helpers are duplicated here from
   // productsAndServicesFieldLimits.spec.ts rather than imported: mirrors
@@ -127,9 +127,9 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
   type SupportedCustomFieldKey = Extract<ProductsCustomFieldKey, 'textField' | 'paragraphText' | 'number'>;
 
   function customFieldNameToDataKey(fieldName: string): SupportedCustomFieldKey {
-    if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.textField) return 'textField';
-    if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText) return 'paragraphText';
-    if (fieldName === PRODUCTS_CUSTOM_FIELD_NAMES.number) return 'number';
+    if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField) return 'textField';
+    if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText) return 'paragraphText';
+    if (fieldName === PRODUCTS_FORM_FIELD_LIMIT_NAMES.number) return 'number';
     throw new Error(
       `customFieldNameToDataKey: unmapped field name "${fieldName}" — this file only targets Text/Paragraph/Number`
     );
@@ -188,6 +188,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
       const result = await psPage.createProduct(data, cf, {
         minimal: true,
         onlyCustomField: customFieldNameToDataKey(field.fieldName),
+        onlyCustomFieldName: field.fieldName,
       });
       expect(
         result.id,
@@ -229,7 +230,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       await psPage.openProductForEdit(id);
       const cf = buildProductCustomFieldsWithOverride(field);
-      await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName));
+      await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName), field.fieldName);
       await psPage.saveEditedProduct();
       try {
         await assertCustomFieldPersistedOnEdit(psPage, id, field.fieldName, field.value, field.fieldName);
@@ -256,6 +257,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await psPage.fillProductsAndServicesForm(data, cf, {
       minimal: true,
       onlyCustomField: customFieldNameToDataKey(field.fieldName),
+      onlyCustomFieldName: field.fieldName,
     });
   }
 
@@ -266,7 +268,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
   ): Promise<void> {
     await psPage.openProductForEdit(id);
     const cf = buildProductCustomFieldsWithOverride(field);
-    await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName));
+    await psPage.fillEditForm({}, cf, customFieldNameToDataKey(field.fieldName), field.fieldName);
   }
 
   async function assertCustomFieldPersistedOnEdit(
@@ -355,7 +357,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const data = generateProductsAndServicesData();
     const cf = generateProductsCustomFieldData();
     cf.textField = 'A'.repeat(max + 1);
-    await restrictedPsPage.fillProductsAndServicesForm(data, cf, { minimal: true, onlyCustomField: 'textField' });
+    await restrictedPsPage.fillProductsAndServicesForm(data, cf, {
+      minimal: true,
+      onlyCustomField: 'textField',
+      onlyCustomFieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
+    });
     const errorPresent1 = await hasInlineFormError(
       restrictedPsPage,
       'FFRPS4 Add Product — restricted, over admin-set max'
@@ -384,7 +390,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
     const acceptValue = '1'.repeat(min);
     await createProductExpectingAccept(restrictedPsPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       value: acceptValue,
     });
 
@@ -396,6 +402,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await restrictedPsPage.fillProductsAndServicesForm(rejectData, rejectCf, {
       minimal: true,
       onlyCustomField: 'number',
+      onlyCustomFieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
     });
     const errorPresent2 = await hasInlineFormError(
       restrictedPsPage,
@@ -425,7 +432,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
     const acceptValue = 'B'.repeat(min);
     await createProductExpectingAccept(restrictedPsPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: acceptValue,
     });
 
@@ -437,6 +444,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await restrictedPsPage.fillProductsAndServicesForm(rejectData, rejectCf, {
       minimal: true,
       onlyCustomField: 'paragraphText',
+      onlyCustomFieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
     });
     const errorPresent3 = await hasInlineFormError(
       restrictedPsPage,
@@ -460,7 +468,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
     const acceptValue = generateValidPanCardValuePs();
     await createProductExpectingAccept(restrictedPsPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
       value: acceptValue,
     });
 
@@ -472,6 +480,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await restrictedPsPage.fillProductsAndServicesForm(rejectData, rejectCf, {
       minimal: true,
       onlyCustomField: 'textField',
+      onlyCustomFieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
     });
     const errorPresent4 = await hasInlineFormError(
       restrictedPsPage,
@@ -491,7 +500,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     await openProductFormExpectingRejection(psPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
       value: repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN - 1),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS8 Add Product — Text under min');
@@ -508,8 +517,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MAX);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS9 passed');
   });
 
@@ -524,8 +533,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     const value = repeatChar(TEXT_REPEAT_CHAR, TEXT_MIN);
-    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS10 passed');
   });
 
@@ -540,7 +549,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     await openEditProductFormExpectingRejection(psPage, id, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField,
       value: generateProductsCustomFieldInvalidTextField(TEXT_MAX),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS11 Edit Product — Text over max');
@@ -557,7 +566,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     await openProductFormExpectingRejection(psPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN - 1),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS12 Add Product — Number under min');
@@ -574,8 +583,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRPS13 passed');
   });
 
@@ -590,8 +599,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     const value = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
-    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRPS14 passed');
   });
 
@@ -606,7 +615,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     await openEditProductFormExpectingRejection(psPage, id, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS15 Edit Product — Number over max');
@@ -623,15 +632,15 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     await openProductFormExpectingRejection(psPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       value: repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MAX + 1),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS16 Add Product — Number initially invalid');
     const validValue = repeatChar(NUMBER_REPEAT_CHAR, NUMBER_MIN);
     await psPage.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       validValue,
-      PRODUCTS_CUSTOM_FIELD_NAMES.number,
+      PRODUCTS_FORM_FIELD_LIMIT_NAMES.number,
       'plain'
     );
     await restrictedPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -646,7 +655,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const savedResult = await psPage.saveProduct();
     expect(savedResult.id, 'Expected the corrected Number value to save successfully').not.toBeNull();
     const id = savedResult.id as string;
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, validValue, 'Number field');
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, validValue, 'Number field');
     logger.success('FFRPS16 passed');
   });
 
@@ -660,7 +669,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     await openProductFormExpectingRejection(psPage, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN - 1),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS17 Add Product — Paragraph under min');
@@ -677,8 +686,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MAX);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRPS18 passed');
   });
 
@@ -693,8 +702,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     const value = repeatChar(PARAGRAPH_REPEAT_CHAR, PARAGRAPH_MIN);
-    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText, value, 'Paragraph field');
+    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText, value, 'Paragraph field');
     logger.success('FFRPS19 passed');
   });
 
@@ -709,7 +718,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
     await openEditProductFormExpectingRejection(psPage, id, {
-      fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+      fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText,
       value: generateProductsCustomFieldInvalidParagraphText(PARAGRAPH_MAX),
     });
     await assertInlineErrorPresent(psPage, 'FFRPS20 Edit Product — Paragraph over max');
@@ -727,8 +736,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, true, 'PAN Card');
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS21 passed');
   });
 
@@ -744,7 +753,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
-    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(psPage, 'FFRPS22 Edit Product — invalid PAN Card');
     logger.success('FFRPS22 passed');
   });
@@ -760,7 +769,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, false, 'Email');
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
-    await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+    await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(psPage, 'FFRPS23 Add Product — invalid Email');
     logger.success('FFRPS23 passed');
   });
@@ -777,8 +786,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
-    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS24 passed');
   });
 
@@ -793,8 +802,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, true, 'Driver Licence');
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS25 passed');
   });
 
@@ -810,7 +819,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
-    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(psPage, 'FFRPS26 Edit Product — invalid Driver Licence');
     logger.success('FFRPS26 passed');
   });
@@ -826,7 +835,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, false, 'Voting Card');
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
-    await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+    await openProductFormExpectingRejection(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(psPage, 'FFRPS27 Add Product — invalid Voting Card');
     logger.success('FFRPS27 passed');
   });
@@ -843,8 +852,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
-    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    await updateProductExpectingAccept(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS28 passed');
   });
 
@@ -859,8 +868,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertGeneratedValueMatchesLivePattern(configPage, PS_TEXT_FIELD_INTERNAL_NAME, value, true, 'Passport');
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.textField, value, 'Text field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value, 'Text field');
     logger.success('FFRPS29 passed');
   });
 
@@ -876,7 +885,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const id = await createBareProduct(psPage);
-    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.textField, value });
+    await openEditProductFormExpectingRejection(psPage, id, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField, value });
     await assertInlineErrorPresent(psPage, 'FFRPS30 Edit Product — invalid Passport');
     logger.success('FFRPS30 passed');
   });
@@ -898,8 +907,8 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await clearProductsApplicationCache(restrictedPage);
     const psPage = new ProductsAndServicesPage(restrictedPage);
     const value = repeatChar(NUMBER_REPEAT_CHAR, CACHE_TEST_DISCRIMINATING_DIGITS);
-    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_CUSTOM_FIELD_NAMES.number, value });
-    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_CUSTOM_FIELD_NAMES.number, value, 'Number field');
+    const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value });
+    await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRPS31 passed');
   });
 });

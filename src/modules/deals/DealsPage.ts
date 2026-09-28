@@ -818,26 +818,42 @@ export class DealsPage extends BasePage {
   // omits it and gets byte-for-byte the original fill-everything behavior.
   // The blur-fix below mirrors the same incident-driven fix documented in
   // LEAD_FEATURE_RETROSPECTIVE.md §2.8.
-  private async fillDealCustomFields(data: DealData, onlyField?: DealCustomFieldKey): Promise<void> {
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see DEAL_FORM_FIELD_LIMIT_NAMES's
+  // own comment in dealFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than DEAL_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Deal test). Every existing caller omits this and gets byte-for-byte the
+  // original behavior.
+  private async fillDealCustomFields(
+    data: DealData,
+    onlyField?: DealCustomFieldKey,
+    fieldNameOverride?: string
+  ): Promise<void> {
     const cf = data.customFields;
     const wants = (key: DealCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
     if (wants('textField')) {
       await this.fillTextLikeCustomField(
-        DEAL_CUSTOM_FIELD_NAMES.textField,
+        fieldNameOverride ?? DEAL_CUSTOM_FIELD_NAMES.textField,
         cf.textField,
         'Text Field'
       );
     }
     if (wants('paragraphText')) {
       await this.fillTextLikeCustomField(
-        DEAL_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldNameOverride ?? DEAL_CUSTOM_FIELD_NAMES.paragraphText,
         cf.paragraphText,
         'Paragraph Text'
       );
     }
     if (wants('number')) {
-      await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? DEAL_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number'
+      );
     }
     if (wants('urlField')) {
       await this.fillTextLikeCustomField(DEAL_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
@@ -905,7 +921,7 @@ export class DealsPage extends BasePage {
   // fill-everything behavior.
   async fillDealForm(
     data: DealData,
-    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Filling deal form');
     const minimal = options?.minimal === true;
@@ -1029,7 +1045,7 @@ export class DealsPage extends BasePage {
     // WHY conditional, not unconditional: mirrors CompaniesPage.fillCompanyForm()'s
     // identical, more-detailed WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillDealCustomFields(data, options?.onlyCustomField);
+      await this.fillDealCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Deal form filled');
@@ -1206,7 +1222,7 @@ export class DealsPage extends BasePage {
   // reasoning Task's/Company's own minimal EDIT already established.
   async fillEditForm(
     data: DealData,
-    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Updating deal in edit form');
     const minimal = options?.minimal === true;
@@ -1296,7 +1312,7 @@ export class DealsPage extends BasePage {
     // WHY conditional — see fillDealForm()'s identical, more-detailed WHY
     // comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillDealCustomFields(data, options?.onlyCustomField);
+      await this.fillDealCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
 
     logger.success('Edit form updated');
@@ -1655,7 +1671,7 @@ export class DealsPage extends BasePage {
   // and gets the original behavior.
   async createDeal(
     data: DealData,
-    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: DealCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       await this.clickAddDeal();

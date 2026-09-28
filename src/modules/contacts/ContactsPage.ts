@@ -394,30 +394,39 @@ export class ContactsPage extends BasePage {
   // on a DIFFERENT field. `onlyField`, when provided, fills ONLY that one
   // field and skips the other 8 entirely — every existing caller omits it
   // and gets byte-for-byte the same fill-everything behavior as before.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see
+  // CONTACT_FORM_FIELD_LIMIT_NAMES's own comment in contactFactory.ts for
+  // the full incident): lets a caller fill the ONE field `onlyField` selects
+  // using a DIFFERENT real internal name than CONTACT_CUSTOM_FIELD_NAMES's
+  // own hardcoded value below, without touching that shared constant (still
+  // used, unchanged, by every other Contact test). Every existing caller
+  // omits this and gets byte-for-byte the original behavior.
   private async fillContactCustomFields(
     data: ContactData,
-    onlyField?: ContactCustomFieldKey
+    onlyField?: ContactCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     const cf = data.customFields;
     const wants = (key: ContactCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
     if (wants('textField')) {
       await this.fillTextLikeCustomField(
-        CONTACT_CUSTOM_FIELD_NAMES.textField,
+        fieldNameOverride ?? CONTACT_CUSTOM_FIELD_NAMES.textField,
         cf.textField,
         'Text Field'
       );
     }
     if (wants('paragraphText')) {
       await this.fillTextLikeCustomField(
-        CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
+        fieldNameOverride ?? CONTACT_CUSTOM_FIELD_NAMES.paragraphText,
         cf.paragraphText,
         'Paragraph Text'
       );
     }
     if (wants('number')) {
       await this.fillTextLikeCustomField(
-        CONTACT_CUSTOM_FIELD_NAMES.number,
+        fieldNameOverride ?? CONTACT_CUSTOM_FIELD_NAMES.number,
         String(cf.number),
         'Number'
       );
@@ -663,7 +672,7 @@ export class ContactsPage extends BasePage {
   // `options` and gets byte-for-byte the original full-form-fill behavior.
   async fillContactForm(
     data: ContactData,
-    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Filling contact form');
     const minimal = options?.minimal === true;
@@ -752,7 +761,7 @@ export class ContactsPage extends BasePage {
     // behavior — not an oversight. Mirrors LeadsPage.fillLeadForm()'s
     // identical, more-detailed WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillContactCustomFields(data, options?.onlyCustomField);
+      await this.fillContactCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
     logger.success('Contact form filled');
   }
@@ -932,7 +941,7 @@ export class ContactsPage extends BasePage {
   // Every existing caller omits `options` and is unaffected.
   async fillEditForm(
     data: ContactData,
-    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<void> {
     logger.info('Updating contact form');
     const minimal = options?.minimal === true;
@@ -1009,7 +1018,7 @@ export class ContactsPage extends BasePage {
     // WHY conditional — see fillContactForm()'s identical, more-detailed
     // WHY comment on its own equivalent call site.
     if (!minimal || options?.onlyCustomField) {
-      await this.fillContactCustomFields(data, options?.onlyCustomField);
+      await this.fillContactCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
     logger.success('Edit form updated');
   }
@@ -1641,7 +1650,7 @@ export class ContactsPage extends BasePage {
   // existing caller omits `options` and gets the original behavior.
   async createContact(
     data: ContactData,
-    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey }
+    options?: { minimal?: boolean; onlyCustomField?: ContactCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22, same pattern as
