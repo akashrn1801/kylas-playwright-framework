@@ -40,7 +40,9 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   // back to the FILENAME itself (which still carries the real entity name)
   // — generic, not hardcoded to any one entity, so it also covers any
   // future entity added the same way.
+  let isFieldLimitFile = false;
   if (rawName.toLowerCase() === 'formfields' && match) {
+    isFieldLimitFile = true;
     const filenameOnly = fp.split('/').pop() || '';
     rawName = filenameOnly.replace(/\.(rbac\.)?spec\.ts$/, '');
   }
@@ -50,7 +52,38 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   // two sides of one entity would still show as separate module rows.
   rawName = rawName.replace(/(FieldLimits|FormFields)$/i, '');
 
-  const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  // WHY this map (2026-09-28, confirmed live via a real notification email):
+  // this feature's per-entity filenames use the entity's SINGULAR name
+  // (leadFieldLimits.spec.ts -> "lead"), while every pre-existing module's
+  // own directory — and therefore this function's directory-derived name
+  // for every other test in the suite — uses the PLURAL form
+  // (tests/ui/leads/ -> "leads", tests/ui/companies/ -> "companies").
+  // Company/Companies is even irregular (y -> ies), so a generic
+  // trailing-"s" rule can't bridge this. Left unmapped, Module Analytics
+  // shows this feature's tests as an entirely separate, unrelated-looking
+  // module ("Lead") from the entity's real, existing module ("Leads").
+  // Products & Services is deliberately absent — its Field-Limit filename
+  // ("productsAndServicesFieldLimits") already matches its directory name
+  // exactly, so no mapping is needed there.
+  const SINGULAR_TO_CANONICAL_MODULE_NAME: Record<string, string> = {
+    lead: 'leads',
+    contact: 'contacts',
+    company: 'companies',
+    task: 'tasks',
+    deal: 'deals',
+  };
+  rawName = SINGULAR_TO_CANONICAL_MODULE_NAME[rawName.toLowerCase()] ?? rawName;
+
+  const canonicalName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  // WHY a suffixed sub-label rather than a full merge into the bare entity
+  // name: these are a materially different test category (field-limit
+  // validation, not the base CRUD suite) with their own failure/flake
+  // characteristics — collapsing them into the exact same row as e.g.
+  // "Leads" would hide that signal. This still visibly groups under the
+  // same entity name (sorts adjacent, shares the base word) rather than
+  // reading as an unrelated module, while keeping the existing UI/RBAC
+  // split (driven by `type`, unchanged) intact for each.
+  const name = isFieldLimitFile ? `${canonicalName} — Field Limits` : canonicalName;
   return { name, type };
 }
 

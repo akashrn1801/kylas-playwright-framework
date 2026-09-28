@@ -426,6 +426,42 @@ async function setupRole(
       }
 
       await context.storageState({ path: stateFile });
+
+      // WHY this verify-and-retry loop (2026-09-28, real sandbox failure —
+      // shard 4/8's globalSetup crashed entirely with "Could not extract an
+      // access token from the saved storage state for role: restricted",
+      // thrown 4 seconds after this exact storageState() call, from inside
+      // ensureProductFixtures()'s own getAccessTokenForRole() read of the
+      // same file): under real concurrent load — 8 shards each logging in
+      // fresh as the SAME shared admin/restricted staging accounts within
+      // the same ~90s window — the app's own client-side write of
+      // localStorage.token can plausibly lag slightly behind the /sales/
+      // redirect this function already waits for above, or the account's
+      // session can be transiently disturbed by a concurrent login
+      // elsewhere. A bounded re-capture here is a real condition-based
+      // check (the existing getAccessTokenForRole() decode either succeeds
+      // or it doesn't), not a blind wait, and is far cheaper than falling
+      // through to this function's own full outer 3-attempt re-login retry
+      // for what is most plausibly a sub-second timing gap. Root cause not
+      // fully confirmed (a single occurrence, not yet reproduced on demand)
+      // — this is defensive hardening per CLAUDE.md rule 10, not a proven
+      // fix; if this loop's own warning log recurs, that's real evidence
+      // toward whichever mechanism is actually at play.
+      const tokenVerifyAttempts = 3;
+      for (let i = 1; i <= tokenVerifyAttempts; i++) {
+        try {
+          await getAccessTokenForRole(role);
+          break;
+        } catch (verifyError) {
+          if (i === tokenVerifyAttempts) throw verifyError;
+          console.warn(
+            `[globalSetup] Saved storage state for ${role} has no decodable token yet ` +
+              `(attempt ${i}/${tokenVerifyAttempts}) — re-capturing in 2s...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await context.storageState({ path: stateFile });
+        }
+      }
       console.log(`[globalSetup] State saved for: ${role}`);
 
       // Save captured display name to userNames.json

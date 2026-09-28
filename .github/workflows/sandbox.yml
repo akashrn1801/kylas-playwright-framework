@@ -323,6 +323,32 @@ jobs:
           path: all-blob-reports
           merge-multiple: true
 
+      # WHY this step (2026-09-28, real sandbox run 36430891548): shard 4/8
+      # crashed in globalSetup (0 tests, no blob uploaded) and shard 1/8 was
+      # cancelled by run-tests' own 180-min timeout (no blob uploaded either)
+      # — the merge step below has NO knowledge of shard_total, so it
+      # silently merged the 6 remaining shards' 673 tests as if that were
+      # the whole 898-test run, and the notification faithfully reported
+      # "Failed: 127" with no indication that 2 whole shards (~25% of the
+      # suite) never contributed any pass/fail signal at all. This is a
+      # DETECTION gap, not a merge bug — playwright merge-reports has no way
+      # to know a shard was supposed to exist but didn't upload. A loud,
+      # impossible-to-miss build annotation is the fix here, not a silent
+      # log line — this must be caught by whoever reviews the run, not
+      # require someone to already suspect a missing shard and go count
+      # artifacts by hand.
+      - name: Verify all shards reported
+        run: |
+          SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
+          ACTUAL_COUNT=$(find all-blob-reports -maxdepth 1 -name '*.zip' | wc -l)
+          echo "Expected shard reports: $SHARD_TOTAL | Actually downloaded: $ACTUAL_COUNT"
+          if [ "$ACTUAL_COUNT" -lt "$SHARD_TOTAL" ]; then
+            MISSING=$((SHARD_TOTAL - ACTUAL_COUNT))
+            echo "::error::Sharded run incomplete — $MISSING of $SHARD_TOTAL shard(s) never uploaded a blob report (the shard's job crashed before completing, or was cancelled/timed out). The merged Total/Passed/Failed counts below come from only $ACTUAL_COUNT/$SHARD_TOTAL shards and UNDERSTATE the real run — do NOT treat them as the whole suite. Check this run's per-job status (Actions tab) to see which shard(s) are missing and why."
+          else
+            echo "All $SHARD_TOTAL shards reported successfully."
+          fi
+
       - name: Merge shard reports into one HTML/JSON report
         run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
 
