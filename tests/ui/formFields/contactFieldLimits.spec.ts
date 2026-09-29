@@ -282,13 +282,18 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
 }
 
 test.describe('Contact Field Limits', () => {
-  // WHY no test.describe.configure({ mode: 'serial' }) anywhere in this
-  // file (2026-09-29, removed — mirrors leadFieldLimits.spec.ts's identical
-  // removal, see that file's own WHY comment for the full reasoning):
-  // contactFormFieldLock.ts's auto-applied, scope:'test' lock fixture
-  // already serializes every test in this file for real (held for each
-  // test's entire duration) — .serial mode was providing zero additional
-  // correctness, only an unwanted skip-cascade on a neighbor's failure.
+  // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer level
+  // — mirrors leadFieldLimits.spec.ts's identical top-of-file comment (see
+  // that file for the full reasoning): each of the 6 field-mutating
+  // sub-blocks below carries its own `.serial` instead, restored 2026-09-29
+  // as CI-carve-out defense-in-depth (see .claude/known-issues.md's dated
+  // 2026-09-29 entry) — kept OUT of this outer block so a failure in one
+  // field's tests never skip-cascades an unrelated field's tests in the
+  // same file. contactFormFieldLock.ts's own cross-process lock only ever
+  // protected same-filesystem concurrency; it never protected against this
+  // file (or its RBAC sibling, targeting the same 3 dedicated fields)
+  // landing on a different GitHub Actions shard, which real sandbox run
+  // 36520337903 proved happens.
 
   // WHY test.describe.configure({ timeout: 480000 }) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -405,6 +410,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Text field character-length limits ─────────────────────────────
 
   test.describe('Text field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -532,6 +538,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Number field digit-count limits ─────────────────────────────────
 
   test.describe('Number field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC13 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -659,6 +666,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────────────────
 
   test.describe('Paragraph field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC23 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -786,6 +794,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Format rules (Regex) — Text field ────────────────────────────────
 
   test.describe('Text field format rules (Regex)', () => {
+    test.describe.configure({ mode: 'serial' });
 
     // WHY cross-checking the generated value against the pattern read LIVE
     // off the config page, not just trusting the generator: mirrors
@@ -1249,6 +1258,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Cache behavior ────────────────────────────────────────────────────
 
   test.describe('Cache behavior', () => {
+    test.describe.configure({ mode: 'serial' });
 
     const CACHE_TEST_STALE_MIN = 3;
     const CACHE_TEST_STALE_MAX = 6;
@@ -1304,6 +1314,7 @@ test.describe('Contact Field Limits', () => {
   // ─── Cleanup ────────────────────────────────────────────────────────
 
   test.describe('Cleanup', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC53 admin should confirm after the test run, all field settings are reset back to blank', async ({
       adminPage,

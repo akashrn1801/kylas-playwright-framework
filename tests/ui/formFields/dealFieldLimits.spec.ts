@@ -370,6 +370,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Text field character-length limits ─────────────────────────────
 
   test.describe('Text field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFD4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -464,6 +465,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Number field digit-count limits ────────────────────────
 
   test.describe('Number field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFD9 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -558,6 +560,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────
 
   test.describe('Paragraph field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFD14 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -672,6 +675,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Format rules (Regex) — Text field ────────────────────────────────
 
   test.describe('Text field format rules (Regex)', () => {
+    test.describe.configure({ mode: 'serial' });
 
     async function assertGeneratedValueMatchesLivePattern(
       configPage: FormFieldsConfigPage,
@@ -995,6 +999,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Cache behavior ────────────────────────────────────────────────────
 
   test.describe('Cache behavior', () => {
+    test.describe.configure({ mode: 'serial' });
 
     const CACHE_TEST_STALE_MIN = 3;
     const CACHE_TEST_STALE_MAX = 6;
@@ -1041,6 +1046,7 @@ test.describe('Deal Field Limits', () => {
   // ─── Cleanup ────────────────────────────────────────────────────────
 
   test.describe('Cleanup', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFD38 admin should confirm after the test run, all field settings are reset back to blank', async ({
       adminPage,

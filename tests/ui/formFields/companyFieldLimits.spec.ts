@@ -376,6 +376,7 @@ test.describe('Company Field Limits', () => {
   // ─── Text field character-length limits ─────────────────────────────
 
   test.describe('Text field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFCO4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -502,6 +503,7 @@ test.describe('Company Field Limits', () => {
   // ─── Number field digit-count limits ────────────────────────
 
   test.describe('Number field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFCO9 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -628,6 +630,7 @@ test.describe('Company Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────
 
   test.describe('Paragraph field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFCO14 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -754,6 +757,7 @@ test.describe('Company Field Limits', () => {
   // ─── Format rules (Regex) — Text field ────────────────────────────────
 
   test.describe('Text field format rules (Regex)', () => {
+    test.describe.configure({ mode: 'serial' });
 
     // WHY cross-checking the generated value against the pattern read LIVE
     // off the config page, not just trusting the generator: mirrors
@@ -1196,6 +1200,7 @@ test.describe('Company Field Limits', () => {
   // ─── Cache behavior ────────────────────────────────────────────────────
 
   test.describe('Cache behavior', () => {
+    test.describe.configure({ mode: 'serial' });
 
     const CACHE_TEST_STALE_MIN = 3;
     const CACHE_TEST_STALE_MAX = 6;
@@ -1242,6 +1247,7 @@ test.describe('Company Field Limits', () => {
   // ─── Cleanup ────────────────────────────────────────────────────────
 
   test.describe('Cleanup', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFCO38 admin should confirm after the test run, all field settings are reset back to blank', async ({
       adminPage,

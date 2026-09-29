@@ -27,34 +27,49 @@ import { logger } from '../../../src/utils/logger';
 import { config } from '../../../config/config';
 import * as path from 'path';
 
-// WHY this file has NO test.describe.configure({ mode: 'serial' }) at all
-// (2026-09-29, removed — previously restructured 2026-09-21 into several
-// small per-field serial blocks instead of one file-wide block; see git
-// history for both prior shapes): every test here configures or depends on
-// the exact current configuration of one of only 3 shared, account-wide
+// WHY this file's 6 field-mutating sub-blocks each carry their own
+// test.describe.configure({ mode: 'serial' }) (restored 2026-09-29 — removed
+// earlier the same day, see .claude/known-issues.md's dated 2026-09-29 entry
+// "A cross-process lock only protects workers on the SAME filesystem" for
+// the full incident): every test in these sub-blocks configures or depends
+// on the exact current configuration of one of only 3 shared, account-wide
 // custom fields (cfTextField/cfNumber/cfParagraphText) — not a disposable
 // per-test record — so tests touching the SAME field must still run
-// one-at-a-time. That real requirement is met by `formFieldsTestLock.ts`'s
-// auto-applied, scope:'test' `leadFormFieldLock` fixture (imported from
-// `./formFieldsTestLock` below), which acquires a real cross-process file
-// lock for EVERY test's entire duration (in this file AND in
-// tests/rbac/formFields/leadFieldLimits.rbac.spec.ts) and releases it only
-// once that test finishes — two tests can never actually execute
-// concurrently regardless of describe grouping, so `.serial` mode was
-// enforcing an ordering constraint the lock already guaranteed for free.
+// one-at-a-time. `formFieldsTestLock.ts`'s auto-applied, scope:'test'
+// `leadFormFieldLock` fixture (imported from `./formFieldsTestLock` below)
+// already guarantees this WITHIN one CI shard (one filesystem) — but it is,
+// like every lock built this way, `fs`-based and scoped to one machine's own
+// disk, so it provides ZERO protection the moment two of this file's own
+// tests (or this file and its sibling
+// tests/rbac/formFields/leadFieldLimits.rbac.spec.ts, which targets the
+// exact same 3 dedicated fields) land on two DIFFERENT GitHub Actions
+// shards — confirmed to happen for real, not hypothetically: real sandbox
+// run 36520337903 (2026-09-29) showed this file's own tests split across
+// shards 6/8 and 7/8 simultaneously, and every entity's UI/RBAC file pair
+// landed on two different shards, producing genuine, evidence-confirmed
+// config-mutation races (not flakes). `.serial` mode's one real, load-
+// bearing side effect — per this repo's own 2026-09-09 sharding-internals
+// audit, forcing a describe block into ONE Playwright shard-distribution
+// group — was the thing actually preventing that split most of the time,
+// not the lock. Correctness now comes from a CI-level fix instead: every
+// formFields entity's UI+RBAC file pair is carved into its own always-
+// single-shard job (sandbox.yml/qa.yml/stage.yml/main.yml's own
+// run-formfields-tests job), never subject to Playwright's own count-based
+// shard splitting at all — so cross-shard splitting for this file
+// specifically is now structurally impossible, and restoring `.serial` per
+// sub-block is safe, low-blast-radius defense-in-depth for same-shard
+// interleaving only.
 //
-// What `.serial` mode ALSO did, which was never actually wanted: Playwright
-// recycles a worker after any serial-block test failure (confirmed at
-// Playwright's own source, node_modules/playwright/lib/worker/
-// workerProcessEntry.js — a failure sets `_isStopped = true`, and every
-// subsequent test the same worker would have run is marked "skipped"
-// without ever attempting it; only a retry of the WHOLE block gets those
-// tests a real chance to run). Live-confirmed real cost of this (2026-09-28
+// WHY per-SUB-BLOCK serial (6 small blocks), not one file-wide block: a
+// file-wide block would force every test in the file into one skip-cascade
+// domain again — live-confirmed real cost of exactly that shape (2026-09-28
 // sandbox run 36464460839, shard 3/8): one genuine failure in Task's RBAC
 // suite cascade-skipped 48 unrelated tests across two files in the same
-// invocation, none of which ever got their own real attempt. With `.serial`
-// removed, the lock alone still prevents any actual race, and a failure in
-// one test no longer takes its neighbors down with it.
+// invocation, none of which ever got their own real attempt. Scoping
+// `.serial` to each of the 6 field-mutating sub-blocks keeps that blast
+// radius to just the tests sharing the SAME dedicated field as the failure,
+// while the CI carve-out above (not `.serial`) is what now guarantees this
+// file and its RBAC sibling never race across shards.
 //
 // WHY every test independently (re-)configures its own field state rather
 // than relying on declaration/execution order: tests must remain
@@ -482,10 +497,12 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
 }
 
 test.describe('Lead Field Limits', () => {
-  // WHY no test.describe.configure({ mode: 'serial' }) anywhere in this
-  // file — see this file's top-of-file comment for the full reasoning
-  // (formFieldsTestLock.ts's cross-process lock already serializes every
-  // test for real; .serial mode was only adding an unwanted skip-cascade).
+  // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer level
+  // — see this file's top-of-file comment for the full reasoning. Each of
+  // the 6 field-mutating sub-blocks below carries its own `.serial` instead,
+  // restored 2026-09-29 as CI-carve-out defense-in-depth, deliberately kept
+  // OUT of this outer block so a failure in one field's tests never
+  // skip-cascades an unrelated field's tests in the same file.
 
   // WHY test.describe.configure({{ timeout: 480000 }}) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -667,6 +684,7 @@ test.describe('Lead Field Limits', () => {
   // one instead of one file-wide block, and why the split is still safe.
 
   test.describe('Text field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -803,6 +821,7 @@ test.describe('Lead Field Limits', () => {
   // ─── Number field digit-count limits ─────────────────────────────────
 
   test.describe('Number field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL13 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -948,6 +967,7 @@ test.describe('Lead Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────────────────
 
   test.describe('Paragraph field limits', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL23 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -1092,6 +1112,7 @@ test.describe('Lead Field Limits', () => {
   // not do.
 
   test.describe('Text field format rules (Regex)', () => {
+    test.describe.configure({ mode: 'serial' });
     // WHY 5 options fully covered (not just a subset), each with its own
     // configure+valid+invalid triple: per explicit scope requirement — every
     // real, non-default option confirmed in FORM_FIELD_LIMIT_INVESTIGATION.md
@@ -1629,6 +1650,7 @@ test.describe('Lead Field Limits', () => {
   // tests from ever executing concurrently against the same field.
 
   test.describe('Cache behavior', () => {
+    test.describe.configure({ mode: 'serial' });
 
     // WHY two deliberately non-overlapping digit-count ranges, not the same
     // range reused from the main Number-field test block above: a value
@@ -1712,6 +1734,7 @@ test.describe('Lead Field Limits', () => {
   // structurally prevented by the lock, not by shared .serial grouping.
 
   test.describe('Cleanup', () => {
+    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL54 after the test run, all field settings are reset back to blank', async ({
       adminPage,

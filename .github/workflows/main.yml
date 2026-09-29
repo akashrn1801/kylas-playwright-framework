@@ -94,7 +94,17 @@ jobs:
           # and fails loudly — never silently swallowed, and never
           # dependent on grep's exit-code convention to signal anything.
           set +e
-          LIST_OUTPUT=$(npx playwright test --project=chromium --list 2>&1)
+          # WHY --grep-invert "formFields" here (2026-09-29): formFields
+          # tests are carved out into their own always-single-shard-per-
+          # entity job (run-formfields-tests below) and must never also be
+          # counted/sharded here — see .claude/known-issues.md's dated
+          # 2026-09-29 entry ("A cross-process lock only protects workers on
+          # the SAME filesystem") for the full incident this fixes.
+          # `--grep-invert` matches against each test's full id string,
+          # which includes its file path, so this is a pure, safe exclusion
+          # by directory — confirmed live (no other test path in this repo
+          # contains the substring "formFields").
+          LIST_OUTPUT=$(npx playwright test --project=chromium --list --grep-invert "formFields" 2>&1)
           LIST_EXIT_CODE=$?
           set -e
           if [ "$LIST_EXIT_CODE" -ne 0 ]; then
@@ -104,11 +114,11 @@ jobs:
           fi
           TEST_COUNT=$(echo "$LIST_OUTPUT" | grep -c "chromium" || true)
           if [ "$TEST_COUNT" -eq 0 ]; then
-            echo "::error::npx playwright test --list succeeded but matched zero tests — almost certainly a broken config, not a legitimately empty suite. Full output:"
+            echo "::error::npx playwright test --list succeeded but matched zero tests (excluding formFields) — almost certainly a broken config, not a legitimately empty suite. Full output:"
             echo "$LIST_OUTPUT"
             exit 1
           fi
-          echo "Real full-suite test count: $TEST_COUNT"
+          echo "Real full-suite test count (excluding formFields, carved out separately): $TEST_COUNT"
           # WHY 125 tests/shard, and why ceiling division (2026-09-09): see
           # this workflow's own top-of-file WHY comment for the full
           # derivation from real measured throughput. Ceiling division (not
@@ -192,7 +202,10 @@ jobs:
           # instead of N disconnected ones. MiscErrorReporter runs HERE, per
           # shard, because its data comes from THIS shard's own live
           # per-worker temp files.
-          npx playwright test --project=chromium --workers=2 --timeout=90000 \
+          # WHY --grep-invert "formFields" here too: must match the plan
+          # job's own exclusion exactly, or TEST_COUNT/shard_total (computed
+          # there) would no longer describe what this step actually runs.
+          npx playwright test --project=chromium --grep-invert "formFields" --workers=2 --timeout=90000 \
             --shard=${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }} \
             --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           EXIT_CODE=$?
@@ -241,6 +254,114 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  # WHY this job exists, separate from run-tests' own dynamic shard matrix
+  # (2026-09-29): confirmed via real sandbox run 36520337903 that formFields'
+  # per-entity cross-process config lock (formFieldLockFactory.ts/
+  # formFieldsTestLock.ts) is `fs`-based and scoped to ONE runner's own
+  # filesystem — it provides zero protection the moment an entity's UI spec
+  # file and its RBAC sibling (which target the exact same shared, account-
+  # wide dedicated custom fields) land on two DIFFERENT shards, which
+  # run-tests' own count-based Playwright sharding does not prevent (see
+  # .claude/known-issues.md's dated 2026-09-29 entry for the full incident:
+  # every one of the 6 entities' UI/RBAC file pairs landed on different
+  # shards in that run, producing genuine, evidence-confirmed config-
+  # mutation races). Fix: give formFields its own fixed, content-addressed
+  # shard plan — one shard per entity, each running that entity's UI+RBAC
+  # file pair together, always — rather than relying on Playwright's own
+  # opaque, count-based, reshuffle-prone chunking to keep them co-located.
+  # This holds regardless of how many shards run-tests itself computes, how
+  # the suite grows, or how Playwright's internal grouping behaves in a
+  # future version — the pairing is fixed by this matrix, not derived.
+  run-formfields-tests:
+    name: playwright-formFields (${{ matrix.entity }})
+    environment: production
+    runs-on: ubuntu-latest
+    # WHY 180 (2026-09-29): real measured per-entity total test time (this
+    # entity's UI+RBAC files combined, first-attempt durations summed from
+    # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
+    # .claude/known-issues.md's dated 2026-09-29 entry for the full
+    # derivation. 180 gives ~1.6-2x margin over the slowest entity (Lead).
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        entity: [lead, contact, company, deal, task, productsAndServices]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
+        env:
+          ENV: prod
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
+          PROD_ADMIN_EMAIL: ${{ secrets.PROD_ADMIN_EMAIL }}
+          PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
+          PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
+          PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+        run: |
+          START_TIME=$(date +%s)
+          echo "⏱️  Started at: $(date '+%H:%M:%S')"
+          # WHY no --shard/--timeout flag here: this job's own matrix IS the
+          # shard plan (fixed, one entity per job) — Playwright's own
+          # --shard flag is deliberately never used for this track. Each
+          # spec file's own test.describe.configure({ timeout: 480000 })
+          # already governs its tests' timeout; no CLI --timeout override
+          # is layered on top, matching how these same files already ran
+          # under sandbox.yml before this fix.
+          npx playwright test --project=chromium --workers=2 \
+            tests/ui/formFields/${{ matrix.entity }}FieldLimits.spec.ts \
+            tests/rbac/formFields/${{ matrix.entity }}FieldLimits.rbac.spec.ts \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo "✅ formFields/${{ matrix.entity }} total time: ${MINUTES}m ${SECONDS}s"
+          exit $EXIT_CODE
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-main-formfields-${{ matrix.entity }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-main-formfields-${{ matrix.entity }}
+          path: reports/prod/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-main-formfields-${{ matrix.entity }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 90
+
   # WHY a separate job, not a step in run-tests (this IS the point of
   # sharding): this is the ONE place that produces a single consolidated
   # report/notification, regardless of how many shards ran or how they each
@@ -253,7 +374,7 @@ jobs:
   # change).
   merge-and-report:
     name: merge report + notify
-    needs: run-tests
+    needs: [run-tests, run-formfields-tests]
     if: always()
     environment: production
     runs-on: ubuntu-latest

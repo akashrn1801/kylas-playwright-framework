@@ -82,19 +82,36 @@ async function assertInlineErrorPresent(
 }
 
 contactTest.describe('Form Field Limits — RBAC › Contact', () => {
-  // WHY no test.describe.configure({ mode: 'serial' }) here (2026-09-29,
-  // removed — see FormFieldsConfigPage.ts/formFieldLockFactory.ts's own
-  // header comment for the full reasoning): the auto-applied, scope:'test'
-  // contactFormFieldLock fixture already acquires this entity's real
-  // cross-process lock for every test's ENTIRE duration and releases it at
-  // the end — two tests from this file can never actually run concurrently
-  // regardless of describe/serial grouping, so .serial mode was providing
-  // zero additional correctness here, only an unwanted side effect: one
-  // test's failure was skip-cascading every remaining test in this block
-  // instead of each getting its own real, independent attempt. Every test
-  // below already independently (re-)configures its own field state before
-  // asserting on it (never relies on a predecessor's leftover config), so
-  // removing the artificial ordering constraint is safe.
+  // WHY contactTest.describe.configure({ mode: 'serial' }) IS here (restored
+  // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
+  // cross-process lock only protects workers on the SAME filesystem"):
+  // removed earlier the same day on the reasoning that the auto-applied,
+  // scope:'test' contactFormFieldLock fixture's own cross-process lock already makes
+  // concurrent execution of this file's own tests impossible, so serial
+  // mode was "only" causing an unwanted skip-cascade side effect. That
+  // reasoning is true only for two tests sharing one filesystem — it said
+  // nothing about GitHub Actions sharding, which runs each shard on a
+  // SEPARATE machine
+  // with its own separate filesystem, where this lock (like every lock
+  // built this way) provides zero cross-machine protection. Removing
+  // .serial mode here removed the one property (this whole block staying
+  // in ONE Playwright shard-distribution group, confirmed via this repo's
+  // own 2026-09-09 sharding-internals audit) that had been keeping this
+  // file's own tests — and, just as importantly, this file's sibling UI
+  // spec file, which shares the exact same entity's dedicated custom
+  // fields — from ever landing on two different shards at the same time.
+  // Real sandbox run 36520337903 (2026-09-29) proved this happens: this
+  // entity's UI and RBAC files ran concurrently on two different shards,
+  // each mutating the same shared account-wide field config with no
+  // cross-shard mutual exclusion, producing genuine, evidence-confirmed
+  // test failures (not flakes). Correctness now comes from a CI-level fix
+  // instead (formFields tests are carved into their own always-single-
+  // shard-per-entity job, never sharded by Playwright's own count-based
+  // splitting — see sandbox.yml/qa.yml/stage.yml/main.yml's own
+  // run-formfields-tests job) — restoring .serial here is defense-in-depth
+  // for same-shard interleaving, now safe to re-add since the CI carve-out
+  // means the original skip-cascade downside this was removed to avoid no
+  // longer trades away real cross-shard correctness to get it.
 
   // WHY contactTest.describe.configure({ timeout: 480000 }) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -115,6 +132,8 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test contactTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
+  contactTest.describe.configure({ mode: 'serial' });
+
   contactTest.describe.configure({ timeout: 480000 });
 
   const CONTACT_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Contact', urlSlug: 'contacts' };

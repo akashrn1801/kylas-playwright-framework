@@ -56,6 +56,12 @@ jobs:
       shards_json: ${{ steps.decide.outputs.shards_json }}
       workers: ${{ steps.decide.outputs.workers }}
       test_count: ${{ steps.decide.outputs.test_count }}
+      # WHY (2026-09-29): see the "decide" step's own WHY comment on the
+      # formFields carve-out. Only 'true' when TARGET is the escalated
+      # full-regression case — the ONLY case where run-tests is ever
+      # actually sharded (SHARD_TOTAL>1), which is the only case the
+      # cross-shard race this carve-out defends against can occur in.
+      run_formfields_track: ${{ steps.decide.outputs.run_formfields_track }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -132,38 +138,72 @@ jobs:
             exit 1
           fi
           echo "Test count: $TEST_COUNT"
-          if [ "$TEST_COUNT" -gt 50 ]; then
+          # WHY this exact string match (2026-09-09, unchanged): "--grep
+          # @regression" is the literal, only string detect-tests.sh's Rule 1
+          # (core framework file changed) emits — the same escalation that
+          # produced the 499-test, 6-hour-plus run this fix addresses. Every
+          # other branch of detect-tests.sh (smoke fallback, per-module test
+          # paths) produces a materially smaller target that has never
+          # approached the timeout ceiling AND always runs as a single shard
+          # (SHARD_TOTAL=1 below) — so only THIS one branch can ever actually
+          # split tests across more than one GitHub Actions runner.
+          #
+          # WHY the formFields carve-out (TARGET_REST/run_formfields_track)
+          # is gated on this exact same condition (2026-09-29): the cross-
+          # shard config-mutation race this carve-out defends against
+          # (.claude/known-issues.md's dated 2026-09-29 entry) can only ever
+          # happen when run-tests is actually sharded (SHARD_TOTAL>1) — which
+          # only happens in this branch. In the small-selective branch below,
+          # SHARD_TOTAL is always 1, so formFields tests (if selected at all)
+          # already run on a single shard with the existing local lock fully
+          # correct — carving them out there would only add overhead for
+          # zero correctness benefit.
+          if [ "$TARGET" = "--grep @regression" ]; then
+            RUN_FORMFIELDS_TRACK=true
+            # WHY --grep-invert "formFields" here, and why a SECOND --list
+            # call rather than reusing LIST_OUTPUT above: `--grep-invert`
+            # matches against each test's full id string (confirmed live —
+            # includes the file path), so this is a pure, safe exclusion by
+            # directory; a second --list call with the real final command
+            # shape (rather than parsing the first call's text output for a
+            # "formFields/" substring) guarantees TEST_COUNT_REST can never
+            # drift from what run-tests actually executes below.
+            LIST_OUTPUT_REST=$(npx playwright test --project=chromium --list $TARGET --grep-invert "formFields" 2>&1)
+            TEST_COUNT_REST=$(echo "$LIST_OUTPUT_REST" | grep -c "chromium" || true)
+            TARGET_REST="$TARGET --grep-invert formFields"
+            echo "Rest-of-suite test count (excluding formFields, carved out separately): $TEST_COUNT_REST"
+            # WHY 125 tests/shard, ceiling division (2026-09-09, unchanged):
+            # identical formula and derivation to qa.yml/stage.yml/main.yml's
+            # own — see this file's top-of-file WHY comment. Now sized off
+            # TEST_COUNT_REST (the rest-of-suite count, formFields excluded),
+            # not the original TEST_COUNT, since that's what run-tests below
+            # actually shards.
+            TARGET_TESTS_PER_SHARD=125
+            SHARD_TOTAL=$(( (TEST_COUNT_REST + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
+            SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
+            echo "Core framework file changed -> full regression escalation -> sharding rest-of-suite into $SHARD_TOTAL (dynamic: $TEST_COUNT_REST tests / $TARGET_TESTS_PER_SHARD per shard) + formFields carved into its own 6-shard, one-per-entity track"
+          else
+            RUN_FORMFIELDS_TRACK=false
+            TARGET_REST="$TARGET"
+            TEST_COUNT_REST=$TEST_COUNT
+            SHARD_TOTAL=1
+            SHARDS_JSON="[1]"
+          fi
+          # WHY sized off TEST_COUNT_REST, not the original TEST_COUNT
+          # (2026-09-29): WORKERS now governs only run-tests' own invocation
+          # of $TARGET_REST below — formFields' own dedicated track always
+          # uses a fixed workers=2, independent of this decision.
+          if [ "$TEST_COUNT_REST" -gt 50 ]; then
             WORKERS=2
           else
             WORKERS=1
           fi
-          # WHY this exact string match (2026-09-09): "--grep @regression" is
-          # the literal, only string detect-tests.sh's Rule 1 (core framework
-          # file changed) emits — the same escalation that produced the
-          # 499-test, 6-hour-plus run this fix addresses. Every other branch
-          # of detect-tests.sh (smoke fallback, per-module test paths)
-          # produces a materially smaller target that has never approached
-          # the timeout ceiling, so only this one case needs sharding.
-          if [ "$TARGET" = "--grep @regression" ]; then
-            # WHY 125 tests/shard, ceiling division (2026-09-09): identical
-            # formula and derivation to qa.yml/stage.yml/main.yml's own —
-            # see this file's top-of-file WHY comment. Reuses the SAME
-            # TEST_COUNT already computed above for the WORKERS decision, no
-            # extra API call needed. No "SHARD_TOTAL < 1" floor is needed —
-            # TEST_COUNT is now guaranteed >= 1 by the check above.
-            TARGET_TESTS_PER_SHARD=125
-            SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
-            SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
-            echo "Core framework file changed -> full regression escalation -> sharding into $SHARD_TOTAL (dynamic: $TEST_COUNT tests / $TARGET_TESTS_PER_SHARD per shard)"
-          else
-            SHARD_TOTAL=1
-            SHARDS_JSON="[1]"
-          fi
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET_REST" >> "$GITHUB_OUTPUT"
           echo "shard_total=$SHARD_TOTAL" >> "$GITHUB_OUTPUT"
           echo "shards_json=$SHARDS_JSON" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
-          echo "test_count=$TEST_COUNT" >> "$GITHUB_OUTPUT"
+          echo "test_count=$TEST_COUNT_REST" >> "$GITHUB_OUTPUT"
+          echo "run_formfields_track=$RUN_FORMFIELDS_TRACK" >> "$GITHUB_OUTPUT"
 
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
@@ -289,6 +329,122 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # WHY this job exists, separate from run-tests' own dynamic shard matrix,
+  # and WHY it's conditional on run_formfields_track (2026-09-29): confirmed
+  # via real sandbox run 36520337903 that formFields' per-entity cross-
+  # process config lock (formFieldLockFactory.ts/formFieldsTestLock.ts) is
+  # `fs`-based and scoped to ONE runner's own filesystem — it provides zero
+  # protection the moment an entity's UI spec file and its RBAC sibling
+  # (which target the exact same shared, account-wide dedicated custom
+  # fields) land on two DIFFERENT shards, which run-tests' own count-based
+  # Playwright sharding does not prevent (see .claude/known-issues.md's dated
+  # 2026-09-29 entry for the full incident: every one of the 6 entities'
+  # UI/RBAC file pairs landed on different shards in that run, producing
+  # genuine, evidence-confirmed config-mutation races). Fix: give formFields
+  # its own fixed, content-addressed shard plan — one shard per entity, each
+  # running that entity's UI+RBAC file pair together, always — rather than
+  # relying on Playwright's own opaque, count-based, reshuffle-prone
+  # chunking to keep them co-located. This holds regardless of how many
+  # shards run-tests itself computes, how the suite grows, or how
+  # Playwright's internal grouping behaves in a future version — the
+  # pairing is fixed by this matrix, not derived. Gated on
+  # run_formfields_track (see the detect job's own WHY comment): only the
+  # escalated full-regression case ever shards run-tests at all, so this is
+  # the only case where the race this job defends against can occur — the
+  # small-selective case always runs as one shard, where the existing local
+  # lock is already fully correct on its own.
+  run-formfields-tests:
+    name: playwright-formFields (${{ matrix.entity }})
+    needs: detect
+    if: needs.detect.outputs.run_formfields_track == 'true'
+    runs-on: ubuntu-latest
+    # WHY 180 (2026-09-29): real measured per-entity total test time (this
+    # entity's UI+RBAC files combined, first-attempt durations summed from
+    # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
+    # .claude/known-issues.md's dated 2026-09-29 entry for the full
+    # derivation. 180 gives ~1.6-2x margin over the slowest entity (Lead).
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        entity: [lead, contact, company, deal, task, productsAndServices]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
+        env:
+          ENV: staging
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+        run: |
+          START_TIME=$(date +%s)
+          echo "⏱️  Started at: $(date '+%H:%M:%S')"
+          # WHY no --shard/--timeout flag here: this job's own matrix IS the
+          # shard plan (fixed, one entity per job) — Playwright's own
+          # --shard flag is deliberately never used for this track. Each
+          # spec file's own test.describe.configure({ timeout: 480000 })
+          # already governs its tests' timeout; no CLI --timeout override
+          # is layered on top, matching how these same files already ran
+          # before this fix.
+          npx playwright test --project=chromium --workers=2 \
+            tests/ui/formFields/${{ matrix.entity }}FieldLimits.spec.ts \
+            tests/rbac/formFields/${{ matrix.entity }}FieldLimits.rbac.spec.ts \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo "✅ formFields/${{ matrix.entity }} total time: ${MINUTES}m ${SECONDS}s"
+          exit $EXIT_CODE
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-sandbox-formfields-${{ matrix.entity }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-sandbox-formfields-${{ matrix.entity }}
+          path: reports/staging/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-sandbox-formfields-${{ matrix.entity }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # WHY a separate job, not a step in run-tests (this IS the point of
   # sharding, and applies uniformly whether this run had 1 shard or 4): this
   # is the ONE place that produces a single consolidated report/notification
@@ -297,7 +453,7 @@ jobs:
   # Build #167 false-"PASSED" incident.
   merge-and-report:
     name: merge report + notify
-    needs: [detect, run-tests]
+    needs: [detect, run-tests, run-formfields-tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -340,13 +496,26 @@ jobs:
       - name: Verify all shards reported
         run: |
           SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
+          # WHY +6 conditionally here (2026-09-29): run-formfields-tests adds
+          # its own fixed 6-shard, one-per-entity matrix (see that job's own
+          # WHY comment) whenever run_formfields_track is 'true' — its blob
+          # artifacts (blob-report-sandbox-formfields-*) match the SAME
+          # download pattern above (blob-report-sandbox-*) and land in the
+          # same all-blob-reports directory, so the expected total must
+          # include them or this check would false-positive "missing shards"
+          # on every escalated run.
+          FORMFIELDS_SHARDS=0
+          if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
+            FORMFIELDS_SHARDS=6
+          fi
+          EXPECTED_TOTAL=$((SHARD_TOTAL + FORMFIELDS_SHARDS))
           ACTUAL_COUNT=$(find all-blob-reports -maxdepth 1 -name '*.zip' | wc -l)
-          echo "Expected shard reports: $SHARD_TOTAL | Actually downloaded: $ACTUAL_COUNT"
-          if [ "$ACTUAL_COUNT" -lt "$SHARD_TOTAL" ]; then
-            MISSING=$((SHARD_TOTAL - ACTUAL_COUNT))
-            echo "::error::Sharded run incomplete — $MISSING of $SHARD_TOTAL shard(s) never uploaded a blob report (the shard's job crashed before completing, or was cancelled/timed out). The merged Total/Passed/Failed counts below come from only $ACTUAL_COUNT/$SHARD_TOTAL shards and UNDERSTATE the real run — do NOT treat them as the whole suite. Check this run's per-job status (Actions tab) to see which shard(s) are missing and why."
+          echo "Expected shard reports: $EXPECTED_TOTAL ($SHARD_TOTAL rest-of-suite + $FORMFIELDS_SHARDS formFields) | Actually downloaded: $ACTUAL_COUNT"
+          if [ "$ACTUAL_COUNT" -lt "$EXPECTED_TOTAL" ]; then
+            MISSING=$((EXPECTED_TOTAL - ACTUAL_COUNT))
+            echo "::error::Sharded run incomplete — $MISSING of $EXPECTED_TOTAL shard(s) never uploaded a blob report (the shard's job crashed before completing, or was cancelled/timed out). The merged Total/Passed/Failed counts below come from only $ACTUAL_COUNT/$EXPECTED_TOTAL shards and UNDERSTATE the real run — do NOT treat them as the whole suite. Check this run's per-job status (Actions tab) to see which shard(s) are missing and why."
           else
-            echo "All $SHARD_TOTAL shards reported successfully."
+            echo "All $EXPECTED_TOTAL shards reported successfully."
           fi
 
       - name: Merge shard reports into one HTML/JSON report
