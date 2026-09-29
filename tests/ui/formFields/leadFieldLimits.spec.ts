@@ -27,60 +27,40 @@ import { logger } from '../../../src/utils/logger';
 import { config } from '../../../config/config';
 import * as path from 'path';
 
-// WHY this file is split into several SMALL nested describe/serial blocks
-// (one per shared field, or finer — see each block's own `.serial` call
-// below) instead of one single serial block spanning all 55 tests
-// (restructured 2026-09-21, previously one file-wide serial block — see
-// git history for the original shape): every test here configures or
-// depends on the exact current configuration of one of only 3 shared,
-// account-wide custom fields (cfTextField/cfNumber/cfParagraphText) — not
-// a disposable per-test record — so tests touching the SAME field must
-// still run one-at-a-time, in a predictable group. But Playwright's own
-// serial-mode failure handling has a real, confirmed usability cost: ANY
-// single test failure inside one serial block causes the WORKER to
-// recycle (confirmed at Playwright's own source,
-// node_modules/playwright/lib/worker/workerProcessEntry.js — a test
-// failure sets `_isStopped = true`, and every subsequent test the SAME
-// worker would have run is marked "skipped" without ever attempting it;
-// only a retry of the WHOLE block, in a fresh worker, gets those tests a
-// real chance to run). This is NOT controlled by `retries` or a
-// `maxFailures` setting — it's an inherent consequence of serial mode
-// requiring same-worker execution combined with Playwright's general
-// worker-recycle-after-any-failure behavior — so one bug in, say, the
-// Number field's tests used to hide whether Paragraph field's or Regex's
-// own tests would have passed or failed, until the Number bug was fixed
-// and the whole 55-test block re-run. Splitting into smaller,
-// field-scoped serial blocks (in this file's existing, UNCHANGED test
-// order — nothing was reordered) means a failure in one field's block
-// only cascades within that field's own handful of tests, letting every
-// OTHER field's tests still actually attempt to run and report a real
-// pass/fail in the same invocation.
+// WHY this file has NO test.describe.configure({ mode: 'serial' }) at all
+// (2026-09-29, removed — previously restructured 2026-09-21 into several
+// small per-field serial blocks instead of one file-wide block; see git
+// history for both prior shapes): every test here configures or depends on
+// the exact current configuration of one of only 3 shared, account-wide
+// custom fields (cfTextField/cfNumber/cfParagraphText) — not a disposable
+// per-test record — so tests touching the SAME field must still run
+// one-at-a-time. That real requirement is met by `formFieldsTestLock.ts`'s
+// auto-applied, scope:'test' `leadFormFieldLock` fixture (imported from
+// `./formFieldsTestLock` below), which acquires a real cross-process file
+// lock for EVERY test's entire duration (in this file AND in
+// tests/rbac/formFields/leadFieldLimits.rbac.spec.ts) and releases it only
+// once that test finishes — two tests can never actually execute
+// concurrently regardless of describe grouping, so `.serial` mode was
+// enforcing an ordering constraint the lock already guaranteed for free.
 //
-// WHY this split does NOT reopen the shared-field race .serial mode
-// exists to prevent, even though tests touching the SAME field (e.g.
-// Text-field limits FFL4-12 and Text-field format/regex FFL32-51) now sit
-// in TWO separate serial blocks rather than one: `test`/`expect` are
-// imported from `./formFieldsTestLock` below, whose auto-applied
-// `leadFormFieldLock` fixture acquires a real cross-process file lock
-// before EVERY test's body runs (in this file AND in
-// tests/rbac/formFields.rbac.spec.ts) and releases it after — this
-// provides genuine, unconditional mutual exclusion regardless of which
-// describe/serial block a test happens to sit in, or which file it's in.
-// The lock is what actually prevents the race today; `.serial` mode's
-// remaining role is grouping tests for predictable, narrow-blast-radius
-// failure reporting, not race prevention — that role moved to the lock
-// when it was built to close the cross-file gap (see
-// formFieldsTestLock.ts's own header comment for the full worker-count
-// evidence table). Per explicit instruction, `.serial` mode itself is NOT
-// removed or weakened anywhere in this file — every block below still
-// carries its own `test.describe.configure({ mode: 'serial' })`,
-// unchanged in mechanism, just narrower in scope.
+// What `.serial` mode ALSO did, which was never actually wanted: Playwright
+// recycles a worker after any serial-block test failure (confirmed at
+// Playwright's own source, node_modules/playwright/lib/worker/
+// workerProcessEntry.js — a failure sets `_isStopped = true`, and every
+// subsequent test the same worker would have run is marked "skipped"
+// without ever attempting it; only a retry of the WHOLE block gets those
+// tests a real chance to run). Live-confirmed real cost of this (2026-09-28
+// sandbox run 36464460839, shard 3/8): one genuine failure in Task's RBAC
+// suite cascade-skipped 48 unrelated tests across two files in the same
+// invocation, none of which ever got their own real attempt. With `.serial`
+// removed, the lock alone still prevents any actual race, and a failure in
+// one test no longer takes its neighbors down with it.
 //
 // WHY every test independently (re-)configures its own field state rather
-// than relying on declaration order, even under serial mode: tests must
-// remain independent and order-agnostic (explicit design rule) — serial
-// mode exists only to prevent two tests from racing the SAME write, not to
-// let a later test assume an earlier one's leftover state.
+// than relying on declaration/execution order: tests must remain
+// independent and order-agnostic (explicit design rule, unaffected by this
+// change) — the lock exists only to prevent two tests from racing the SAME
+// write, not to let a later test assume an earlier one's leftover state.
 //
 // WHY digit-count/character-length boundary values are always built from
 // the SAME min/max constants a given test itself passes to
@@ -502,11 +482,32 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
 }
 
 test.describe('Lead Field Limits', () => {
-  // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer
-  // level: each nested describe block below carries its own — see this
-  // file's top-of-file comment for the full reasoning (narrower blast
-  // radius on failure, safety backstopped by formFieldsTestLock.ts's
-  // cross-process lock regardless of grouping).
+  // WHY no test.describe.configure({ mode: 'serial' }) anywhere in this
+  // file — see this file's top-of-file comment for the full reasoning
+  // (formFieldsTestLock.ts's cross-process lock already serializes every
+  // test for real; .serial mode was only adding an unwanted skip-cascade).
+
+  // WHY test.describe.configure({{ timeout: 480000 }}) here (2026-09-29,
+  // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
+  // failed with "admin page failed to reach the app's /sales/ area (only
+  // 0ms left before the fixture-setup deadline...)"): fixtures/index.ts's
+  // createRolePage() computes its own fixture-setup deadline from
+  // `testInfo.timeout * 0.85` BEFORE any test in this file ever calls
+  // test.setTimeout(480000) inside its own body — too late to affect that
+  // calculation, since fixture setup runs before the test body. Every test
+  // here was therefore getting only the CI default 120000ms (a ~102000ms
+  // deadline) for fixture setup, not the 480000ms the test actually needs —
+  // and a single slow navigation attempt can legitimately consume that
+  // entire 102000ms budget, leaving zero time for the already-correct
+  // wrongPage recovery retry to ever run. describe.configure is resolved at
+  // test-collection time, so testInfo.timeout is already correct by the
+  // time ANY fixture (including adminPage/restrictedPage) initializes for
+  // these tests — fixing the deadline math without touching
+  // fixtures/index.ts's shared session-recovery logic at all. The existing
+  // per-test test.setTimeout(480000) calls below are now redundant but
+  // harmless (same value) — left in place rather than mass-edited out.
+  test.describe.configure({ timeout: 480000 });
+
 
   // WHY this hook, in addition to (not instead of) the standalone verified
   // cleanup tests near the end of this file: a guaranteed-on-failure
@@ -515,6 +516,22 @@ test.describe('Lead Field Limits', () => {
   // codebase for guaranteed teardown of shared/global state (e.g.
   // Dashboard's disposable-dashboard-per-test teardown).
   test.afterAll(async ({ browser }) => {
+    // WHY test.setTimeout(600000) here (2026-09-29, real CI failures —
+    // sandbox run 36464460839: FFD37/FFD20 in dealFieldLimits.spec.ts and
+    // FFTK38 in taskFieldLimits.spec.ts both failed with "Test timeout of
+    // 120000ms exceeded while setting up formFieldLock" / "afterAll hook
+    // timeout of 120000ms exceeded"): playwright.config.ts sets the CI
+    // default test timeout to 120000ms — afterAll hooks get that same
+    // default and do NOT inherit any individual test's own
+    // test.setTimeout(480000) bump (that only extends the ONE test that
+    // calls it). This hook's own lock acquisition can legitimately need to
+    // wait up to ~480000ms for a DIFFERENT worker's still-in-progress,
+    // full-length test on the SAME entity to finish and release the same
+    // lock — 120000ms was never enough headroom for that, independent of
+    // anything being actually wrong; it was a real, guaranteed-to
+    // -eventually-fire timeout-budget mismatch. Sized generously above the
+    // known ~480000ms worst case, not a guess.
+    test.setTimeout(600000);
     // WHY this doesn't request the adminPage fixture: Playwright's
     // afterAll hooks can only depend on worker-scoped fixtures —
     // adminPage is test-scoped (a fresh authenticated Page created and
@@ -650,7 +667,6 @@ test.describe('Lead Field Limits', () => {
   // one instead of one file-wide block, and why the split is still safe.
 
   test.describe('Text field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -787,7 +803,6 @@ test.describe('Lead Field Limits', () => {
   // ─── Number field digit-count limits ─────────────────────────────────
 
   test.describe('Number field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL13 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -933,7 +948,6 @@ test.describe('Lead Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────────────────
 
   test.describe('Paragraph field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL23 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -1078,7 +1092,6 @@ test.describe('Lead Field Limits', () => {
   // not do.
 
   test.describe('Text field format rules (Regex)', () => {
-    test.describe.configure({ mode: 'serial' });
     // WHY 5 options fully covered (not just a subset), each with its own
     // configure+valid+invalid triple: per explicit scope requirement — every
     // real, non-default option confirmed in FORM_FIELD_LIMIT_INVESTIGATION.md
@@ -1616,7 +1629,6 @@ test.describe('Lead Field Limits', () => {
   // tests from ever executing concurrently against the same field.
 
   test.describe('Cache behavior', () => {
-    test.describe.configure({ mode: 'serial' });
 
     // WHY two deliberately non-overlapping digit-count ranges, not the same
     // range reused from the main Number-field test block above: a value
@@ -1700,7 +1712,6 @@ test.describe('Lead Field Limits', () => {
   // structurally prevented by the lock, not by shared .serial grouping.
 
   test.describe('Cleanup', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFL54 after the test run, all field settings are reset back to blank', async ({
       adminPage,

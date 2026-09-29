@@ -83,7 +83,40 @@ async function assertInlineErrorPresent(
 }
 
 taskTest.describe('Form Field Limits — RBAC › Task', () => {
-  taskTest.describe.configure({ mode: 'serial' });
+  // WHY no test.describe.configure({ mode: 'serial' }) here (2026-09-29,
+  // removed — see FormFieldsConfigPage.ts/formFieldLockFactory.ts's own
+  // header comment for the full reasoning): the auto-applied, scope:'test'
+  // taskFormFieldLock fixture already acquires this entity's real
+  // cross-process lock for every test's ENTIRE duration and releases it at
+  // the end — two tests from this file can never actually run concurrently
+  // regardless of describe/serial grouping, so .serial mode was providing
+  // zero additional correctness here, only an unwanted side effect: one
+  // test's failure was skip-cascading every remaining test in this block
+  // instead of each getting its own real, independent attempt. Every test
+  // below already independently (re-)configures its own field state before
+  // asserting on it (never relies on a predecessor's leftover config), so
+  // removing the artificial ordering constraint is safe.
+
+  // WHY taskTest.describe.configure({ timeout: 480000 }) here (2026-09-29,
+  // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
+  // failed with "admin page failed to reach the app's /sales/ area (only
+  // 0ms left before the fixture-setup deadline...)"): fixtures/index.ts's
+  // createRolePage() computes its own fixture-setup deadline from
+  // `testInfo.timeout * 0.85` BEFORE this describe block's own tests ever
+  // call test.setTimeout(480000) inside their bodies — too late to affect
+  // that calculation, since fixture setup runs before the test body. Every
+  // test in this file was therefore getting only the CI default 120000ms
+  // (a ~102000ms deadline) for fixture setup, not the 480000ms the test
+  // actually needs — and a single slow navigation attempt can legitimately
+  // consume that entire 102000ms budget, leaving zero time for the
+  // already-correct wrongPage recovery retry to ever run. describe.configure
+  // is resolved at test-collection time, so testInfo.timeout is already
+  // correct by the time ANY fixture (including adminPage/restrictedPage)
+  // initializes for these tests — fixing the deadline math without touching
+  // fixtures/index.ts's shared session-recovery logic at all. The existing
+  // per-test taskTest.setTimeout(480000) calls below are now redundant but
+  // harmless (same value) — left in place rather than mass-edited out.
+  taskTest.describe.configure({ timeout: 480000 });
 
   const TASK_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Task', urlSlug: 'tasks' };
   const OTHER_DETAILS_TAB = 'Other Details';

@@ -495,6 +495,20 @@ ${body}
     const passRateSubtext = previousRun
       ? this.deltaSubtext(report.passRate - this.passRateOf(previousRun), '%')
       : undefined;
+    // WHY this subtext (2026-09-29, real reader confusion: "222 retries
+    // recorded, but only 8 failed + 30 flaky — that doesn't reconcile"):
+    // totalRetries sums every test's own retry count, including tests that
+    // passed on every attempt they were ever recorded for but still got
+    // re-run because a DIFFERENT test's failure forced a whole
+    // `.serial`-mode block to retry from the top (see
+    // ReportParser.ts's retriesFromCleanSweeps WHY comment for the full
+    // mechanism). Only rendered when sweeps actually contributed anything,
+    // matching this file's existing "signal chips only render when
+    // nonzero" convention.
+    const retriesSubtext =
+      report.retriesFromCleanSweeps > 0
+        ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
+        : undefined;
 
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
@@ -513,7 +527,12 @@ ${body}
       },
       { value: this.formatDuration(report.duration), label: 'Duration' },
       { value: String(report.modules.length), label: 'Modules' },
-      { value: String(report.totalRetries), label: 'Retries', variant: report.totalRetries > 0 ? 'warn' : 'neutral' },
+      {
+        value: String(report.totalRetries),
+        label: 'Retries',
+        variant: report.totalRetries > 0 ? 'warn' : 'neutral',
+        subtext: retriesSubtext,
+      },
     ]);
 
     // WHY: signal chips only render when nonzero — an empty run shouldn't be

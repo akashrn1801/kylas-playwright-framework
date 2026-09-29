@@ -209,6 +209,25 @@ export interface ParsedReport {
   uiCount: number;
   rbacCount: number;
   totalRetries: number;
+  // WHY this split, not just totalRetries (2026-09-29, real confusion this
+  // caused — user-reported: "222 retries recorded, but only 8 failed + 30
+  // flaky (38 non-clean-first-try tests) — that doesn't reconcile"):
+  // totalRetries sums `allResults.length - 1` across EVERY test, including
+  // ones that themselves passed on every attempt they were ever recorded
+  // for. That happens for real, at scale, whenever any file uses
+  // `test.describe.configure({ mode: 'serial' })` — Playwright retries the
+  // WHOLE serial block on ANY single test's failure, re-running every test
+  // in it (already-passed ones included), each contributing its own
+  // `retries >= 1` despite never itself having failed (confirmed and
+  // already documented independently for quotations.spec.ts's identical
+  // shape — see known-issues.md's "Retry-count discrepancy" entry). 222 is
+  // arithmetically correct; it just isn't what a reader expecting "222
+  // individually-retried tests" would assume. Splitting into genuine
+  // (failed/flaky tests' own retries) vs. swept (passed tests' retries,
+  // caused by someone ELSE's failure in the same serial block) lets the
+  // email state the real reconciliation instead of a bare, confusing total.
+  retriesFromNonCleanTests: number;
+  retriesFromCleanSweeps: number;
   // WHY: sourced from Playwright's own raw.config — real, not guessed. Feeds
   // the new Environment Info block (browsers actually exercised, worker
   // count Playwright itself resolved, and the Playwright version that
@@ -402,6 +421,10 @@ export class ReportParser {
     const uiCount = results.filter((r) => r.file?.includes('ui')).length;
     const rbacCount = results.filter((r) => r.file?.includes('rbac')).length;
     const totalRetries = results.reduce((sum, r) => sum + r.retries, 0);
+    const retriesFromNonCleanTests = results
+      .filter((r) => r.status === 'failed' || r.status === 'flaky')
+      .reduce((sum, r) => sum + r.retries, 0);
+    const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
     const projects: string[] = Array.isArray(raw.config?.projects)
       ? raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name))
       : [];
@@ -425,6 +448,8 @@ export class ReportParser {
       uiCount,
       rbacCount,
       totalRetries,
+      retriesFromNonCleanTests,
+      retriesFromCleanSweeps,
       playwrightVersion: raw.config?.version,
       workers: raw.config?.workers,
       projects,

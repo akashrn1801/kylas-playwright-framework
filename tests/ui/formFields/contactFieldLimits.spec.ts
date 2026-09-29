@@ -282,12 +282,52 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
 }
 
 test.describe('Contact Field Limits', () => {
-  // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer
-  // level: mirrors leadFieldLimits.spec.ts — each nested describe block
-  // below carries its own; safety is backstopped by
-  // contactFormFieldLock.ts's cross-process lock regardless of grouping.
+  // WHY no test.describe.configure({ mode: 'serial' }) anywhere in this
+  // file (2026-09-29, removed — mirrors leadFieldLimits.spec.ts's identical
+  // removal, see that file's own WHY comment for the full reasoning):
+  // contactFormFieldLock.ts's auto-applied, scope:'test' lock fixture
+  // already serializes every test in this file for real (held for each
+  // test's entire duration) — .serial mode was providing zero additional
+  // correctness, only an unwanted skip-cascade on a neighbor's failure.
+
+  // WHY test.describe.configure({ timeout: 480000 }) here (2026-09-29,
+  // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
+  // failed with "admin page failed to reach the app's /sales/ area (only
+  // 0ms left before the fixture-setup deadline...)"): fixtures/index.ts's
+  // createRolePage() computes its own fixture-setup deadline from
+  // `testInfo.timeout * 0.85` BEFORE any test in this file ever calls
+  // test.setTimeout(480000) inside its own body — too late to affect that
+  // calculation, since fixture setup runs before the test body. Every test
+  // here was therefore getting only the CI default 120000ms (a ~102000ms
+  // deadline) for fixture setup, not the 480000ms the test actually needs —
+  // and a single slow navigation attempt can legitimately consume that
+  // entire 102000ms budget, leaving zero time for the already-correct
+  // wrongPage recovery retry to ever run. describe.configure is resolved at
+  // test-collection time, so testInfo.timeout is already correct by the
+  // time ANY fixture (including adminPage/restrictedPage) initializes for
+  // these tests — fixing the deadline math without touching
+  // fixtures/index.ts's shared session-recovery logic at all. The existing
+  // per-test test.setTimeout(480000) calls below are now redundant but
+  // harmless (same value) — left in place rather than mass-edited out.
+  test.describe.configure({ timeout: 480000 });
 
   test.afterAll(async ({ browser }) => {
+    // WHY test.setTimeout(600000) here (2026-09-29, real CI failures —
+    // sandbox run 36464460839: FFD37/FFD20 in dealFieldLimits.spec.ts and
+    // FFTK38 in taskFieldLimits.spec.ts both failed with "Test timeout of
+    // 120000ms exceeded while setting up formFieldLock" / "afterAll hook
+    // timeout of 120000ms exceeded"): playwright.config.ts sets the CI
+    // default test timeout to 120000ms — afterAll hooks get that same
+    // default and do NOT inherit any individual test's own
+    // test.setTimeout(480000) bump (that only extends the ONE test that
+    // calls it). This hook's own lock acquisition can legitimately need to
+    // wait up to ~480000ms for a DIFFERENT worker's still-in-progress,
+    // full-length test on the SAME entity to finish and release the same
+    // lock — 120000ms was never enough headroom for that, independent of
+    // anything being actually wrong; it was a real, guaranteed-to
+    // -eventually-fire timeout-budget mismatch. Sized generously above the
+    // known ~480000ms worst case, not a guess.
+    test.setTimeout(600000);
     // WHY this doesn't request the adminPage fixture, and WHY wrapped in
     // withContactFormFieldLock(): mirrors leadFieldLimits.spec.ts's own
     // afterAll hook exactly — see that file's own WHY comment for the full
@@ -365,7 +405,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Text field character-length limits ─────────────────────────────
 
   test.describe('Text field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC4 admin should set a min/max character limit on the Text field and it saves correctly', async ({
       adminPage,
@@ -493,7 +532,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Number field digit-count limits ─────────────────────────────────
 
   test.describe('Number field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC13 admin should set a min/max digit limit on the Number field and it saves correctly', async ({
       adminPage,
@@ -621,7 +659,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Paragraph field character-length limits ─────────────────────────
 
   test.describe('Paragraph field limits', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC23 admin should set a min/max character limit on the Paragraph field and it saves correctly', async ({
       adminPage,
@@ -749,7 +786,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Format rules (Regex) — Text field ────────────────────────────────
 
   test.describe('Text field format rules (Regex)', () => {
-    test.describe.configure({ mode: 'serial' });
 
     // WHY cross-checking the generated value against the pattern read LIVE
     // off the config page, not just trusting the generator: mirrors
@@ -1213,7 +1249,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Cache behavior ────────────────────────────────────────────────────
 
   test.describe('Cache behavior', () => {
-    test.describe.configure({ mode: 'serial' });
 
     const CACHE_TEST_STALE_MIN = 3;
     const CACHE_TEST_STALE_MAX = 6;
@@ -1269,7 +1304,6 @@ test.describe('Contact Field Limits', () => {
   // ─── Cleanup ────────────────────────────────────────────────────────
 
   test.describe('Cleanup', () => {
-    test.describe.configure({ mode: 'serial' });
 
     test('@regression FFC53 admin should confirm after the test run, all field settings are reset back to blank', async ({
       adminPage,

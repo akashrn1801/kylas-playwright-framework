@@ -282,7 +282,27 @@ export class FormFieldsConfigPage extends BasePage {
 
   // ─── Search & open ──────────────────────────────────────────────────────
 
+  // WHY the explicit bounded waitFor() here, before delegating to the
+  // shared this.fill() (2026-09-29, real CI failures — sandbox run
+  // 36464460839: FFD24/FFL41/FFL49 all failed with "Test timeout of
+  // 480000ms exceeded" + "locator.clear/waitFor: Target page, context or
+  // browser has been closed" while inside this exact call): BasePage.fill()
+  // itself has no timeout of its own on its internal `waitFor({state:
+  // 'visible'})` — its only real backstop is the outer TEST timeout, so
+  // whenever this search input is slow to appear, the test silently burns
+  // its entire remaining budget before Playwright's own timeout finally
+  // tears down the browser context mid-action, producing a confusing
+  // "context has been closed" symptom instead of a clear, attributable
+  // error. This is a repo-wide property of the shared fill() helper (used
+  // by nearly every module), not something to change there — rippling that
+  // change would be a high-blast-radius edit CLAUDE.md rule 9 explicitly
+  // warns against, well beyond this feature's scope. Scoped here instead:
+  // a real, bounded, condition-based wait (config.timeouts.navigation,
+  // already this file's own convention elsewhere, e.g. openFieldForEdit())
+  // that fails loudly and fast, naming the exact locator, instead of
+  // silently exhausting the whole test timeout.
   async searchField(internalName: string): Promise<void> {
+    await this.searchInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await this.fill(this.searchInput(), internalName, `Form Fields search: ${internalName}`);
   }
 
