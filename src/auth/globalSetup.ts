@@ -215,6 +215,64 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
   );
 }
 
+// WHY this retry helper exists, and why it mirrors setupRole()'s own
+// 3-attempt/backoff shape rather than inventing a new one (2026-09-29, real
+// sandbox run 36537195806): confirmed via direct evidence that
+// loadProductReferenceData()/createOneProductFixture() — together, 5
+// unprotected HTTP calls per job (2 GETs + 3 product-create POSTs), with
+// ZERO retry anywhere — are exposed to real, transient HTTP 429s under this
+// feature's own increased CI concurrency. The formFields CI carve-out (see
+// .claude/known-issues.md's dated 2026-09-29 entry) raised sandbox's peak
+// concurrent globalSetup invocations from 8 to 10 (6 dedicated formFields
+// shards + 4 rest-of-suite shards, all starting within the same ~30s
+// window). Direct evidence this is real, not coincidental: the prior 8-job
+// run shows ZERO occurrences of a 429 on this exact call anywhere in its
+// log; the first 10-job run had exactly ONE — on the *last*-starting job of
+// the ten, landing in what was most plausibly an already-saturated
+// rate-limit window from the other 9's near-simultaneous calls (9/10
+// succeeded outright). This is a genuinely transient, load-dependent
+// condition — not a hard "10 concurrent always fails" ceiling — so a bounded
+// retry is the proportionate fix, not reducing job parallelism (which would
+// roughly double this track's wall-clock time to buy protection against a
+// failure mode a retry already fully absorbs).
+//
+// WHY retry only 429/5xx, never a real 4xx (400/404/422/etc.): those
+// indicate something is actually wrong (bad request shape, missing
+// reference data, real validation failure) — blindly retrying one would
+// only delay a real failure by up to ~15s while producing 3x the noise, per
+// this exact codebase's own established distinction elsewhere (e.g.
+// createCompany/createLead/createContact's transient-vs-real-400
+// classification in known-issues.md's "RBAC test-isolation and app-bug
+// investigations" entry).
+const TRANSIENT_HTTP_ERROR_PATTERN = /\bHTTP (429|5\d\d)\b/;
+
+function isTransientHttpError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_HTTP_ERROR_PATTERN.test(message);
+}
+
+async function withTransientRetry<T>(description: string, fn: () => Promise<T>): Promise<T> {
+  const maxAttempts = 3;
+  const backoffMs = [5000, 10000];
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const retryable = isTransientHttpError(error) && attempt < maxAttempts;
+      if (!retryable) throw error;
+      const delay = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1];
+      console.warn(
+        `[globalSetup] ${description} failed (attempt ${attempt}/${maxAttempts}, transient — ` +
+          `${String(error)}) — retrying in ${delay / 1000}s...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  // Unreachable — the loop above always either returns or throws, kept only
+  // to satisfy TypeScript's control-flow analysis.
+  throw new Error(`[globalSetup] ${description}: exhausted retries with no error captured`);
+}
+
 // WHY failure here is the SAME severity as a login failure (hard stop, not a
 // caught-and-continue): per the design doc's guardrail #4 — a silently
 // missing/wrong fixture would otherwise surface many specs later as a
@@ -226,7 +284,9 @@ async function ensureProductFixtures(): Promise<void> {
   const adminToken = await getAccessTokenForRole('admin');
   const apiContext = await apiRequest.newContext();
   try {
-    const referenceData = await loadProductReferenceData(apiContext, adminToken);
+    const referenceData = await withTransientRetry('loadProductReferenceData', () =>
+      loadProductReferenceData(apiContext, adminToken)
+    );
     const records: Partial<Record<ProductFixtureKey, ProductFixtureRecord>> = {};
     // WHY generated exactly once per run, here: this is the ONE call site —
     // globalSetup runs in its own process, separate from every test worker,
@@ -239,11 +299,9 @@ async function ensureProductFixtures(): Promise<void> {
       console.log(
         `[globalSetup] Creating fresh product fixture: ${fixture.key} ("${fixture.data.name}")`
       );
-      records[fixture.key] = await createOneProductFixture(
-        apiContext,
-        adminToken,
-        fixture,
-        referenceData
+      records[fixture.key] = await withTransientRetry(
+        `createOneProductFixture(${fixture.key})`,
+        () => createOneProductFixture(apiContext, adminToken, fixture, referenceData)
       );
     }
 
