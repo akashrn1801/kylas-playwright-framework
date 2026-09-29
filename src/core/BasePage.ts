@@ -558,7 +558,22 @@ export class BasePage {
   // is not a safe shortcut. Generalized here rather than duplicated per
   // module for the same reasoning as fillStandardField() just above.
   async clickDetailPageTab(tabName: string, description = `"${tabName}" tab`): Promise<void> {
-    await this.click(this.page.locator(`a[data-targetid="${tabName}"]`), description);
+    // WHY wrapped in withRateLimitRecovery() (2026-09-29 formFields lock-starvation
+    // investigation, item 1/Company): confirmed via a real CI failure's own captured
+    // page snapshot (FFRCO9/FFRCO6, sandbox run 36573185433) that the underlying
+    // click()'s 120s waitFor() timeout on this exact locator was NOT a missing
+    // render-prerequisite wait — the page had already been replaced by the app's
+    // own "Whoa! Too many requests at once!" 429 error page (see
+    // authManager.isRateLimitedPage()'s WHY comment for the full incident),
+    // reached via a call site Fix 1 (FormFieldsConfigPage.open()/searchField())
+    // never covered: this method is called directly against a Lead/Contact/
+    // Company/Task detail page, not the Form Fields config screen. Every real
+    // consumer of this method is a formFields spec (confirmed via full-repo
+    // grep) — the same rate-limit exposure that already required this recovery
+    // wrapper elsewhere in this feature, not a genuinely new render-timing gap.
+    await this.withRateLimitRecovery(() =>
+      this.click(this.page.locator(`a[data-targetid="${tabName}"]`), description)
+    );
   }
 
   async selectOption(locator: Locator, value: string, description = 'dropdown'): Promise<void> {
@@ -953,11 +968,29 @@ export class BasePage {
         .catch(() => null),
     ]);
 
+    // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
+    // evidence, sandbox run 36573185433: FFRPS5's own "Products & Services
+    // list table should be visible" failure). Direct screenshot evidence
+    // (both the admin and restricted user's pages) confirmed the app's own
+    // HTTP-429 "Too many requests" error page had replaced the list entirely
+    // — and the raw CI log confirmed this method's EXISTING reload-and-retry
+    // fallback below already fired once and still failed a second time
+    // (the retry landed on the same, still-active rate limit, not a genuine
+    // navigation-drift race this fallback was originally built for). Nested
+    // outside withSessionExpiryRecovery so either recovery class can
+    // independently catch and retry, mirroring the composition already
+    // established elsewhere in this feature (FormFieldsConfigPage.open()).
+    // This is a shared method (Deals/Companies/Contacts/Leads/Tasks/
+    // Quotations/Products & Services all call it) — purely additive, adds
+    // one more recovery layer without changing behavior for any non-429
+    // failure, so every consumer benefits from the same protection.
     const assertTableVisible = (): Promise<void> =>
-      this.withSessionExpiryRecovery(() =>
-        expect(tableLocator, `${description} list table should be visible`).toBeVisible({
-          timeout: config.timeouts.navigation,
-        })
+      this.withRateLimitRecovery(() =>
+        this.withSessionExpiryRecovery(() =>
+          expect(tableLocator, `${description} list table should be visible`).toBeVisible({
+            timeout: config.timeouts.navigation,
+          })
+        )
       );
 
     try {

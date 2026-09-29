@@ -2,6 +2,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { loadDotEnv } from './loadDotEnv';
 import { NotificationInput } from '../NotificationService';
+import { loadJobStats } from '../JobStats';
 
 // Manually load .env before anything else
 loadDotEnv();
@@ -87,6 +88,30 @@ export function resolveNotificationInput(): Omit<NotificationInput, 'jsonReportP
   return { env, branch, buildNumber, buildUrl, gitCommit, triggeredBy, runSource, allureUrl };
 }
 
+// WHY a separate function from resolveNotificationInput() above, not folded
+// into it (2026-09-29, Phase 3 items #1/#6): that function is deliberately
+// pure/synchronous (see its own WHY comment — importable and callable in a
+// test context with zero side effects). Fetching job stats is a real network
+// call, so it stays out of that function and is only invoked here, in main(),
+// which already reaches real side-effecting code (the actual email send).
+async function loadJobStatsForCurrentRun(
+  input: Omit<NotificationInput, 'jsonReportPath'>
+): Promise<NotificationInput['jobStats']> {
+  if (input.runSource !== 'github-actions') return undefined;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const runId = process.env.GITHUB_RUN_ID;
+  // WHY PIPELINE_TOKEN, falling back to GITHUB_TOKEN: PIPELINE_TOKEN is the
+  // PAT already wired into every workflow's "Sync run history"/notify steps
+  // for `ci/reporting-history` git access (see known-issues.md's CI
+  // reporting-history ledger entry) — reused here rather than requiring a
+  // second secret. GITHUB_TOKEN (the default, auto-issued per-job token) is
+  // tried second in case a given workflow ever runs this step without
+  // PIPELINE_TOKEN configured — either is sufficient for a read-only Jobs
+  // API call, which only needs `actions: read`.
+  const token = process.env.PIPELINE_TOKEN || process.env.GITHUB_TOKEN;
+  return (await loadJobStats(repo, runId, token)) ?? undefined;
+}
+
 async function main() {
   const { NotificationService } = await import('../NotificationService');
   const service = new NotificationService();
@@ -106,7 +131,9 @@ async function main() {
           ))
   );
 
-  await service.notify({ jsonReportPath, ...resolveNotificationInput() });
+  const baseInput = resolveNotificationInput();
+  const jobStats = await loadJobStatsForCurrentRun(baseInput);
+  await service.notify({ jsonReportPath, ...baseInput, jobStats });
 }
 
 // WHY: guarded behind require.main === module (2026-07-14, added after a

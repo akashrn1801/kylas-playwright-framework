@@ -349,19 +349,43 @@ export class FormFieldsConfigPage extends BasePage {
   async openFieldForEdit(internalName: string): Promise<void> {
     await this.open();
     await this.searchField(internalName);
-    await this.click(this.fieldRowLabelCell(internalName), `field row: ${internalName}`);
-    // WHY wrapped (CLAUDE.md rule 3): see open()'s identical comment.
-    await this.withSessionExpiryRecovery(() =>
-      expect(
-        this.page,
-        `Expected navigation to the "${internalName}" field's edit page`
-      ).toHaveURL(/\/setup\/fields\/[^/]+\/edit\//, { timeout: config.timeouts.navigation })
+    // WHY wrapped in withRateLimitRecovery() (2026-09-29 — real CI failures,
+    // sandbox run 36573185433: FFRC6's own "field row: cfFormFieldLimitParagraph
+    // ... element(s) not found" timeout was this exact click's own internal
+    // waitFor(visible) failing because the app's own HTTP-429 "Too many
+    // requests" error page had replaced the field list table entirely — see
+    // isRateLimitedPage()'s WHY comment in authManager.ts for the full
+    // incident, and open()'s identical composition above): this method's
+    // three steps (row click, URL assertion, Min Length render assertion) all
+    // read from the same page, so all three get the same protection.
+    await this.withRateLimitRecovery(() =>
+      this.click(this.fieldRowLabelCell(internalName), `field row: ${internalName}`)
     );
-    await this.withSessionExpiryRecovery(() =>
-      expect(
-        this.minInput(),
-        `Expected the "${internalName}" edit form's Min Length input to render`
-      ).toBeVisible({ timeout: config.timeouts.navigation })
+    // WHY wrapped (CLAUDE.md rule 3): see open()'s identical comment.
+    // WHY ALSO wrapped in withRateLimitRecovery(): same incident as above —
+    // nested outside withSessionExpiryRecovery so either recovery class can
+    // independently catch and retry this same assertion (mirrors open()'s
+    // established composition).
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page,
+          `Expected navigation to the "${internalName}" field's edit page`
+        ).toHaveURL(/\/setup\/fields\/[^/]+\/edit\//, { timeout: config.timeouts.navigation })
+      )
+    );
+    // WHY wrapped in withRateLimitRecovery() (2026-09-29 — real CI failure,
+    // sandbox run 36573185433: FFRC25's own "Expected the
+    // cfFormFieldLimitText edit form's Min Length input to render" failure
+    // captured the app's own 429 error page verbatim in its page snapshot):
+    // same reasoning as the two calls above.
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(
+          this.minInput(),
+          `Expected the "${internalName}" edit form's Min Length input to render`
+        ).toBeVisible({ timeout: config.timeouts.navigation })
+      )
     );
   }
 

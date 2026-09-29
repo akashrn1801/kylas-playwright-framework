@@ -188,6 +188,21 @@ export interface ModuleStats {
   // shape the report-level `slowestTests`/`slowestTestsTop20` already use,
   // for consistency rather than a lighter, separate display-only type.
   slowestTests: TestResult[];
+  // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 4a): the
+  // whole-run `totalRetries`/`retriesFromNonCleanTests`/
+  // `retriesFromCleanSweeps` split (see ParsedReport's own WHY comment for
+  // the full mechanism/incident) answers "how much retrying happened
+  // overall" but not "which module is actually causing it" — a run-wide
+  // number can't tell a reader whether one `.serial`-mode file is
+  // responsible for the bulk of it or it's spread evenly. Same
+  // genuine-vs-swept split as the whole-run fields, computed per module in
+  // the identical single pass, for the identical reason: a module full of
+  // tests swept into ANOTHER test's serial-block retry (itself never
+  // failing) must not look the same as a module whose own tests are
+  // genuinely flaky/failing and retrying.
+  totalRetries: number;
+  retriesFromNonCleanTests: number;
+  retriesFromCleanSweeps: number;
 }
 
 export interface ParsedReport {
@@ -420,6 +435,9 @@ export class ReportParser {
           skipped: 0,
           duration: 0,
           slowestTests: [],
+          totalRetries: 0,
+          retriesFromNonCleanTests: 0,
+          retriesFromCleanSweeps: 0,
         });
         moduleTestsMap.set(key, []);
       }
@@ -430,7 +448,18 @@ export class ReportParser {
       if (r.status === 'failed') mod.failed++;
       if (r.status === 'flaky') mod.flaky++;
       if (r.status === 'skipped') mod.skipped++;
+      // WHY the identical genuine-vs-swept split as the whole-run
+      // totalRetries/retriesFromNonCleanTests/retriesFromCleanSweeps
+      // computed further below, just per-module (2026-09-29, Phase 3 item
+      // 4a) — see ModuleStats.totalRetries' own WHY comment.
+      mod.totalRetries += r.retries;
+      if (r.status === 'failed' || r.status === 'flaky') {
+        mod.retriesFromNonCleanTests += r.retries;
+      }
       moduleTestsMap.get(key)!.push(r);
+    }
+    for (const mod of moduleMap.values()) {
+      mod.retriesFromCleanSweeps = mod.totalRetries - mod.retriesFromNonCleanTests;
     }
     // WHY top 3, a named constant (2026-09-29): see ModuleStats.slowestTests'
     // own WHY comment for the reasoning behind 3, not 1 or the full list.

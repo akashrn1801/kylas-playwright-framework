@@ -781,10 +781,37 @@ export class DealsPage extends BasePage {
 
   async clickAddDeal(): Promise<void> {
     logger.info('Clicking Add Deal');
+    // WHY armed before the click, not awaited inline where the Pipeline
+    // control is used (2026-09-29 — real CI failure, sandbox run
+    // 36573185433: FFRD6/FFRD5 both failed on fillDealForm()'s
+    // pipelineOption.waitFor() never seeing "Default Deal Pipeline" appear).
+    // Live network capture (QA, direct reproduction) confirmed the exact
+    // prerequisite: GET /v1/pipelines/lookup?entityType=DEAL&q=name: — the
+    // request that supplies this dropdown's real options — fires EAGERLY as
+    // part of the Add Deal modal's own bootstrap (alongside
+    // layouts/create, users/lookup, contacts/lookup, companies/lookup),
+    // never on-demand when the Pipeline control is clicked. A captured
+    // failure screenshot showed the Pipeline menu already open and
+    // rendering literal "No Options" while the same modal's own Product-or-
+    // Services section was still showing loading-skeleton placeholders —
+    // direct evidence of a genuine race between fillDealForm()'s Pipeline
+    // click and this specific request resolving under real concurrent CI
+    // load, not a fixture/data problem. Versioned path per CLAUDE.md rule 15
+    // (`/v1/pipelines/lookup`, not a bare `pipelines` substring). Non-fatal
+    // (.catch(() => null)): if this request never fires or times out for a
+    // genuinely unrelated reason, fillDealForm()'s own existing
+    // pipelineOption.waitFor() remains the real, final backstop — this only
+    // closes the race under real load, it doesn't replace that check.
+    const pipelinesLoaded = this.armResponseWaitWithRecovery(
+      (res) => res.url().includes('/v1/pipelines/lookup') && res.request().method() === 'GET',
+      'pipelines lookup (Add Deal modal)',
+      config.timeouts.navigation
+    ).catch(() => null);
     await this.click(this.addButton(), 'add deal button');
     await this.withSessionExpiryRecovery(() =>
       expect(this.nameInput()).toBeVisible({ timeout: 10000 })
     );
+    await pipelinesLoaded;
     logger.success('Deal form opened');
   }
 

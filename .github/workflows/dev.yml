@@ -79,6 +79,12 @@ jobs:
         if: always()
         env:
           ENV: qa
+          # WHY (2026-09-29): Phase 3 items #1/#6 — notify.ts's own
+          # loadJobStatsForCurrentRun() reuses this same PAT (already wired
+          # in for ci/reporting-history git access elsewhere in this
+          # workflow) for a read-only GitHub Jobs API call. Degrades
+          # gracefully (JobStats.ts's own WHY comment) if ever unset.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com

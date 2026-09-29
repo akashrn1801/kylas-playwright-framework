@@ -11,6 +11,7 @@ import { notificationConfig, getRecipients } from './config/notificationConfig';
 import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
+import { JobStats } from './JobStats';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { loadKnownIssuesIndex } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
@@ -59,6 +60,15 @@ export interface NotificationInput {
   // not fabricated here. Undefined when no real Allure publish location
   // exists for this run (GitHub Actions, local) — see notify.ts's WHY comment.
   allureUrl?: string;
+  // WHY: added 2026-09-29 (Phase 3 items #1/#6) — real per-job CI timing
+  // data, fetched by notify.ts via JobStats.loadJobStats() ONLY when
+  // runSource === 'github-actions' (Jenkins has no equivalent concept
+  // queryable this way — see JobStats.ts's own WHY comment). Undefined for
+  // every Jenkins/local run, and also whenever the GitHub Jobs API call
+  // itself failed for any reason (missing token, network error, non-2xx) —
+  // loadJobStats() already degrades to null in every failure case, matching
+  // allureUrl's own graceful-omission precedent directly above.
+  jobStats?: JobStats;
 }
 
 // WHY: Confirmed live (2026-07-07 reporting audit) — MiscErrorReporter.ts writes
@@ -323,6 +333,7 @@ export class NotificationService {
       triggeredBy: input.triggeredBy,
       runSource: input.runSource,
       allureUrl: input.allureUrl,
+      jobStats: input.jobStats,
       miscErrors,
       historyDelta: historyDeltaFile.delta,
       recurringFlaky: historyDeltaFile.recurringFlaky,

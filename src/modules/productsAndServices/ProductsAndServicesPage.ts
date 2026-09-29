@@ -405,10 +405,23 @@ export class ProductsAndServicesPage extends BasePage {
     // "absent" skip on an environment where they demonstrably exist (live-
     // reproduced and disproven the same session). The URL matching first
     // does not guarantee the form's own content has painted yet.
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.nameInput(), 'Products & Services create form should be visible').toBeVisible({
-        timeout: config.timeouts.expect,
-      })
+    // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
+    // failure, sandbox run 36573185433: FFRPS9's own "Products & Services
+    // create form should be visible" timeout was NOT the 10s
+    // config.timeouts.expect being too aggressive for real render latency —
+    // both this page's own screenshot AND the restricted user's separately-
+    // captured screenshot showed the app's own HTTP-429 "Too many requests"
+    // error page verbatim, replacing the create form entirely. A longer
+    // timeout would not have helped: that page never resolves into the real
+    // form on its own. Nested outside withSessionExpiryRecovery so either
+    // recovery class can independently catch and retry this same assertion,
+    // mirroring FormFieldsConfigPage.open()'s established composition.
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(this.nameInput(), 'Products & Services create form should be visible').toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      )
     );
     logger.info('Opened Products & Services create form');
   }

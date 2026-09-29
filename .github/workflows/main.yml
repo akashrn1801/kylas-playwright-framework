@@ -418,6 +418,9 @@ jobs:
         if: always()
         env:
           ENV: prod
+          # WHY (2026-09-29): Phase 3 items #1/#6 — see dev.yml's identical
+          # comment for the full reasoning.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com

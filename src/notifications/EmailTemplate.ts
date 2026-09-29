@@ -13,6 +13,7 @@ import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
+import { JobStats, detectJobOverlaps } from './JobStats';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -66,6 +67,14 @@ export interface EmailContext {
   slowTestTrend?: SlowTestTrend[];
   suiteDrift?: SuiteDrift | null;
   passRateSeries?: PassRatePoint[];
+  // WHY optional, GitHub-Actions-only (2026-09-29, Phase 3 items #1/#6) —
+  // see JobStats.ts's own WHY comment for why Jenkins has no equivalent and
+  // why this degrades to undefined rather than throwing on any fetch
+  // failure. Rendered by buildJobStatsSection() only when both `jobs.length
+  // > 0` (item #1 — per-job timing) — `totalJobMinutes` (item #6) is shown
+  // alongside it, not as a separate section, since both come from the same
+  // single API call and answer closely related questions.
+  jobStats?: JobStats;
   // WHY: computed once by NotificationService from FailureAnalyzer/
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
@@ -188,6 +197,7 @@ export class EmailTemplate {
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
       this.buildModuleSlowestTestsSection(ctx),
+      this.buildJobStatsSection(ctx),
       this.buildFlakyTestsSection(ctx),
       this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
@@ -842,6 +852,23 @@ ${body}
         const failedCell = m.failed > 0
           ? `<a href="#section-failed-tests" style="color:${FAIL};text-decoration:none;">${m.failed}</a>`
           : String(m.failed);
+        // WHY this cell exists (2026-09-29, Phase 3 item 4a): see
+        // ModuleStats.totalRetries' own WHY comment — a per-module retry
+        // count, honestly split the same way the whole-run KPI tile already
+        // is, so a reader can tell which module is actually driving the
+        // run's total retries rather than only seeing one aggregate number.
+        // Rendered as "–" when zero (matches this table's other zero-value
+        // conventions), a plain count when every retry there is genuine, or
+        // a count plus a small swept-count annotation when any exist —
+        // mirrors buildKpiDashboard()'s retriesSubtext shape exactly.
+        const retriesCell =
+          m.totalRetries === 0
+            ? `<span style="color:${MUTED};">–</span>`
+            : `<span style="color:${WARN};font-weight:700;">${m.totalRetries}</span>${
+                m.retriesFromCleanSweeps > 0
+                  ? `<div style="font-size:9px;color:${MUTED};margin-top:2px;">${m.retriesFromNonCleanTests} genuine, ${m.retriesFromCleanSweeps} swept</div>`
+                  : ''
+              }`;
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
@@ -849,6 +876,7 @@ ${body}
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
+        <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
         <td style="padding:8px;text-align:center;">${trendGlyph}${stabilityBadge}</td>
       </tr>`;
       })
@@ -867,6 +895,7 @@ ${body}
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${WARN};font-weight:600;">Flaky</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Progress</th>
+      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Trend</th>
     </tr>
     ${rows}
@@ -958,6 +987,88 @@ ${body}
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">Slowest Tests by Module (Top 3 each)</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Ranked by each module's own worst test — surfaces drag a whole-run top-5 can hide</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moduleBlocks}</table>
+  </div>
+</td></tr>`;
+  }
+
+  // ===================== CI job stats =====================
+
+  // WHY this section exists (2026-09-29, Phase 3 items #1 + #6, sharing one
+  // GitHub Jobs API call per JobStats.ts's own WHY comment): item #6 (total
+  // CI job-minutes) answers "what did this run cost in summed compute,"
+  // genuinely different from wall-clock duration once a run is sharded
+  // across N parallel jobs — a 5-shard run finishing in ~90 min of
+  // wall-clock time can easily represent 400+ minutes of summed job-minutes.
+  // Item #1 (per-job timestamps) is the breakdown backing that total —
+  // shown as one table rather than two sections since both come from the
+  // exact same `ctx.jobStats` payload. GitHub-Actions-only: `ctx.jobStats`
+  // is undefined for every Jenkins/local run (graceful omission, matching
+  // buildModuleSlowestTestsSection()'s own "return '' when nothing to show"
+  // convention above) or whenever the live API call itself failed for any
+  // reason — never a broken-looking empty section.
+  private buildJobStatsSection(ctx: EmailContext): string {
+    const stats = ctx.jobStats;
+    if (!stats || stats.jobs.length === 0) return '';
+    const sortedJobs = [...stats.jobs].sort((a, b) => b.durationMs - a.durationMs);
+    const rows = sortedJobs
+      .map(
+        (j) => `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(j.name)}</td>
+        <td style="padding:6px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(j.durationMs / 60000)}m`)}</td>
+      </tr>`
+      )
+      .join('');
+    // WHY a plural-safe note only when incompleteJobCount > 0, not always:
+    // most runs have zero incomplete jobs by the time this section renders
+    // (this merge+notify job itself is the one common exception — it's
+    // still `in_progress` at query time, with no `completed_at` yet, so
+    // JobStats.computeJobStats() correctly excludes it) — an always-present
+    // "0 jobs excluded" line would be noise on the common case.
+    const incompleteNote =
+      stats.incompleteJobCount > 0
+        ? `<div style="font-size:11px;color:${MUTED};margin-top:8px;">${stats.incompleteJobCount} job${stats.incompleteJobCount === 1 ? '' : 's'} still in progress at query time (excluded from the total above) — typically this merge+notify job itself.</div>`
+        : '';
+    // WHY computed here, inline, rather than a separate EmailContext field
+    // (2026-09-29, Phase 3 item 2 v1): detectJobOverlaps() is a pure
+    // function fully derivable from ctx.jobStats.jobs, which is already on
+    // the context — threading a second, redundant field for the exact same
+    // underlying data would duplicate a single source of truth for no
+    // benefit. See JobStats.ts's own WHY comment on this section for the
+    // real, honest scope limit: module-tag attribution (the `sameModuleTag`
+    // flag) only exists for formFields-track jobs; every other overlap is
+    // still reported, just without a module tag, never silently dropped.
+    const overlaps = detectJobOverlaps(stats.jobs);
+    const overlapsSection =
+      overlaps.length === 0
+        ? ''
+        : (() => {
+            const flaggedFirst = [...overlaps].sort(
+              (a, b) => (b.sameModuleTag ? 1 : 0) - (a.sameModuleTag ? 1 : 0) || b.overlapDurationMs - a.overlapDurationMs
+            );
+            const overlapRows = flaggedFirst
+              .map((o) => {
+                const flagged = o.sameModuleTag !== undefined;
+                return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:6px 0;font-size:11.5px;color:${flagged ? FAIL : INK};font-weight:${flagged ? '700' : '400'};">${flagged ? '⚠ ' : ''}${this.esc(o.jobA)} ↔ ${this.esc(o.jobB)}${flagged ? ` <span style="font-size:10px;color:${FAIL};">(same module: ${this.esc(o.sameModuleTag!)})</span>` : ''}</td>
+        <td style="padding:6px 0;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${Math.round(o.overlapDurationMs / 60000)}m`)}</td>
+      </tr>`;
+              })
+              .join('');
+            return `
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Job Time Overlaps</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Jobs whose execution windows overlapped — ⚠ flags a pair confirmed to share the SAME module (a structural anomaly the current shard design should prevent; investigate if this ever appears). Module attribution is currently only derivable for formFields-track jobs — a rest-of-suite shard overlap is still shown, just without a module tag (see JobStats.ts's own WHY comment).</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${overlapRows}</table>`;
+          })();
+    return `
+<tr><td style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">CI Job Stats</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Total summed compute across every completed job in this run: <strong style="color:${INK};">${this.mono(`${stats.totalJobMinutes}m`)}</strong> (genuinely different from wall-clock duration once sharded)</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+    ${incompleteNote}
+    ${overlapsSection}
   </div>
 </td></tr>`;
   }
