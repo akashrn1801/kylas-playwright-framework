@@ -8,6 +8,8 @@ import {
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
+  isRateLimitedPage,
+  tryRecoverFromRateLimit,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
@@ -302,6 +304,31 @@ export class BasePage {
         'A wrapped call failed while on a signIn/login or Forbidden page — attempting one-time session recovery'
       );
       await tryRecoverSessionForPage(this.page, urlBeforeCall);
+      return await fn();
+    }
+  }
+
+  // WHY a separate combinator from withSessionExpiryRecovery() above, not a
+  // merged one (2026-09-29 — see isRateLimitedPage()'s own WHY comment in
+  // authManager.ts for the full incident this fixes): the SHAPE is
+  // deliberately identical (try/catch, detect a specific known page state,
+  // recover, retry once) per the standing instruction to reuse that shape
+  // rather than invent a new one — but the detection and recovery action are
+  // both genuinely different from session expiry, so keeping them as two
+  // single-purpose functions matches this file's own existing precedent
+  // (one function, one job) rather than blurring two unrelated recovery
+  // classes into one conditional-branching mega-function.
+  protected async withRateLimitRecovery<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!(await isRateLimitedPage(this.page))) {
+        throw error;
+      }
+      logger.warn(
+        'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+      );
+      await tryRecoverFromRateLimit(this.page);
       return await fn();
     }
   }

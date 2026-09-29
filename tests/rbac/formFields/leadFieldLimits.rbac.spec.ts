@@ -1,4 +1,12 @@
 import { test as leadTest, expect } from '../../ui/formFields/formFieldsTestLock';
+// WHY this second `test` import — mirrors companyFieldLimits.rbac.spec.ts's
+// own identical `baseTest` import (2026-09-29, Fix 2 for the dated
+// known-issues.md entry, "A cross-process lock only protects workers on the
+// SAME filesystem"): confirmed via a complete, per-test code-level audit
+// that FFR1/2/3 below are the only 3 of this file's 25 tests that never
+// call configureFieldLimit()/configureFieldRegex()/
+// clearAllFieldConfigurations() via adminPage.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
@@ -79,6 +87,48 @@ async function assertInlineErrorPresent(
   ).toBe(true);
 }
 
+// WHY this constant lives at file (not describe-block) scope (2026-09-29):
+// both the lock-free block below AND the main, lock-wrapped block need it —
+// mirrors companyFieldLimits.rbac.spec.ts's identical hoist.
+const LEAD_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Lead', urlSlug: 'leads' };
+
+// WHY this block is separate from, not nested inside, the main
+// 'Form Field Limits — RBAC › Lead' describe below, using `baseTest`
+// instead of `leadTest` — mirrors companyFieldLimits.rbac.spec.ts's own
+// identical extraction (see that file's WHY comment for the full
+// reasoning, including why `.serial` isn't needed here either).
+baseTest.describe('Form Field Limits — RBAC › Lead (read-only, lock-free)', () => {
+  baseTest(
+    '@regression FFR1 restricted user can see the field settings list but nothing else on that page',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
+      await configPage.assertListVisibleReadOnly();
+      logger.success('FFR1 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFR2 restricted user does not see the "Add Field" button',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
+      await configPage.assertAddFieldButtonAbsent();
+      logger.success('FFR2 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFR3 restricted user cannot click into any field to open it for editing',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
+      await configPage.assertRowNotClickable(LEAD_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFR3 passed');
+    }
+  );
+});
+
 leadTest.describe('Form Field Limits — RBAC › Lead', () => {
   // WHY leadTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
@@ -134,7 +184,9 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
 
   leadTest.describe.configure({ timeout: 480000 });
 
-  const LEAD_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Lead', urlSlug: 'leads' };
+  // WHY LEAD_ENTITY is NOT re-declared here (2026-09-29): it now lives at
+  // file scope (see the top of this file) — shared with the lock-free
+  // 'read-only' block above, not duplicated.
 
   // WHY these constants/helpers are duplicated here from
   // leadFieldLimits.spec.ts rather than imported: mirrors every other
@@ -314,39 +366,9 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
   }
 
 
-  leadTest('@regression FFR1 restricted user can see the field settings list but nothing else on that page', async ({
-    restrictedPage,
-  }) => {
-    // WHY: see leadFieldLimits.spec.ts's FFL1 WHY comment — every test
-    // sharing formFieldsTestLock.ts's cross-process lock (both files)
-    // needs this same extended timeout regardless of what it does
-    // internally, or it becomes the weak link a shared-lock starvation
-    // chain can be killed through.
-    leadTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
-    await configPage.assertListVisibleReadOnly();
-    logger.success('FFR1 passed');
-  });
-
-  leadTest('@regression FFR2 restricted user does not see the "Add Field" button', async ({
-    restrictedPage,
-  }) => {
-    // WHY: see FFR1's own WHY comment above.
-    leadTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
-    await configPage.assertAddFieldButtonAbsent();
-    logger.success('FFR2 passed');
-  });
-
-  leadTest('@regression FFR3 restricted user cannot click into any field to open it for editing', async ({
-    restrictedPage,
-  }) => {
-    // WHY: see FFR1's own WHY comment above.
-    leadTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, LEAD_ENTITY);
-    await configPage.assertRowNotClickable(LEAD_TEXT_FIELD_INTERNAL_NAME);
-    logger.success('FFR3 passed');
-  });
+  // WHY FFR1/2/3 are no longer here (2026-09-29): moved to the lock-free
+  // 'Form Field Limits — RBAC › Lead (read-only, lock-free)' describe
+  // block near the top of this file.
 
   leadTest("@regression FFR4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,

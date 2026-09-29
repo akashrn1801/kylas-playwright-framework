@@ -594,6 +594,126 @@ export function computeSuiteDrift(
   };
 }
 
+export interface ModuleStabilityTrend {
+  name: string;
+  type: string;
+  runsConsidered: number;
+  totalTests: number;
+  totalFailed: number;
+  totalFlaky: number;
+  // WHY percentages, not raw counts alone: lets a reader compare a
+  // low-volume module (3 tests, 1 failure) against a high-volume one (100
+  // tests, 5 failures) on the same scale — the raw counts alone would make
+  // the low-volume module look trivial despite a 33% fail rate.
+  failRate: number;
+  flakyRate: number;
+  direction: 'improving' | 'worsening' | 'stable' | 'insufficient-data';
+}
+
+// WHY a fixed +/-5-percentage-point margin, a named starting heuristic
+// (2026-09-29) — mirrors this file's own established precedent
+// (SLOW_TEST_REGRESSION_THRESHOLD): a bare inequality between two halves'
+// rates would flag "worsening"/"improving" on noise as small as one extra
+// flaky test in a low-volume module. Revisit once real accumulated history
+// shows this margin is too tight or too loose — not statistically derived.
+export const MODULE_STABILITY_TREND_MARGIN_POINTS = 5;
+
+// WHY >= 4 runs required to compute a direction, not attempted on fewer
+// (2026-09-29): splitting fewer than 4 runs in half would compare 1-vs-1 or
+// 1-vs-2 runs — a single run's outcome is not a rate, and comparing it
+// against another single run is not a trend, it's noise dressed up as one.
+const MODULE_STABILITY_MIN_RUNS_FOR_DIRECTION = 4;
+
+// WHY this function exists, and why it's a NEW function rather than
+// extending computeModuleTrend() above (2026-09-29, Phase 3 reporting
+// enhancement item 5 — explicitly asked to check for reuse first): checked,
+// and computeModuleTrend() answers a genuinely different question — "did
+// this module get better or worse since the SINGLE most recent run" (one
+// comparison point). This answers "is this module TRENDING toward
+// instability over the last N runs" (a rate over a window, split into an
+// older half vs. a newer half so a flat blended average can't hide a module
+// that was rock-solid and just started degrading — see
+// MODULE_STABILITY_TREND_MARGIN_POINTS' own WHY comment). Genuinely reuses
+// existing mechanisms rather than building parallel ones: `historyBeforeAppend`
+// + `current` is the same input shape every other compute* function in this
+// file takes, RECURRING_FLAKY_LOOKBACK is the same default window
+// computeRecurringFlaky()/computeRecurringFailures() already use, and
+// RunHistoryRecord.modules[] (ModuleHistoryStats) is data every run's record
+// already stores today — zero new capture needed, per the original design
+// note.
+//
+// WHY scope-aware (branch + normalized scope) from the START, not retrofitted
+// later (2026-09-29): computeDelta()/computeSuiteDrift() were fixed
+// 2026-09-09 to stop comparing across mismatched branch/scope (the "Suite
+// Drift Detected" false-alarm on a clean dev run — dev's @smoke runs and
+// qa's @regression runs interleave in the same env-keyed history file).
+// computeRecurringFlaky()/computeRecurringFailures()/computeModuleTrend()
+// still have this exact gap (flagged, not retrofitted here — a separate,
+// pre-existing concern out of scope for this addition). This NEW function
+// is built scope-aware from day one so it doesn't repeat that same mistake
+// a third time — a module's stability signal is exactly as vulnerable to
+// cross-branch/cross-scope contamination as the whole-run delta was.
+export function computeModuleStabilityTrend(
+  historyBeforeAppend: RunHistoryRecord[],
+  current: RunHistoryRecord,
+  lookback: number = RECURRING_FLAKY_LOOKBACK
+): ModuleStabilityTrend[] {
+  const matchingHistory = historyBeforeAppend.filter(
+    (r) => r.branch === current.branch && r.scope === current.scope
+  );
+  const recentRuns = [...matchingHistory.slice(-(lookback - 1)), current];
+
+  const moduleKeys = new Set<string>();
+  for (const run of recentRuns) {
+    for (const m of run.modules) {
+      if (m.total > 0) moduleKeys.add(`${m.type}:${m.name}`);
+    }
+  }
+
+  const trends: ModuleStabilityTrend[] = [];
+  for (const key of moduleKeys) {
+    const [type, name] = key.split(':');
+    const perRun: ModuleHistoryStats[] = [];
+    for (const run of recentRuns) {
+      const m = run.modules.find((mod) => `${mod.type}:${mod.name}` === key);
+      if (m && m.total > 0) perRun.push(m);
+    }
+    if (perRun.length === 0) continue;
+
+    const totalTests = perRun.reduce((sum, m) => sum + m.total, 0);
+    const totalFailed = perRun.reduce((sum, m) => sum + m.failed, 0);
+    const totalFlaky = perRun.reduce((sum, m) => sum + m.flaky, 0);
+    const failRate = totalTests > 0 ? Math.round((totalFailed / totalTests) * 100) : 0;
+    const flakyRate = totalTests > 0 ? Math.round((totalFlaky / totalTests) * 100) : 0;
+
+    let direction: ModuleStabilityTrend['direction'] = 'insufficient-data';
+    if (perRun.length >= MODULE_STABILITY_MIN_RUNS_FOR_DIRECTION) {
+      const mid = Math.floor(perRun.length / 2);
+      const rateOf = (runs: ModuleHistoryStats[]): number => {
+        const t = runs.reduce((s, m) => s + m.total, 0);
+        const bad = runs.reduce((s, m) => s + m.failed + m.flaky, 0);
+        return t > 0 ? bad / t : 0;
+      };
+      const olderRate = rateOf(perRun.slice(0, mid));
+      const newerRate = rateOf(perRun.slice(mid));
+      const diffPoints = (newerRate - olderRate) * 100;
+      direction =
+        diffPoints > MODULE_STABILITY_TREND_MARGIN_POINTS
+          ? 'worsening'
+          : diffPoints < -MODULE_STABILITY_TREND_MARGIN_POINTS
+            ? 'improving'
+            : 'stable';
+    }
+
+    trends.push({ name, type, runsConsidered: perRun.length, totalTests, totalFailed, totalFlaky, failRate, flakyRate, direction });
+  }
+
+  // WHY worst-first (failRate + flakyRate descending): the module most worth
+  // a reader's attention first, mirroring computeRecurringByField()'s own
+  // "most-frequently-recurring first" ordering precedent.
+  return trends.sort((a, b) => b.failRate + b.flakyRate - (a.failRate + a.flakyRate));
+}
+
 export interface PassRatePoint {
   buildNumber: string;
   passRate: number;

@@ -1,4 +1,12 @@
 import { test, expect, withContactFormFieldLock } from './contactFormFieldLock';
+// WHY a second, separate `test` import here — mirrors
+// companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
+// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// protects workers on the SAME filesystem"): confirmed via a complete,
+// per-test code-level audit that every Navigation test below only ever
+// READS field config, never calls configureFieldLimit()/
+// configureFieldRegex()/clearAllFieldConfigurations().
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import {
@@ -281,6 +289,62 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
   await configPage.clearFieldConfiguration(PARAGRAPH_FIELD_INTERNAL_NAME);
 }
 
+// WHY this block is a sibling of, not nested inside, 'Contact Field Limits'
+// below, using `baseTest` instead of `test` — mirrors
+// companyFieldLimits.spec.ts's own identical 'Navigation' extraction (see
+// the `baseTest` import's own WHY comment above and that file's for the
+// full reasoning, including why extraction loses nothing the original
+// nesting provided).
+baseTest.describe('Navigation', () => {
+  baseTest(
+    '@smoke @prodSafe FFC1 admin should open the Contact field settings page and see the entity tabs',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
+      await configPage.open();
+      const tabs = await configPage.getVisibleEntityTabLabels();
+      expect(
+        tabs.length,
+        'Expected more than one entity tab on the Form Fields screen'
+      ).toBeGreaterThan(1);
+      expect(tabs, 'Expected the "Contact" tab to be present among the live tab labels').toContain(
+        'Contact'
+      );
+      logger.success('FFC1 passed');
+    }
+  );
+
+  baseTest(
+    '@smoke @prodSafe FFC2 admin should search the field list by internal name and see it filter correctly',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
+      await configPage.open();
+      await configPage.searchField(TEXT_FIELD_INTERNAL_NAME);
+      await configPage.openFieldForEdit(TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFC2 passed');
+    }
+  );
+
+  baseTest(
+    "@smoke @prodSafe FFC3 admin should open an individual custom field's edit page from the list",
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
+      const snapshot = await configPage.readFieldConfigFresh(TEXT_FIELD_INTERNAL_NAME);
+      expect(
+        typeof snapshot.min,
+        'Expected the field edit page to expose real Min Length control state'
+      ).toBe('string');
+      expect(
+        typeof snapshot.maxDisabled,
+        'Expected the field edit page to expose real Max Length disabled-state'
+      ).toBe('boolean');
+      logger.success('FFC3 passed');
+    }
+  );
+}); // end describe('Navigation')
+
 test.describe('Contact Field Limits', () => {
   // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer level
   // — mirrors leadFieldLimits.spec.ts's identical top-of-file comment (see
@@ -359,53 +423,8 @@ test.describe('Contact Field Limits', () => {
   });
 
   // ─── Navigation ──────────────────────────────────────────────────────
-
-  test.describe('Navigation', () => {
-    test('@smoke @prodSafe FFC1 admin should open the Contact field settings page and see the entity tabs', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
-      await configPage.open();
-      const tabs = await configPage.getVisibleEntityTabLabels();
-      expect(
-        tabs.length,
-        'Expected more than one entity tab on the Form Fields screen'
-      ).toBeGreaterThan(1);
-      expect(tabs, 'Expected the "Contact" tab to be present among the live tab labels').toContain(
-        'Contact'
-      );
-      logger.success('FFC1 passed');
-    });
-
-    test('@smoke @prodSafe FFC2 admin should search the field list by internal name and see it filter correctly', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
-      await configPage.open();
-      await configPage.searchField(TEXT_FIELD_INTERNAL_NAME);
-      await configPage.openFieldForEdit(TEXT_FIELD_INTERNAL_NAME);
-      logger.success('FFC2 passed');
-    });
-
-    test("@smoke @prodSafe FFC3 admin should open an individual custom field's edit page from the list", async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, CONTACT_ENTITY);
-      const snapshot = await configPage.readFieldConfigFresh(TEXT_FIELD_INTERNAL_NAME);
-      expect(
-        typeof snapshot.min,
-        'Expected the field edit page to expose real Min Length control state'
-      ).toBe('string');
-      expect(
-        typeof snapshot.maxDisabled,
-        'Expected the field edit page to expose real Max Length disabled-state'
-      ).toBe('boolean');
-      logger.success('FFC3 passed');
-    });
-  }); // end describe('Navigation')
+  // WHY moved out of this block entirely (2026-09-29): see the top-level
+  // `baseTest.describe('Navigation', ...)` block above this describe.
 
   // ─── Text field character-length limits ─────────────────────────────
 

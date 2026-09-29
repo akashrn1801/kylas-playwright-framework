@@ -3,6 +3,14 @@ import {
   expect,
   withProductsAndServicesFormFieldLock,
 } from './productsAndServicesFormFieldLock';
+// WHY a second, separate `test` import here — mirrors
+// companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
+// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// protects workers on the SAME filesystem"): confirmed via a complete,
+// per-test code-level audit that every Navigation test below only ever
+// READS field config, never calls configureFieldLimit()/
+// configureFieldRegex()/clearAllFieldConfigurations().
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { ProductsAndServicesPage } from '../../../src/modules/productsAndServices/ProductsAndServicesPage';
 import {
@@ -300,6 +308,60 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
   await configPage.clearFieldConfiguration(PS_PARAGRAPH_FIELD_INTERNAL_NAME);
 }
 
+// WHY this block is a sibling of, not nested inside, 'Products & Services
+// Field Limits' below, using `baseTest` instead of `test` — mirrors
+// companyFieldLimits.spec.ts's own identical 'Navigation' extraction.
+baseTest.describe('Navigation', () => {
+  baseTest(
+    '@smoke @prodSafe FFPS1 admin should open the Product & Service field settings page and see the entity tabs',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
+      await configPage.open();
+      const tabs = await configPage.getVisibleEntityTabLabels();
+      expect(
+        tabs.length,
+        'Expected more than one entity tab on the Form Fields screen'
+      ).toBeGreaterThan(1);
+      expect(
+        tabs,
+        'Expected the "Product & Service" tab to be present among the live tab labels'
+      ).toContain('Product & Service');
+      logger.success('FFPS1 passed');
+    }
+  );
+
+  baseTest(
+    '@smoke @prodSafe FFPS2 admin should search the field list by internal name and see it filter correctly',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
+      await configPage.open();
+      await configPage.searchField(PS_TEXT_FIELD_INTERNAL_NAME);
+      await configPage.openFieldForEdit(PS_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFPS2 passed');
+    }
+  );
+
+  baseTest(
+    "@smoke @prodSafe FFPS3 admin should open an individual custom field's edit page from the list",
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
+      const snapshot = await configPage.readFieldConfigFresh(PS_TEXT_FIELD_INTERNAL_NAME);
+      expect(
+        typeof snapshot.min,
+        'Expected the field edit page to expose real Min Length control state'
+      ).toBe('string');
+      expect(
+        typeof snapshot.maxDisabled,
+        'Expected the field edit page to expose real Max Length disabled-state'
+      ).toBe('boolean');
+      logger.success('FFPS3 passed');
+    }
+  );
+}); // end describe('Navigation')
+
 test.describe('Products & Services Field Limits', () => {
   // WHY test.describe.configure({{ timeout: 480000 }}) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -358,54 +420,8 @@ test.describe('Products & Services Field Limits', () => {
   });
 
   // ─── Navigation ──────────────────────────────────────────────────────
-
-  test.describe('Navigation', () => {
-    test('@smoke @prodSafe FFPS1 admin should open the Product & Service field settings page and see the entity tabs', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
-      await configPage.open();
-      const tabs = await configPage.getVisibleEntityTabLabels();
-      expect(
-        tabs.length,
-        'Expected more than one entity tab on the Form Fields screen'
-      ).toBeGreaterThan(1);
-      expect(
-        tabs,
-        'Expected the "Product & Service" tab to be present among the live tab labels'
-      ).toContain('Product & Service');
-      logger.success('FFPS1 passed');
-    });
-
-    test('@smoke @prodSafe FFPS2 admin should search the field list by internal name and see it filter correctly', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
-      await configPage.open();
-      await configPage.searchField(PS_TEXT_FIELD_INTERNAL_NAME);
-      await configPage.openFieldForEdit(PS_TEXT_FIELD_INTERNAL_NAME);
-      logger.success('FFPS2 passed');
-    });
-
-    test("@smoke @prodSafe FFPS3 admin should open an individual custom field's edit page from the list", async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, PRODUCTS_ENTITY);
-      const snapshot = await configPage.readFieldConfigFresh(PS_TEXT_FIELD_INTERNAL_NAME);
-      expect(
-        typeof snapshot.min,
-        'Expected the field edit page to expose real Min Length control state'
-      ).toBe('string');
-      expect(
-        typeof snapshot.maxDisabled,
-        'Expected the field edit page to expose real Max Length disabled-state'
-      ).toBe('boolean');
-      logger.success('FFPS3 passed');
-    });
-  }); // end describe('Navigation')
+  // WHY moved out of this block entirely (2026-09-29): see the top-level
+  // `baseTest.describe('Navigation', ...)` block above this describe.
 
   // ─── Text field character-length limits ─────────────────────────────
 

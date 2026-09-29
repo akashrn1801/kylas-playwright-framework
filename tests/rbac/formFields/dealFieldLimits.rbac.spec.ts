@@ -1,4 +1,12 @@
 import { test as dealTest, expect } from '../../ui/formFields/dealFormFieldLock';
+// WHY this second `test` import — mirrors companyFieldLimits.rbac.spec.ts's
+// own identical `baseTest` import (2026-09-29, Fix 2 for the dated
+// known-issues.md entry, "A cross-process lock only protects workers on the
+// SAME filesystem"): confirmed via a complete, per-test code-level audit
+// that FFRD1/2/3 below are the only 3 of this file's 31 tests that never
+// call configureFieldLimit()/configureFieldRegex()/
+// clearAllFieldConfigurations() via adminPage.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
@@ -82,6 +90,50 @@ async function assertInlineErrorPresent(
   ).toBe(true);
 }
 
+// WHY these two constants live at file (not describe-block) scope
+// (2026-09-29): both the lock-free block below AND the main, lock-wrapped
+// block need them — mirrors companyFieldLimits.rbac.spec.ts's identical
+// hoist.
+const DEAL_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Deal', urlSlug: 'deals' };
+const D_TEXT_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.textField}`;
+
+// WHY this block is separate from, not nested inside, the main
+// 'Form Field Limits — RBAC › Deal' describe below, using `baseTest`
+// instead of `dealTest` — mirrors companyFieldLimits.rbac.spec.ts's own
+// identical extraction (see that file's WHY comment for the full
+// reasoning, including why `.serial` isn't needed here either).
+baseTest.describe('Form Field Limits — RBAC › Deal (read-only, lock-free)', () => {
+  baseTest(
+    '@regression FFRD1 restricted user can see the field settings list but nothing else on that page',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
+      await configPage.assertListVisibleReadOnly();
+      logger.success('FFRD1 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRD2 restricted user does not see the "Add Field" button',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
+      await configPage.assertAddFieldButtonAbsent();
+      logger.success('FFRD2 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRD3 restricted user cannot click into any field to open it for editing',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
+      await configPage.assertRowNotClickable(D_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFRD3 passed');
+    }
+  );
+});
+
 dealTest.describe('Form Field Limits — RBAC › Deal', () => {
   // WHY dealTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
@@ -137,9 +189,9 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
 
   dealTest.describe.configure({ timeout: 480000 });
 
-  const DEAL_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Deal', urlSlug: 'deals' };
-
-  const D_TEXT_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.textField}`;
+  // WHY DEAL_ENTITY/D_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
+  // (2026-09-29): both now live at file scope (see the top of this file) —
+  // shared with the lock-free 'read-only' block above, not duplicated.
   const D_NUMBER_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.number}`;
   const D_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${DEAL_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
@@ -314,32 +366,9 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     ).toBe(shouldMatch);
   }
 
-  dealTest('@regression FFRD1 restricted user can see the field settings list but nothing else on that page', async ({
-    restrictedPage,
-  }) => {
-    dealTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
-    await configPage.assertListVisibleReadOnly();
-    logger.success('FFRD1 passed');
-  });
-
-  dealTest('@regression FFRD2 restricted user does not see the "Add Field" button', async ({
-    restrictedPage,
-  }) => {
-    dealTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
-    await configPage.assertAddFieldButtonAbsent();
-    logger.success('FFRD2 passed');
-  });
-
-  dealTest('@regression FFRD3 restricted user cannot click into any field to open it for editing', async ({
-    restrictedPage,
-  }) => {
-    dealTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, DEAL_ENTITY);
-    await configPage.assertRowNotClickable(D_TEXT_FIELD_INTERNAL_NAME);
-    logger.success('FFRD3 passed');
-  });
+  // WHY FFRD1/2/3 are no longer here (2026-09-29): moved to the lock-free
+  // 'Form Field Limits — RBAC › Deal (read-only, lock-free)' describe
+  // block near the top of this file.
 
   dealTest("@regression FFRD4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,

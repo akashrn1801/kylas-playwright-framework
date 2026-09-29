@@ -1,4 +1,12 @@
 import { test as contactTest, expect } from '../../ui/formFields/contactFormFieldLock';
+// WHY this second `test` import — mirrors companyFieldLimits.rbac.spec.ts's
+// own identical `baseTest` import (2026-09-29, Fix 2 for the dated
+// known-issues.md entry, "A cross-process lock only protects workers on the
+// SAME filesystem"): confirmed via a complete, per-test code-level audit
+// that FFRC1/2/3 below are the only 3 of this file's 28 tests that never
+// call configureFieldLimit()/configureFieldRegex()/
+// clearAllFieldConfigurations() via adminPage.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
@@ -81,6 +89,48 @@ async function assertInlineErrorPresent(
   ).toBe(true);
 }
 
+// WHY this constant lives at file (not describe-block) scope (2026-09-29):
+// both the lock-free block below AND the main, lock-wrapped block need it —
+// mirrors companyFieldLimits.rbac.spec.ts's identical hoist.
+const CONTACT_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Contact', urlSlug: 'contacts' };
+
+// WHY this block is separate from, not nested inside, the main
+// 'Form Field Limits — RBAC › Contact' describe below, using `baseTest`
+// instead of `contactTest` — mirrors companyFieldLimits.rbac.spec.ts's own
+// identical extraction (see that file's WHY comment for the full
+// reasoning, including why `.serial` isn't needed here either).
+baseTest.describe('Form Field Limits — RBAC › Contact (read-only, lock-free)', () => {
+  baseTest(
+    '@regression FFRC1 restricted user can see the field settings list but nothing else on that page',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
+      await configPage.assertListVisibleReadOnly();
+      logger.success('FFRC1 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRC2 restricted user does not see the "Add Field" button',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
+      await configPage.assertAddFieldButtonAbsent();
+      logger.success('FFRC2 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRC3 restricted user cannot click into any field to open it for editing',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
+      await configPage.assertRowNotClickable(CONTACT_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFRC3 passed');
+    }
+  );
+});
+
 contactTest.describe('Form Field Limits — RBAC › Contact', () => {
   // WHY contactTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
@@ -136,7 +186,9 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
 
   contactTest.describe.configure({ timeout: 480000 });
 
-  const CONTACT_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Contact', urlSlug: 'contacts' };
+  // WHY CONTACT_ENTITY is NOT re-declared here (2026-09-29): it now lives at
+  // file scope (see the top of this file) — shared with the lock-free
+  // 'read-only' block above, not duplicated.
   const OTHER_DETAILS_TAB = 'Other Details';
 
   // WHY these constants/helpers live here, duplicated from
@@ -326,35 +378,9 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     ).toBe(shouldMatch);
   }
 
-  contactTest('@regression FFRC1 restricted user can see the field settings list but nothing else on that page', async ({
-    restrictedPage,
-  }) => {
-    // WHY: see the Lead block's FFR1 WHY comment — every test sharing a
-    // cross-process lock needs this same extended timeout regardless of
-    // what it does internally.
-    contactTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
-    await configPage.assertListVisibleReadOnly();
-    logger.success('FFRC1 passed');
-  });
-
-  contactTest('@regression FFRC2 restricted user does not see the "Add Field" button', async ({
-    restrictedPage,
-  }) => {
-    contactTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
-    await configPage.assertAddFieldButtonAbsent();
-    logger.success('FFRC2 passed');
-  });
-
-  contactTest('@regression FFRC3 restricted user cannot click into any field to open it for editing', async ({
-    restrictedPage,
-  }) => {
-    contactTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, CONTACT_ENTITY);
-    await configPage.assertRowNotClickable(CONTACT_TEXT_FIELD_INTERNAL_NAME);
-    logger.success('FFRC3 passed');
-  });
+  // WHY FFRC1/2/3 are no longer here (2026-09-29): moved to the lock-free
+  // 'Form Field Limits — RBAC › Contact (read-only, lock-free)' describe
+  // block near the top of this file.
 
   contactTest("@regression FFRC4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,

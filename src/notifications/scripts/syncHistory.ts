@@ -27,6 +27,7 @@ import {
   computeRecurringFlaky,
   computeRecurringFailures,
   computeModuleTrend,
+  computeModuleStabilityTrend,
   computeSlowTestTrend,
   computeSuiteDrift,
   buildPassRateSeries,
@@ -35,6 +36,7 @@ import {
   RunDelta,
   RecurringIssue,
   ModuleTrend,
+  ModuleStabilityTrend,
   SlowTestTrend,
   SuiteDrift,
   PassRatePoint,
@@ -595,6 +597,7 @@ interface HistoryDeltaOutput {
   recurringFlaky: RecurringIssue[];
   recurringFailures: RecurringIssue[];
   moduleTrend: ModuleTrend[];
+  moduleStabilityTrend: ModuleStabilityTrend[];
   slowTestTrend: SlowTestTrend[];
   suiteDrift: SuiteDrift | null;
   passRateSeries: PassRatePoint[];
@@ -605,6 +608,7 @@ const EMPTY_DELTA_OUTPUT: HistoryDeltaOutput = {
   recurringFlaky: [],
   recurringFailures: [],
   moduleTrend: [],
+  moduleStabilityTrend: [],
   slowTestTrend: [],
   // WHY: null, not {occurred:false,...} — a genuinely-computed "no drift"
   // and "sync never ran / failed before computing" are different states, and
@@ -769,6 +773,7 @@ async function main() {
         recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
         recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
         moduleTrend: computeModuleTrend(historyBeforeAppend, current),
+        moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
         slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
         suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
         passRateSeries: buildPassRateSeries(historyBeforeAppend, current),

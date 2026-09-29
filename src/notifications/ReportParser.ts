@@ -178,6 +178,16 @@ export interface ModuleStats {
   // health/trend and for the Module Analytics "time" column on the target
   // feature list.
   duration: number;
+  // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 3): a
+  // module's own aggregate `duration` above tells you a module is slow, but
+  // not WHICH test(s) inside it are the actual drag — a module could be slow
+  // because every test is moderately slow, or because one single outlier
+  // test dominates the total. Top 3 (not top 1, not the full list) — enough
+  // to distinguish "one outlier" from "broadly slow module" without making
+  // this a second copy of the whole module's test list. Same `TestResult[]`
+  // shape the report-level `slowestTests`/`slowestTestsTop20` already use,
+  // for consistency rather than a lighter, separate display-only type.
+  slowestTests: TestResult[];
 }
 
 export interface ParsedReport {
@@ -390,10 +400,16 @@ export class ReportParser {
     const startTime = raw.stats?.startTime || raw.startTime || new Date().toISOString();
     const endTime = new Date(new Date(startTime).getTime() + duration).toISOString();
     const moduleMap = new Map<string, ModuleStats>();
+    // WHY a separate map, not pushed straight onto ModuleStats (2026-09-29):
+    // keeps the raw per-test refs out of ModuleStats until the final sort —
+    // ModuleStats is the exported, long-lived shape (serialized into
+    // history/reports elsewhere); building its `slowestTests` in one pass at
+    // the end avoids re-sorting on every push.
+    const moduleTestsMap = new Map<string, TestResult[]>();
     for (const r of results) {
       const { name, type } = deriveModuleFromFile(r.file);
       const key = `${type}:${name}`;
-      if (!moduleMap.has(key))
+      if (!moduleMap.has(key)) {
         moduleMap.set(key, {
           name,
           type,
@@ -403,7 +419,10 @@ export class ReportParser {
           flaky: 0,
           skipped: 0,
           duration: 0,
+          slowestTests: [],
         });
+        moduleTestsMap.set(key, []);
+      }
       const mod = moduleMap.get(key)!;
       mod.total++;
       mod.duration += r.duration;
@@ -411,6 +430,14 @@ export class ReportParser {
       if (r.status === 'failed') mod.failed++;
       if (r.status === 'flaky') mod.flaky++;
       if (r.status === 'skipped') mod.skipped++;
+      moduleTestsMap.get(key)!.push(r);
+    }
+    // WHY top 3, a named constant (2026-09-29): see ModuleStats.slowestTests'
+    // own WHY comment for the reasoning behind 3, not 1 or the full list.
+    const MODULE_SLOWEST_TOP_N = 3;
+    for (const [key, mod] of moduleMap) {
+      const modResults = moduleTestsMap.get(key) ?? [];
+      mod.slowestTests = [...modResults].sort((a, b) => b.duration - a.duration).slice(0, MODULE_SLOWEST_TOP_N);
     }
     const modules = Array.from(moduleMap.values()).sort(
       (a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name)

@@ -10,7 +10,7 @@ import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
 import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
-import { RunDelta, RecurringIssue, ModuleTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
+import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { loadKnownIssuesIndex } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
@@ -91,6 +91,7 @@ interface HistoryDeltaFile {
   recurringFlaky: RecurringIssue[];
   recurringFailures: RecurringIssue[];
   moduleTrend: ModuleTrend[];
+  moduleStabilityTrend: ModuleStabilityTrend[];
   slowTestTrend: SlowTestTrend[];
   suiteDrift: SuiteDrift | null;
   passRateSeries: PassRatePoint[];
@@ -101,6 +102,7 @@ const EMPTY_HISTORY_DELTA: HistoryDeltaFile = {
   recurringFlaky: [],
   recurringFailures: [],
   moduleTrend: [],
+  moduleStabilityTrend: [],
   slowTestTrend: [],
   suiteDrift: null,
   passRateSeries: [],
@@ -257,6 +259,7 @@ export class NotificationService {
           recurringFlaky: parsed.recurringFlaky ?? [],
           recurringFailures: parsed.recurringFailures ?? [],
           moduleTrend: parsed.moduleTrend ?? [],
+          moduleStabilityTrend: parsed.moduleStabilityTrend ?? [],
           slowTestTrend: parsed.slowTestTrend ?? [],
           suiteDrift: parsed.suiteDrift ?? null,
           passRateSeries: parsed.passRateSeries ?? [],
@@ -325,6 +328,7 @@ export class NotificationService {
       recurringFlaky: historyDeltaFile.recurringFlaky,
       recurringFailures: historyDeltaFile.recurringFailures,
       moduleTrend: historyDeltaFile.moduleTrend,
+      moduleStabilityTrend: historyDeltaFile.moduleStabilityTrend,
       slowTestTrend: historyDeltaFile.slowTestTrend,
       suiteDrift: historyDeltaFile.suiteDrift,
       passRateSeries: historyDeltaFile.passRateSeries,

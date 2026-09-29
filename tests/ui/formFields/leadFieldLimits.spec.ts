@@ -1,4 +1,12 @@
 import { test, expect, withLeadFormFieldLock } from './formFieldsTestLock';
+// WHY a second, separate `test` import here — mirrors
+// companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
+// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// protects workers on the SAME filesystem"): confirmed via a complete,
+// per-test code-level audit that every Navigation test below only ever
+// READS field config, never calls configureFieldLimit()/
+// configureFieldRegex()/clearAllFieldConfigurations().
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import {
@@ -496,6 +504,63 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
   await configPage.clearFieldConfiguration(PARAGRAPH_FIELD_INTERNAL_NAME);
 }
 
+// WHY this block is a sibling of, not nested inside, 'Lead Field Limits'
+// below, using `baseTest` instead of `test` — mirrors
+// companyFieldLimits.spec.ts's own identical 'Navigation' extraction. The
+// original FFL1's own WHY comment about needing the shared lock's extended
+// timeout no longer applies to these 3 tests specifically, since they no
+// longer participate in the lock at all — kept as historical context on the
+// (now file-scoped) `test` import instead, not repeated per-test here.
+baseTest.describe('Navigation', () => {
+  baseTest(
+    '@smoke @prodSafe FFL1 admin should open the Lead field settings page and see the entity tabs',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
+      await configPage.open();
+      const tabs = await configPage.getVisibleEntityTabLabels();
+      expect(
+        tabs.length,
+        'Expected more than one entity tab on the Form Fields screen'
+      ).toBeGreaterThan(1);
+      expect(tabs, 'Expected the "Lead" tab to be present among the live tab labels').toContain(
+        'Lead'
+      );
+      logger.success('FFL1 passed');
+    }
+  );
+
+  baseTest(
+    '@smoke @prodSafe FFL2 admin should search the field list by internal name and see it filter correctly',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
+      await configPage.open();
+      await configPage.searchField(TEXT_FIELD_INTERNAL_NAME);
+      await configPage.openFieldForEdit(TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFL2 passed');
+    }
+  );
+
+  baseTest(
+    "@smoke @prodSafe FFL3 admin should open an individual custom field's edit page from the list",
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
+      const snapshot = await configPage.readFieldConfigFresh(TEXT_FIELD_INTERNAL_NAME);
+      expect(
+        typeof snapshot.min,
+        'Expected the field edit page to expose real Min Length control state'
+      ).toBe('string');
+      expect(
+        typeof snapshot.maxDisabled,
+        'Expected the field edit page to expose real Max Length disabled-state'
+      ).toBe('boolean');
+      logger.success('FFL3 passed');
+    }
+  );
+}); // end describe('Navigation')
+
 test.describe('Lead Field Limits', () => {
   // WHY no test.describe.configure({ mode: 'serial' }) at THIS, outer level
   // — see this file's top-of-file comment for the full reasoning. Each of
@@ -605,76 +670,8 @@ test.describe('Lead Field Limits', () => {
   // so no ordering/mutual-exclusion guarantee is needed among them beyond
   // what formFieldsTestLock.ts's lock already provides unconditionally.
 
-  test.describe('Navigation', () => {
-    test('@smoke @prodSafe FFL1 admin should open the Lead field settings page and see the entity tabs', async ({
-      adminPage,
-    }) => {
-      // WHY this test needs the same extended timeout as this file's heavier
-      // create-lead tests despite doing almost nothing itself (real,
-      // confirmed live bug, 2026-09-21): every test in both this file and
-      // formFields.rbac.spec.ts shares ONE cross-process lock
-      // (formFieldsTestLock.ts) — and CI's own project-wide default test
-      // timeout is only 120000ms (playwright.config.ts), far shorter than
-      // this lock's own legitimate worst-case wait if it's ever queued behind
-      // a slow holder. A short-timeout test that has to wait for the lock can
-      // get killed by ITS OWN timeout while merely waiting — confirmed live:
-      // FFL1 itself was killed this way (8.0m, the local default ceiling)
-      // after FFL54 (a different test, no explicit timeout of its own) hung
-      // while holding the lock. Every lock-participating test needs a
-      // matching, sufficiently generous timeout regardless of what it does
-      // internally, or it becomes the weak link the WHOLE shared-lock chain
-      // can be starved through.
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
-      await configPage.open();
-      const tabs = await configPage.getVisibleEntityTabLabels();
-      expect(
-        tabs.length,
-        'Expected more than one entity tab on the Form Fields screen'
-      ).toBeGreaterThan(1);
-      expect(tabs, 'Expected the "Lead" tab to be present among the live tab labels').toContain(
-        'Lead'
-      );
-      logger.success('FFL1 passed');
-    });
-
-    test('@smoke @prodSafe FFL2 admin should search the field list by internal name and see it filter correctly', async ({
-      adminPage,
-    }) => {
-      // WHY: see FFL1's own WHY comment — every lock-participating test needs
-      // this same extended timeout, regardless of what it does internally.
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
-      await configPage.open();
-      await configPage.searchField(TEXT_FIELD_INTERNAL_NAME);
-      // WHY openFieldForEdit() succeeding is itself the proof search
-      // narrowed correctly: it clicks the one row matching this internal
-      // name and asserts real navigation to that field's edit page — a
-      // search that failed to narrow the list (or matched the wrong row)
-      // would fail this same assertion with a clear, specific error.
-      await configPage.openFieldForEdit(TEXT_FIELD_INTERNAL_NAME);
-      logger.success('FFL2 passed');
-    });
-
-    test("@smoke @prodSafe FFL3 admin should open an individual custom field's edit page from the list", async ({
-      adminPage,
-    }) => {
-      // WHY: see FFL1's own WHY comment — every lock-participating test needs
-      // this same extended timeout, regardless of what it does internally.
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, LEAD_ENTITY);
-      const snapshot = await configPage.readFieldConfigFresh(TEXT_FIELD_INTERNAL_NAME);
-      expect(
-        typeof snapshot.min,
-        'Expected the field edit page to expose real Min Length control state'
-      ).toBe('string');
-      expect(
-        typeof snapshot.maxDisabled,
-        'Expected the field edit page to expose real Max Length disabled-state'
-      ).toBe('boolean');
-      logger.success('FFL3 passed');
-    });
-  }); // end describe('Navigation')
+  // WHY moved out of this block entirely (2026-09-29): see the top-level
+  // `baseTest.describe('Navigation', ...)` block above this describe.
 
   // ─── Text field character-length limits ─────────────────────────────
   // WHY .serial here (and in every subsequent describe block below):

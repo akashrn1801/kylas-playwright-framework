@@ -1,4 +1,16 @@
 import { test as companyTest, expect } from '../../ui/formFields/companyFormFieldLock';
+// WHY this second `test` import (2026-09-29 — Fix 2 for the dated
+// known-issues.md entry, "A cross-process lock only protects workers on the
+// SAME filesystem" / the lock-starvation-amplifier follow-up): mirrors
+// companyFieldLimits.spec.ts's own identical `baseTest` import — see that
+// file's WHY comment for the full reasoning. Confirmed via a complete,
+// per-test code-level audit (not a guessed pattern) that FFRCO1/2/3 below
+// are the only 3 of this file's 31 tests that never call
+// configureFieldLimit()/configureFieldRegex()/clearAllFieldConfigurations()
+// via adminPage — every other test destructures adminPage specifically to
+// perform one of those real mutations before its restrictedPage-side
+// verification.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
@@ -81,6 +93,55 @@ async function assertInlineErrorPresent(
   ).toBe(true);
 }
 
+// WHY these two constants live at file (not describe-block) scope
+// (2026-09-29): both the lock-free block below AND the main, lock-wrapped
+// block need them; declaring them once here, outside either closure, avoids
+// duplicating them (they were previously declared inside the main block
+// only, before FFRCO1/2/3 were extracted out of it).
+const COMPANY_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Company', urlSlug: 'companies' };
+const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.textField}`;
+
+// WHY this block is separate from, not nested inside, the main
+// 'Form Field Limits — RBAC › Company' describe below, using `baseTest`
+// instead of `companyTest` (2026-09-29): see the `baseTest` import's own WHY
+// comment above for the full reasoning. Deliberately NOT wrapped in
+// `.serial` either (unlike the main block) — these 3 tests share no mutable
+// state with each other (each independently reads a fresh page), so nothing
+// needs their execution order/co-location protected, mirroring
+// companyFieldLimits.spec.ts's own 'Navigation' block, which was never
+// `.serial` either even before this change.
+baseTest.describe('Form Field Limits — RBAC › Company (read-only, lock-free)', () => {
+  baseTest(
+    '@regression FFRCO1 restricted user can see the field settings list but nothing else on that page',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
+      await configPage.assertListVisibleReadOnly();
+      logger.success('FFRCO1 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRCO2 restricted user does not see the "Add Field" button',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
+      await configPage.assertAddFieldButtonAbsent();
+      logger.success('FFRCO2 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRCO3 restricted user cannot click into any field to open it for editing',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
+      await configPage.assertRowNotClickable(CO_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFRCO3 passed');
+    }
+  );
+});
+
 companyTest.describe('Form Field Limits — RBAC › Company', () => {
   // WHY companyTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
@@ -136,10 +197,11 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
 
   companyTest.describe.configure({ timeout: 480000 });
 
-  const COMPANY_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Company', urlSlug: 'companies' };
+  // WHY COMPANY_ENTITY/CO_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
+  // (2026-09-29): both now live at file scope (see the top of this file) —
+  // shared with the lock-free 'read-only' block above, not duplicated.
   const OTHER_DETAILS_TAB = 'Other Details';
 
-  const CO_TEXT_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.textField}`;
   const CO_NUMBER_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.number}`;
   const CO_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${COMPANY_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
@@ -322,32 +384,9 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     ).toBe(shouldMatch);
   }
 
-  companyTest('@regression FFRCO1 restricted user can see the field settings list but nothing else on that page', async ({
-    restrictedPage,
-  }) => {
-    companyTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
-    await configPage.assertListVisibleReadOnly();
-    logger.success('FFRCO1 passed');
-  });
-
-  companyTest('@regression FFRCO2 restricted user does not see the "Add Field" button', async ({
-    restrictedPage,
-  }) => {
-    companyTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
-    await configPage.assertAddFieldButtonAbsent();
-    logger.success('FFRCO2 passed');
-  });
-
-  companyTest('@regression FFRCO3 restricted user cannot click into any field to open it for editing', async ({
-    restrictedPage,
-  }) => {
-    companyTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, COMPANY_ENTITY);
-    await configPage.assertRowNotClickable(CO_TEXT_FIELD_INTERNAL_NAME);
-    logger.success('FFRCO3 passed');
-  });
+  // WHY FFRCO1/2/3 are no longer here (2026-09-29): moved to the lock-free
+  // 'Form Field Limits — RBAC › Company (read-only, lock-free)' describe
+  // block near the top of this file — see that block's own WHY comment.
 
   companyTest("@regression FFRCO4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,

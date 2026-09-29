@@ -3,6 +3,7 @@ import {
   RunDelta,
   RecurringIssue,
   ModuleTrend,
+  ModuleStabilityTrend,
   SlowTestTrend,
   SuiteDrift,
   PassRatePoint,
@@ -54,6 +55,14 @@ export interface EmailContext {
   recurringFlaky?: RecurringIssue[];
   recurringFailures?: RecurringIssue[];
   moduleTrend?: ModuleTrend[];
+  // WHY a separate field, not folded into moduleTrend (2026-09-29, Phase 3
+  // reporting enhancement item 5): moduleTrend answers "better/worse than
+  // the single most recent run"; this answers "trending toward instability
+  // over the last N runs" — a genuinely different question, computed by a
+  // genuinely different function (computeModuleStabilityTrend()) — see that
+  // function's own WHY comment in RunHistory.ts for why it isn't folded into
+  // the existing one.
+  moduleStabilityTrend?: ModuleStabilityTrend[];
   slowTestTrend?: SlowTestTrend[];
   suiteDrift?: SuiteDrift | null;
   passRateSeries?: PassRatePoint[];
@@ -178,6 +187,7 @@ export class EmailTemplate {
       this.buildTrendSection(ctx, testAnchors),
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
+      this.buildModuleSlowestTestsSection(ctx),
       this.buildFlakyTestsSection(ctx),
       this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
@@ -767,6 +777,12 @@ ${body}
   private buildModuleAnalytics(ctx: EmailContext): string {
     const { report } = ctx;
     const trendByKey = new Map((ctx.moduleTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
+    // WHY a separate lookup, not merged into trendByKey (2026-09-29, Phase 3
+    // item 5): the two answer different questions — see ModuleStabilityTrend's
+    // own WHY comment in RunHistory.ts. Rendered as a second, smaller line
+    // under the existing single-run arrow rather than a whole new table,
+    // per the "extend the existing mechanism, don't build parallel" note.
+    const stabilityByKey = new Map((ctx.moduleStabilityTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
 
     const scored = report.modules
       .map((m) => ({
@@ -803,6 +819,23 @@ ${body}
               : trend.direction === 'worsening'
                 ? `<span style="color:${FAIL};">▼</span>`
                 : `<span style="color:${MUTED};">–</span>`;
+        // WHY only rendered when direction !== 'insufficient-data' (2026-09-29,
+        // Phase 3 item 5): fewer than 4 matching-scope runs in history isn't a
+        // real trend to report — rendering nothing there is more honest than
+        // a misleadingly confident "stable" on too little data.
+        const stability = stabilityByKey.get(`${m.type}:${m.name}`);
+        const stabilityBadge =
+          !stability || stability.direction === 'insufficient-data'
+            ? ''
+            : `<div style="font-size:9px;margin-top:2px;color:${
+                stability.direction === 'worsening' ? FAIL : stability.direction === 'improving' ? SUCCESS : MUTED
+              };">${
+                stability.direction === 'worsening'
+                  ? '⚠ worsening'
+                  : stability.direction === 'improving'
+                    ? '✓ improving'
+                    : '– stable'
+              } (${stability.failRate + stability.flakyRate}% unstable / last ${stability.runsConsidered})</div>`;
         const flakyCell = m.flaky > 0
           ? `<a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${m.flaky}</a>`
           : String(m.flaky);
@@ -816,7 +849,7 @@ ${body}
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
-        <td style="padding:8px;text-align:center;">${trendGlyph}</td>
+        <td style="padding:8px;text-align:center;">${trendGlyph}${stabilityBadge}</td>
       </tr>`;
       })
       .join('');
@@ -869,6 +902,62 @@ ${body}
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Slowest Tests (Top 5)</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+  </div>
+</td></tr>`;
+  }
+
+  // ===================== Slowest tests by module =====================
+
+  // WHY this section exists, separate from buildSlowTestsSection() above
+  // (2026-09-29, Phase 3 reporting enhancement item 3): the whole-run top-5
+  // can be dominated by one or two modules, hiding that a DIFFERENT module
+  // also has its own real drag — a module's own slowestTests (ReportParser's
+  // per-module top 3) surfaces that regardless of how the whole-run top-5
+  // happens to be distributed. Modules are ordered by their OWN worst test's
+  // duration, descending — the module most worth investigating first, not
+  // report.modules' own health-score order (buildModuleAnalytics' ordering
+  // answers a different question: "which module is least healthy," not
+  // "which module's runtime is worst").
+  private buildModuleSlowestTestsSection(ctx: EmailContext): string {
+    const { report } = ctx;
+    const modulesWithTests = report.modules.filter((m) => m.slowestTests.length > 0);
+    if (modulesWithTests.length === 0) return '';
+    const sortedModules = [...modulesWithTests].sort(
+      (a, b) => (b.slowestTests[0]?.duration ?? 0) - (a.slowestTests[0]?.duration ?? 0)
+    );
+    const moduleBlocks = sortedModules
+      .map((m) => {
+        const typeStyle =
+          m.type === 'UI'
+            ? `background:#EFF3FE;color:${ACCENT};`
+            : m.type === 'RBAC'
+              ? `background:${SUCCESS_BG};color:${SUCCESS};`
+              : `background:${CANVAS_TINT};color:${SLATE};`;
+        const rows = m.slowestTests
+          .map(
+            (t: TestResult) => `
+        <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+          <td style="padding:4px 0 4px 12px;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
+          <td style="padding:4px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(t.duration / 1000)}s`)}</td>
+        </tr>`
+          )
+          .join('');
+        return `
+      <tr>
+        <td style="padding:10px 0 4px;" colspan="2">
+          <span style="font-size:12px;font-weight:700;color:${INK};">${this.esc(m.name)}</span>
+          <span style="${typeStyle}padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;margin-left:6px;">${m.type}</span>
+        </td>
+      </tr>
+      ${rows}`;
+      })
+      .join('');
+    return `
+<tr><td style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">Slowest Tests by Module (Top 3 each)</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Ranked by each module's own worst test — surfaces drag a whole-run top-5 can hide</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moduleBlocks}</table>
   </div>
 </td></tr>`;
   }

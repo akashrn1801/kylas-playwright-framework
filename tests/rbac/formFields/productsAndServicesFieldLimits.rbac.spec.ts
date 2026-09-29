@@ -1,4 +1,12 @@
 import { test as productsTest, expect } from '../../ui/formFields/productsAndServicesFormFieldLock';
+// WHY this second `test` import — mirrors companyFieldLimits.rbac.spec.ts's
+// own identical `baseTest` import (2026-09-29, Fix 2 for the dated
+// known-issues.md entry, "A cross-process lock only protects workers on the
+// SAME filesystem"): confirmed via a complete, per-test code-level audit
+// that FFRPS1/2/3 below are the only 3 of this file's 31 tests that never
+// call configureFieldLimit()/configureFieldRegex()/
+// clearAllFieldConfigurations() via adminPage.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { ProductsAndServicesPage } from '../../../src/modules/productsAndServices/ProductsAndServicesPage';
 import { FormFieldsConfigPage, FormFieldsEntityConfig } from '../../../src/modules/formFields/FormFieldsConfigPage';
@@ -82,6 +90,54 @@ async function assertInlineErrorPresent(
   ).toBe(true);
 }
 
+// WHY these two constants live at file (not describe-block) scope
+// (2026-09-29): both the lock-free block below AND the main, lock-wrapped
+// block need them — mirrors companyFieldLimits.rbac.spec.ts's identical
+// hoist.
+const PRODUCTS_ENTITY: FormFieldsEntityConfig = {
+  tabLabel: 'Product & Service',
+  urlSlug: 'products-services',
+};
+const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField}`;
+
+// WHY this block is separate from, not nested inside, the main
+// 'Form Field Limits — RBAC › Products & Services' describe below, using
+// `baseTest` instead of `productsTest` — mirrors
+// companyFieldLimits.rbac.spec.ts's own identical extraction (see that
+// file's WHY comment for the full reasoning, including why `.serial` isn't
+// needed here either).
+baseTest.describe('Form Field Limits — RBAC › Products & Services (read-only, lock-free)', () => {
+  baseTest(
+    '@regression FFRPS1 restricted user can see the field settings list but nothing else on that page',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
+      await configPage.assertListVisibleReadOnly();
+      logger.success('FFRPS1 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRPS2 restricted user does not see the "Add Field" button',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
+      await configPage.assertAddFieldButtonAbsent();
+      logger.success('FFRPS2 passed');
+    }
+  );
+
+  baseTest(
+    '@regression FFRPS3 restricted user cannot click into any field to open it for editing',
+    async ({ restrictedPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
+      await configPage.assertRowNotClickable(PS_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFRPS3 passed');
+    }
+  );
+});
+
 productsTest.describe('Form Field Limits — RBAC › Products & Services', () => {
   // WHY productsTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
@@ -137,12 +193,9 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
   productsTest.describe.configure({ timeout: 480000 });
 
-  const PRODUCTS_ENTITY: FormFieldsEntityConfig = {
-    tabLabel: 'Product & Service',
-    urlSlug: 'products-services',
-  };
-
-  const PS_TEXT_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.textField}`;
+  // WHY PRODUCTS_ENTITY/PS_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
+  // (2026-09-29): both now live at file scope (see the top of this file) —
+  // shared with the lock-free 'read-only' block above, not duplicated.
   const PS_NUMBER_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.number}`;
   const PS_PARAGRAPH_FIELD_INTERNAL_NAME = `cf${PRODUCTS_FORM_FIELD_LIMIT_NAMES.paragraphText}`;
 
@@ -351,32 +404,9 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     ).toBe(shouldMatch);
   }
 
-  productsTest('@regression FFRPS1 restricted user can see the field settings list but nothing else on that page', async ({
-    restrictedPage,
-  }) => {
-    productsTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
-    await configPage.assertListVisibleReadOnly();
-    logger.success('FFRPS1 passed');
-  });
-
-  productsTest('@regression FFRPS2 restricted user does not see the "Add Field" button', async ({
-    restrictedPage,
-  }) => {
-    productsTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
-    await configPage.assertAddFieldButtonAbsent();
-    logger.success('FFRPS2 passed');
-  });
-
-  productsTest('@regression FFRPS3 restricted user cannot click into any field to open it for editing', async ({
-    restrictedPage,
-  }) => {
-    productsTest.setTimeout(480000);
-    const configPage = new FormFieldsConfigPage(restrictedPage, PRODUCTS_ENTITY);
-    await configPage.assertRowNotClickable(PS_TEXT_FIELD_INTERNAL_NAME);
-    logger.success('FFRPS3 passed');
-  });
+  // WHY FFRPS1/2/3 are no longer here (2026-09-29): moved to the lock-free
+  // 'Form Field Limits — RBAC › Products & Services (read-only, lock-free)'
+  // describe block near the top of this file.
 
   productsTest("@regression FFRPS4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,

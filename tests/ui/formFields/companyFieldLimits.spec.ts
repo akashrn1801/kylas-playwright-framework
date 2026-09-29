@@ -1,4 +1,22 @@
 import { test, expect, withCompanyFormFieldLock } from './companyFormFieldLock';
+// WHY a second, separate `test` import here (2026-09-29 — Fix 2 for the
+// dated known-issues.md entry, "A cross-process lock only protects workers
+// on the SAME filesystem" / the lock-starvation-amplifier follow-up):
+// `test` above (from companyFormFieldLock.ts) auto-acquires the "companies"
+// form-field-config lock for EVERY test that uses it, via an `auto: true`
+// fixture wrapping the whole test body — correct and necessary for tests
+// that actually MUTATE that shared, account-wide config, but genuinely
+// unnecessary (and, per real CI evidence, actively harmful under load — see
+// the known-issues.md entry) for the Navigation block below, which never
+// mutates anything. `baseTest` is the plain, lock-free fixture set —
+// confirmed via a complete, per-test code-level audit (not a guessed
+// pattern) that every Navigation test below only ever READS field config
+// (open()/getVisibleEntityTabLabels()/searchField()/openFieldForEdit()/
+// readFieldConfigFresh() — never configureFieldLimit()/configureFieldRegex()/
+// clearAllFieldConfigurations()), so removing lock acquisition from these
+// specific tests cannot reintroduce the original cross-worker config-
+// mutation race this lock exists to prevent.
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { CompaniesPage } from '../../../src/modules/companies/CompaniesPage';
 import {
@@ -267,6 +285,78 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
   await configPage.clearFieldConfiguration(CO_PARAGRAPH_FIELD_INTERNAL_NAME);
 }
 
+// WHY this block is OUTSIDE (a sibling of, not nested inside) the main
+// 'Company Field Limits' describe below, using `baseTest` instead of `test`
+// (2026-09-29): see the `baseTest` import's own WHY comment above for the
+// full reasoning. Kept as its own top-level describe rather than nested
+// inside the lock-wrapped block specifically so it's visually unambiguous
+// at a glance that this block does NOT share the outer block's lock
+// fixture — nesting a `baseTest(...)` call inside a `test.describe(...)`
+// built from a DIFFERENT extended `test` object works mechanically in
+// Playwright (suite-building is lexical, not tied to fixture-object
+// identity), but would be a confusing, easy-to-misread shape for a future
+// reader/editor of this file. Extraction does not lose anything the
+// original nesting provided: these 3 tests never depended on the outer
+// block's own `afterAll` safety-net cleanup (they only ever READ config,
+// never assert a specific blank/configured value that cleanup would
+// affect), and `fullyParallel: true` already meant no ordering guarantee
+// existed between this block and the outer block's own `.serial` sub-blocks
+// even before this change (confirmed via this repo's own 2026-09-09
+// sharding-internals audit — only `.serial` mode itself gives an ordering/
+// co-location guarantee, and this block was never `.serial`). Each test
+// below already carries its own explicit `baseTest.setTimeout(480000)` call
+// (redundant with, but independent of, the outer block's own
+// `describe.configure({timeout:480000})` it no longer sits inside).
+baseTest.describe('Navigation', () => {
+  baseTest(
+    '@smoke @prodSafe FFCO1 admin should open the Company field settings page and see the entity tabs',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
+      await configPage.open();
+      const tabs = await configPage.getVisibleEntityTabLabels();
+      expect(
+        tabs.length,
+        'Expected more than one entity tab on the Form Fields screen'
+      ).toBeGreaterThan(1);
+      expect(tabs, 'Expected the "Company" tab to be present among the live tab labels').toContain(
+        'Company'
+      );
+      logger.success('FFCO1 passed');
+    }
+  );
+
+  baseTest(
+    '@smoke @prodSafe FFCO2 admin should search the field list by internal name and see it filter correctly',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
+      await configPage.open();
+      await configPage.searchField(CO_TEXT_FIELD_INTERNAL_NAME);
+      await configPage.openFieldForEdit(CO_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFCO2 passed');
+    }
+  );
+
+  baseTest(
+    "@smoke @prodSafe FFCO3 admin should open an individual custom field's edit page from the list",
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
+      const snapshot = await configPage.readFieldConfigFresh(CO_TEXT_FIELD_INTERNAL_NAME);
+      expect(
+        typeof snapshot.min,
+        'Expected the field edit page to expose real Min Length control state'
+      ).toBe('string');
+      expect(
+        typeof snapshot.maxDisabled,
+        'Expected the field edit page to expose real Max Length disabled-state'
+      ).toBe('boolean');
+      logger.success('FFCO3 passed');
+    }
+  );
+}); // end describe('Navigation')
+
 test.describe('Company Field Limits', () => {
   // WHY test.describe.configure({{ timeout: 480000 }}) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -325,53 +415,10 @@ test.describe('Company Field Limits', () => {
   });
 
   // ─── Navigation ──────────────────────────────────────────────────────
-
-  test.describe('Navigation', () => {
-    test('@smoke @prodSafe FFCO1 admin should open the Company field settings page and see the entity tabs', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
-      await configPage.open();
-      const tabs = await configPage.getVisibleEntityTabLabels();
-      expect(
-        tabs.length,
-        'Expected more than one entity tab on the Form Fields screen'
-      ).toBeGreaterThan(1);
-      expect(tabs, 'Expected the "Company" tab to be present among the live tab labels').toContain(
-        'Company'
-      );
-      logger.success('FFCO1 passed');
-    });
-
-    test('@smoke @prodSafe FFCO2 admin should search the field list by internal name and see it filter correctly', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
-      await configPage.open();
-      await configPage.searchField(CO_TEXT_FIELD_INTERNAL_NAME);
-      await configPage.openFieldForEdit(CO_TEXT_FIELD_INTERNAL_NAME);
-      logger.success('FFCO2 passed');
-    });
-
-    test("@smoke @prodSafe FFCO3 admin should open an individual custom field's edit page from the list", async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, COMPANY_ENTITY);
-      const snapshot = await configPage.readFieldConfigFresh(CO_TEXT_FIELD_INTERNAL_NAME);
-      expect(
-        typeof snapshot.min,
-        'Expected the field edit page to expose real Min Length control state'
-      ).toBe('string');
-      expect(
-        typeof snapshot.maxDisabled,
-        'Expected the field edit page to expose real Max Length disabled-state'
-      ).toBe('boolean');
-      logger.success('FFCO3 passed');
-    });
-  }); // end describe('Navigation')
+  // WHY moved out of this block entirely (2026-09-29): see the top-level
+  // `baseTest.describe('Navigation', ...)` block above this describe (and
+  // the `baseTest` import's own WHY comment) — these 3 tests never mutate
+  // config and no longer acquire this block's lock.
 
   // ─── Text field character-length limits ─────────────────────────────
 

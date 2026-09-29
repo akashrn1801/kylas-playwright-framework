@@ -263,11 +263,21 @@ export class FormFieldsConfigPage extends BasePage {
     // a session that expires in the gap between the wrongPage-checked
     // navigation above and this specific assertion running would otherwise
     // time out here with no recovery attempt at all.
-    await this.withSessionExpiryRecovery(() =>
-      expect(
-        this.entityTab(this.entity.tabLabel),
-        `Expected the "${this.entity.tabLabel}" tab to be active on the Form Fields list`
-      ).toHaveClass(/active/, { timeout: config.timeouts.navigation })
+    // WHY ALSO wrapped in withRateLimitRecovery() (2026-09-29 — real CI
+    // failures, sandbox run 36541336794: FFTK13/FFTK17's own "Expected the
+    // Task tab to be active... element(s) not found" failures were this
+    // exact assertion failing because the app's own HTTP-429 "Too many
+    // requests" error page had replaced the tab strip entirely — see
+    // isRateLimitedPage()'s own WHY comment in authManager.ts for the full
+    // incident): nested outside withSessionExpiryRecovery so either
+    // recovery class can independently catch and retry this same assertion.
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(
+          this.entityTab(this.entity.tabLabel),
+          `Expected the "${this.entity.tabLabel}" tab to be active on the Form Fields list`
+        ).toHaveClass(/active/, { timeout: config.timeouts.navigation })
+      )
     );
   }
 
@@ -302,8 +312,24 @@ export class FormFieldsConfigPage extends BasePage {
   // that fails loudly and fast, naming the exact locator, instead of
   // silently exhausting the whole test timeout.
   async searchField(internalName: string): Promise<void> {
-    await this.searchInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
-    await this.fill(this.searchInput(), internalName, `Form Fields search: ${internalName}`);
+    await this.withRateLimitRecovery(async () => {
+      await this.searchInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      // WHY a direct, explicitly-bounded fill here instead of the shared
+      // this.fill() (2026-09-29 — real CI failures, sandbox run
+      // 36541336794: FFRCO5/FFCO1/FFCO2/FFCO3 in Company's shard all
+      // cascaded from this exact call): this.fill()'s own internal
+      // actionability retry has no timeout of its own either — confirmed
+      // live via trace.zip inspection that the real trigger is the app's
+      // own HTTP-429 "Too many requests" error page silently replacing this
+      // search input mid-fill, with nothing to reattach to, riding the full
+      // 480s test timeout with no earlier signal (the exact same "no bound
+      // on the fill itself" gap the waitFor above was already fixed for,
+      // per that fix's own WHY comment — this closes the other half of it,
+      // scoped here rather than in the shared BasePage.fill() for the
+      // identical high-blast-radius reason that fix already cites).
+      logger.info(`Filling Form Fields search: ${internalName}`);
+      await this.searchInput().fill(internalName, { timeout: config.timeouts.navigation });
+    });
   }
 
   // WHY this also waits for minInput() to be visible, not just the URL

@@ -1,4 +1,12 @@
 import { test, expect, withDealFormFieldLock } from './dealFormFieldLock';
+// WHY a second, separate `test` import here — mirrors
+// companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
+// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// protects workers on the SAME filesystem"): confirmed via a complete,
+// per-test code-level audit that every Navigation test below only ever
+// READS field config, never calls configureFieldLimit()/
+// configureFieldRegex()/clearAllFieldConfigurations().
+import { test as baseTest } from '../../../src/fixtures/index';
 import { Page } from '@playwright/test';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
@@ -263,6 +271,57 @@ async function clearAllFieldConfigurations(adminPage: Page): Promise<void> {
   await configPage.clearFieldConfiguration(D_PARAGRAPH_FIELD_INTERNAL_NAME);
 }
 
+// WHY this block is a sibling of, not nested inside, 'Deal Field Limits'
+// below, using `baseTest` instead of `test` — mirrors
+// companyFieldLimits.spec.ts's own identical 'Navigation' extraction.
+baseTest.describe('Navigation', () => {
+  baseTest(
+    '@smoke @prodSafe FFD1 admin should open the Deal field settings page and see the entity tabs',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
+      await configPage.open();
+      const tabs = await configPage.getVisibleEntityTabLabels();
+      expect(
+        tabs.length,
+        'Expected more than one entity tab on the Form Fields screen'
+      ).toBeGreaterThan(1);
+      expect(tabs, 'Expected the "Deal" tab to be present among the live tab labels').toContain('Deal');
+      logger.success('FFD1 passed');
+    }
+  );
+
+  baseTest(
+    '@smoke @prodSafe FFD2 admin should search the field list by internal name and see it filter correctly',
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
+      await configPage.open();
+      await configPage.searchField(D_TEXT_FIELD_INTERNAL_NAME);
+      await configPage.openFieldForEdit(D_TEXT_FIELD_INTERNAL_NAME);
+      logger.success('FFD2 passed');
+    }
+  );
+
+  baseTest(
+    "@smoke @prodSafe FFD3 admin should open an individual custom field's edit page from the list",
+    async ({ adminPage }) => {
+      baseTest.setTimeout(480000);
+      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
+      const snapshot = await configPage.readFieldConfigFresh(D_TEXT_FIELD_INTERNAL_NAME);
+      expect(
+        typeof snapshot.min,
+        'Expected the field edit page to expose real Min Length control state'
+      ).toBe('string');
+      expect(
+        typeof snapshot.maxDisabled,
+        'Expected the field edit page to expose real Max Length disabled-state'
+      ).toBe('boolean');
+      logger.success('FFD3 passed');
+    }
+  );
+}); // end describe('Navigation')
+
 test.describe('Deal Field Limits', () => {
   // WHY test.describe.configure({{ timeout: 480000 }}) here (2026-09-29,
   // real CI failures — sandbox run 36464460839: FFRTK6/FFC6/FFCO25/FFPS6 all
@@ -321,51 +380,8 @@ test.describe('Deal Field Limits', () => {
   });
 
   // ─── Navigation ──────────────────────────────────────────────────────
-
-  test.describe('Navigation', () => {
-    test('@smoke @prodSafe FFD1 admin should open the Deal field settings page and see the entity tabs', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
-      await configPage.open();
-      const tabs = await configPage.getVisibleEntityTabLabels();
-      expect(
-        tabs.length,
-        'Expected more than one entity tab on the Form Fields screen'
-      ).toBeGreaterThan(1);
-      expect(tabs, 'Expected the "Deal" tab to be present among the live tab labels').toContain('Deal');
-      logger.success('FFD1 passed');
-    });
-
-    test('@smoke @prodSafe FFD2 admin should search the field list by internal name and see it filter correctly', async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
-      await configPage.open();
-      await configPage.searchField(D_TEXT_FIELD_INTERNAL_NAME);
-      await configPage.openFieldForEdit(D_TEXT_FIELD_INTERNAL_NAME);
-      logger.success('FFD2 passed');
-    });
-
-    test("@smoke @prodSafe FFD3 admin should open an individual custom field's edit page from the list", async ({
-      adminPage,
-    }) => {
-      test.setTimeout(480000);
-      const configPage = new FormFieldsConfigPage(adminPage, DEAL_ENTITY);
-      const snapshot = await configPage.readFieldConfigFresh(D_TEXT_FIELD_INTERNAL_NAME);
-      expect(
-        typeof snapshot.min,
-        'Expected the field edit page to expose real Min Length control state'
-      ).toBe('string');
-      expect(
-        typeof snapshot.maxDisabled,
-        'Expected the field edit page to expose real Max Length disabled-state'
-      ).toBe('boolean');
-      logger.success('FFD3 passed');
-    });
-  }); // end describe('Navigation')
+  // WHY moved out of this block entirely (2026-09-29): see the top-level
+  // `baseTest.describe('Navigation', ...)` block above this describe.
 
   // ─── Text field character-length limits ─────────────────────────────
 
