@@ -958,14 +958,87 @@ export class BasePage {
     tableLocator: Locator,
     description: string
   ): Promise<void> {
+    // WHY deadline-aware, not a flat config.timeouts.navigation everywhere
+    // (2026-09-30 — real, root-caused CI failure, sandbox run 36611987924
+    // (job 109552721989, shard 5/5): productsAndServices.rbac.spec.ts:20
+    // ("PS6" — "restricted user should navigate to products and services
+    // list") failed identically on BOTH attempts with `page.reload: Target
+    // page, context or browser has been closed`. Root cause, confirmed via
+    // direct log evidence, not guessed: PS6 is the ONLY test in that file
+    // with no explicit `test.setTimeout()` override (every one of its 6
+    // siblings calls `test.setTimeout(480000)`), leaving it on CI's default
+    // `playwright.config.ts` test-level timeout of exactly 120000ms — the
+    // SAME number `config.timeouts.navigation` resolves to in this exact CI
+    // environment (`sandbox.yml`'s `NAVIGATION_TIMEOUT=120000`). This
+    // method's own worst-case unwrapped time (initial race + a full
+    // assertTableVisible + reload + a second full assertTableVisible) can
+    // exceed 120s on its own — so whenever the FIRST attempt genuinely runs
+    // its own close-to-full budget, the OUTER Playwright test timeout
+    // (started earlier, at test-body entry) fires FIRST and tears down the
+    // browser context WHILE this method is still mid-recovery — which is
+    // exactly what "Target page, context or browser has been closed" during
+    // the reload attempt means, and exactly why it reproduced identically
+    // on the automatic retry (a deterministic budget collision, not random
+    // flakiness). This is the same class of bug already fixed once before
+    // in this codebase for fixtures/index.ts's `navigateAndConfirmLoggedIn()`
+    // (2026-08-26) — the identical remedy is applied here: consult the
+    // CURRENT test's own real remaining timeout budget via `test.info()`
+    // (already imported in this file, confirmed live elsewhere — see
+    // `test.skip(...)` above), cap every internal wait to what's actually
+    // left, and fail FAST with a clear, attributable diagnostic instead of
+    // attempting a doomed reload-and-retry that Playwright's own opaque
+    // test-timeout would silently kill anyway. Deliberately does NOT
+    // replace the immediate, isolated fix already applied to PS6 itself
+    // (adding its own missing `test.setTimeout(480000)`, matching every
+    // sibling test in the same file) — that closes THIS exact exposure
+    // immediately; this closes the general RISK CLASS for every other
+    // current and future caller of this shared method (Deals/Companies/
+    // Contacts/Leads/Tasks/Quotations/Products & Services) that might have
+    // the same gap without anyone having hit it yet.
+    const testInfo = test.info();
+    // WHY 0.85, the same fraction fixtures/index.ts's own deadline-aware fix
+    // uses (SETUP_DEADLINE_FRACTION) — leaves real headroom for whatever the
+    // calling test does AFTER this method returns, not 100% of the test's
+    // own budget consumed by list-readiness alone.
+    const DEADLINE_FRACTION = 0.85;
+    // WHY Date.now() here, not a true test-start timestamp (2026-09-30):
+    // this Playwright version's TestInfo has no `startTime`/live-elapsed-time
+    // property at all (confirmed via its own .d.ts — `duration` is
+    // documented as "always zero before the test finishes," useless for a
+    // live deadline) — the exact same constraint fixtures/index.ts's own
+    // `navigateAndConfirmLoggedIn()` precedent already works within (it
+    // anchors its own deadline the identical way: `Date.now() +
+    // testInfo.timeout * SETUP_DEADLINE_FRACTION`, not a true start time).
+    // Honest limitation, stated plainly: this UNDERSTATES total elapsed test
+    // time by whatever ran before this method was first called (fixture
+    // setup, any earlier navigation) — but this method is always called
+    // early in a test (right after a "go to list" navigation), so that gap
+    // is typically a few seconds against a 120s+ budget, not the dominant
+    // factor. This still directly and completely closes the confirmed real
+    // failure (PS6's own collision was overwhelmingly time spent INSIDE this
+    // method, not before it), even though it isn't a mathematically perfect
+    // deadline.
+    // WHY testInfo.timeout === 0 is treated as "no deadline constraint at
+    // all," not "deadline is right now": Playwright's own documented
+    // convention is that a timeout of 0 means UNLIMITED — a test that
+    // deliberately opts into no timeout (`test.setTimeout(0)`) must get this
+    // method's original, un-capped behavior, not an artificial 0ms deadline
+    // that would make every wait below fail instantly.
+    const deadline = testInfo.timeout > 0 ? Date.now() + testInfo.timeout * DEADLINE_FRACTION : Infinity;
+    // WHY Math.max(..., a real floor), mirroring fixtures/index.ts's
+    // identical guard: Playwright's own `timeout` option treats `0` as
+    // "wait forever," the opposite of what a near-zero remaining budget
+    // should mean here — this floor guarantees a real, small, still-
+    // meaningful wait is attempted (and can still fail fast on its own
+    // terms) rather than silently becoming an unbounded wait.
+    const MIN_STEP_BUDGET_MS = 5000;
+    const boundedTimeout = (): number =>
+      Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
+
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.page
-        .waitForResponse(responsePredicate, { timeout: config.timeouts.navigation })
-        .catch(() => null),
-      tableLocator
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
+      this.page.waitForResponse(responsePredicate, { timeout: boundedTimeout() }).catch(() => null),
+      tableLocator.waitFor({ state: 'visible', timeout: boundedTimeout() }).catch(() => null),
     ]);
 
     // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
@@ -988,7 +1061,7 @@ export class BasePage {
       this.withRateLimitRecovery(() =>
         this.withSessionExpiryRecovery(() =>
           expect(tableLocator, `${description} list table should be visible`).toBeVisible({
-            timeout: config.timeouts.navigation,
+            timeout: boundedTimeout(),
           })
         )
       );
@@ -996,8 +1069,22 @@ export class BasePage {
     try {
       await assertTableVisible();
     } catch (error) {
+      // WHY fail fast here instead of always attempting the reload-and-retry
+      // (2026-09-30, see this method's own top WHY comment): if too little
+      // real budget remains to safely attempt BOTH a reload and another full
+      // wait, doing so anyway just reproduces the exact "context closed
+      // mid-recovery" symptom this fix exists to prevent — a real, honest,
+      // immediately-attributable failure here is strictly more useful than a
+      // confusing downstream Playwright-teardown error.
+      const MIN_VIABLE_RETRY_BUDGET_MS = 15000;
+      const remaining = deadline - Date.now();
+      if (Number.isFinite(deadline) && remaining < MIN_VIABLE_RETRY_BUDGET_MS) {
+        throw new Error(
+          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)}`
+        );
+      }
       logger.warn(
-        `${description} list table not visible within ${config.timeouts.navigation}ms (possible navigation drift) — reloading and retrying once: ${String(error)}`
+        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)}`
       );
       await this.page.reload({ waitUntil: 'domcontentloaded' });
       await assertTableVisible();

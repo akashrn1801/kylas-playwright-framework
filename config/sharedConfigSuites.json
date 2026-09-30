@@ -1,0 +1,8 @@
+{
+  "formFields": {
+    "description": "Form Field Limit feature — a global, admin-configurable custom-field length/regex limit affecting the same shared, account-wide config every one of its UI+RBAC file pairs mutates. Carved out of normal shard-count bin-packing per .claude/known-issues.md's 2026-09-29 'cross-process lock only protects workers on the SAME filesystem' entry.",
+    "uiDir": "tests/ui/formFields",
+    "rbacDir": "tests/rbac/formFields",
+    "entities": ["lead", "contact", "company", "deal", "task", "productsAndServices"]
+  }
+}

@@ -8,18 +8,24 @@
  * planner" entry for the full incident/design history this fixes (the
  * formFields cross-shard config-mutation race).
  *
- * WHY formFields is EXCLUDED here, hardcoded, not a CLI flag (2026-09-29):
- * formFields keeps using its own separately-verified fixed 6-shard,
+ * WHY formFields (and any future shared-config suite) is EXCLUDED here, read
+ * from a config FILE, never a CLI flag (2026-09-29, hardcoded original;
+ * 2026-09-30, generalized to config/sharedConfigSuites.json — Part 2/E1 of
+ * the contributor-guide-and-guardrails work, see docs/CONTRIBUTING_TESTS.md
+ * §C): formFields keeps using its own separately-verified fixed 6-shard,
  * one-per-entity matrix (the `run-formfields-tests` job in every sharded
  * workflow) — that matrix was purpose-built and verified to solve the exact
  * cross-shard shared-config race this planner's own file-atomicity does NOT
  * by itself guarantee at the UI+RBAC-PAIR level (this planner guarantees one
  * FILE never splits across shards, not that two specific files always land
- * together). Making the exclusion a hardcoded constant, not a flag a caller
- * could pass or omit, means no future workflow edit can accidentally let
- * formFields' 12 files leak into this planner's own bin-packing and get
- * separated across shards again — the one failure mode this whole file
- * exists to prevent.
+ * together). Reading the exclusion from a committed JSON file, rather than a
+ * flag a caller could pass or omit, means no future workflow edit can
+ * accidentally let a shared-config suite's files leak into this planner's
+ * own bin-packing and get separated across shards again — the one failure
+ * mode this whole file exists to prevent. The file is the single source of
+ * truth for BOTH this exclusion and (per docs/design/... if it ships) the
+ * fixed formFields workflow matrix — not two independently-maintained lists
+ * that could drift apart.
  *
  * Usage: npx ts-node scripts/plan-shards.ts [--tests-per-shard 125] [<extra playwright --list args, e.g. --grep @regression>]
  * Writes shard_total/shards_json/test_count to $GITHUB_OUTPUT when set
@@ -28,10 +34,57 @@
  */
 import { execSync } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from '../src/utils/logger';
 
-// WHY hardcoded, see file-level WHY comment above — never exposed as a flag.
-const FORMFIELDS_EXCLUDED_PREFIXES = ['ui/formFields/', 'rbac/formFields/'];
+interface SharedConfigSuiteEntry {
+  description?: string;
+  uiDir: string;
+  rbacDir: string;
+  entities: string[];
+}
+
+const SHARED_CONFIG_SUITES_PATH = path.join(__dirname, '../config/sharedConfigSuites.json');
+
+// WHY a real fs.readFileSync + JSON.parse, not a require() of the JSON file
+// (2026-09-30): keeps this script's own error message in control (a
+// require() failure on malformed JSON produces a much less actionable
+// stack trace) and keeps the read explicit/testable, matching this file's
+// own existing "never silently guess" convention throughout.
+function loadSharedConfigSuiteExclusionPrefixes(): string[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(SHARED_CONFIG_SUITES_PATH, 'utf-8');
+  } catch (err) {
+    fail(
+      `Could not read ${SHARED_CONFIG_SUITES_PATH} — this planner requires it to exist (even as {} if there are genuinely zero shared-config suites to exclude). Error: ${(err as Error).message}`
+    );
+  }
+  let parsed: Record<string, SharedConfigSuiteEntry>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`${SHARED_CONFIG_SUITES_PATH} is not valid JSON: ${(err as Error).message}`);
+  }
+  const prefixes: string[] = [];
+  for (const [name, entry] of Object.entries(parsed)) {
+    if (!entry.uiDir || !entry.rbacDir) {
+      fail(`${SHARED_CONFIG_SUITES_PATH}'s "${name}" entry is missing uiDir/rbacDir`);
+    }
+    // WHY stripping a leading "tests/" here, not stored pre-stripped in the
+    // JSON: the JSON is meant to be human-readable/citable the same way
+    // every doc in this repo already writes these paths (`tests/ui/...`),
+    // but Playwright's own --list --reporter=json output reports file paths
+    // relative to the tests ROOT (confirmed live: `ui/formFields/...`, not
+    // `tests/ui/formFields/...`) — this is the one, explicit, commented
+    // place that difference is bridged, not a silent assumption.
+    for (const dir of [entry.uiDir, entry.rbacDir]) {
+      const stripped = dir.replace(/^tests\//, '');
+      prefixes.push(`${stripped.replace(/\/+$/, '')}/`);
+    }
+  }
+  return prefixes;
+}
 
 interface FileEntry {
   file: string;
@@ -58,8 +111,8 @@ interface PlaywrightListReport {
   suites?: PlaywrightListSuite[];
 }
 
-function isFormFieldsFile(file: string): boolean {
-  return FORMFIELDS_EXCLUDED_PREFIXES.some((prefix) => file.startsWith(prefix));
+function isSharedConfigSuiteFile(file: string, exclusionPrefixes: string[]): boolean {
+  return exclusionPrefixes.some((prefix) => file.startsWith(prefix));
 }
 
 function parseArgs(argv: string[]): { testsPerShard: number; playwrightArgs: string[] } {
@@ -182,21 +235,22 @@ function main(): void {
     );
   }
 
+  const exclusionPrefixes = loadSharedConfigSuiteExclusionPrefixes();
   const excluded: FileEntry[] = [];
   const included: FileEntry[] = [];
   for (const [file, testCount] of fileCounts) {
-    (isFormFieldsFile(file) ? excluded : included).push({ file, testCount });
+    (isSharedConfigSuiteFile(file, exclusionPrefixes) ? excluded : included).push({ file, testCount });
   }
 
   if (excluded.length > 0) {
     logger.info(
-      `[plan-shards] Excluded ${excluded.length} formFields file(s) / ${excluded.reduce((a, e) => a + e.testCount, 0)} test(s) from bin-packing — formFields always uses its own separately-verified fixed 6-shard matrix (run-formfields-tests), never this planner.`,
+      `[plan-shards] Excluded ${excluded.length} shared-config-suite file(s) / ${excluded.reduce((a, e) => a + e.testCount, 0)} test(s) from bin-packing (config/sharedConfigSuites.json) — each uses its own separately-verified fixed matrix, never this planner.`,
       excluded.map((e) => e.file)
     );
   }
 
   if (included.length === 0) {
-    fail(`After excluding formFields, zero test files remain for target "${playwrightArgs.join(' ')}" — this planner has nothing to shard.`);
+    fail(`After excluding shared-config suites, zero test files remain for target "${playwrightArgs.join(' ')}" — this planner has nothing to shard.`);
   }
 
   const shards = binPack(included, testsPerShard);

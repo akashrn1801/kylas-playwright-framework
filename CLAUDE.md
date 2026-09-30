@@ -8,6 +8,8 @@ Core, always-apply rules for working on this codebase, kept lean on purpose — 
 @.claude/known-issues.md
 @.claude/AGENT_DELEGATION_GUIDE.md
 
+**Before adding or changing any test, or adding a new module, read `docs/CONTRIBUTING_TESTS.md` first.** It has three checklists (existing-module changes, new modules, shared-account-wide-config features) with real file citations for every item — not duplicated here to keep this file lean, per its own stated design above.
+
 ---
 
 ## Table of Contents

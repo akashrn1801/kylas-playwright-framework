@@ -74,6 +74,46 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   };
   rawName = SINGULAR_TO_CANONICAL_MODULE_NAME[rawName.toLowerCase()] ?? rawName;
 
+  // KNOWN, DELIBERATELY-NOT-FIXED DISPLAY QUIRKS (documented here 2026-09-30
+  // after being surfaced for the first time by docs/CONTRIBUTING_TESTS.md's
+  // E6 doc-auto-generation script comparing this function's real output
+  // against README.md's old hand-written module table):
+  //
+  // 1. This only capitalizes the FIRST character of the raw directory name
+  //    — it does not know about spaces, hyphens, or ampersands a human
+  //    would use in prose. Two real, confirmed consequences:
+  //    - `tests/ui/call-logs/` (hyphenated directory) renders as
+  //      "Call-logs", not "Call Logs".
+  //    - `tests/ui/productsAndServices/` (camelCase directory) renders as
+  //      "ProductsAndServices", not "Products & Services".
+  //    Every other display of these module names elsewhere in this repo
+  //    (README.md prose, this file's own comments, test-label prefixes)
+  //    uses the human-friendly form — only THIS function's OWN output
+  //    (Module Analytics, the "CI Job Stats"/"Job Time Overlaps" sections,
+  //    and anything else reading `ParsedReport.modules[].name`) shows the
+  //    literal directory-derived form.
+  // 2. `login.spec.ts` genuinely lives in `tests/ui/dashboard/` (see that
+  //    file's own header for why — it deliberately doesn't use the shared
+  //    fixture system, but its FILE PATH still puts it under the Dashboard
+  //    directory) — so this function has always merged Login's own test
+  //    count into the "Dashboard" row, never shown it separately. README's
+  //    former hand-maintained module table drew a manual distinction this
+  //    function has never actually been able to see.
+  //
+  // WHY left as documented quirks, not fixed, despite being easy to
+  // mechanically patch (a display-name lookup table, the same shape as
+  // SINGULAR_TO_CANONICAL_MODULE_NAME above): this function's OUTPUT is
+  // persisted verbatim into `ci/reporting-history`'s per-run records
+  // (`RunHistoryRecord.modules[]`), and every trend/recurring-flaky/
+  // stability computation in `RunHistory.ts` keys off `${type}:${name}`.
+  // Changing the display name today would silently break trend continuity
+  // for these modules across the transition (a "Call-logs" history and a
+  // "Call Logs" history would never match each other), for a
+  // COSMETIC-only gain — a real, non-trivial ripple effect this function's
+  // own callers don't protect against. Revisit deliberately, with an
+  // explicit history-migration plan, if this is ever worth fixing — do not
+  // patch it as a quick side-fix to something else the way it was almost
+  // introduced during unrelated doc-generation work.
   const canonicalName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
   // WHY a suffixed sub-label rather than a full merge into the bare entity
   // name: these are a materially different test category (field-limit

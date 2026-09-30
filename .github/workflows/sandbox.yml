@@ -81,6 +81,7 @@ jobs:
       # actually sharded (SHARD_TOTAL>1), which is the only case the
       # cross-shard race this carve-out defends against can occur in.
       run_formfields_track: ${{ steps.decide.outputs.run_formfields_track }}
+      formfields_entities_json: ${{ steps.sharedConfig.outputs.formfields_entities_json }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -230,6 +231,22 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
           echo "run_formfields_track=$RUN_FORMFIELDS_TRACK" >> "$GITHUB_OUTPUT"
+
+      # WHY this step exists (2026-09-30, Part 2/E1 of the contributor-guide-
+      # and-guardrails work — see docs/CONTRIBUTING_TESTS.md §C and
+      # config/sharedConfigSuites.json's own header): see qa.yml's identical
+      # step for the full reasoning — one shared source of truth for the
+      # run-formfields-tests matrix below instead of 4 independently
+      # hardcoded copies. No new latency concern here specifically (unlike
+      # qa.yml/stage.yml/main.yml) — run-formfields-tests already depends on
+      # this job (`needs: detect`) for its own run_formfields_track gate.
+      - name: Read shared-config-suite entities for the formFields job matrix
+        id: sharedConfig
+        run: |
+          node -e "
+            const cfg = require('./config/sharedConfigSuites.json');
+            console.log('formfields_entities_json=' + JSON.stringify(cfg.formFields.entities));
+          " >> "$GITHUB_OUTPUT"
 
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
@@ -413,7 +430,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        entity: [lead, contact, company, deal, task, productsAndServices]
+        entity: ${{ fromJSON(needs.detect.outputs.formfields_entities_json) }}
     permissions:
       contents: write
     steps:

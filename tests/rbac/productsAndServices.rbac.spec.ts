@@ -20,6 +20,20 @@ test.describe('Products & Services RBAC', () => {
   test('@smoke @regression @prodSafe restricted user should navigate to products and services list', async ({
     restrictedPage,
   }) => {
+    // WHY added 2026-09-30 (real, root-caused CI failure — sandbox run
+    // 36611133924/job 109552721989, shard 5/5): this was the ONLY test in
+    // this file with no explicit test.setTimeout() override, unlike every
+    // sibling test below — leaving it on CI's default 120000ms test-level
+    // timeout, which structurally collides with BasePage.waitForEntityListPage()'s
+    // own worst-case internal budget (also built from config.timeouts.navigation
+    // = 120000ms in this CI env) — confirmed via direct log evidence: both
+    // attempts failed identically with "Target page, context or browser has
+    // been closed" during the reload-retry, meaning the OUTER test timeout
+    // fired and tore down the context mid-recovery. See
+    // BasePage.waitForEntityListPage()'s own updated WHY comment for the
+    // full root-cause writeup and the matching deadline-aware structural fix
+    // applied there for every OTHER caller of this shared method.
+    test.setTimeout(480000);
     const pasPage = new ProductsAndServicesPage(restrictedPage);
 
     await pasPage.goToProductsAndServicesList();

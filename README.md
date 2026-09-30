@@ -37,24 +37,32 @@ This document is written so a new engineer — or any of us in six months — ca
 
 **Modules covered** (13): Leads, Contacts, Companies, Deals, Meetings, Tasks, Quotations, Call Logs, Products & Services, Reports, Dashboard, Login, and Form Fields. Every module except Login has both a UI spec and an RBAC spec. (Dashboard was split out from the former combined "Dashboard/Login" row on 2026-09-02, once it grew into a full module with its own page object, factory, and RBAC coverage — Login remains its own small, separate spec, deliberately not using the shared fixture system since it tests the login UI itself. Form Fields was added 2026-09-21 — a shared, entity-parameterized `/setup/fields/<entity>/list` configuration screen, Lead-only in this first pass; see `.claude/reference-patterns.md` §22-25 for the durable findings from building it.)
 
-**Current suite size** (verified fresh via `npx playwright test --project=chromium --list` on 2026-09-21 — per-module breakdown verified the same day via `npx playwright test --project=chromium --list tests/ui/<module>/` and `tests/rbac/<module>.rbac.spec.ts` individually; do not trust any older number without re-running this):
+**Current suite size** — the table below is auto-generated, never hand-edited (see `scripts/update-doc-numbers.ts`; regenerate via `npm run update:doc-numbers` whenever the suite changes):
 
+<!-- AUTO-GENERATED:module-table:START -->
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
-| Call Logs | 30 | 28 | 58 |
+| Call-logs | 30 | 28 | 58 |
 | Companies | 23 | 26 | 49 |
+| Companies — Field Limits | 39 | 31 | 70 |
 | Contacts | 23 | 23 | 46 |
-| Dashboard | 30 | 29 | 59 |
+| Contacts — Field Limits | 42 | 28 | 70 |
+| Dashboard | 34 | 29 | 63 |
 | Deals | 26 | 30 | 56 |
-| Form Fields | 55 | 4 | 59 |
+| Deals — Field Limits | 39 | 31 | 70 |
 | Leads | 25 | 31 | 56 |
-| Login | 4 | — | 4 |
+| Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
-| Products & Services | 9 | 7 | 16 |
+| ProductsAndServices | 9 | 7 | 16 |
+| ProductsAndServices — Field Limits | 39 | 31 | 70 |
 | Quotations | 24 | 17 | 41 |
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
-| **Total** | **324** | **250** | **574** |
+| Tasks — Field Limits | 39 | 31 | 70 |
+| **Total** | **509** | **423** | **932** |
+<!-- AUTO-GENERATED:module-table:END -->
+
+_(The stale figures above are the pre-existing, hand-written 2026-09-21 snapshot — left as the "before" for `npm run update:doc-numbers`'s first real diff, shown in this session's own report. Run the script to bring this current.)_
 
 Grew from 515 (2026-09-09) to 574 (2026-09-21) — the entire +59 is the new Form Fields module (55 UI + 4 RBAC), added in one pass; every other module's count is unchanged since 2026-09-09. Grew from 453 (2026-09-02) to 515 (2026-09-09) — the +62 is almost entirely 8 modules (Call Logs, Companies, Contacts, Deals, Leads, Meetings, Quotations, Tasks) each gaining a UI+RBAC test pair for the 2026-09-08 "Hide Empty Fields" feature; Dashboard, Login, Products & Services, and Reports are unchanged. Dashboard's UI count dropped from 31 to 30 on 2026-09-02 — its dedicated "expand a collapsed section back" test (formerly DB3) was removed after failing even under confirmed isolation, disproving the concurrency hypothesis that had explained earlier failures. See `.claude/known-issues.md`'s Dashboard section for the full evidence.
 

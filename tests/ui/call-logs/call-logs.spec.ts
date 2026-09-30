@@ -1,6 +1,5 @@
 import * as path from 'path';
-import { test } from '../../../src/fixtures/index';
-import { expect } from '@playwright/test';
+import { test, expect } from '../../../src/fixtures/index';
 import { safeWaitForURL } from '../../../src/utils/navigation';
 import { CallLogsPage } from '../../../src/modules/call-logs/CallLogsPage';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
