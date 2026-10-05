@@ -143,6 +143,8 @@ baseTest.describe('Form Field Limits — RBAC › Company (read-only, lock-free)
 });
 
 companyTest.describe('Form Field Limits — RBAC › Company', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY companyTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -193,8 +195,6 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test companyTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  companyTest.describe.configure({ mode: 'serial' });
-
   companyTest.describe.configure({ timeout: 480000 });
 
   // WHY COMPANY_ENTITY/CO_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
@@ -387,6 +387,26 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
   // WHY FFRCO1/2/3 are no longer here (2026-09-29): moved to the lock-free
   // 'Form Field Limits — RBAC › Company (read-only, lock-free)' describe
   // block near the top of this file — see that block's own WHY comment.
+
+  // WHY split into smaller per-category serial sub-blocks below, not one
+  // big serial block for the whole file (2026-09-30): mirrors
+  // companyFieldLimits.spec.ts's own already-proven structure exactly.
+  // Cross-shard safety is UNAFFECTED either way — formFields tests never
+  // use Playwright's own `--shard` splitting at all (this entire file plus
+  // its UI sibling always run as one unsharded invocation on one dedicated
+  // machine per entity, see run-formfields-tests), so `.serial`'s "keeps a
+  // block in one shard-distribution group" property (the reason it was
+  // restored, see the WHY comment above) was never actually being exercised
+  // by a risk these smaller sub-blocks could reintroduce. What DOES change:
+  // a failure in, say, Number field tests now only skip-cascades the
+  // remaining Number tests (a handful), not the whole file's other ~23
+  // tests — dramatically shrinking blast radius while keeping full mutual-
+  // exclusion ordering within each category (no two mutating tests in the
+  // same category ever run concurrently, exactly as before). All the
+  // constants/helper functions above stay at THIS shared scope (not moved
+  // inside any one sub-block) so every sub-block below can still see them.
+  companyTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
   companyTest("@regression FFRCO4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
@@ -601,6 +621,10 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
     expect(errorPresent4, 'Expected an inline validation error for the invalid PAN Card value').toBe(true);
     logger.success('FFRCO7 passed');
   });
+  });
+
+  companyTest.describe('Text field tests', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
     companyTest('@regression FFRCO8 restricted user should confirm typing too few characters in the Text field is rejected when creating a company', async ({
       adminPage,
@@ -708,6 +732,10 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await assertInlineErrorPresent(companiesPage, 'FFRCO11 Edit Company — Text over max');
       logger.success('FFRCO11 passed');
     });
+  });
+
+  companyTest.describe('Number field tests', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
     companyTest('@regression FFRCO12 restricted user should confirm typing too few digits in the Number field is rejected when creating a company', async ({
       adminPage,
@@ -866,6 +894,10 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       );
       logger.success('FFRCO16 passed');
     });
+  });
+
+  companyTest.describe('Paragraph field tests', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
     companyTest('@regression FFRCO17 restricted user should confirm typing too few characters in the Paragraph field is rejected when creating a company', async ({
       adminPage,
@@ -973,6 +1005,10 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await assertInlineErrorPresent(companiesPage, 'FFRCO20 Edit Company — Paragraph over max');
       logger.success('FFRCO20 passed');
     });
+  });
+
+  companyTest.describe('Text field format rules (Regex) tests', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
     companyTest('@regression FFRCO21 restricted user should confirm a valid PAN Card value is accepted when creating a company', async ({
       adminPage,
@@ -1276,7 +1312,10 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       await assertInlineErrorPresent(companiesPage, 'FFRCO30 Edit Company — invalid Passport');
       logger.success('FFRCO30 passed');
     });
+  });
 
+  companyTest.describe('Cache behavior', () => {
+    companyTest.describe.configure({ mode: 'serial' });
 
   companyTest("@regression FFRCO31 restricted user should confirm after the cache is cleared, the new limit is correctly applied on a new company", async ({
     restrictedPage,
@@ -1309,5 +1348,6 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
       'Number field'
     );
     logger.success('FFRCO31 passed');
+  });
   });
 });

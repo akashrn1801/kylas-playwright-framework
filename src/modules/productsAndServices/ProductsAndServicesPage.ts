@@ -694,8 +694,18 @@ export class ProductsAndServicesPage extends BasePage {
     if (/^\d+$/.test(nameOrId)) {
       await this.navigateTo(`${config.appUrl}/setup/products-services/edit/${nameOrId}`);
       await this.waitForUrl(/\/products-services\/edit\//, config.timeouts.navigation);
-      await this.withSessionExpiryRecovery(() =>
-        expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
+      // WHY also wrapped in withRateLimitRecovery() (2026-09-30 — real CI
+      // failures, sandbox run 36663556957: FFPS24/FFPS21 both failed here
+      // with the Name input entirely absent from the DOM after navigating
+      // to the edit page — the same "app rendered a known-bad state instead
+      // of the real form" signature already confirmed for Company/Task in
+      // this same run, just without a captured intercepting-element name
+      // since this assertion never clicks anything — see
+      // authManager.isAppErrorBoundaryPage()'s own WHY comment).
+      await this.withRateLimitRecovery(() =>
+        this.withSessionExpiryRecovery(() =>
+          expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
+        )
       );
       logger.info(`Opened product for edit by id: ${nameOrId}`);
       return;

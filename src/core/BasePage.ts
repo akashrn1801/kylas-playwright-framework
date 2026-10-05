@@ -10,6 +10,8 @@ import {
   armSessionExpirySignal,
   isRateLimitedPage,
   tryRecoverFromRateLimit,
+  isAppErrorBoundaryPage,
+  tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
@@ -318,17 +320,41 @@ export class BasePage {
   // single-purpose functions matches this file's own existing precedent
   // (one function, one job) rather than blurring two unrelated recovery
   // classes into one conditional-branching mega-function.
+  //
+  // WHY this method ALSO now checks isAppErrorBoundaryPage() (2026-09-30),
+  // NOT split into a third, separate withAppErrorRecovery() combinator: that
+  // "one function, one job" precedent above was about session-expiry vs.
+  // rate-limiting specifically, because those two need genuinely DIFFERENT
+  // recovery actions (re-login vs. a page refresh) — splitting them kept
+  // each recovery ACTION single-purpose. The 429 rate-limit page and this
+  // app-error-boundary state (see authManager.ts's own WHY comment on
+  // isAppErrorBoundaryPage() for the real CI evidence) both need the
+  // IDENTICAL remedy: reload and retry once. Detecting either condition
+  // here and reusing the same retry-once shape is the correct application
+  // of "one job," not a violation of it — the job is "recover from a known-
+  // bad, reload-fixable app page state," and both conditions are instances
+  // of that one job. A future condition needing a DIFFERENT recovery action
+  // should still get its own combinator, matching the original reasoning.
   protected async withRateLimitRecovery<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (error) {
-      if (!(await isRateLimitedPage(this.page))) {
+      const rateLimited = await isRateLimitedPage(this.page);
+      const appErrorBoundary = !rateLimited && (await isAppErrorBoundaryPage(this.page));
+      if (!rateLimited && !appErrorBoundary) {
         throw error;
       }
-      logger.warn(
-        'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
-      );
-      await tryRecoverFromRateLimit(this.page);
+      if (rateLimited) {
+        logger.warn(
+          'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+        );
+        await tryRecoverFromRateLimit(this.page);
+      } else {
+        logger.warn(
+          'A wrapped call failed while the app showed its own generic error-boundary ("Something is broken") state — attempting one-time recovery'
+        );
+        await tryRecoverFromAppErrorBoundary(this.page);
+      }
       return await fn();
     }
   }

@@ -139,6 +139,8 @@ baseTest.describe('Form Field Limits — RBAC › Products & Services (read-only
 });
 
 productsTest.describe('Form Field Limits — RBAC › Products & Services', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY productsTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -189,8 +191,6 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test productsTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  productsTest.describe.configure({ mode: 'serial' });
-
   productsTest.describe.configure({ timeout: 480000 });
 
   // WHY PRODUCTS_ENTITY/PS_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
@@ -408,6 +408,13 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
   // 'Form Field Limits — RBAC › Products & Services (read-only, lock-free)'
   // describe block near the top of this file.
 
+  // WHY split into smaller per-category serial sub-blocks below (2026-10-05) — mirrors productsAndServicesFieldLimits.spec.ts's own
+  // structure and Company's RBAC restructuring (see companyFieldLimits.rbac.spec.ts's WHY comment: cross-shard safety
+  // unaffected, blast radius reduced). Constants/helpers above stay at this shared scope so every sub-block can see them.
+
+  productsTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    productsTest.describe.configure({ mode: 'serial' });
+
   productsTest("@regression FFRPS4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
     restrictedPage,
@@ -572,6 +579,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     logger.success('FFRPS7 passed');
   });
 
+  });
+
+  productsTest.describe('Text field tests', () => {
+    productsTest.describe.configure({ mode: 'serial' });
+
   productsTest('@regression FFRPS8 restricted user should confirm typing too few characters in the Text field is rejected when creating a product', async ({
     adminPage,
     restrictedPage,
@@ -637,6 +649,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertInlineErrorPresent(psPage, 'FFRPS11 Edit Product — Text over max');
     logger.success('FFRPS11 passed');
   });
+
+  });
+
+  productsTest.describe('Number field tests', () => {
+    productsTest.describe.configure({ mode: 'serial' });
 
   productsTest('@regression FFRPS12 restricted user should confirm typing too few digits in the Number field is rejected when creating a product', async ({
     adminPage,
@@ -741,6 +758,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     logger.success('FFRPS16 passed');
   });
 
+  });
+
+  productsTest.describe('Paragraph field tests', () => {
+    productsTest.describe.configure({ mode: 'serial' });
+
   productsTest('@regression FFRPS17 restricted user should confirm typing too few characters in the Paragraph field is rejected when creating a product', async ({
     adminPage,
     restrictedPage,
@@ -806,6 +828,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     await assertInlineErrorPresent(psPage, 'FFRPS20 Edit Product — Paragraph over max');
     logger.success('FFRPS20 passed');
   });
+
+  });
+
+  productsTest.describe('Text field format rules (Regex) tests', () => {
+    productsTest.describe.configure({ mode: 'serial' });
 
   productsTest('@regression FFRPS21 restricted user should confirm a valid PAN Card value is accepted when creating a product', async ({
     adminPage,
@@ -972,6 +999,11 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     logger.success('FFRPS30 passed');
   });
 
+  });
+
+  productsTest.describe('Cache behavior', () => {
+    productsTest.describe.configure({ mode: 'serial' });
+
   productsTest("@regression FFRPS31 restricted user should confirm after the cache is cleared, the new limit is correctly applied on a new product", async ({
     restrictedPage,
     adminPage,
@@ -992,5 +1024,6 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
     const id = await createProductExpectingAccept(psPage, { fieldName: PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value });
     await assertCustomFieldPersistedOnEdit(psPage, id, PRODUCTS_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRPS31 passed');
+  });
   });
 });

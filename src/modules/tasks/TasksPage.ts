@@ -263,7 +263,14 @@ export class TasksPage extends BasePage {
     const menu = this.page.locator('.is-invalid__menu');
     const option = menu.locator('.is-invalid__option', { hasText: optionText }).first();
     await option.waitFor({ state: 'visible', timeout: 5000 });
-    await option.click();
+    // WHY wrapped in withRateLimitRecovery() (2026-09-30 — real CI failures,
+    // sandbox run 36663556957: FFRTK7/FFTK8 both failed here with the app's
+    // own generic error-boundary state, `<div class="app-error something-is-
+    // broken">` from `<div id="app">`, physically intercepting this exact
+    // click — confirmed via 787 retry attempts all reporting the identical
+    // intercepting element). See authManager.isAppErrorBoundaryPage()'s own
+    // WHY comment for the full incident.
+    await this.withRateLimitRecovery(() => option.click());
     // WHY defensive hardening, NOT a confirmed root-cause fix (2026-07-23):
     // tasks.rbac.spec.ts:69 hung once in CI — saveEditedTask()'s save click
     // registered (assertNoFormErrors found zero errors) yet the modal never

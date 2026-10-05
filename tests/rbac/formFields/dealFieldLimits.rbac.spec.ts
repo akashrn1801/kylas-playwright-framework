@@ -135,6 +135,8 @@ baseTest.describe('Form Field Limits — RBAC › Deal (read-only, lock-free)', 
 });
 
 dealTest.describe('Form Field Limits — RBAC › Deal', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY dealTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -185,8 +187,6 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test dealTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  dealTest.describe.configure({ mode: 'serial' });
-
   dealTest.describe.configure({ timeout: 480000 });
 
   // WHY DEAL_ENTITY/D_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
@@ -369,6 +369,13 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
   // WHY FFRD1/2/3 are no longer here (2026-09-29): moved to the lock-free
   // 'Form Field Limits — RBAC › Deal (read-only, lock-free)' describe
   // block near the top of this file.
+
+  // WHY split into smaller per-category serial sub-blocks below (2026-10-05) — mirrors dealFieldLimits.spec.ts's own
+  // structure and Company's RBAC restructuring (see companyFieldLimits.rbac.spec.ts's WHY comment: cross-shard safety
+  // unaffected, blast radius reduced). Constants/helpers above stay at this shared scope so every sub-block can see them.
+
+  dealTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    dealTest.describe.configure({ mode: 'serial' });
 
   dealTest("@regression FFRD4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
@@ -571,6 +578,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     logger.success('FFRD7 passed');
   });
 
+  });
+
+  dealTest.describe('Text field tests', () => {
+    dealTest.describe.configure({ mode: 'serial' });
+
   dealTest('@regression FFRD8 restricted user should confirm typing too few characters in the Text field is rejected when creating a deal', async ({
     adminPage,
     restrictedPage,
@@ -643,6 +655,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await assertInlineErrorPresent(dealsPage, 'FFRD11 Edit Deal — Text over max');
     logger.success('FFRD11 passed');
   });
+
+  });
+
+  dealTest.describe('Number field tests', () => {
+    dealTest.describe.configure({ mode: 'serial' });
 
   dealTest('@regression FFRD12 restricted user should confirm typing too few digits in the Number field is rejected when creating a deal', async ({
     adminPage,
@@ -752,6 +769,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     logger.success('FFRD16 passed');
   });
 
+  });
+
+  dealTest.describe('Paragraph field tests', () => {
+    dealTest.describe.configure({ mode: 'serial' });
+
   dealTest('@regression FFRD17 restricted user should confirm typing too few characters in the Paragraph field is rejected when creating a deal', async ({
     adminPage,
     restrictedPage,
@@ -824,6 +846,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     await assertInlineErrorPresent(dealsPage, 'FFRD20 Edit Deal — Paragraph over max');
     logger.success('FFRD20 passed');
   });
+
+  });
+
+  dealTest.describe('Text field format rules (Regex) tests', () => {
+    dealTest.describe.configure({ mode: 'serial' });
 
   dealTest('@regression FFRD21 restricted user should confirm a valid PAN Card value is accepted when creating a deal', async ({
     adminPage,
@@ -1008,6 +1035,11 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     logger.success('FFRD30 passed');
   });
 
+  });
+
+  dealTest.describe('Cache behavior', () => {
+    dealTest.describe.configure({ mode: 'serial' });
+
   dealTest("@regression FFRD31 restricted user should confirm after the cache is cleared, the new limit is correctly applied on a new deal", async ({
     restrictedPage,
     adminPage,
@@ -1030,5 +1062,6 @@ dealTest.describe('Form Field Limits — RBAC › Deal', () => {
     const dealId = await createDealExpectingAccept(dealsPage, name, { fieldName: DEAL_FORM_FIELD_LIMIT_NAMES.number, value });
     await assertCustomFieldPersistedOnDetail(dealsPage, dealId, DEAL_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRD31 passed');
+  });
   });
 });

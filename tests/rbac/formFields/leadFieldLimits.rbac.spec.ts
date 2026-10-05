@@ -130,6 +130,8 @@ baseTest.describe('Form Field Limits — RBAC › Lead (read-only, lock-free)', 
 });
 
 leadTest.describe('Form Field Limits — RBAC › Lead', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY leadTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -180,8 +182,6 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test leadTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  leadTest.describe.configure({ mode: 'serial' });
-
   leadTest.describe.configure({ timeout: 480000 });
 
   // WHY LEAD_ENTITY is NOT re-declared here (2026-09-29): it now lives at
@@ -370,6 +370,21 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
   // 'Form Field Limits — RBAC › Lead (read-only, lock-free)' describe
   // block near the top of this file.
 
+  // WHY split into smaller per-category serial sub-blocks below (2026-09-30)
+  // — mirrors leadFieldLimits.spec.ts's own structure and the other 5
+  // entities' RBAC restructuring (see companyFieldLimits.rbac.spec.ts's own
+  // WHY comment for the full reasoning: cross-shard safety unaffected,
+  // blast radius dramatically reduced). Lead genuinely has only ONE
+  // dual-fixture admin-configures/restricted-verifies test (FFR4, unlike
+  // the other 5 entities' 4) — Lead was built before the per-field-type
+  // dual-fixture pattern was established and deliberately never
+  // retrofitted with the other 3 (Number/Paragraph/Regex) — a real,
+  // pre-existing content difference, not a mistake introduced here. All
+  // constants/helpers above stay at this shared scope so every sub-block
+  // below can see them.
+  leadTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    leadTest.describe.configure({ mode: 'serial' });
+
   leadTest("@regression FFR4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
     restrictedPage,
@@ -428,6 +443,10 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
     await assertInlineErrorPresent(restrictedLeadsPage, 'FFR4 Add Lead — restricted, over admin-set max');
     logger.success('FFR4 passed');
   });
+  });
+
+  leadTest.describe('Text field tests', () => {
+    leadTest.describe.configure({ mode: 'serial' });
 
   leadTest('@regression FFR5 typing too few characters in the Text field is rejected when creating a lead', async ({
     adminPage,
@@ -535,6 +554,10 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
     await assertInlineErrorPresent(leadsPage, 'FFR8 Edit Lead — Text over max');
     logger.success('FFR8 passed');
   });
+  });
+
+  leadTest.describe('Number field tests', () => {
+    leadTest.describe.configure({ mode: 'serial' });
 
   leadTest('@regression FFR9 typing too few digits in the Number field is rejected when creating a lead', async ({
     adminPage,
@@ -704,6 +727,10 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
     );
     logger.success('FFR13 passed');
   });
+  });
+
+  leadTest.describe('Paragraph field tests', () => {
+    leadTest.describe.configure({ mode: 'serial' });
 
   leadTest('@regression FFR14 typing exactly the minimum allowed characters in the Paragraph field is accepted when creating a lead', async ({
     restrictedPage,
@@ -811,6 +838,10 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
     );
     logger.success('FFR17 passed');
   });
+  });
+
+  leadTest.describe('Text field format rules (Regex) tests', () => {
+    leadTest.describe.configure({ mode: 'serial' });
 
   leadTest('@regression FFR18 a valid PAN number is accepted when creating a lead', async ({
     restrictedPage,
@@ -1022,6 +1053,10 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
     );
     logger.success('FFR24 passed');
   });
+  });
+
+  leadTest.describe('Cache behavior', () => {
+    leadTest.describe.configure({ mode: 'serial' });
 
   leadTest('@regression FFR25 after the cache is cleared, the new limit is correctly applied on a new lead', async ({
     restrictedPage,
@@ -1054,5 +1089,6 @@ leadTest.describe('Form Field Limits — RBAC › Lead', () => {
       'Number field'
     );
     logger.success('FFR25 passed');
+  });
   });
 });

@@ -135,6 +135,8 @@ baseTest.describe('Form Field Limits — RBAC › Task (read-only, lock-free)', 
 });
 
 taskTest.describe('Form Field Limits — RBAC › Task', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY taskTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -185,8 +187,6 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test taskTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  taskTest.describe.configure({ mode: 'serial' });
-
   taskTest.describe.configure({ timeout: 480000 });
 
   // WHY TASK_ENTITY/TK_TEXT_FIELD_INTERNAL_NAME are NOT re-declared here
@@ -376,6 +376,13 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
   // WHY FFRTK1/2/3 are no longer here (2026-09-29): moved to the lock-free
   // 'Form Field Limits — RBAC › Task (read-only, lock-free)' describe
   // block near the top of this file.
+
+  // WHY split into smaller per-category serial sub-blocks below (2026-10-05) — mirrors taskFieldLimits.spec.ts's own
+  // structure and Company's RBAC restructuring (see companyFieldLimits.rbac.spec.ts's WHY comment: cross-shard safety
+  // unaffected, blast radius reduced). Constants/helpers above stay at this shared scope so every sub-block can see them.
+
+  taskTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    taskTest.describe.configure({ mode: 'serial' });
 
   taskTest("@regression FFRTK4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
@@ -585,6 +592,11 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     logger.success('FFRTK7 passed');
   });
 
+  });
+
+  taskTest.describe('Text field tests', () => {
+    taskTest.describe.configure({ mode: 'serial' });
+
   taskTest('@regression FFRTK8 restricted user should confirm typing too few characters in the Text field is rejected when creating a task', async ({
     adminPage,
     restrictedPage,
@@ -663,6 +675,11 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await assertInlineErrorPresent(tasksPage, 'FFRTK11 Edit Task — Text over max');
     logger.success('FFRTK11 passed');
   });
+
+  });
+
+  taskTest.describe('Number field tests', () => {
+    taskTest.describe.configure({ mode: 'serial' });
 
   taskTest('@regression FFRTK12 restricted user should confirm typing too few digits in the Number field is rejected when creating a task', async ({
     adminPage,
@@ -781,6 +798,11 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     logger.success('FFRTK16 passed');
   });
 
+  });
+
+  taskTest.describe('Paragraph field tests', () => {
+    taskTest.describe.configure({ mode: 'serial' });
+
   taskTest('@regression FFRTK17 restricted user should confirm typing too few characters in the Paragraph field is rejected when creating a task', async ({
     adminPage,
     restrictedPage,
@@ -859,6 +881,11 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     await assertInlineErrorPresent(tasksPage, 'FFRTK20 Edit Task — Paragraph over max');
     logger.success('FFRTK20 passed');
   });
+
+  });
+
+  taskTest.describe('Text field format rules (Regex) tests', () => {
+    taskTest.describe.configure({ mode: 'serial' });
 
   taskTest('@regression FFRTK21 restricted user should confirm a valid PAN Card value is accepted when creating a task', async ({
     adminPage,
@@ -1073,6 +1100,11 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     logger.success('FFRTK30 passed');
   });
 
+  });
+
+  taskTest.describe('Cache behavior', () => {
+    taskTest.describe.configure({ mode: 'serial' });
+
   taskTest("@regression FFRTK31 restricted user should confirm after the cache is cleared, the new limit is correctly applied on a new task", async ({
     restrictedPage,
     adminPage,
@@ -1098,5 +1130,6 @@ taskTest.describe('Form Field Limits — RBAC › Task', () => {
     });
     await assertCustomFieldPersistedOnDetail(tasksPage, taskId, TASK_FORM_FIELD_LIMIT_NAMES.number, value, 'Number field');
     logger.success('FFRTK31 passed');
+  });
   });
 });

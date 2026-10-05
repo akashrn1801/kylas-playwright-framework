@@ -132,6 +132,8 @@ baseTest.describe('Form Field Limits — RBAC › Contact (read-only, lock-free)
 });
 
 contactTest.describe('Form Field Limits — RBAC › Contact', () => {
+  // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
+  // reasoning that follows still applies to each sub-block.
   // WHY contactTest.describe.configure({ mode: 'serial' }) IS here (restored
   // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
@@ -182,8 +184,6 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
   // fixtures/index.ts's shared session-recovery logic at all. The existing
   // per-test contactTest.setTimeout(480000) calls below are now redundant but
   // harmless (same value) — left in place rather than mass-edited out.
-  contactTest.describe.configure({ mode: 'serial' });
-
   contactTest.describe.configure({ timeout: 480000 });
 
   // WHY CONTACT_ENTITY is NOT re-declared here (2026-09-29): it now lives at
@@ -381,6 +381,15 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
   // WHY FFRC1/2/3 are no longer here (2026-09-29): moved to the lock-free
   // 'Form Field Limits — RBAC › Contact (read-only, lock-free)' describe
   // block near the top of this file.
+
+  // WHY split into smaller per-category serial sub-blocks below (2026-09-30)
+  // — mirrors contactFieldLimits.spec.ts's own structure and Company's RBAC
+  // restructuring (see that file's own WHY comment for the full reasoning:
+  // cross-shard safety unaffected, blast radius dramatically reduced). All
+  // constants/helpers above stay at this shared scope so every sub-block
+  // below can see them.
+  contactTest.describe('Admin-configures / restricted-verifies boundary tests', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
   contactTest("@regression FFRC4 after admin sets a limit and restricted user's cache is cleared, restricted user sees the same limit applied", async ({
     adminPage,
@@ -675,6 +684,10 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
     );
     logger.success('FFRC7 passed');
   });
+  });
+
+  contactTest.describe('Text field tests', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
     contactTest('@regression FFRC8 restricted user should confirm typing too few characters in the Text field is rejected when creating a contact', async ({
       adminPage,
@@ -788,7 +801,10 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await assertInlineErrorPresent(contactsPage, 'FFRC11 Edit Contact — Text over max');
       logger.success('FFRC11 passed');
     });
+  });
 
+  contactTest.describe('Number field tests', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
     contactTest('@regression FFRC12 restricted user should confirm typing too few digits in the Number field is rejected when creating a contact', async ({
       adminPage,
@@ -962,7 +978,10 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       );
       logger.success('FFRC16 passed');
     });
+  });
 
+  contactTest.describe('Paragraph field tests', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
     contactTest('@regression FFRC17 restricted user should confirm typing exactly the minimum allowed characters in the Paragraph field is accepted when creating a contact', async ({
       restrictedPage,
@@ -1076,7 +1095,10 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       await assertInlineErrorPresent(contactsPage, 'FFRC20 Edit Contact — Paragraph over max');
       logger.success('FFRC20 passed');
     });
+  });
 
+  contactTest.describe('Text field format rules (Regex) tests', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
     contactTest('@regression FFRC21 restricted user should confirm a valid PAN number is accepted when creating a contact', async ({
       restrictedPage,
@@ -1300,8 +1322,10 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       );
       logger.success('FFRC27 passed');
     });
+  });
 
-
+  contactTest.describe('Cache behavior', () => {
+    contactTest.describe.configure({ mode: 'serial' });
 
     contactTest('@regression FFRC28 restricted user should confirm after the cache is cleared, the new limit is correctly applied on a new contact', async ({
       restrictedPage,
@@ -1341,5 +1365,5 @@ contactTest.describe('Form Field Limits — RBAC › Contact', () => {
       );
       logger.success('FFRC28 passed');
     });
-
+  });
 });

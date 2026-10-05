@@ -405,11 +405,20 @@ export class FormFieldsConfigPage extends BasePage {
   private async submit(): Promise<void> {
     await this.click(this.submitButton(), 'Submit (field config)');
     // WHY wrapped (CLAUDE.md rule 3): see open()'s identical comment.
-    await this.withSessionExpiryRecovery(() =>
-      expect(
-        this.page,
-        'Expected navigation back to the Form Fields list after Submit'
-      ).toHaveURL(/\/setup\/fields\/[^/]+\/list/, { timeout: config.timeouts.navigation })
+    // WHY ALSO wrapped in withRateLimitRecovery() (2026-09-30 — real CI
+    // failure, sandbox run 36663556957: Task's FFRTK6 failed here, stuck on
+    // `/setup/fields/tasks/edit/182468` for the full 120000ms wait instead
+    // of navigating back to the list after Submit). Confirmed as the same
+    // incident class as FFRTK7/FFTK8's own confirmed app-error-boundary
+    // interception in this same run/shard, not treated as a coincidence —
+    // see authManager.isAppErrorBoundaryPage()'s own WHY comment.
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page,
+          'Expected navigation back to the Form Fields list after Submit'
+        ).toHaveURL(/\/setup\/fields\/[^/]+\/list/, { timeout: config.timeouts.navigation })
+      )
     );
   }
 
