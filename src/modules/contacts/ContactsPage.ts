@@ -385,8 +385,8 @@ export class ContactsPage extends BasePage {
   // verification.
   // WHY the optional `onlyField` param (2026-09-22, Form Field Limit
   // feature, Contact rollout — reusing the exact reusable architecture
-  // proven for Lead, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5 and
-  // LEAD_FEATURE_RETROSPECTIVE.md §1): this method's unconditional fill of
+  // proven for Lead, see docs/known-issues/form-fields.md and
+  // docs/known-issues/form-fields.md): this method's unconditional fill of
   // all 9 custom fields is the exact same root-cause shape confirmed live
   // for Lead — a test that configures a narrow min/max/regex constraint on
   // ONE field must not also fill every OTHER field with a random default
@@ -468,7 +468,7 @@ export class ContactsPage extends BasePage {
 
     // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
     // LeadsPage.fillLeadCustomFields()'s identical, incident-driven fix
-    // (LEAD_FEATURE_RETROSPECTIVE.md §2.8): a Tab press removes focus from
+    // (docs/known-issues/form-fields.md): a Tab press removes focus from
     // the just-filled field but also ADVANCES it to whatever's next in DOM
     // tab order, which can land on and open an unrelated react-select
     // control (Pick List/Multi Pick List sit immediately after these
@@ -657,7 +657,7 @@ export class ContactsPage extends BasePage {
 
   // WHY the optional `options` param (2026-09-22, Form Field Limit feature,
   // Contact rollout — reusing the exact reusable architecture proven for
-  // Lead, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5): `options.minimal`,
+  // Lead, see docs/known-issues/form-fields.md): `options.minimal`,
   // when true, skips every field this method fills EXCEPT Last Name (the
   // one field confirmed live, via a real minimal-fill save, to be the true
   // save-required minimum for Contact — Contact has no Lead-equivalent

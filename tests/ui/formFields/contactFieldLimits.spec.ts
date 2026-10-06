@@ -1,7 +1,7 @@
 import { test, expect, withContactFormFieldLock } from './contactFormFieldLock';
 // WHY a second, separate `test` import here — mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
-// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// Fix 2 for the dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only
 // protects workers on the SAME filesystem"): confirmed via a complete,
 // per-test code-level audit that every Navigation test below only ever
 // READS field config, never calls configureFieldLimit()/
@@ -36,8 +36,8 @@ import * as path from 'path';
 
 // WHY this is the Contact rollout of the Form Field Limit feature — the
 // SAME reusable architecture already proven for Lead (58/58 tests passing,
-// 0 failed/flaky/skipped — see LEAD_FEATURE_RETROSPECTIVE.md and
-// LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md), not a re-derivation. Every
+// 0 failed/flaky/skipped — see docs/known-issues/form-fields.md and
+// docs/known-issues/form-fields.md), not a re-derivation. Every
 // structural choice below (per-field serial blocks, the accept/reject save
 // split, the minimal-fill architecture) mirrors leadFieldLimits.spec.ts
 // exactly — see that file's own top-of-file comment for the full original
@@ -53,7 +53,7 @@ import * as path from 'path';
 // why this is a parameterized factory rather than a 2nd hand-copied lock
 // file.
 //
-// WHY Contact's own live-confirmed facts (REMAINING_ENTITIES_INVESTIGATION.md,
+// WHY Contact's own live-confirmed facts (docs/known-issues/form-fields.md,
 // cross-checked live again during this implementation — see this session's
 // own diagnostic pass): Contact's CREATE form is a standalone page, NOT
 // `#editEntityModal` (confirmed live: clickAddContact() navigates within
@@ -125,7 +125,7 @@ async function clearContactApplicationCache(targetPage: Page): Promise<void> {
 // WHY exactly two Contact-mutation paths exist below, deliberately
 // different, never merged into one shared function: mirrors
 // leadFieldLimits.spec.ts's own identical split exactly — see that file's
-// top-of-block architecture note (and LEAD_FEATURE_RETROSPECTIVE.md §1) for
+// top-of-block architecture note (and docs/known-issues/form-fields.md) for
 // the full evidence chain this reuses unchanged. In short: a "Save click
 // resolves, zero network request ever fires" symptom is a client-side
 // validation block, not a backend/timing bug — retrying it as transient
@@ -350,7 +350,7 @@ test.describe('Contact Field Limits', () => {
   // — mirrors leadFieldLimits.spec.ts's identical top-of-file comment (see
   // that file for the full reasoning): each of the 6 field-mutating
   // sub-blocks below carries its own `.serial` instead, restored 2026-09-29
-  // as CI-carve-out defense-in-depth (see .claude/known-issues.md's dated
+  // as CI-carve-out defense-in-depth (see docs/known-issues/sharding-and-locks.md's dated
   // 2026-09-29 entry) — kept OUT of this outer block so a failure in one
   // field's tests never skip-cascades an unrelated field's tests in the
   // same file. contactFormFieldLock.ts's own cross-process lock only ever

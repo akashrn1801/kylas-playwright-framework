@@ -1,7 +1,7 @@
 import { test, expect, withLeadFormFieldLock } from './formFieldsTestLock';
 // WHY a second, separate `test` import here — mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
-// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// Fix 2 for the dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only
 // protects workers on the SAME filesystem"): confirmed via a complete,
 // per-test code-level audit that every Navigation test below only ever
 // READS field config, never calls configureFieldLimit()/
@@ -37,7 +37,7 @@ import * as path from 'path';
 
 // WHY this file's 6 field-mutating sub-blocks each carry their own
 // test.describe.configure({ mode: 'serial' }) (restored 2026-09-29 — removed
-// earlier the same day, see .claude/known-issues.md's dated 2026-09-29 entry
+// earlier the same day, see docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry
 // "A cross-process lock only protects workers on the SAME filesystem" for
 // the full incident): every test in these sub-blocks configures or depends
 // on the exact current configuration of one of only 3 shared, account-wide
@@ -89,7 +89,7 @@ import * as path from 'path';
 // the SAME min/max constants a given test itself passes to
 // configureFieldLimit() — never a second, independently-chosen literal
 // that happens to match: per the hard-rule directive, and per
-// FORM_FIELD_LIMIT_INVESTIGATION_FOLLOWUP.md §4's confirmed rule that
+// docs/known-issues/form-fields.md's confirmed rule that
 // Number validates digit-count length (not numeric magnitude) — mechanically
 // identical to Text/Paragraph's own character-length validation, so one
 // "repeat a character N times" builder correctly serves all three field
@@ -105,7 +105,7 @@ const PARAGRAPH_FIELD_INTERNAL_NAME = `cf${LEAD_FORM_FIELD_LIMIT_NAMES.paragraph
 // WHY these specific min/max pairs, not the field type's absolute ceiling:
 // small, fast-to-type values are sufficient to exercise the real
 // under/at/over boundary logic (already confirmed to be a simple length
-// comparison, FORM_FIELD_LIMIT_INVESTIGATION.md §2.5/§2.8) without the
+// comparison, docs/known-issues/form-fields.md) without the
 // runtime cost of typing hundreds of characters per test across 27+
 // boundary tests.
 const TEXT_MIN = 3;
@@ -225,7 +225,7 @@ async function clearLeadApplicationCache(targetPage: Page): Promise<void> {
 // only ever target these 3 custom fields (Text/Paragraph/Number) — this is
 // a deliberately narrow, explicit map, not a generic derivation, matching
 // this codebase's own established "never guess a mapping, hand-verify and
-// hardcode it" convention (e.g. reference-patterns.md §22's layoutCache
+// hardcode it" convention (e.g. docs/PATTERNS.md P30's layoutCache
 // key). Throws on an unmapped name rather than silently no-op'ing, since a
 // typo'd field name here would otherwise silently generate a Lead with the
 // WRONG field set to the test's value — a false pass waiting to happen.
@@ -295,7 +295,7 @@ function buildLeadDataWithFieldOverride(lastName: string, field: LeadFieldUnderT
 
 // Client-side-blocked rejection — applies to EVERY min/max/regex violation
 // in this suite (Number, every Regex option, AND Text/Paragraph min/max):
-// confirmed live (FORM_FIELD_LIMIT_INVESTIGATION.md §2.7/§2.8 for Number/
+// confirmed live (docs/known-issues/form-fields.md for Number/
 // Regex) the inline error appears on blur, before any Save click, and Save
 // itself fires no network request while it's present — checking the inline
 // error directly is therefore sufficient, faster, and more precise proof
@@ -306,8 +306,8 @@ function buildLeadDataWithFieldOverride(lastName: string, field: LeadFieldUnderT
 // dedicated re-investigation (same rigor as the earlier Number-field
 // digit-count resolution, 5 separate live trials, evidence saved to
 // .claude/evidence/failure-triage-investigator/2026-09-21-text-field-
-// inline-error-discrepancy/): FORM_FIELD_LIMIT_INVESTIGATION.md §2.5 (and
-// reference-patterns.md §9's "ParagraphText... no client-side check" line)
+// inline-error-discrepancy/): docs/known-issues/form-fields.md (and
+// docs/PATTERNS.md P31's "ParagraphText... no client-side check" line)
 // both claim Text/Paragraph min/max are validated SERVER-SIDE ONLY, via a
 // generic toast, with NO inline error — this is confirmed WRONG. Live
 // reproduction (2 min/max configs, create AND update forms, Text AND
@@ -619,7 +619,7 @@ test.describe('Lead Field Limits', () => {
     // adminPage is test-scoped (a fresh authenticated Page created and
     // torn down per individual test), so it cannot be injected here.
     // Instead this builds a context directly from the on-disk
-    // storage-state file architecture.md documents as this codebase's own
+    // storage-state file docs/ARCHITECTURE.md documents as this codebase's own
     // stable, public convention (`src/auth/storageStates/<env>/<role>.json`,
     // written once by globalSetup.ts before any test runs) — not a reach
     // into fixtures/index.ts's own private internals.
@@ -952,8 +952,8 @@ test.describe('Lead Field Limits', () => {
 
 
     // WHY this test exists as a real regression assertion, not just left as
-    // a retracted investigation finding: FORM_FIELD_LIMIT_INVESTIGATION_
-    // FOLLOWUP.md §4 fully resolved the original "stuck error" finding as a
+    // a retracted investigation finding: docs/known-issues/form-fields.md
+    // fully resolved the original "stuck error" finding as a
     // false positive — the field's own validation was correct all along; a
     // genuinely-corrected value clears the error and saves normally. This
     // test proves that resolution as living, ongoing coverage rather than
@@ -1112,7 +1112,7 @@ test.describe('Lead Field Limits', () => {
     test.describe.configure({ mode: 'serial' });
     // WHY 5 options fully covered (not just a subset), each with its own
     // configure+valid+invalid triple: per explicit scope requirement — every
-    // real, non-default option confirmed in FORM_FIELD_LIMIT_INVESTIGATION.md
+    // real, non-default option confirmed in docs/known-issues/form-fields.md
     // §2.7's live-confirmed table gets proven coverage, not an assumed
     // extrapolation from the 1-2 options that happened to be spot-checked
     // during investigation. Every valid/invalid value below is generated by
@@ -1333,7 +1333,7 @@ test.describe('Lead Field Limits', () => {
     });
 
     // WHY only ONE option (PAN Card) gets a representative update pair,
-    // rather than repeating this for all 5: FORM_FIELD_LIMIT_INVESTIGATION.md
+    // rather than repeating this for all 5: docs/known-issues/form-fields.md
     // §2.7 already confirmed create/update behave identically for regex
     // (same inline error, same paginated banner, same client-side block) —
     // one full create+update pair proves that equivalence; repeating it per

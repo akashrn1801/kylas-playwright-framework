@@ -6,7 +6,7 @@ import { logger } from '../../../src/utils/logger';
 
 // WHY this factory exists, rather than a 6th (and later, 7th/8th/9th) copy
 // of formFieldsTestLock.ts's own file (2026-09-22, Contact rollout — see
-// LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §3's own explicit instruction to
+// docs/known-issues/form-fields.md's own explicit instruction to
 // decide this before writing a new entity's lock): formFieldsTestLock.ts
 // (Lead's own lock, already verified clean across 58/58 tests and left
 // UNTOUCHED here — zero risk to that already-shipped work) is ~600 lines of

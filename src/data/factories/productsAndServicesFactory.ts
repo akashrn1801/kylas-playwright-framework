@@ -10,7 +10,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // test run (redesigned 2026-08-11, reversing the original "3 permanent
 // fixtures, created once, reused forever" model; confirmed and approved) —
 // and disposable data for the rare test that needs a throwaway product. See
-// .claude/architecture.md's deviation note for the full rationale — do not
+// docs/known-issues/products-and-services.md's deviations section for the full rationale — do not
 // "normalize" this file toward generateXxxData()/generateAdminXxxData()/
 // generateSharedXxxData() being the only data source the way every other
 // factory is.
@@ -254,7 +254,7 @@ export function generateProductsAndServicesData(
     description: faker.commerce.productDescription(),
     // WHY alphanumeric + timestamp: mirrors companyFactory.ts's uniqueText1/2
     // pattern — the closest existing "must be unique" field precedent in this
-    // codebase (see PRODUCTS_AND_SERVICES_PROGRESS.md investigation notes).
+    // codebase (see docs/known-issues/products-and-services.md).
     hsnSacCode: `${faker.string.alphanumeric(6).toUpperCase()}-${ts}`,
     // WHY 'India' (not randomized): confirmed live to exist as a real option
     // on this form; matches this codebase's own existing default-country
@@ -281,7 +281,7 @@ export function generateProductsAndServicesData(
 // (confirmed via `GET /v1/products/layout?view=create` on QA AND staging —
 // both show the identical 8 fields below; PROD confirmed to have none of
 // them yet). PRODUCTS_CUSTOM_FIELD_NAMES is its own single source of truth,
-// per CLAUDE.md's Custom Fields pattern — never import
+// per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import
 // COMPANY_CUSTOM_FIELD_NAMES/DEAL_CUSTOM_FIELD_NAMES here even though the
 // values happen to be identical today: each module owns its own field-name
 // constant so the two can diverge safely later.
@@ -317,7 +317,7 @@ export const PRODUCTS_FORM_FIELD_LIMIT_NAMES = {
 // (Form Field Limit feature, Products & Services rollout, 2026-09-23): the
 // app's IndexedDB `layoutCache` key is not a fixed transformation of the
 // entity name — CONFIRMED as the standing counter-example in this
-// codebase's own known-issues.md (reference-patterns.md §22): Lead/Deal/
+// codebase's own docs (docs/PATTERNS.md P30): Lead/Deal/
 // Contact all use the simple lowercase-plural rule, but Products & Services
 // uses the hyphenated `products-services`, which that rule does not
 // predict. Trusted directly from that already-live-confirmed documentation

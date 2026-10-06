@@ -100,7 +100,7 @@ export class DealsPage extends BasePage {
   // QuotationsPage's own `productIdInput(row)`, and that its "Search ..."
   // placeholder genuinely triggers a live server search when typed into
   // (not just a decorative/disabled field) — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 6 investigation for the full
+  // docs/known-issues/products-and-services.md's Batch 6 investigation for the full
   // evidence. This is the `searchInput` BasePage.addProductRowAndSearchByName()
   // needs — Locators are lazily re-evaluated at action time, so `.last()`
   // correctly resolves to whichever row was just added, even though this
@@ -143,7 +143,7 @@ export class DealsPage extends BasePage {
     this.page.locator('.part-payments-summary .summary-row').nth(2).locator('.summary-value');
 
   // WHY confirmed live (2026-08-10, real root cause behind the T11 Batch 7
-  // failure — see PRODUCTS_AND_SERVICES_PROGRESS.md): adding a product row
+  // failure — see docs/known-issues/products-and-services.md): adding a product row
   // to a deal that already has part-payment installments configured makes
   // the installments no longer sum to the new Total — the app surfaces this
   // as an "unallocated amount" banner + a "Distribute Equally" button, and
@@ -543,7 +543,7 @@ export class DealsPage extends BasePage {
   // `ReportsPage.closeMenuRobustly()`'s exact, already-proven shape
   // (wait for hidden → Escape → wait again → Escape once more → wait
   // again, loud warning on final failure) rather than inventing a new
-  // pattern — this repo's own known-issues.md already flags this exact
+  // pattern — this repo's own docs/PATTERNS.md P13 already flags this exact
   // race as "a genuinely repo-wide risk, not module-specific."
   private async closeIsInvalidMenuRobustly(description: string): Promise<void> {
     const menu = this.page.locator('.is-invalid__menu');
@@ -617,7 +617,7 @@ export class DealsPage extends BasePage {
     // alongside the closeIsInvalidMenuRobustly() fix above): this click was
     // previously unbounded — Playwright's own default action timeout is 0
     // (unbounded) when neither this call nor a global `actionTimeout`
-    // specifies one, confirmed repo-wide convention per known-issues.md.
+    // specifies one, confirmed repo-wide convention per docs/known-issues/locators-and-timing.md.
     // Bounding it turns a silent 8+ minute hang into a fast, diagnosable
     // failure if a leftover backdrop (see above) or any other transient
     // block ever exhausts the menu-close recovery above.
@@ -844,7 +844,7 @@ export class DealsPage extends BasePage {
   // and skips the other 8 entirely when provided. Every existing caller
   // omits it and gets byte-for-byte the original fill-everything behavior.
   // The blur-fix below mirrors the same incident-driven fix documented in
-  // LEAD_FEATURE_RETROSPECTIVE.md §2.8.
+  // docs/known-issues/form-fields.md
   // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
   // feature's cross-shard-collision fix — see DEAL_FORM_FIELD_LIMIT_NAMES's
   // own comment in dealFactory.ts for the full incident): lets a caller fill
@@ -1448,7 +1448,7 @@ export class DealsPage extends BasePage {
 
   /**
    * @param skipTotalMathCheck Skips ONLY the final Total-Received=Remaining
-   *        check (fixed 2026-08-10 — see PRODUCTS_AND_SERVICES_PROGRESS.md).
+   *        check (fixed 2026-08-10 — see docs/known-issues/products-and-services.md).
    *        Status/received/remaining-vs-total checks above it still run
    *        unconditionally. Set when the caller just added a product row
    *        mid-edit (`updateDeal()`'s `productNameToAttach`) — that
@@ -1723,7 +1723,7 @@ export class DealsPage extends BasePage {
   // WHY `productNameToAttach` is a new, OPTIONAL 4th parameter, not a change
   // to any existing behavior: `updateDeal()` never touched products at all
   // before this — confirmed by reading its own pre-existing body plus
-  // `fillEditForm()`'s (see PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 6
+  // `fillEditForm()`'s (see docs/known-issues/products-and-services.md's Batch 6
   // investigation). Every existing caller that doesn't pass this 4th arg
   // gets byte-for-byte identical behavior (the `if` block below is simply
   // never reached). Only a dedicated Products & Services integration test
@@ -1771,7 +1771,7 @@ export class DealsPage extends BasePage {
       // WHY only the total-math sub-check is skipped, not the whole
       // assertion, when `productNameToAttach` was just used (fixed
       // 2026-08-10, real failure found via a genuinely new Batch 7 test —
-      // see PRODUCTS_AND_SERVICES_PROGRESS.md): adding a NEW product row
+      // see docs/known-issues/products-and-services.md): adding a NEW product row
       // legitimately increases the deal's Total (auto-calculated from
       // products), but the existing part-payment installments were split
       // against the OLD, smaller total set at create time and don't
@@ -2052,7 +2052,7 @@ export class DealsPage extends BasePage {
 
   // WHY a bounded reopen-and-retry loop around the modal-open + render-settle
   // sequence, not a single pass (redesigned 2026-08-23 — see
-  // .claude/sandbox-build-144-task-a-deals-clone.md): the FIRST version of
+  // docs/known-issues/locators-and-timing.md): the FIRST version of
   // this redesign made the Name-field-shows-"Copy" wait non-fatal and simply
   // proceeded to click Save regardless. Verifying that change with 10 real
   // trials under `--workers=2` surfaced a genuine, confirmed correctness
@@ -2223,7 +2223,7 @@ export class DealsPage extends BasePage {
   // reasoning already proven for assertRightPanelIconVisible()'s reload-and-
   // retry elsewhere in this codebase). This is a defensive hardening
   // attempt for the test suite, not a substitute for the real app-side fix
-  // — see PROD_BUILD4_INVESTIGATION.md's drafted bug report for Cluster 2.4.
+  // — see docs/known-issues/locators-and-timing.md's drafted bug report for Cluster 2.4.
   async assertClonedFromFieldOnDetail(originalDealName: string): Promise<void> {
     await this.click(this.internalsDetailPageTab(), 'Internals tab');
     try {
@@ -2395,7 +2395,7 @@ export class DealsPage extends BasePage {
   // `<div class="no-associated-entity">...No Contacts found...</div>` —
   // the card is empty in the UI despite the API having real data. This is a
   // genuine, user-facing Kylas product defect (documented in full in
-  // CLAUDE.md's Known Issues) — separate from, but the direct cause of, a
+  // docs/known-issues/rbac-and-test-isolation.md) — separate from, but the direct cause of, a
   // second problem: these three methods used to scrape that same broken
   // card, so they were fooled by it too, reporting "no contact" for deals
   // that genuinely had one. Fixed by reading the deal's own GET response

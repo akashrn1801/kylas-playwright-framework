@@ -1,13 +1,13 @@
 import { test, expect, withCompanyFormFieldLock } from './companyFormFieldLock';
 // WHY a second, separate `test` import here (2026-09-29 — Fix 2 for the
-// dated known-issues.md entry, "A cross-process lock only protects workers
+// dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only protects workers
 // on the SAME filesystem" / the lock-starvation-amplifier follow-up):
 // `test` above (from companyFormFieldLock.ts) auto-acquires the "companies"
 // form-field-config lock for EVERY test that uses it, via an `auto: true`
 // fixture wrapping the whole test body — correct and necessary for tests
 // that actually MUTATE that shared, account-wide config, but genuinely
 // unnecessary (and, per real CI evidence, actively harmful under load — see
-// the known-issues.md entry) for the Navigation block below, which never
+// the docs/known-issues/sharding-and-locks.md entry) for the Navigation block below, which never
 // mutates anything. `baseTest` is the plain, lock-free fixture set —
 // confirmed via a complete, per-test code-level audit (not a guessed
 // pattern) that every Navigation test below only ever READS field config
@@ -48,7 +48,7 @@ import * as path from 'path';
 
 // WHY this is the Company rollout of the Form Field Limit feature — the
 // SAME reusable architecture already proven for Lead and Contact (see
-// LEAD_FEATURE_RETROSPECTIVE.md/LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md),
+// docs/known-issues/form-fields.md),
 // not a re-derivation. Two structural decisions changed for Company,
 // deliberately, per explicit direction after Contact shipped:
 //
@@ -138,7 +138,7 @@ async function clearCompanyApplicationCache(targetPage: Page): Promise<void> {
 // Company create/update flow for this feature — architecture note
 // ============================================================================
 // WHY exactly two Company-mutation paths exist below: mirrors leadFieldLimits.spec.ts's/
-// contactFieldLimits.spec.ts's own identical split exactly — see LEAD_FEATURE_RETROSPECTIVE.md
+// contactFieldLimits.spec.ts's own identical split exactly — see docs/known-issues/form-fields.md
 // §1 for the full evidence chain this reuses unchanged.
 // ============================================================================
 

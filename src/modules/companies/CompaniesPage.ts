@@ -575,8 +575,8 @@ export class CompaniesPage extends BasePage {
   // be updated to reflect reality before it's used for later verification.
   // WHY the optional `onlyField` param (2026-09-22, Form Field Limit
   // feature, Company rollout — reusing the exact reusable architecture
-  // proven for Lead/Contact, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5
-  // and LEAD_FEATURE_RETROSPECTIVE.md §1): fills ONLY the one field under
+  // proven for Lead/Contact, see docs/known-issues/form-fields.md
+  // and docs/known-issues/form-fields.md): fills ONLY the one field under
   // test and skips the other 8 entirely when provided — every existing
   // caller omits it and gets byte-for-byte the same fill-everything
   // behavior as before.
@@ -654,7 +654,7 @@ export class CompaniesPage extends BasePage {
 
     // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
     // LeadsPage.fillLeadCustomFields()'s/ContactsPage.fillContactCustomFields()'s
-    // identical, incident-driven fix (LEAD_FEATURE_RETROSPECTIVE.md §2.8).
+    // identical, incident-driven fix (docs/known-issues/form-fields.md).
     if (onlyField !== undefined) {
       await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     }
@@ -696,7 +696,7 @@ export class CompaniesPage extends BasePage {
   }
 
   // WHY the optional `options` param — mirrors ContactsPage.fillContactForm()'s
-  // own, more-detailed WHY comment (LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // own, more-detailed WHY comment (docs/known-issues/form-fields.md
   // §5): `options.minimal` skips every field except Name (confirmed live to
   // be the true save-required minimum for Company — no Pipeline-equivalent
   // dependency, no toggle needed). Every existing caller omits `options` and
@@ -1680,7 +1680,7 @@ export class CompaniesPage extends BasePage {
     // WHY (2026-09-07, PROD Build #4): the previous `.includes('/deals')`
     // substring only excluded the one previously-found `/v4/reports/deals`
     // collision — narrower than the fully-versioned pattern rule 15/
-    // known-issues.md actually requires (confirmed via DealsPage.ts's own
+    // docs/PATTERNS.md P17 actually requires (confirmed via DealsPage.ts's own
     // captureDealIdFromResponse(), which already uses the versioned form).
     // Tightened to match that standard rather than leaving this call site
     // (flagged as "highest-risk, not independently re-reproduced" on

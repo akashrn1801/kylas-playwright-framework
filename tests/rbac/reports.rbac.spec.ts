@@ -26,7 +26,7 @@ import { logger } from '../../src/utils/logger';
 
 // WHY label prefix 'R', continuing from reports.spec.ts's R1-R37 — see that
 // file's own comment for why this module shares one continuous numbering
-// space across both files from the start (.claude/architecture.md §13).
+// space across both files from the start (docs/PATTERNS.md P33).
 test.describe('Reports RBAC', () => {
   // WHY duplicated here rather than imported from reports.spec.ts: this
   // codebase's own convention keeps UI and RBAC spec files independent,
@@ -769,7 +769,7 @@ test.describe('Reports RBAC', () => {
 
     // WHY a uniquely-tagged Last Name + filtered report: shares the exact
     // root cause and fix as reports.spec.ts's R36 — see that test's own WHY
-    // comment and .claude/known-issues.md's Sandbox Build #147 investigation
+    // comment and docs/known-issues/reports-module.md's Sandbox Build #147 investigation
     // (revised 2026-08-25) for the full evidence. Not independently
     // re-investigated as a separate root cause since it's byte-identical.
     const uniqueLastName = `R64-delete-check-${Date.now()}`;

@@ -220,7 +220,7 @@ function resolveRefId(map: Map<string, number>, name: string, fieldLabel: string
 // documented mechanism exactly — the real accessToken lives inside the JWT's
 // own payload (`payload.data.accessToken`), not the raw token string itself.
 // Confirmed live via the identical decode during this module's own
-// investigation (see PRODUCTS_AND_SERVICES_PROGRESS.md).
+// investigation (see docs/known-issues/products-and-services.md).
 async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<string> {
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
@@ -248,7 +248,7 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
 // unprotected HTTP calls per job (2 GETs + 3 product-create POSTs), with
 // ZERO retry anywhere — are exposed to real, transient HTTP 429s under this
 // feature's own increased CI concurrency. The formFields CI carve-out (see
-// .claude/known-issues.md's dated 2026-09-29 entry) raised sandbox's peak
+// docs/known-issues/rate-limits-and-error-pages.md) raised sandbox's peak
 // concurrent globalSetup invocations from 8 to 10 (6 dedicated formFields
 // shards + 4 rest-of-suite shards, all starting within the same ~30s
 // window). Direct evidence this is real, not coincidental: the prior 8-job
@@ -268,7 +268,7 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
 // only delay a real failure by up to ~15s while producing 3x the noise, per
 // this exact codebase's own established distinction elsewhere (e.g.
 // createCompany/createLead/createContact's transient-vs-real-400
-// classification in known-issues.md's "RBAC test-isolation and app-bug
+// classification in docs/known-issues/rbac-and-test-isolation.md's "RBAC test-isolation and app-bug
 // investigations" entry).
 const TRANSIENT_HTTP_ERROR_PATTERN = /\bHTTP (429|5\d\d)\b/;
 
@@ -362,7 +362,7 @@ async function createOneProductFixture(
 
   // WHY this exact body shape, field by field: network-captured live
   // (2026-08-10) from a real UI Save click — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's investigation notes. Not derived
+  // docs/known-issues/products-and-services.md's investigation notes. Not derived
   // from the response shape (which differs in small ways, e.g. `disabled`
   // appears on countryOfOrigin/category's response objects but was absent
   // from the real request's `units` entries) — this is the literal request

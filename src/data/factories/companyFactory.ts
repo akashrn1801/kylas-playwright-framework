@@ -8,7 +8,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // custom fields as Lead/Contact/Deal, with identical names/types and
 // identical DOM/locator conventions (see BasePage's "Custom Field Helpers").
 // Company has NO lookup-type custom field, same as Deal. COMPANY_CUSTOM_FIELD_NAMES
-// is its own single source of truth, per CLAUDE.md's Custom Fields pattern —
+// is its own single source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) —
 // never import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES/
 // DEAL_CUSTOM_FIELD_NAMES here even though the values happen to be identical
 // today: each module owns its own field-name constant so the two can diverge
@@ -81,7 +81,7 @@ export const generateCompanyCustomFieldInvalidParagraphText = (max = 2550): stri
 // its own field-name constant so the two can diverge safely later"
 // reasoning already established in this file's own top-of-file comment,
 // applied here to Regex-shape generators too): confirmed live
-// (REMAINING_ENTITIES_INVESTIGATION.md, and directly re-confirmed for
+// (docs/known-issues/form-fields.md, and directly re-confirmed for
 // Company this session) that the Text field's Regex dropdown offers the
 // identical 5 real format options on every entity — but there is no
 // guarantee that holds forever, and this module should not silently start

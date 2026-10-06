@@ -337,7 +337,7 @@ export class ReportsPage extends BasePage {
   // `#updatedActionBtn` on the Create form and `#updateActionBtn` on the
   // Edit form — one letter apart, easily missed — the identical dual-id
   // shape already documented for this exact gotcha in
-  // `.claude/reference-patterns.md`'s Save-button note for other modules.
+  // `docs/PATTERNS.md`'s Save-button note for other modules.
   private readonly saveButton = (): Locator =>
     this.page.locator('#updatedActionBtn, #updateActionBtn');
 
@@ -407,7 +407,7 @@ export class ReportsPage extends BasePage {
       .filter({ hasText: text });
   // WHY `button#confirm.btn-danger`: confirmed live — the identical shared
   // delete-confirm modal component every other module in this codebase
-  // already uses (`.claude/reference-patterns.md`'s own note that this shape
+  // already uses (`docs/PATTERNS.md`'s own note that this shape
   // is shared codebase-wide), not a Reports-specific one.
   private readonly deleteConfirmButton = (): Locator => this.page.locator('button#confirm.btn-danger');
   // WHY two distinct `#openActionsMenu` buttons, disambiguated by parent
@@ -929,7 +929,7 @@ export class ReportsPage extends BasePage {
     const available = options.some((opt) => opt.trim() === 'Quotation');
     test.skip(
       !available,
-      'Quotation report entity type not yet deployed to this environment (confirmed QA-only as of 2026-09-09) — skipping until it ships to stage/prod; see .claude/known-issues.md'
+      'Quotation report entity type not yet deployed to this environment (confirmed QA-only as of 2026-09-09) — skipping until it ships to stage/prod; see docs/known-issues/ci-pipelines.md'
     );
   }
 
@@ -1077,7 +1077,7 @@ export class ReportsPage extends BasePage {
   // thin, locator-adapted copy of its already-proven rc-time-picker
   // column-click sequence, matching this file's own established precedent of
   // NOT sharing `selectDateInPicker()` across modules for the same reason
-  // (see `.claude/known-issues.md` item 19 — several native date pickers in
+  // (see `docs/KNOWN_ISSUES_ACTIVE.md` KI-24 — several native date pickers in
   // this codebase are independently duplicated per module rather than
   // consolidated).
   private async fillTimeInPicker(input: Locator, date: Date, description: string): Promise<void> {
@@ -1516,7 +1516,7 @@ export class ReportsPage extends BasePage {
   // suffix) returned 10 rows in a live check, most of them unrelated
   // leftover reports from other runs that merely share that one word — the
   // exact same false-positive class already documented for Quotations'
-  // assertQuotationInList() (.claude/known-issues.md item 17). An "any
+  // assertQuotationInList() (docs/KNOWN_ISSUES_ACTIVE.md KI-23). An "any
   // non-empty result" check would have passed regardless of whether our own
   // report was really among them. reportRowByName()'s `hasText` filter is a
   // real, client-side substring check against each row's own rendered text
@@ -2080,7 +2080,7 @@ export class ReportsPage extends BasePage {
 
   // WHY this exists, and why it retries ONLY this one exact signature:
   // confirmed live 2026-08-25 (see APPLICATION_BUGS.md's dedicated entry and
-  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // docs/known-issues/reports-module.md for full evidence)
   // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
   // `POST /v3/reports` for a newly-created Meeting report deterministically
   // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
@@ -2142,7 +2142,7 @@ export class ReportsPage extends BasePage {
 
   // WHY this exists, and why the retry below is a FALLBACK, never the
   // default path: confirmed live 2026-08-25 (see APPLICATION_BUGS.md #4 and
-  // .claude/known-issues.md's Sandbox Build #147 section for full evidence)
+  // docs/known-issues/reports-module.md for full evidence)
   // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
   // `POST /v3/reports` for a newly-created Meeting report deterministically
   // (5/5 reproduced) returns HTTP 500 with `code: "01403004"` (message and
@@ -2236,8 +2236,8 @@ export class ReportsPage extends BasePage {
   // synthetic wait, and is arguably a MORE correct check (it re-proves the
   // report engine's own read path, not just the passage of time).
   // WHY the optional `filters` param, added 2026-08-25 (R36/R64 flakiness
-  // investigation — see .claude/known-issues.md's "Sandbox Build #147
-  // investigation" section for the full root-cause writeup): every existing
+  // investigation — see docs/known-issues/reports-module.md
+  // for the full root-cause writeup): every existing
   // caller of this method (14 across reports.spec.ts/reports.rbac.spec.ts)
   // only ever needs "report total >= a tight-window API ground truth,"
   // which already tolerates the report's own coarse ±1-day date window

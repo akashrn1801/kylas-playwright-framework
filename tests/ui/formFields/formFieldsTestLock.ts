@@ -10,7 +10,7 @@ import { logger } from '../../../src/utils/logger';
 // tests/rbac/formFields.rbac.spec.ts are two SEPARATE spec files, each
 // independently wrapped in its own test.describe.configure({ mode:
 // 'serial' }) — but Playwright's serial mode is a per-file guarantee
-// only, confirmed at the framework's own source in .claude/known-issues.md's
+// only, confirmed at the framework's own source in docs/known-issues/sharding-and-locks.md's
 // "Sharding order-dependency audit". Both files mutate the exact same
 // account-wide, single-instance Lead custom-field configuration
 // (cfTextField/cfNumber/cfParagraphText) — not disposable per-test data.
@@ -22,8 +22,7 @@ import { logger } from '../../../src/utils/logger';
 // racing writes to the same field.
 //
 // CONFIRMED WORKER-COUNT TABLE (2026-09-21, read directly from the real
-// files — CONTEXT.md/KYLAS_FRAMEWORK_GUIDE.md referenced elsewhere do not
-// exist in this repo, per FORM_FIELD_LIMIT_INVESTIGATION.md §1.0, so this
+// files — no separate context/guide docs exist in this repo, so this
 // was verified against the actual CI config instead of assumed):
 //   GitHub Actions: dev.yml=1 (and @smoke-only — excludes every config-
 //     mutating test in both files, so genuinely not exposed to this race),
@@ -89,7 +88,7 @@ import { logger } from '../../../src/utils/logger';
 // test.describe.configure({mode:'serial'}) spanning both files were NOT
 // chosen: `dependencies` is already confirmed unsafe for this repo's CI
 // shape (silently bypasses --grep filtering, re-runs the whole dependency
-// a second time across separate invocations — see .claude/known-issues.md's
+// a second time across separate invocations — see docs/known-issues/sharding-and-locks.md's
 // Reports-module section). A single shared describe block would require
 // merging leadFieldLimits.spec.ts and formFields.rbac.spec.ts into one
 // file, breaking the deliberate, explicit architectural separation this
@@ -543,7 +542,7 @@ function releaseLeadFormFieldLock(holderId: string): void {
 // has no .serial override (deliberate — see this file's own top-of-file
 // blast-radius-reduction comment in leadFieldLimits.spec.ts), it falls into
 // Playwright's own `parallelWithHooks` chunking (confirmed at the
-// framework's source — see known-issues.md's "Sharding order-dependency
+// framework's source — see docs/known-issues/sharding-and-locks.md's "Sharding order-dependency
 // audit"), which can and does split it into multiple independently-
 // scheduled chunks, each running its OWN copy of afterAll. Under real
 // --workers=2, this let an entirely UNLOCKED afterAll clear cfTextField/

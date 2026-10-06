@@ -145,7 +145,7 @@ function attachErrorListeners(page: Page): void {
 // ── Role page lifecycle (shared by adminPage + restrictedPage) ────────────────
 
 // WHY 'wrongPage' as its own named outcome, not folded into 'timeout'
-// (2026-09-09 — see .claude/known-issues.md's dated entry for the full
+// (2026-09-09 — see docs/known-issues/ci-pipelines.md for the full
 // investigation and reasoning): this used to be a strict two-outcome race
 // (sales / signIn) where ANYTHING else silently became 'timeout' — correct
 // for a genuinely hung/unresponsive load, but WRONG for a page that loaded
@@ -199,7 +199,7 @@ type NavOutcome = 'sales' | 'signIn' | 'wrongPage' | 'timeout';
 // attempt — rather than blindly starting a wait it structurally cannot
 // finish before Playwright's own blunt, contextless kill fires. Mirrors this
 // codebase's own already-proven pattern for the identical class of problem —
-// see `.claude/known-issues.md`'s CI reporting-history entry, where a fixed
+// see `docs/known-issues/reporting-and-notifications.md`, where a fixed
 // retry-delay list was replaced with a real elapsed-time-bounded backoff for
 // the same underlying reason ("a bigger guessed number is still a disguised
 // ceiling").
@@ -262,7 +262,7 @@ async function navigateAndConfirmLoggedIn(
       // (found and fixed 2026-08-26 — this exact line was flagged by the
       // pre-commit hook as a genuine pre-existing blind-wait call that
       // happened to move into the staged diff, the same class of catch
-      // already documented in known-issues.md's Sandbox Build #144 entry):
+      // already documented in docs/known-issues/locators-and-timing.md):
       // a failed goto() can still be completing its navigation in the
       // background (it can throw on the waitUntil condition timing out
       // while the page genuinely finishes loading moments later) — waiting
@@ -485,7 +485,7 @@ async function createRolePage(
     } catch (recoveryError) {
       // WHY: a transient failure here (e.g. a CDP-level browser.newContext()
       // Protocol error — confirmed real, sandbox run 32839778416, 2026-08-25,
-      // see known-issues.md) must not burn the remaining retry attempt. Log
+      // see docs/known-issues/locators-and-timing.md) must not burn the remaining retry attempt. Log
       // and fall through — the next loop iteration's own
       // getContextForRole()/navigateAndConfirmLoggedIn() below gets a
       // genuine second try (getContextForRole() has its own "no valid state,

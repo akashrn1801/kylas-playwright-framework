@@ -1600,7 +1600,7 @@ export class LeadsPage extends BasePage {
   // React's own bubble-phase delegated handler ever seeing it. This is the
   // exact same failure family already confirmed and fixed once in this
   // codebase for a different element (a react-select menu) — see
-  // `.claude/reference-patterns.md` §18: the `viasocket.com` chatbot
+  // `docs/PATTERNS.md` P13: the `viasocket.com` chatbot
   // widget, embedded on every page, is confirmed to perform its own async
   // DOM/event work shortly after page interactions; the captured evidence
   // here directly shows its own `embedfrontend.viasocket.com/cdn-cgi/
@@ -1850,7 +1850,7 @@ export class LeadsPage extends BasePage {
       // WHY Social (facebook/twitter/linkedIn) added here (2026-09-08, Hide-
       // Empty-Fields work): previously edit-only scoped to firstName/lastName/
       // Salutation/Requirement/custom-fields (see this method's own historical
-      // scoping note in known-issues.md) — Social was deliberately left out
+      // scoping note in docs/known-issues/rbac-and-test-isolation.md) — Social was deliberately left out
       // because every other candidate needing edit support so far was a
       // react-select (real re-selection risk on a pre-filled form). Social's
       // 3 fields are plain `<input>` fills, identical risk profile to
@@ -2175,7 +2175,7 @@ export class LeadsPage extends BasePage {
     // WHY: Capture the DELETE response before clicking — never end a mutation
     // with only a fixed-duration sleep (CLAUDE.md rule #2). Mirrors
     // DealsPage.deleteDeal()'s already-proven shape; see
-    // .claude/known-issues.md's Build #147 entry for why the previous
+    // docs/known-issues/locators-and-timing.md's Build #147 entry for why the previous
     // unconditional 1s pause here was masking a real "report count checked
     // before the delete actually committed" failure.
     const deleteResponsePromise = this.armResponseWaitWithRecovery(
@@ -2244,7 +2244,7 @@ export class LeadsPage extends BasePage {
       .catch(() => false);
     if (emailFieldReady) {
       // WHY this second wait (mirrors DealsPage.cloneDeal()'s proven
-      // Name-field pre-fill-content check, reference-patterns.md §4): the
+      // Name-field pre-fill-content check, docs/PATTERNS.md P5): the
       // field being VISIBLE doesn't guarantee its pre-filled VALUE has
       // committed yet — waiting for a real, non-empty value is the actual
       // readiness signal the original comment above incorrectly assumed

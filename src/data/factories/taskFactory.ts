@@ -7,7 +7,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // WHY: Task has the same 8 custom fields as Meeting (Text, Paragraph, Number,
 // PickList, Checkbox, Date, DateTimePicker, UrlField — no MultiPickList;
 // child entities never get one). TASK_CUSTOM_FIELD_NAMES is its own single
-// source of truth, per CLAUDE.md's Custom Fields pattern — never import
+// source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import
 // MEETING_CUSTOM_FIELD_NAMES here even where values happen to coincide.
 //
 // CORRECTED 2026-08-06, real live evidence, not the 2026-08-01 claim this

@@ -273,7 +273,7 @@ export function generateReportData(overrides: Partial<ReportData> = {}): ReportD
 }
 
 // WHY ADM<timestamp> prefix — same RBAC-isolation convention documented in
-// .claude/architecture.md's "Test Data Factories" section — guarantees a
+// docs/ARCHITECTURE.md's data-factories section — guarantees a
 // restricted user's negative-visibility assertion against this report can
 // never collide with old, never-cleaned-up QA report data (this environment
 // already has 100+ permanent pre-existing reports, confirmed live).

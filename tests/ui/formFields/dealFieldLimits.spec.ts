@@ -1,7 +1,7 @@
 import { test, expect, withDealFormFieldLock } from './dealFormFieldLock';
 // WHY a second, separate `test` import here — mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
-// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// Fix 2 for the dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only
 // protects workers on the SAME filesystem"): confirmed via a complete,
 // per-test code-level audit that every Navigation test below only ever
 // READS field config, never calls configureFieldLimit()/
@@ -128,7 +128,7 @@ async function clearDealApplicationCache(targetPage: Page): Promise<void> {
 // WHY exactly two Deal-mutation paths exist below: mirrors
 // leadFieldLimits.spec.ts's/contactFieldLimits.spec.ts's/
 // companyFieldLimits.spec.ts's/taskFieldLimits.spec.ts's own identical
-// split exactly — see LEAD_FEATURE_RETROSPECTIVE.md §1 for the full
+// split exactly — see docs/known-issues/form-fields.md for the full
 // evidence chain this reuses unchanged.
 // ============================================================================
 
