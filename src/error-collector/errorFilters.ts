@@ -261,7 +261,7 @@ export function isNoise(message: string, url?: string): boolean {
 // different status than every other module's 422/029003 RBAC pattern.
 // Without this, a correctly-passing Products RBAC test still shows up as an
 // "unexpected background error" in misc-errors.json — see
-// .claude/architecture.md's Products & Services deviations section (item 4).
+// docs/known-issues/products-and-services.md's deviations section (item 4).
 //
 // WHY these arrays are now actually load-bearing (fixed 2026-08-11 — found
 // while adding the 403/00902001 entry): confirmed these were declared and
@@ -321,7 +321,7 @@ export function isExpectedRbacError(
 // entity CRUD/detail/search/layout endpoint (e.g. /v1/deals/\d+$, */search,
 // */layout*, /v1/users/me$, /v1/tasks/\d+/complete) is intentionally EXCLUDED —
 // those ARE load-bearing (waitForXDetailsPage() etc. depend on them per
-// CLAUDE.md's canonical patterns), so a real 4xx/5xx there must keep surfacing as
+// docs/PATTERNS.md's canonical patterns), so a real 4xx/5xx there must keep surfacing as
 // unexpected. Do not add an endpoint here without the same live-evidence bar —
 // widening this list is exactly the "band-aid that could bury a real outage"
 // risk this mechanism exists to avoid.
@@ -417,7 +417,7 @@ const BACKGROUND_WIDGET_CONNECTION_ERROR_PATTERN =
   /ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_(RESET|REFUSED|TIMED_OUT)|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED/i;
 
 // WHY: confirmed live 2026-07-18 — Lead/Contact's custom "Paragraph Text"
-// field has no client-side length check (see CLAUDE.md's Custom Fields
+// field has no client-side length check (see docs/PATTERNS.md P31's custom-field
 // section) and is only rejected server-side on Save with this generic
 // "Uhoh! Your data is invalid" message. The dedicated negative tests
 // ("should see validation errors for invalid custom field values and not

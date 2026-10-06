@@ -8,7 +8,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // custom fields as Lead/Contact/Deal, with identical names/types and
 // identical DOM/locator conventions (see BasePage's "Custom Field Helpers").
 // Company has NO lookup-type custom field, same as Deal. COMPANY_CUSTOM_FIELD_NAMES
-// is its own single source of truth, per CLAUDE.md's Custom Fields pattern —
+// is its own single source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) —
 // never import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES/
 // DEAL_CUSTOM_FIELD_NAMES here even though the values happen to be identical
 // today: each module owns its own field-name constant so the two can diverge
@@ -26,6 +26,105 @@ export const COMPANY_CUSTOM_FIELD_NAMES = {
 } as const;
 
 export type CompanyCustomFieldKey = keyof typeof COMPANY_CUSTOM_FIELD_NAMES;
+
+// WHY this separate constant exists, not reusing COMPANY_CUSTOM_FIELD_NAMES's
+// own textField/paragraphText/number values (2026-09-28, post-sandbox-CI
+// cross-shard collision fix): COMPANY_CUSTOM_FIELD_NAMES's cfTextField/
+// cfParagraphText/cfNumber are real, shared, account-wide fields that every
+// OTHER Company test (not just this feature) also fills with realistic,
+// unconstrained random data. The Form Field Limit feature's own tests
+// transiently set/clear Regex and Min/Max Length constraints on whichever
+// field they target — confirmed live via a real 8-shard sandbox CI run
+// (160/898 unrelated test failures, spread across 10 modules) that any other
+// concurrently-running test filling the SAME shared field can catch it
+// mid-mutation and fail validation, with no cross-shard mutual exclusion
+// possible (the config lock is a local-filesystem lock, scoped to one CI
+// runner — see formFieldLockFactory.ts's own header comment). The human
+// operator created 3 brand-new, dedicated custom fields per entity
+// (confirmed live on QA, 2026-09-28: internal names exactly
+// cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph,
+// types Text Field/Number/Paragraph Text, rendering correctly on the real
+// create form) that NOTHING else in this codebase touches — eliminating the
+// collision at its root instead of trying to synchronize around it. This
+// feature's own test files must use ONLY this constant, never
+// COMPANY_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const COMPANY_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
+// WHY this constant, and why it must NOT be derived from COMPANY_CUSTOM_
+// FIELD_NAMES or the entity name (2026-09-22, Form Field Limit feature,
+// Company rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY/
+// CONTACT_LAYOUT_CACHE_KEY): the app's IndexedDB `layoutCache` key is not a
+// fixed transformation of the entity name. This is Company's own hand-
+// verified key, confirmed live via a direct IndexedDB dump, for
+// BasePage.clearApplicationCache() — never guess this value.
+export const COMPANY_LAYOUT_CACHE_KEY = 'companies';
+
+// ── Invalid values for negative testing (Form Field Limit feature) ──────
+// WHY an optional `max` param, defaulting to the field type's own absolute
+// ceiling: mirrors leadFactory.ts's/contactFactory.ts's identical fix —
+// this file has no pre-existing callers of these two generators (Company's
+// factory never needed them before this feature), so there is no
+// backward-compatibility constraint to preserve; the optional-default
+// shape is adopted from the start for consistency with the other 2
+// entities' identical generators.
+export const generateCompanyCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
+export const generateCompanyCustomFieldInvalidParagraphText = (max = 2550): string =>
+  'B'.repeat(max + 1);
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY duplicated here rather than imported from leadFactory.ts/
+// contactFactory.ts (2026-09-22, Company rollout — same "each module owns
+// its own field-name constant so the two can diverge safely later"
+// reasoning already established in this file's own top-of-file comment,
+// applied here to Regex-shape generators too): confirmed live
+// (docs/known-issues/form-fields.md, and directly re-confirmed for
+// Company this session) that the Text field's Regex dropdown offers the
+// identical 5 real format options on every entity — but there is no
+// guarantee that holds forever, and this module should not silently start
+// emitting a different value shape the moment another entity's own
+// investigation is updated for an unrelated reason. Every value here is
+// still cross-checked against the pattern read LIVE off the config page at
+// test-run time (never trusted from the generator alone).
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+// WHY the fixed, real `example.com` domain, not a random fake one: mirrors
+// leadFactory.ts's/contactFactory.ts's own generateValidEmailFormatValue()
+// and its documented reasoning (a random-domain value was the confirmed
+// trigger for a load-dependent Lead create-POST timeout, FFL36) — applied
+// here preemptively.
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
 
 export interface CompanyCustomFieldData {
   textField: string;

@@ -806,6 +806,101 @@ export async function isSessionExpiryPage(page: Page): Promise<boolean> {
   return FORBIDDEN_PAGE_PATTERN.test(bodyText);
 }
 
+// WHY this exists, and why it's a SEPARATE check from isSessionExpiryPage()
+// above rather than folded into it (2026-09-29, confirmed live via trace.zip
+// inspection of sandbox run 36541336794's Company/Task formFields shards —
+// see docs/known-issues/session-expiry-and-auth.md for the full incident): a
+// genuinely different app-level page state, with a genuinely different
+// cause and recovery action. Under real concurrent CI load (10 shards x 2
+// workers hammering the same staging backend), the Form Fields list's own
+// data-fetch endpoint (`/v1/<entity>/fields?...`) can receive a real HTTP
+// 429 from the backend, and the app's OWN React error boundary renders this
+// exact, dedicated "Whoa! Too many requests at once!" full-page state in
+// place of the list — confirmed via extracted screencast frames spanning
+// the entire multi-minute hang this caused. This page has no auto-retry
+// (only a manual "Refresh" button a real user would click) — nothing in
+// this codebase detected or recovered from it before this fix, so a test
+// that hit it mid-action just rode its own full test timeout waiting for a
+// DOM element (e.g. the search input) that had already been silently
+// replaced and would never come back on its own.
+const RATE_LIMIT_PAGE_PATTERN = /Too many requests at once/i;
+
+export async function isRateLimitedPage(page: Page): Promise<boolean> {
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  return RATE_LIMIT_PAGE_PATTERN.test(bodyText);
+}
+
+// WHY clicking the app's own "Refresh" button, not a bare page.reload()
+// (2026-09-29): mirrors this codebase's existing standing preference
+// (already established for session recovery, which does a real re-login
+// rather than a shortcut) of simulating the real, intended user recovery
+// path rather than a lower-fidelity workaround. Falls back to a hard
+// reload only if the button itself can't be found/clicked (e.g. the error
+// boundary rendered something even more degenerate than the confirmed-live
+// shape) — never silently does nothing.
+export async function tryRecoverFromRateLimit(page: Page): Promise<void> {
+  logger.warn(
+    '[authManager] Rate-limited page detected ("Too many requests at once") — clicking Refresh and retrying'
+  );
+  const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
+  const clicked = await refreshButton
+    .click({ timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!clicked) {
+    logger.warn('[authManager] Could not click the app\'s own Refresh button — falling back to a hard page reload');
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+  }
+}
+
+// WHY this second, genuinely different bad-app-state check exists
+// (2026-09-30 — real CI evidence, sandbox run 36663556957: Company's
+// FFRCO13, Task's FFRTK6/FFRTK7/FFTK8, and Products & Services' FFPS24/
+// FFPS21 all failed in the same run): confirmed via direct log evidence —
+// NOT the 429 "Too many requests" page (that pattern never matched here) —
+// a DIFFERENT, generic Kylas frontend error-boundary/fallback component,
+// confirmed live in two distinct real shapes: `<span class="error-msg">
+// Something is broken here</span>` scoped to a single card/widget
+// (Company's own case — a "card w-100 mb-20" container), and
+// `<div class="app-error something-is-broken">` scoped to the ENTIRE app
+// root (Task's own case — `<div id="app">`), each intercepting pointer
+// events on whatever real control a test was trying to interact with. This
+// is the SAME reusable component at two different mounting scopes (proven
+// by the shared "something-is-broken"/"something is broken" text and CSS
+// naming), not two unrelated bugs — a real, generic React-error-boundary-
+// style fallback the Kylas frontend renders when SOME component's own
+// data-fetch/render fails, at whatever level of the component tree the
+// nearest boundary happens to be. Neither occurrence produced a `pageerror`
+// or `console-error` ErrorCollector could see (checked directly against
+// both runs' own misc-errors.json — zero relevant entries in either),
+// consistent with a deliberately-caught error a React error boundary
+// swallows internally rather than letting bubble to an uncaught-exception
+// handler. Root cause of WHY the underlying component fails is not
+// established here (out of scope for a test-code fix — see CLAUDE.md rule
+// 10, this is a defensive hardening fix, not a proven root-cause fix for
+// whatever the app's own underlying failure is) — this only detects and
+// recovers from the resulting KNOWN bad UI state, the same class of fix
+// already proven for the 429 page immediately above.
+const APP_ERROR_BOUNDARY_PATTERN = /something is broken/i;
+
+export async function isAppErrorBoundaryPage(page: Page): Promise<boolean> {
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  return APP_ERROR_BOUNDARY_PATTERN.test(bodyText);
+}
+
+// WHY a plain reload only, no "Refresh"-button attempt (unlike
+// tryRecoverFromRateLimit() above): neither confirmed real occurrence of
+// this error-boundary state showed any button at all in its captured DOM —
+// a generic error-boundary fallback typically doesn't ship its own retry
+// affordance the way the app's own dedicated 429 page does. A hard reload
+// is the only real recovery action available.
+export async function tryRecoverFromAppErrorBoundary(page: Page): Promise<void> {
+  logger.warn(
+    '[authManager] App error-boundary state detected ("Something is broken") — reloading and retrying'
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+}
+
 // ── Session-expiry-aware waitForResponse (2026-07-20) ────────────────────────
 // WHY this exists: `click()`/`fill()`/`navigateTo()` all recover from a mid-
 // test session expiry, but a `page.waitForResponse()` armed to capture a

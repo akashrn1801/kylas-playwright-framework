@@ -15,7 +15,7 @@ pipeline {
     // WHY (2026-09-10): this job always targets the SAME STAGING credentials
     // (see 'Setup Environment' below) — two overlapping builds would race the
     // same shared admin/restricted accounts, the same credential-file class of
-    // risk already documented in CLAUDE.md's "Concurrent-Worker Credential
+    // risk already documented in docs/known-issues/session-expiry-and-auth.md's "Concurrent-Worker Credential
     // File Race" section, just at the Jenkins-job level. No trigger in this
     // file makes concurrent runs likely, but nothing prevented a human from
     // triggering a second "Build Now" while one is still in flight either —
@@ -122,7 +122,7 @@ REPORT_PATH=reports/playwright-report/results.json
           // "tests were attempted but something genuinely prevented a
           // report" (a real infra failure — still alert). Same fix as the
           // base Jenkinsfile — see its own identical WHY comment and
-          // .claude/known-issues.md's 2026-09-10 entry.
+          // docs/known-issues/ci-pipelines.md's 2026-09-10 entry.
           env.TESTS_ATTEMPTED = 'true'
           echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
           // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
@@ -132,7 +132,7 @@ REPORT_PATH=reports/playwright-report/results.json
           // via bash parameter expansion inside the single-quoted sh block
           // below, never Groovy-string-interpolated (same reasoning as the
           // credential itself — a real bound env var, resolved by bash, never
-          // appears in a logged command string). See .claude/known-issues.md's
+          // appears in a logged command string). See docs/known-issues/ci-pipelines.md's
           // dynamic-duration-estimate entry for the full design and for why
           // this file's OWN existing "Sync run history" call below needed the
           // identical fix — confirmed via direct grep that neither ever had a
@@ -207,7 +207,7 @@ REPORT_PATH=reports/playwright-report/results.json
         // during Install/Setup Environment/Detect Changed Tests) still hits
         // NotificationService's "Report not found" alert, even though no
         // report was ever supposed to exist for that build. Full
-        // investigation: .claude/known-issues.md's 2026-09-10 entry.
+        // investigation: docs/known-issues/ci-pipelines.md's 2026-09-10 entry.
         if (env.TESTS_ATTEMPTED == 'true') {
           try {
             sh 'npm run notify || true'

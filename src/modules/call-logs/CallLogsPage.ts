@@ -1219,7 +1219,7 @@ export class CallLogsPage extends BasePage {
   // WHY 'plain' passed explicitly on every call: Call Log's custom-field ids
   // use the shorter `_input_cf<Name>` suffix, not the `_input_
   // customFieldValues.cf<Name>` suffix parent entities use — confirmed live
-  // 2026-07-31, matching CLAUDE.md's own documented finding that Meetings
+  // 2026-07-31, matching docs/PATTERNS.md's documented finding that Meetings
   // and Call Logs share this convention. Mirrors
   // MeetingsPage.fillMeetingCustomFields()'s identical structure.
   private async fillCallLogCustomFields(cf: CallLogCustomFieldData): Promise<void> {

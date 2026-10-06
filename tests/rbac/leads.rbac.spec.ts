@@ -767,7 +767,7 @@ test.describe('Leads RBAC', () => {
     // WHY (2026-09-07, PROD Build #4): this used to be a raw, unbounded
     // click with no timeout/retry/reload-fallback — under real PROD load
     // this exact right-panel-icon-visibility-can-lag-after-share race
-    // (reference-patterns.md §5) has no bound of its own and can consume
+    // (docs/PATTERNS.md P23) has no bound of its own and can consume
     // the whole 480s test timeout, surfacing later as a confusing "browser
     // has been closed" error on an unrelated downstream step. Reuse the
     // existing bounded reload-and-retry helper instead of a raw locator

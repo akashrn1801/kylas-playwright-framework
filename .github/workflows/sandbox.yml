@@ -14,7 +14,7 @@ on:
 # escapes the ceiling; see qa.yml's own WHY comment for the full reasoning
 # (worker-tuning blocked by the documented --workers=1 credential-race risk;
 # self-hosted runner not needed once sharding clears the ceiling with large
-# margin) and .claude/known-issues.md's dated 2026-09-09 entry for the full
+# margin) and docs/known-issues/sharding-and-locks.md's dated 2026-09-09 entry for the full
 # investigation, INCLUDING a separate, related finding from the same
 # incident: the "Sync run history"/"Send notification email" steps ran
 # during GitHub's post-cancellation grace period and picked up a stale,
@@ -46,6 +46,25 @@ on:
 # dynamic and this one already had the matrix INFRASTRUCTURE to support it
 # trivially); else a single shard (`--shard=1/1`, a verified no-op) for
 # every other, smaller selective target.
+#
+# WHY the escalated branch now calls scripts/plan-shards.ts instead of the
+# old inline count-based arithmetic (2026-09-29): `--shard=N/M` is
+# Playwright's own internal splitter — it slices the discovered test list
+# purely by count, with zero awareness of file boundaries or shared state.
+# That's the exact mechanism that caused the formFields cross-shard config-
+# mutation race (see docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry).
+# scripts/plan-shards.ts replaces it with a discovery-and-bin-pack planner
+# that treats each spec FILE as the atomic unit — never splits one file
+# across two shards — while still targeting the same 125-tests/shard budget,
+# and EXCLUDES formFields' 12 files via a hardcoded path-prefix check (never
+# a flag a caller could omit). This is deliberately used ONLY in the
+# escalated branch (the only one that can ever produce more than 1 shard —
+# see the "decide" step's own WHY comment for why the non-escalated branch
+# must NOT go through this planner: detect-tests.sh can select formFields
+# paths directly for a formFields-specific change, and those must still run,
+# unsharded, exactly as before). Full design/verification history:
+# docs/known-issues/sharding-and-locks.md's dated 2026-09-29 "Dynamic per-module shard
+# planner" entry.
 jobs:
   detect:
     name: detect target + shard plan
@@ -56,6 +75,13 @@ jobs:
       shards_json: ${{ steps.decide.outputs.shards_json }}
       workers: ${{ steps.decide.outputs.workers }}
       test_count: ${{ steps.decide.outputs.test_count }}
+      # WHY (2026-09-29): see the "decide" step's own WHY comment on the
+      # formFields carve-out. Only 'true' when TARGET is the escalated
+      # full-regression case — the ONLY case where run-tests is ever
+      # actually sharded (SHARD_TOTAL>1), which is the only case the
+      # cross-shard race this carve-out defends against can occur in.
+      run_formfields_track: ${{ steps.decide.outputs.run_formfields_track }}
+      formfields_entities_json: ${{ steps.sharedConfig.outputs.formfields_entities_json }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -132,41 +158,98 @@ jobs:
             exit 1
           fi
           echo "Test count: $TEST_COUNT"
-          if [ "$TEST_COUNT" -gt 50 ]; then
+          # WHY this exact string match (2026-09-09, unchanged): "--grep
+          # @regression" is the literal, only string detect-tests.sh's Rule 1
+          # (core framework file changed) emits — the same escalation that
+          # produced the 499-test, 6-hour-plus run this fix addresses. Every
+          # other branch of detect-tests.sh (smoke fallback, per-module test
+          # paths) produces a materially smaller target that has never
+          # approached the timeout ceiling AND always runs as a single shard
+          # (SHARD_TOTAL=1 below) — so only THIS one branch can ever actually
+          # split tests across more than one GitHub Actions runner.
+          #
+          # WHY the formFields carve-out (scripts/plan-shards.ts /
+          # run_formfields_track) is gated on this exact same condition
+          # (2026-09-29, planner swapped in same day): the cross-shard
+          # config-mutation race this carve-out defends against
+          # (docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry) can only ever
+          # happen when run-tests is actually sharded (SHARD_TOTAL>1) — which
+          # only happens in this branch. CRITICALLY, this branching must be
+          # preserved exactly, not simplified to "always call the planner":
+          # in the small-selective (else) branch below, detect-tests.sh CAN
+          # select formFields paths directly (e.g. a change to a formFields
+          # spec/page-object file) — those tests must still run, unsharded,
+          # via $TARGET as-is. Routing that branch through plan-shards.ts
+          # too would silently DROP those formFields tests entirely (the
+          # script's hardcoded exclusion has no awareness of "were these
+          # explicitly selected on purpose") — a real regression, not a
+          # safety improvement, since SHARD_TOTAL is always 1 there anyway,
+          # meaning the existing local lock is already fully correct on its
+          # own with zero cross-shard exposure to defend against.
+          if [ "$TARGET" = "--grep @regression" ]; then
+            RUN_FORMFIELDS_TRACK=true
+            # WHY scripts/plan-shards.ts here, not the old inline arithmetic:
+            # see this workflow's own top-of-file WHY comment for the full
+            # file-atomic-bin-packing rationale. The script writes its own
+            # shard_total/shards_json/test_count directly to $GITHUB_OUTPUT;
+            # TEST_COUNT_REST is read back from that same file immediately
+            # after (a real file, safely re-readable within one step) purely
+            # to drive the WORKERS decision below.
+            npx ts-node scripts/plan-shards.ts --grep @regression
+            TEST_COUNT_REST=$(grep '^test_count=' "$GITHUB_OUTPUT" | tail -1 | cut -d'=' -f2)
+            echo "Rest-of-suite test count (excluding formFields, carved out separately): $TEST_COUNT_REST"
+          else
+            RUN_FORMFIELDS_TRACK=false
+            TEST_COUNT_REST=$TEST_COUNT
+            # WHY files:[] here (2026-09-29): an empty file list signals to
+            # run-tests below "no file-atomic plan was computed for this
+            # branch — fall back to running $TARGET as-is via --shard=1/1",
+            # exactly matching this branch's pre-existing, unchanged
+            # behavior. See run-tests' own WHY comment for how it branches
+            # on this.
+            echo "shard_total=1" >> "$GITHUB_OUTPUT"
+            echo "shards_json=[{\"shardId\":1,\"files\":[],\"testCount\":$TEST_COUNT}]" >> "$GITHUB_OUTPUT"
+            echo "test_count=$TEST_COUNT" >> "$GITHUB_OUTPUT"
+          fi
+          # WHY sized off TEST_COUNT_REST, not the original TEST_COUNT
+          # (2026-09-29): WORKERS now governs only run-tests' own invocation
+          # of $TARGET below — formFields' own dedicated track always
+          # uses a fixed workers=2, independent of this decision.
+          if [ "$TEST_COUNT_REST" -gt 50 ]; then
             WORKERS=2
           else
             WORKERS=1
           fi
-          # WHY this exact string match (2026-09-09): "--grep @regression" is
-          # the literal, only string detect-tests.sh's Rule 1 (core framework
-          # file changed) emits — the same escalation that produced the
-          # 499-test, 6-hour-plus run this fix addresses. Every other branch
-          # of detect-tests.sh (smoke fallback, per-module test paths)
-          # produces a materially smaller target that has never approached
-          # the timeout ceiling, so only this one case needs sharding.
-          if [ "$TARGET" = "--grep @regression" ]; then
-            # WHY 125 tests/shard, ceiling division (2026-09-09): identical
-            # formula and derivation to qa.yml/stage.yml/main.yml's own —
-            # see this file's top-of-file WHY comment. Reuses the SAME
-            # TEST_COUNT already computed above for the WORKERS decision, no
-            # extra API call needed. No "SHARD_TOTAL < 1" floor is needed —
-            # TEST_COUNT is now guaranteed >= 1 by the check above.
-            TARGET_TESTS_PER_SHARD=125
-            SHARD_TOTAL=$(( (TEST_COUNT + TARGET_TESTS_PER_SHARD - 1) / TARGET_TESTS_PER_SHARD ))
-            SHARDS_JSON="[$(seq 1 "$SHARD_TOTAL" | paste -sd, -)]"
-            echo "Core framework file changed -> full regression escalation -> sharding into $SHARD_TOTAL (dynamic: $TEST_COUNT tests / $TARGET_TESTS_PER_SHARD per shard)"
-          else
-            SHARD_TOTAL=1
-            SHARDS_JSON="[1]"
-          fi
+          # WHY target=$TARGET unconditionally, not a formFields-stripped
+          # TARGET_REST (2026-09-29): in the escalated branch, $TARGET is
+          # always exactly "--grep @regression" — passed through to
+          # run-tests below alongside the planner's own resolved file list,
+          # re-applying the same tag filter WITHIN those files (a file can
+          # contain some non-@regression tests alongside its @regression
+          # ones). In the non-escalated branch, $TARGET is used as-is via
+          # --shard=1/1, fully unchanged from before this fix.
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "shard_total=$SHARD_TOTAL" >> "$GITHUB_OUTPUT"
-          echo "shards_json=$SHARDS_JSON" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
-          echo "test_count=$TEST_COUNT" >> "$GITHUB_OUTPUT"
+          echo "run_formfields_track=$RUN_FORMFIELDS_TRACK" >> "$GITHUB_OUTPUT"
+
+      # WHY this step exists (2026-09-30, Part 2/E1 of the contributor-guide-
+      # and-guardrails work — see docs/CONTRIBUTING_TESTS.md §C and
+      # config/sharedConfigSuites.json's own header): see qa.yml's identical
+      # step for the full reasoning — one shared source of truth for the
+      # run-formfields-tests matrix below instead of 4 independently
+      # hardcoded copies. No new latency concern here specifically (unlike
+      # qa.yml/stage.yml/main.yml) — run-formfields-tests already depends on
+      # this job (`needs: detect`) for its own run_formfields_track gate.
+      - name: Read shared-config-suite entities for the formFields job matrix
+        id: sharedConfig
+        run: |
+          node -e "
+            const cfg = require('./config/sharedConfigSuites.json');
+            console.log('formfields_entities_json=' + JSON.stringify(cfg.formFields.entities));
+          " >> "$GITHUB_OUTPUT"
 
   run-tests:
-    name: playwright-selective (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
+    name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
     needs: detect
     runs-on: ubuntu-latest
     # WHY 180 (2026-09-09): sized for the escalated (4-shard, ~90 min/shard
@@ -198,7 +281,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run selective tests (shard ${{ matrix.shard }}/${{ needs.detect.outputs.shard_total }})
+      - name: Run selective tests (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
         env:
           ENV: staging
           CI: true
@@ -218,9 +301,10 @@ jobs:
           WORKERS="${{ needs.detect.outputs.workers }}"
           SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
           TEST_COUNT="${{ needs.detect.outputs.test_count }}"
+          FILES="${{ join(matrix.shard.files, ' ') }}"
           START_TIME=$(date +%s)
           echo "⏱️  Started at: $(date '+%H:%M:%S')"
-          echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS | Shard: ${{ matrix.shard }}/$SHARD_TOTAL"
+          echo "📋 Test count: $TEST_COUNT | Workers: $WORKERS | Shard: ${{ matrix.shard.shardId }}/$SHARD_TOTAL"
           # WHY estimate-duration only on shard 1 (2026-09-09): the historical
           # duration data it reads reflects a full UNSHARDED run's total time
           # — printing it identically on every shard of an escalated run
@@ -228,10 +312,9 @@ jobs:
           # against ci/reporting-history for zero added benefit. Still runs
           # unconditionally for the common, non-escalated (single-shard)
           # case, unchanged from before this fix.
-          if [ "${{ matrix.shard }}" = "1" ]; then
+          if [ "${{ matrix.shard.shardId }}" = "1" ]; then
             BRANCH_NAME=sandbox WORKERS=$WORKERS npm run estimate-duration --silent || true
           fi
-          echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET --shard=${{ matrix.shard }}/$SHARD_TOTAL"
           # WHY --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
           # instead of the config's default reporter array (verified live,
           # 2026-09-09 — see merge.config.ts's own WHY comment for the full
@@ -243,9 +326,29 @@ jobs:
           # rather than two different ones depending on whether escalation
           # happened. MiscErrorReporter runs HERE, per shard, because its
           # data comes from THIS shard's own live per-worker temp files.
-          npx playwright test --project=chromium --workers=$WORKERS $TARGET \
-            --shard=${{ matrix.shard }}/$SHARD_TOTAL \
-            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          #
+          # WHY branching on whether FILES is non-empty (2026-09-29): a
+          # non-empty file list means the detect job's escalated branch ran
+          # scripts/plan-shards.ts and resolved this shard's own exact,
+          # formFields-free file set — pass those files directly (file-
+          # atomic, no --shard flag). An EMPTY file list means the common,
+          # non-escalated case (detect job's else branch) — preserved
+          # completely unchanged from before this fix: run $TARGET as-is via
+          # --shard=1/1, which may legitimately include formFields paths
+          # directly (detect-tests.sh can select them for a formFields-
+          # specific change) — safe here because this path is, by
+          # construction, always exactly 1 shard, so no cross-shard race is
+          # possible.
+          if [ -n "$FILES" ]; then
+            echo "Running (file-atomic): npx playwright test --project=chromium $TARGET --workers=$WORKERS $FILES"
+            npx playwright test --project=chromium $TARGET --workers=$WORKERS $FILES \
+              --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          else
+            echo "Running: npx playwright test --project=chromium --workers=$WORKERS $TARGET --shard=${{ matrix.shard.shardId }}/$SHARD_TOTAL"
+            npx playwright test --project=chromium --workers=$WORKERS $TARGET \
+              --shard=${{ matrix.shard.shardId }}/$SHARD_TOTAL \
+              --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          fi
           EXIT_CODE=$?
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
@@ -253,7 +356,7 @@ jobs:
           SECONDS=$((ELAPSED % 60))
           echo ""
           echo "⏱️  Finished at: $(date '+%H:%M:%S')"
-          echo "✅ Shard ${{ matrix.shard }}/$SHARD_TOTAL total time: ${MINUTES}m ${SECONDS}s"
+          echo "✅ Shard ${{ matrix.shard.shardId }}/$SHARD_TOTAL total time: ${MINUTES}m ${SECONDS}s"
           exit $EXIT_CODE
 
       # WHY blob-report/ uploaded per shard, then merged by the job below
@@ -264,7 +367,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: blob-report-sandbox-${{ matrix.shard }}
+          name: blob-report-sandbox-${{ matrix.shard.shardId }}
           path: blob-report/
           retention-days: 3
           if-no-files-found: warn
@@ -276,7 +379,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: misc-errors-sandbox-${{ matrix.shard }}
+          name: misc-errors-sandbox-${{ matrix.shard.shardId }}
           path: reports/staging/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
@@ -284,7 +387,133 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: playwright-test-results-sandbox-${{ matrix.shard }}
+          name: playwright-test-results-sandbox-${{ matrix.shard.shardId }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # WHY this job exists, separate from run-tests' own dynamic shard matrix,
+  # and WHY it's conditional on run_formfields_track (2026-09-29): confirmed
+  # via real sandbox run 36520337903 that formFields' per-entity cross-
+  # process config lock (formFieldLockFactory.ts/formFieldsTestLock.ts) is
+  # `fs`-based and scoped to ONE runner's own filesystem — it provides zero
+  # protection the moment an entity's UI spec file and its RBAC sibling
+  # (which target the exact same shared, account-wide dedicated custom
+  # fields) land on two DIFFERENT shards, which run-tests' own count-based
+  # Playwright sharding does not prevent (see docs/known-issues/sharding-and-locks.md's dated
+  # 2026-09-29 entry for the full incident: every one of the 6 entities'
+  # UI/RBAC file pairs landed on different shards in that run, producing
+  # genuine, evidence-confirmed config-mutation races). Fix: give formFields
+  # its own fixed, content-addressed shard plan — one shard per entity, each
+  # running that entity's UI+RBAC file pair together, always — rather than
+  # relying on Playwright's own opaque, count-based, reshuffle-prone
+  # chunking to keep them co-located. This holds regardless of how many
+  # shards run-tests itself computes, how the suite grows, or how
+  # Playwright's internal grouping behaves in a future version — the
+  # pairing is fixed by this matrix, not derived. Gated on
+  # run_formfields_track (see the detect job's own WHY comment): only the
+  # escalated full-regression case ever shards run-tests at all, so this is
+  # the only case where the race this job defends against can occur — the
+  # small-selective case always runs as one shard, where the existing local
+  # lock is already fully correct on its own.
+  run-formfields-tests:
+    name: playwright-formFields (${{ matrix.entity }})
+    # WHY sequenced AFTER run-tests (2026-10-06): see qa.yml's identical
+    # comment for the full reasoning. Here the pre-existing run_formfields_track
+    # gate is KEPT and combined with `!cancelled()`: `needs: [detect, run-tests]`
+    # alone would apply the implicit success() gate and skip formFields
+    # whenever any core shard failed. detect stays in `needs` because the
+    # matrix and the gate read its outputs. If run-tests is ever skipped
+    # (e.g. detect failed upstream), run_formfields_track is empty and this job
+    # is skipped by its own gate, exactly as before; if detect succeeded and
+    # run-tests were skipped for any other reason, `!cancelled()` still lets
+    # formFields run.
+    needs: [detect, run-tests]
+    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
+    runs-on: ubuntu-latest
+    # WHY 180 (2026-09-29): real measured per-entity total test time (this
+    # entity's UI+RBAC files combined, first-attempt durations summed from
+    # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
+    # docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry for the full
+    # derivation. 180 gives ~1.6-2x margin over the slowest entity (Lead).
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        entity: ${{ fromJSON(needs.detect.outputs.formfields_entities_json) }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
+        env:
+          ENV: staging
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+        run: |
+          START_TIME=$(date +%s)
+          echo "⏱️  Started at: $(date '+%H:%M:%S')"
+          # WHY no --shard/--timeout flag here: this job's own matrix IS the
+          # shard plan (fixed, one entity per job) — Playwright's own
+          # --shard flag is deliberately never used for this track. Each
+          # spec file's own test.describe.configure({ timeout: 480000 })
+          # already governs its tests' timeout; no CLI --timeout override
+          # is layered on top, matching how these same files already ran
+          # before this fix.
+          npx playwright test --project=chromium --workers=2 \
+            tests/ui/formFields/${{ matrix.entity }}FieldLimits.spec.ts \
+            tests/rbac/formFields/${{ matrix.entity }}FieldLimits.rbac.spec.ts \
+            --reporter=blob,list,./src/reporters/MiscErrorReporter.ts
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo "✅ formFields/${{ matrix.entity }} total time: ${MINUTES}m ${SECONDS}s"
+          exit $EXIT_CODE
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: blob-report-sandbox-formfields-${{ matrix.entity }}
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: misc-errors-sandbox-formfields-${{ matrix.entity }}
+          path: reports/staging/misc-errors.json
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-test-results-sandbox-formfields-${{ matrix.entity }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
@@ -297,7 +526,7 @@ jobs:
   # Build #167 false-"PASSED" incident.
   merge-and-report:
     name: merge report + notify
-    needs: [detect, run-tests]
+    needs: [detect, run-tests, run-formfields-tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -322,6 +551,45 @@ jobs:
           pattern: blob-report-sandbox-*
           path: all-blob-reports
           merge-multiple: true
+
+      # WHY this step (2026-09-28, real sandbox run 36430891548): shard 4/8
+      # crashed in globalSetup (0 tests, no blob uploaded) and shard 1/8 was
+      # cancelled by run-tests' own 180-min timeout (no blob uploaded either)
+      # — the merge step below has NO knowledge of shard_total, so it
+      # silently merged the 6 remaining shards' 673 tests as if that were
+      # the whole 898-test run, and the notification faithfully reported
+      # "Failed: 127" with no indication that 2 whole shards (~25% of the
+      # suite) never contributed any pass/fail signal at all. This is a
+      # DETECTION gap, not a merge bug — playwright merge-reports has no way
+      # to know a shard was supposed to exist but didn't upload. A loud,
+      # impossible-to-miss build annotation is the fix here, not a silent
+      # log line — this must be caught by whoever reviews the run, not
+      # require someone to already suspect a missing shard and go count
+      # artifacts by hand.
+      - name: Verify all shards reported
+        run: |
+          SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
+          # WHY +6 conditionally here (2026-09-29): run-formfields-tests adds
+          # its own fixed 6-shard, one-per-entity matrix (see that job's own
+          # WHY comment) whenever run_formfields_track is 'true' — its blob
+          # artifacts (blob-report-sandbox-formfields-*) match the SAME
+          # download pattern above (blob-report-sandbox-*) and land in the
+          # same all-blob-reports directory, so the expected total must
+          # include them or this check would false-positive "missing shards"
+          # on every escalated run.
+          FORMFIELDS_SHARDS=0
+          if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
+            FORMFIELDS_SHARDS=6
+          fi
+          EXPECTED_TOTAL=$((SHARD_TOTAL + FORMFIELDS_SHARDS))
+          ACTUAL_COUNT=$(find all-blob-reports -maxdepth 1 -name '*.zip' | wc -l)
+          echo "Expected shard reports: $EXPECTED_TOTAL ($SHARD_TOTAL rest-of-suite + $FORMFIELDS_SHARDS formFields) | Actually downloaded: $ACTUAL_COUNT"
+          if [ "$ACTUAL_COUNT" -lt "$EXPECTED_TOTAL" ]; then
+            MISSING=$((EXPECTED_TOTAL - ACTUAL_COUNT))
+            echo "::error::Sharded run incomplete — $MISSING of $EXPECTED_TOTAL shard(s) never uploaded a blob report (the shard's job crashed before completing, or was cancelled/timed out). The merged Total/Passed/Failed counts below come from only $ACTUAL_COUNT/$EXPECTED_TOTAL shards and UNDERSTATE the real run — do NOT treat them as the whole suite. Check this run's per-job status (Actions tab) to see which shard(s) are missing and why."
+          else
+            echo "All $EXPECTED_TOTAL shards reported successfully."
+          fi
 
       - name: Merge shard reports into one HTML/JSON report
         run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
@@ -354,7 +622,7 @@ jobs:
           # never a guessed value.
           WORKERS: ${{ needs.detect.outputs.workers }}
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true
@@ -364,6 +632,9 @@ jobs:
         env:
           ENV: staging
           BRANCH_NAME: sandbox
+          # WHY (2026-09-29): Phase 3 items #1/#6 — see dev.yml's identical
+          # comment for the full reasoning.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com

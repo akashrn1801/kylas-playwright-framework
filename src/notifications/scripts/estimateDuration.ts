@@ -3,7 +3,7 @@
  * current workflow/Jenkinsfile invocation — replacing the hardcoded
  * "Estimated duration: ~N min" echo lines every workflow used to carry
  * (one of which, stage.yml's "~44 min," was found wrong by ~6x — see the
- * dated .claude/known-issues.md entry for the full incident and design).
+ * duration-estimate entry in docs/known-issues/ci-pipelines.md for the full incident and design).
  *
  * WHY a separate script from syncHistory.ts, not folded into it: this is a
  * READ-ONLY companion (fetch + inspect the ci/reporting-history branch,

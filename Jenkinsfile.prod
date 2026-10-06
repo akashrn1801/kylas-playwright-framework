@@ -8,8 +8,8 @@ pipeline {
     // WHY (2026-09-10): this job's own Approval Gate already assumes one
     // human-gated run at a time against PRODUCTION; without this, a second
     // manual trigger could run concurrently against the SAME shared PROD
-    // credentials — the Jenkins-job-level version of the risk CLAUDE.md's
-    // "Concurrent-Worker Credential File Race" section documents at the
+    // credentials — the Jenkins-job-level version of the risk
+    // docs/known-issues/session-expiry-and-auth.md's "Concurrent-Worker Credential File Race" entry documents at the
     // Playwright-worker level, and the highest-stakes place in this repo for
     // that race to happen. Not an intentional use case for this pipeline.
     // NOTE: this does not close the cross-pipeline overlap between THIS job
