@@ -171,8 +171,7 @@ export class MeetingsPage extends BasePage {
   // Other Details (index 1) / Internals (index 2) — a different index than
   // Deal/Company, since Meeting has fewer standard-field tabs. Filtering by
   // the tab's own stable text avoids hardcoding an index that's already
-  // proven to drift entity-to-entity (see CLAUDE.md's Company custom-field
-  // entry, which documents the identical index shifting for that entity).
+  // proven to drift entity-to-entity (the same index shift was seen on Company's detail tabs).
   private readonly otherDetailsDetailPageTab = () =>
     this.page.locator('a.nav-item.nav-link').filter({ hasText: 'Other Details' });
 
@@ -816,7 +815,7 @@ export class MeetingsPage extends BasePage {
   // validation problem. This is the same class of transient-permission-
   // propagation race already tolerated elsewhere in this codebase's RBAC
   // tests (poll/retry on a transient permission error rather than failing
-  // immediately — see CLAUDE.md's RBAC testing philosophy) — NOT a blanket
+  // immediately — see docs/PATTERNS.md P40-P42) — NOT a blanket
   // retry-as-band-aid: it only retries when the specific 422/01503001 is
   // observed on the network, so a genuinely different validation error
   // (any other error code, or no response at all) still fails immediately,

@@ -123,7 +123,7 @@ function slugify(title: string, used: Set<string>): string {
   // otherwise silently share one HTML id, breaking anchor navigation for
   // whichever one isn't first — confirmed this is a real, if rare,
   // possibility given this codebase's per-module sequential test-labeling
-  // convention (CLAUDE.md's Reference Patterns §13) rather than assumed safe.
+  // convention (docs/PATTERNS.md P33) rather than assumed safe.
   while (used.has(candidate)) {
     candidate = `test-${base}-${suffix}`;
     suffix += 1;

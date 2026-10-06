@@ -373,7 +373,7 @@ test.describe('Deals', () => {
     const clonedId = await dealsPage.cloneDeal();
     // WHY the primary correctness signal is now ID-based, not a mid-render
     // UI field read (redesigned 2026-08-23 — see
-    // .claude/sandbox-build-144-task-a-deals-clone.md): cloneDeal()'s
+    // docs/known-issues/locators-and-timing.md): cloneDeal()'s
     // clonedId comes from a genuine network response (a discrete, hard
     // event), not a DOM snapshot that can be caught half-rendered.
     expect(clonedId).not.toBeNull();
@@ -437,7 +437,7 @@ test.describe('Deals', () => {
     // (2026-07-27): this test's whole purpose is verifying the contact becomes
     // visible in the "Associated Contacts" UI card — deliberately reads the UI,
     // not the API, so it keeps surfacing the confirmed, real, unresolved
-    // app-level display bug (see CLAUDE.md's Known Issues) if it's still present.
+    // app-level display bug (see docs/known-issues/rbac-and-test-isolation.md) if it's still present.
     const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
     // WHY: Real end-state check — reload and re-read the card count.
@@ -479,7 +479,7 @@ test.describe('Deals', () => {
   // custom-field helpers for the environment-safety skip logic that makes
   // these tests (and every other Deal create/update path) work unchanged
   // once that happens. Deal has no lookup-type custom field, unlike Lead —
-  // no lookup-specific tests here (see CLAUDE.md's Custom Fields entry).
+  // no lookup-specific tests here (see docs/PATTERNS.md P58).
 
   // ── D37 ───────────────────────────────────────────────────
 
@@ -532,7 +532,7 @@ test.describe('Deals', () => {
   // (Products & Services) fix: this is genuinely Deal-specific behavior —
   // adding a product to a deal that already has part-payment installments
   // configured — not a Products & Services concern at all. Root-caused and
-  // fixed 2026-08-10 (see PRODUCTS_AND_SERVICES_PROGRESS.md): the app
+  // fixed 2026-08-10 (see docs/known-issues/products-and-services.md): the app
   // correctly detects the resulting Total/installment mismatch and blocks
   // Save until "Distribute Equally" is resolved — a real, working app
   // feature, not a bug. This test verifies the app's OWN detection and the
@@ -664,7 +664,7 @@ test.describe('Deals', () => {
     // WHY count occurrences BEFORE removal, not just check the name exists:
     // fillDealForm()'s random product picker can independently select the
     // SAME product for two different rows in one deal (confirmed live,
-    // real, non-rare — see PRODUCTS_AND_SERVICES_PROGRESS.md Entry 37's
+    // real, non-rare — see docs/known-issues/products-and-services.md Entry 37's
     // "3 BHK" picked twice example) — so a removed row's name can still
     // legitimately appear in a surviving row. Found live via this exact
     // test: an earlier version asserted zero remaining occurrences and

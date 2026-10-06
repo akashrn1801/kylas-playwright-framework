@@ -7,6 +7,11 @@ src/auth/storageStates/
 src/auth/storageStates/*.json
 src/data/productFixtures/
 src/data/productFixtures/*.json
+# WHY: runtime cross-process lock directories used by
+# tests/ui/formFields/formFieldsTestLock.ts to serialize the two Form
+# Field Limit spec files' shared-config mutations across concurrent CI
+# workers — created/removed at test time, never meant to be committed.
+.locks/
 .env
 *.json.bak
 .DS_Store

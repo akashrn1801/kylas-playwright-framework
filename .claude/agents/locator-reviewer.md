@@ -34,7 +34,7 @@ private readonly someButton = (): Locator => this.page.getByRole(...)
 
 #### 1.2 — Check Locator Priority Order
 
-Per `.claude/reference-patterns.md` section 10, the priority is:
+This repo's locator priority order is (internal-name rule: `docs/PATTERNS.md` P21):
 1. **Role + accessible name** — `getByRole('button', { name: 'Save' })`
 2. **Label** — `getByLabel('Email')`
 3. **Text** — `getByText('Click me')`, preferably with `exact: true`
@@ -71,7 +71,7 @@ grep -n "getByText('[A-Z]" src/modules/SomeModule.ts | grep -v "exact: true"
 
 #### 1.4 — Check for Known Collision Risks
 
-Refer to `.claude/engineering-checklist.md` rule 17: "A locator that is unique today can become ambiguous the moment a sibling field/button is added elsewhere in the DOM."
+Refer to `CLAUDE.md` standing rule 17 (details: `docs/PATTERNS.md` P22): "A locator that is unique today can become ambiguous the moment a sibling field/button is added elsewhere in the DOM."
 
 Specifically:
 - If the locator uses `getByPlaceholder('Pick a Date')` unscoped, check whether other Date/DateTimePicker fields might exist on the same page (Deal's estimated-closure-date collision precedent)
@@ -167,11 +167,11 @@ Report format following standard MCP template:
 
 ## Integration with Existing Locator Patterns
 
-Before reporting a finding, cross-check against established patterns in `.claude/reference-patterns.md`:
+Before reporting a finding, cross-check against established patterns in `docs/PATTERNS.md`:
 
-- **Right panel icon (section 5):** already uses dual-selector + SVG ID map for stability
-- **Ellipsis menu (section 2):** already uses scoped `.dropdown-menu.show` + filter for stability
-- **Share modal (section 3):** already uses modal-scoped selectors
+- **Right panel icon (P23):** already uses dual-selector + SVG ID map for stability
+- **Ellipsis menu (P3):** already uses scoped `.dropdown-menu.show` + filter for stability
+- **Share modal (P4):** already uses modal-scoped selectors
 
 If a new locator violates these patterns, note that and reference the working pattern as the fix.
 

@@ -114,6 +114,34 @@ export const LEAD_CUSTOM_FIELD_NAMES = {
 
 export type LeadCustomFieldKey = keyof typeof LEAD_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant, not reusing LEAD_CUSTOM_FIELD_NAMES's own
+// textField/paragraphText/number (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see COMPANY_FORM_FIELD_LIMIT_NAMES's identical comment in
+// companyFactory.ts for the full incident, applied here unchanged): the
+// human operator created 3 dedicated custom fields per entity, confirmed
+// live on QA (internal names exactly cfFormFieldLimitText/
+// cfFormFieldLimitNumber/cfFormFieldLimitParagraph, types Text Field/Number/
+// Paragraph Text). This feature's own test files must use ONLY this
+// constant, never LEAD_CUSTOM_FIELD_NAMES, for the 3 field types it
+// exercises.
+export const LEAD_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
+// WHY this constant, and why it must NOT be derived from LEAD_CUSTOM_FIELD_
+// NAMES or the entity name (2026-09-21, Form Field Limit feature): confirmed
+// live (docs/known-issues/form-fields.md) that the app's
+// IndexedDB `layoutCache` key for an entity is not a fixed transformation of
+// its name — Lead/Deal/Contact happen to be the simple lowercase plural, but
+// Products & Services' real key is "products-services", which no derivation
+// rule predicts. This is Lead's own hand-verified key, confirmed live, for
+// BasePage.clearApplicationCache() — never guess this value for an entity
+// not yet verified the same way; see BasePage.clearApplicationCache()'s own
+// comment for the full reasoning.
+export const LEAD_LAYOUT_CACHE_KEY = 'leads';
+
 export interface LeadCustomFieldData {
   textField: string;
   paragraphText: string;
@@ -161,9 +189,19 @@ export function generateLeadCustomFieldData(
 // WHY: generated programmatically at call time (string repetition), never
 // stored as a literal block of text in this file.
 // TextField max is 255 chars — one over is the minimal invalid case.
-export const generateLeadCustomFieldInvalidTextField = (): string => 'A'.repeat(256);
+// WHY an optional `max` param, defaulting to the field type's own absolute
+// ceiling (2026-09-21, Form Field Limit feature — original doc §1.4's own
+// flagged follow-up): confirmed via grep that this codebase's only 2 real
+// callers (both in tests/ui/leads/leads.spec.ts) call this with zero
+// arguments and must keep getting the exact same 256-char value as before —
+// the default preserves that byte-for-byte. The Form Field Limit feature's
+// own tests need "one character over whatever max THEY configured" instead,
+// which can be anywhere in 0–255, not just the type's absolute ceiling.
+export const generateLeadCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
 // ParagraphText max is 2,550 chars — one over is the minimal invalid case.
-export const generateLeadCustomFieldInvalidParagraphText = (): string => 'B'.repeat(2551);
+// WHY optional `max` param: same reasoning as generateLeadCustomFieldInvalidTextField() above.
+export const generateLeadCustomFieldInvalidParagraphText = (max = 2550): string =>
+  'B'.repeat(max + 1);
 // WHY: confirmed live (2026-07-08 custom-fields investigation) — this field
 // renders as a native <input type="number">. Both Playwright's fill() and a
 // real browser's keystroke handling reject non-numeric characters outright
@@ -173,6 +211,109 @@ export const generateLeadCustomFieldInvalidParagraphText = (): string => 'B'.rep
 // No invalid-Number generator is provided; the Step 5 negative test skips
 // this field type for this reason instead of manufacturing a fake scenario.
 export const generateLeadCustomFieldInvalidUrl = (): string => 'not a valid url###';
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY these exist as named, shape-aware generators — not a single hardcoded
+// "valid" and "invalid" string per option (2026-09-21, explicit
+// requirement): the Text field's Regex dropdown offers 5 real, fixed-format
+// options, confirmed live via docs/known-issues/form-fields.md's own
+// pattern table. A hardcoded literal per option would silently drift from
+// the app's real pattern if it's ever corrected or re-verified; generating
+// a value FROM the known shape (and having the caller cross-check it
+// against the actual live pattern read off the config page at test-run
+// time, via FormFieldsConfigPage.getRegexPatternInfo()) proves the
+// generator is right rather than assuming it, every single run — this is
+// the same "never hardcode, always confirm live" discipline this codebase
+// already applies to react-select dropdown options.
+//
+// WHY the invalid counterpart deliberately violates exactly ONE constraint
+// of the pattern, not an unrelated random string: a completely different
+// garbage string (e.g. "???") would still be rejected, but wouldn't prove
+// the pattern's own boundary is being enforced precisely — e.g. that PAN
+// Card genuinely requires exactly 5 leading letters, not "5 or fewer." Each
+// invalid generator below removes exactly one character from the specific
+// group most likely to reveal an off-by-one in the app's own validation,
+// mirroring the exact shape of invalid example already confirmed live for
+// that option in docs/known-issues/form-fields.md (e.g. Passport's
+// real confirmed invalid example "A123456" is its own valid shape minus
+// one trailing digit — the generator below reproduces that same kind of
+// violation programmatically instead of hardcoding that literal).
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+// WHY 4 leading letters, not 5: one short of PAN Card's own confirmed
+// `^[A-Z]{5}[0-9]{4}[A-Z]{1}$` pattern — the minimal, single-constraint
+// violation described above.
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+// WHY the domain is the fixed, real `example.com` (RFC 2606's reserved
+// documentation/testing domain — genuinely resolves in DNS, never delivers
+// real mail to an arbitrary local-part), not a random fake domain like the
+// original `${faker.string.alpha(6)}.com` (real, confirmed live finding,
+// 2026-09-21): FFL36 (the only test consuming this value) failed with a
+// genuine `TimeoutError: page.waitForResponse: Timeout 60000ms exceeded`
+// on the lead create POST in 2 of 2 real --workers=2 full-suite runs, and
+// ONLY this test — no other Add-Lead-creating test in either file (PAN
+// Card, Driver Licence, Voting Card, Passport, or any Number/Paragraph
+// boundary test) ever showed this symptom, across every run today,
+// including runs where the cross-process-lock bug (a separate, confirmed,
+// already-fixed issue — see formFieldsTestLock.ts) was ruled out as the
+// cause via ground-truth marker-file verification. FFL36 also passed
+// cleanly (40.5s) in true single-worker isolation, matching this
+// codebase's own established pattern (rule 21) for a load-dependent
+// symptom, not proof of no bug. The one property unique to THIS test's own
+// value, never shared by any of the other regex tests' structurally
+// different values, is that it is the only one shaped like a genuine email
+// address — a plausible trigger for server-side email-format
+// validation/enrichment logic (common in CRMs, not necessarily scoped to a
+// dedicated "Email" system field) attempting a live DNS/MX lookup against
+// whatever domain is submitted. A lookup against a domain that has never
+// existed (a fresh random string every run) is a materially different,
+// plausibly slower case for a resolver than one against a real,
+// permanently-registered domain. This is a hardened fix based on this
+// reasoning, not a confirmed root cause (no backend/network access to
+// prove it directly) — labeled honestly per this codebase's own standing
+// rule for exactly this situation. If FFL36 continues failing after this
+// change, the email-shape-triggers-a-slow-lookup hypothesis is disproven
+// and a different explanation is needed.
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+// WHY omitting the TLD segment entirely, not just shortening it: mirrors
+// the exact confirmed invalid example shape from
+// docs/known-issues/form-fields.md ("john.doe@example" — a real local-part@domain
+// with no ".tld" at all), the most direct single-constraint violation of
+// the pattern's own `\.[A-Za-z]{2,}$` requirement.
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+// WHY 6 trailing digits, not 7: one short of Driver Licence's own confirmed
+// `^[A-Za-z]{2}[- ]?[0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{7}$` pattern.
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+// WHY 5 trailing digits, not 7: reproduces the exact confirmed invalid
+// example shape ("ABC12345") for Voting Card's own `^[A-Z]{3}[0-9]{7}$`
+// pattern.
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+// WHY 6 trailing digits, not 7: reproduces the exact confirmed invalid
+// example shape ("A123456") for Passport's own `^[A-Z][0-9]{7}$` pattern.
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
 
 export type LeadPipelineStage =
   | 'Open'
@@ -296,7 +437,7 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
 // Requirement's Products-or-Services/Currency are all confirmed live to be
 // UNCONDITIONALLY random-picked by LeadsPage.fillLeadForm() regardless of
 // what value is passed here (the same class of gap fixed with
-// skipOptionalFields on CallLogsPage — see CLAUDE.md's Call Logs section) —
+// skipOptionalFields on CallLogsPage — see docs/known-issues/locators-and-timing.md) —
 // so blanking them via override would silently have no effect, not
 // genuinely leave them empty. PickList/MultiPickList custom fields are the
 // same. The fields below are the ones CONFIRMED to respect a plain empty-

@@ -9,7 +9,7 @@ pipeline {
     // human-gated run at a time; without this, a second manual trigger while
     // a first build waits at (or has cleared) approval would run concurrently
     // against the SAME shared STAGING credentials — the Jenkins-job-level
-    // version of the risk CLAUDE.md's "Concurrent-Worker Credential File
+    // version of the risk docs/known-issues/session-expiry-and-auth.md's "Concurrent-Worker Credential File
     // Race" section documents at the Playwright-worker level. Not an
     // intentional use case for this pipeline.
     disableConcurrentBuilds()

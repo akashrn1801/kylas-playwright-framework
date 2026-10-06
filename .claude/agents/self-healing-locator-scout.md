@@ -74,7 +74,7 @@ Contact the user to approve Task 1 access before re-invoking.
    browser_take_screenshot
    ```
 
-4. **Use locator-priority order** (from `.claude/reference-patterns.md` section 10) to identify the BEST selector:
+4. **Use locator-priority order** (repo convention; internal-name rule in `docs/PATTERNS.md` P21) to identify the BEST selector:
    1. Role + accessible name — `getByRole('button', { name: 'Save' })`
    2. Label — `getByLabel('Email')`
    3. Text — `getByText('Click me', { exact: true })`
@@ -158,8 +158,8 @@ The new locator:
 
 Before editing, confirm the proposed fix aligns with established patterns:
 
-1. **Check `.claude/reference-patterns.md`** — does a similar element already have a documented pattern?
-   - E.g., if fixing a Share modal button, see how `reference-patterns.md` section 3 (Share Modal Pattern) handles it
+1. **Check `docs/PATTERNS.md`** — does a similar element already have a documented pattern?
+   - E.g., if fixing a Share modal button, see how `docs/PATTERNS.md` P4 (share modal) handles it
    - If your proposed fix differs, is there a reason? If not, adopt the established pattern instead.
 
 2. **Check similar modules** for consistency:
