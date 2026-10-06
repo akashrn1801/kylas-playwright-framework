@@ -8,7 +8,7 @@ import {
   SuiteDrift,
   PassRatePoint,
 } from './RunHistory';
-import { HealthScore, VerdictResult, computeOverallVerdict } from './AutomationHealth';
+import { HealthScore, VerdictResult, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
 import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
@@ -98,8 +98,9 @@ export interface EmailContext {
   // matters. Undefined/false renders the same honest "no history yet" state.
   hasHistoryEverExisted?: boolean;
   // WHY: base GitHub blob URL (pinned to this run's exact commit SHA) for
-  // the known-issues.md cross-reference — a specific failure's line number
-  // (FailureDetail.knownIssue.line) is appended as #L<line> at render time.
+  // the known-issues cross-reference — a specific failure's own doc path
+  // (FailureDetail.knownIssue.file) and line number are appended as
+  // /<file>#L<line> at render time.
   // Null when the remote isn't GitHub or couldn't be resolved.
   knownIssuesUrl?: string | null;
   reportFreshness?: ReportFreshness;
@@ -167,7 +168,10 @@ export class EmailTemplate {
     // where the banner below the fold won't be seen until the email is
     // opened — prefixed here so it's visible before that.
     const stalePrefix = ctx.reportFreshness?.isStale ? '⚠️ STALE REPORT — ' : '';
-    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
+    // WHY a separate "Health:" segment (2026-10-06, sandbox Build #186): the
+    // verdict word and icon above come only from this run's own results;
+    // health is its own labeled value, never folded into the headline status.
+    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
   }
 
   html(ctx: EmailContext): string {
@@ -1251,7 +1255,7 @@ ${body}
     // the information isn't lost, just not clickable there.
     const knownIssueHtml =
       d.knownIssue && knownIssuesUrl
-        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">known-issues.md${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
+        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}/${d.knownIssue.file ?? 'docs/KNOWN_ISSUES_ACTIVE.md'}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">${this.esc(d.knownIssue.file ? (d.knownIssue.file.split('/').pop() ?? d.knownIssue.file) : 'known-issues')}${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
         : '';
 
     return `
@@ -1665,13 +1669,7 @@ ${body}
     // fallback isn't a magic number, just the same computation done inline
     // without the optional signals (history/misc errors/drift) a real caller
     // would normally supply.
-    const passRatePenalty = Math.round((100 - report.passRate) * 0.6);
-    const failPenalty = Math.min(report.failed * 3, 25);
-    const flakyPenalty = Math.min(report.flaky * 1.5, 15);
-    const score = Math.max(0, Math.min(100, Math.round(100 - passRatePenalty - failPenalty - flakyPenalty)));
-    const label: HealthScore['label'] =
-      score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
-    return { score, label, factors: [] };
+    return computeHealthScore(report, null, null, null);
   }
 
   // WHY: takes the report's own startTime, not new Date() (now) — a real bug

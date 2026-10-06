@@ -203,7 +203,7 @@ export class NotificationService {
     } catch (err) {
       // WHY (2026-09-09, sandbox Build #167 investigation): a killed/crashed
       // CI job (e.g. GitHub Actions' hard 6-hour job ceiling — see
-      // .claude/known-issues.md's dated entry) can leave NO results.json at
+      // docs/known-issues/sharding-and-locks.md's 6-hour-ceiling entry) can leave NO results.json at
       // all, which used to throw here uncaught — main()'s only catch just
       // logged to the raw CI console and exited, so nobody watching only the
       // email inbox (not raw CI logs) was ever told the run had a problem.
@@ -315,7 +315,7 @@ export class NotificationService {
       miscErrors: miscErrors?.errors ?? null,
       previousRunFailedTitles: historyDeltaFile.delta?.previousRun?.failedTestTitles ?? null,
       recurringFailures: historyDeltaFile.recurringFailures,
-      knownIssuesIndex: loadKnownIssuesIndex(path.resolve(process.cwd(), '.claude', 'known-issues.md')),
+      knownIssuesIndex: loadKnownIssuesIndex(process.cwd()),
       runSource: input.runSource ?? 'local',
       buildUrl: input.buildUrl,
     };
@@ -431,13 +431,15 @@ export class NotificationService {
   }
 
   // WHY the commit SHA, not a branch name (2026-08-24): a branch-based link
-  // drifts the moment known-issues.md changes on that branch after this run
+  // drifts the moment the known-issues docs change on that branch after this run
   // — linking to the exact commit under test means the link always shows
   // precisely the content that existed for THIS build, immutable, never
   // subject to later edits. GitHub's blob view accepts a short SHA.
   private resolveKnownIssuesUrl(gitCommit: string): string | null {
     const ownerRepo = resolveGithubOwnerRepo();
     if (!ownerRepo || !gitCommit || gitCommit === 'unknown') return null;
-    return `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/blob/${gitCommit}/.claude/known-issues.md`;
+    // Base blob URL only (no file): each known-issues match carries its own
+    // `file` (docs/known-issues/<topic>.md etc.), appended at render time.
+    return `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/blob/${gitCommit}`;
   }
 }

@@ -56,7 +56,7 @@ const GITHUB_API_BASE = 'https://api.github.com';
 // WHY paginated (100/page, GitHub's own per_page max), not a single request:
 // a large sharded run (qa.yml/stage.yml/main.yml/sandbox.yml can already
 // exceed 15 jobs today between the rest-of-suite track and the formFields
-// per-entity track, and per this repo's own known-issues.md entry on
+// per-entity track, and per docs/KNOWN_ISSUES_ACTIVE.md KI-11 on
 // formFields' shard count not self-scaling, job count is expected to keep
 // growing) could exceed a single page well within this feature's lifetime.
 export async function fetchGitHubJobs(
@@ -104,8 +104,8 @@ export async function fetchGitHubJobs(
 }
 
 // WHY pure and separate from fetchGitHubJobs() above (this pipeline's own
-// established enrichment-layer convention — see known-issues.md's
-// "Notification/reporting pipeline" entry, matching FailureDetailBuilder.ts's
+// established enrichment-layer convention — see docs/known-issues/reporting-and-notifications.md's
+// enrichment-convention entry, matching FailureDetailBuilder.ts's
 // precedent): testable with zero network access; the caller wires the
 // loader's real output into this function's input.
 export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {

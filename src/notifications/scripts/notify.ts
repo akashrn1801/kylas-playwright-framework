@@ -102,8 +102,8 @@ async function loadJobStatsForCurrentRun(
   const runId = process.env.GITHUB_RUN_ID;
   // WHY PIPELINE_TOKEN, falling back to GITHUB_TOKEN: PIPELINE_TOKEN is the
   // PAT already wired into every workflow's "Sync run history"/notify steps
-  // for `ci/reporting-history` git access (see known-issues.md's CI
-  // reporting-history ledger entry) — reused here rather than requiring a
+  // for `ci/reporting-history` git access (see docs/known-issues/reporting-and-notifications.md's
+  // history-ledger entry) — reused here rather than requiring a
   // second secret. GITHUB_TOKEN (the default, auto-issued per-job token) is
   // tried second in case a given workflow ever runs this step without
   // PIPELINE_TOKEN configured — either is sufficient for a read-only Jobs

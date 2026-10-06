@@ -154,7 +154,7 @@ export interface RunHistoryRecord {
   slowestTests: Array<{ title: string; duration: number }>;
   modules: ModuleHistoryStats[];
   // WHY gitCommit + isDevEquivalentRun added 2026-09-03 (fixes a real false
-  // "Suite Drift Detected" alarm — see the dated known-issues.md entry): a
+  // "Suite Drift Detected" alarm — see docs/known-issues/reporting-and-notifications.md): a
   // `sandbox:reset` run (scripts/reset-sandbox.sh does `git reset --hard
   // origin/dev` then force-pushes) always has a commit BYTE-IDENTICAL to
   // dev's own HEAD — a hard reset moves the branch pointer to the same
@@ -171,7 +171,7 @@ export interface RunHistoryRecord {
   gitCommit: string;
   isDevEquivalentRun: boolean;
   // WHY optional, added 2026-09-04 (dynamic CI duration-estimate feature —
-  // see .claude/known-issues.md's dated entry for the full design): no
+  // see docs/known-issues/ci-pipelines.md for the full design): no
   // existing record has this populated, and it must stay optional forever
   // for backward compatibility — parseHistory()/serializeHistory() and every
   // existing consumer (computeDelta, computeModuleTrend, EmailTemplate.ts,
@@ -294,10 +294,73 @@ export function serializeHistory(records: RunHistoryRecord[]): string {
  * function does not itself filter by record.env.
  */
 export function appendAndPrune(existingJsonl: string, record: RunHistoryRecord): string {
-  const records = parseHistory(existingJsonl);
+  // WHY an existing record of the same build is replaced, not kept (2026-10-06):
+  // a manual re-run of failed jobs re-runs history:sync under the same
+  // buildNumber — see comparableHistory()'s WHY comment. The newest attempt
+  // supersedes the earlier ones, so history holds one record per build.
+  const key = buildKey(record);
+  const records = parseHistory(existingJsonl).filter((r) => key === null || buildKey(r) !== key);
   records.push(record);
   const pruned = records.slice(-MAX_RECORDS_PER_ENV);
   return serializeHistory(pruned);
+}
+
+// ===================== Comparable history (2026-10-06) =====================
+
+// WHY one shared filter for every history-derived signal: computeDelta() and
+// computeModuleStabilityTrend() already compared only same-branch/same-scope
+// runs, but computeRecurringFlaky()/computeRecurringFailures()/
+// computeModuleTrend() read the raw env-keyed history, in which `dev` @smoke
+// runs and `sandbox`/`qa` @regression runs interleave, so a failure in 3 of
+// the "last 10 runs" could be 3 different branches' runs. Sandbox Build #186
+// reported 49 recurring failures and 42 recurring flaky from that mixture.
+//
+// WHY de-duplicated per build: `buildNumber` is GITHUB_RUN_NUMBER, which a
+// manual "re-run failed jobs" does NOT change, and every re-run re-executes
+// merge-and-report and so appends another record. Confirmed in the real
+// ci/reporting-history data: staging has sandbox #154, stage #197 and
+// sandbox #171 each recorded twice (and sandbox #186 was re-run to attempt 7).
+// Counting every attempt as a separate "run" inflates every recurring count.
+// The LATEST record of a build is kept — a re-run's merged report reflects
+// the freshest results for the shards it replaced.
+// 'local' (and 'unknown') are not unique build ids — separate local runs all
+// carry the literal "local" — so they are never collapsed.
+export function buildKey(r: RunHistoryRecord): string | null {
+  if (!r.buildNumber || r.buildNumber === 'local' || r.buildNumber === 'unknown') return null;
+  return `${r.runSource}|${r.branch}|${r.buildNumber}`;
+}
+
+export function dedupeByBuild(records: RunHistoryRecord[]): RunHistoryRecord[] {
+  const lastIndexByKey = new Map<string, number>();
+  records.forEach((r, i) => {
+    const key = buildKey(r);
+    if (key) lastIndexByKey.set(key, i);
+  });
+  return records.filter((r, i) => {
+    const key = buildKey(r);
+    return key === null || lastIndexByKey.get(key) === i;
+  });
+}
+
+/**
+ * History comparable to `current`: same branch, same normalized scope, the
+ * current build's own earlier attempts removed (current replaces them), and
+ * one record per build. Pre-2026-09-09 records have no `scope` and therefore
+ * never match — the same designed, honest degrade computeDelta() has.
+ */
+export function comparableHistory(
+  historyBeforeAppend: RunHistoryRecord[],
+  current: RunHistoryRecord
+): RunHistoryRecord[] {
+  const currentKey = buildKey(current);
+  return dedupeByBuild(
+    historyBeforeAppend.filter(
+      (r) =>
+        r.branch === current.branch &&
+        r.scope === current.scope &&
+        (currentKey === null || buildKey(r) !== currentKey)
+    )
+  );
 }
 
 /**
@@ -319,10 +382,7 @@ export function computeDelta(
   historyBeforeAppend: RunHistoryRecord[],
   current: RunHistoryRecord
 ): RunDelta {
-  const previousRun =
-    [...historyBeforeAppend]
-      .reverse()
-      .find((r) => r.branch === current.branch && r.scope === current.scope) ?? null;
+  const previousRun = comparableHistory(historyBeforeAppend, current).slice(-1)[0] ?? null;
   if (!previousRun) {
     return {
       previousRun: null,
@@ -360,7 +420,7 @@ function computeRecurringByField(
   lookback: number,
   threshold: number
 ): RecurringIssue[] {
-  const recentRuns = [...historyBeforeAppend.slice(-(lookback - 1)), current];
+  const recentRuns = [...comparableHistory(historyBeforeAppend, current).slice(-(lookback - 1)), current];
   const counts = new Map<string, number>();
   for (const run of recentRuns) {
     for (const title of run[field] || []) {
@@ -439,8 +499,7 @@ export function computeModuleTrend(
   historyBeforeAppend: RunHistoryRecord[],
   current: RunHistoryRecord
 ): ModuleTrend[] {
-  const previousRun =
-    historyBeforeAppend.length > 0 ? historyBeforeAppend[historyBeforeAppend.length - 1] : null;
+  const previousRun = comparableHistory(historyBeforeAppend, current).slice(-1)[0] ?? null;
   if (!previousRun) return [];
   const prevByKey = new Map(previousRun.modules.map((m) => [`${m.type}:${m.name}`, m]));
   const trends: ModuleTrend[] = [];
@@ -505,8 +564,8 @@ export function computeSlowTestTrend(
 export interface SuiteDrift {
   occurred: boolean;
   decreaseBy: number;
-  // WHY added 2026-09-03 (fixes a real false-alarm, see the dated
-  // known-issues.md entry): tells the email WHICH comparison actually
+  // WHY added 2026-09-03 (fixes a real false-alarm, see
+  // docs/known-issues/reporting-and-notifications.md): tells the email WHICH comparison actually
   // produced this verdict, so it can render an honest, specific note
   // instead of a one-size-fits-all message.
   // - 'previous-run': the original, unqualified comparison — whatever ran
@@ -648,19 +707,16 @@ const MODULE_STABILITY_MIN_RUNS_FOR_DIRECTION = 4;
 // Drift Detected" false-alarm on a clean dev run — dev's @smoke runs and
 // qa's @regression runs interleave in the same env-keyed history file).
 // computeRecurringFlaky()/computeRecurringFailures()/computeModuleTrend()
-// still have this exact gap (flagged, not retrofitted here — a separate,
-// pre-existing concern out of scope for this addition). This NEW function
-// is built scope-aware from day one so it doesn't repeat that same mistake
-// a third time — a module's stability signal is exactly as vulnerable to
+// had this exact gap until 2026-10-06, when all of them were moved onto the
+// shared comparableHistory() filter (same branch + scope, one record per
+// build) used here — a module's stability signal is exactly as vulnerable to
 // cross-branch/cross-scope contamination as the whole-run delta was.
 export function computeModuleStabilityTrend(
   historyBeforeAppend: RunHistoryRecord[],
   current: RunHistoryRecord,
   lookback: number = RECURRING_FLAKY_LOOKBACK
 ): ModuleStabilityTrend[] {
-  const matchingHistory = historyBeforeAppend.filter(
-    (r) => r.branch === current.branch && r.scope === current.scope
-  );
+  const matchingHistory = comparableHistory(historyBeforeAppend, current);
   const recentRuns = [...matchingHistory.slice(-(lookback - 1)), current];
 
   const moduleKeys = new Set<string>();
@@ -736,7 +792,15 @@ export function buildPassRateSeries(
     passRate: r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0,
     timestamp: r.timestamp,
   });
-  return [...historyBeforeAppend.slice(-(n - 1)), current].map(toPoint);
+  // WHY de-duplicated per build (2026-10-06): a re-run of a build's failed
+  // jobs appends a second record under the same build number — see
+  // comparableHistory()'s WHY comment. Not scope-filtered: this is a
+  // deliberately branch-wide pass-rate series.
+  const currentKey = buildKey(current);
+  const prior = dedupeByBuild(historyBeforeAppend).filter(
+    (r) => currentKey === null || buildKey(r) !== currentKey
+  );
+  return [...prior.slice(-(n - 1)), current].map(toPoint);
 }
 
 export interface DurationEstimate {

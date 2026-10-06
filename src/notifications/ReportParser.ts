@@ -77,7 +77,7 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   // KNOWN, DELIBERATELY-NOT-FIXED DISPLAY QUIRKS (documented here 2026-09-30
   // after being surfaced for the first time by docs/CONTRIBUTING_TESTS.md's
   // E6 doc-auto-generation script comparing this function's real output
-  // against README.md's old hand-written module table):
+  // against the old hand-written README module table):
   //
   // 1. This only capitalizes the FIRST character of the raw directory name
   //    — it does not know about spaces, hyphens, or ampersands a human
@@ -87,7 +87,7 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   //    - `tests/ui/productsAndServices/` (camelCase directory) renders as
   //      "ProductsAndServices", not "Products & Services".
   //    Every other display of these module names elsewhere in this repo
-  //    (README.md prose, this file's own comments, test-label prefixes)
+  //    (README prose, this file's own comments, test-label prefixes)
   //    uses the human-friendly form — only THIS function's OWN output
   //    (Module Analytics, the "CI Job Stats"/"Job Time Overlaps" sections,
   //    and anything else reading `ParsedReport.modules[].name`) shows the
@@ -285,7 +285,7 @@ export interface ParsedReport {
   // in it (already-passed ones included), each contributing its own
   // `retries >= 1` despite never itself having failed (confirmed and
   // already documented independently for quotations.spec.ts's identical
-  // shape — see known-issues.md's "Retry-count discrepancy" entry). 222 is
+  // shape — see docs/known-issues/reporting-and-notifications.md's retry-count entry). 222 is
   // arithmetically correct; it just isn't what a reader expecting "222
   // individually-retried tests" would assume. Splitting into genuine
   // (failed/flaky tests' own retries) vs. swept (passed tests' retries,
