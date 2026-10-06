@@ -43,7 +43,7 @@ function factoryTemplate(entity: string): string {
   return `import { faker } from '@faker-js/faker';
 
 // WHY the ADM/SHR prefix+timestamp convention — see
-// .claude/architecture.md's "Test Data Factories" section: this codebase's
+// docs/ARCHITECTURE.md's data-factories section: this codebase's
 // QA/staging datasets never get cleaned up, so a distinguishing prefix is
 // the only reliable way to make an RBAC negative-assertion trustworthy.
 // TODO: replace this placeholder shape with the real ${entity} fields —
@@ -78,8 +78,8 @@ import { BasePage } from '../../core/BasePage';
 import { ${entity}Data } from '../../data/factories/${entity.charAt(0).toLowerCase() + entity.slice(1)}Factory';
 import { logger } from '../../utils/logger';
 
-// WHY this exact 10-section order — see .claude/architecture.md's "Page
-// Object Structure" section: a fixed order means anyone can jump into an
+// WHY this exact 10-section order — see docs/ARCHITECTURE.md's page-object
+// structure section: a fixed order means anyone can jump into an
 // unfamiliar page object already knowing where to look. Keep every section
 // header even if a section starts empty — a future edit adds to the RIGHT
 // section instead of guessing.
@@ -137,8 +137,7 @@ function uiSpecTemplate(entity: string, moduleDir: string): string {
 import { ${entity}Page } from '../../../src/modules/${moduleDir}/${entity}Page';
 import { generate${entity}Data } from '../../../src/data/factories/${entity.charAt(0).toLowerCase() + entity.slice(1)}Factory';
 
-// TODO: real per-module letter prefix for test labels (CLAUDE.md/
-// .claude/reference-patterns.md §13) — grep this file's own future sibling
+// TODO: real per-module letter prefix for test labels (docs/PATTERNS.md P33) — grep this file's own future sibling
 // files for the next free number before picking one.
 test.describe('${entity} ', () => {
   test('@smoke admin should create a ${entity.toLowerCase()}', async ({ adminPage }) => {
@@ -157,7 +156,7 @@ function rbacSpecTemplate(entity: string, moduleDir: string): string {
 import { ${entity}Page } from '../../src/modules/${moduleDir}/${entity}Page';
 import { generate${entity}Data } from '../../src/data/factories/${entity.charAt(0).toLowerCase() + entity.slice(1)}Factory';
 
-// See README.md §9 (RBAC Testing Philosophy) for the negative-assertion/
+// See docs/PATTERNS.md P40-P42 (RBAC rules) for the negative-assertion/
 // share/reassign patterns this file should follow — this is a skeleton
 // starting point, not a complete RBAC suite.
 test.describe('${entity} RBAC', () => {
@@ -188,14 +187,14 @@ function printRemainingChecklist(entity: string, moduleDir: string): void {
    src/notifications/ReportParser.ts's deriveModuleFromFile() (§B.4).
 6. Add a "test:${moduleDir}" script to package.json, following the existing
    pattern (§B.5).
-7. Regenerate config/expected-test-counts.json:
-   npx ts-node scripts/generate-expected-test-counts.ts
+7. Regenerate the test-count baseline and generated docs:
+   npm run generate:test-counts, then npm run docs:refresh (never hand-edit counts)
 8. Run npm run check:conventions — the scaffolded files should already pass
    (tags, no @playwright/test import, correct naming) but re-check after your
    own edits.
-9. Add this module to README.md's Project Overview / module-count table.
-10. Add a known-issues.md entry — even a placeholder "built following the
-    standard module pattern, no deviations" line (§B.7).
+9. Module-count tables are generated — do not hand-edit; docs:refresh (step 7) updates them.
+10. Add a docs/known-issues/ topic only if the module has a real incident or
+    deliberately deviates from the standard pattern (§B.6).
 11. Run locator-reviewer once you've replaced the placeholder selectors.
 `);
 }

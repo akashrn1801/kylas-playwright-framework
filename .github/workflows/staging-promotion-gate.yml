@@ -3,7 +3,7 @@
 # triggered CI for the `stage` branch) despite being a completely different
 # pipeline — manual-only, runs against STAGING_* secrets, and gates an
 # approval-based auto-merge of `staging` into `prod`. The near-identical
-# names were a standing source of confusion (see CLAUDE.md's CI/CD table).
+# names were a standing source of confusion (see docs/CI_PIPELINES.md).
 #
 # TRIGGER: manual only (workflow_dispatch) — never runs on push.
 # RESPONSIBILITY: run the full suite against the Staging environment, then —
@@ -70,7 +70,7 @@ jobs:
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true

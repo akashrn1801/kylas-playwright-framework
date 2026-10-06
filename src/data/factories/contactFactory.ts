@@ -12,7 +12,7 @@ export const SOURCE_OPTIONS = ['Google', 'Facebook', 'LinkedIn', 'Exhibition', '
 // custom fields as Lead, QA-only for now, with identical names/types and
 // identical DOM/locator conventions (see BasePage's "Custom Field Helpers").
 // CONTACT_CUSTOM_FIELD_NAMES is its own single source of truth, per
-// CLAUDE.md's Custom Fields pattern — never import LEAD_CUSTOM_FIELD_NAMES
+// docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import LEAD_CUSTOM_FIELD_NAMES
 // here even though the values happen to be identical today: each module
 // owns its own field-name constant so the two can diverge safely later
 // (e.g. Contact gaining/losing a field independently of Lead) without any
@@ -47,7 +47,7 @@ export const CONTACT_FORM_FIELD_LIMIT_NAMES = {
 // FIELD_NAMES or the entity name (2026-09-22, Form Field Limit feature,
 // Contact rollout — same reasoning as LEAD_LAYOUT_CACHE_KEY in
 // leadFactory.ts, confirmed live independently for Contact via
-// REMAINING_ENTITIES_INVESTIGATION.md's own live IndexedDB dump): the app's
+// docs/known-issues/form-fields.md's own live IndexedDB dump): the app's
 // IndexedDB `layoutCache` key is not a fixed transformation of the entity
 // name — Lead/Deal/Contact/Company happen to be the simple lowercase
 // plural, but Products & Services' real key is "products-services". This is
@@ -118,12 +118,12 @@ export const generateContactCustomFieldInvalidUrl = (): string => 'not a valid u
 // ── Text field Regex format generators (Form Field Limit feature) ────────
 // WHY duplicated here rather than imported from leadFactory.ts (2026-09-22,
 // Contact rollout — deliberate, matching this file's own established
-// convention, not an oversight): CLAUDE.md's Custom Fields pattern already
+// convention, not an oversight): docs/PATTERNS.md P21/P58 (custom-fields pattern) already
 // establishes "never import one module's [field] constants into another's —
 // each module owns its own... field sets diverge over time"
-// (reference-patterns.md §9) for exactly this reason. These generators
+// (docs/PATTERNS.md P58) for exactly this reason. These generators
 // encode the Text field's Regex dropdown's real pattern SHAPES — confirmed
-// live (REMAINING_ENTITIES_INVESTIGATION.md) to be identical across every
+// live (docs/known-issues/form-fields.md) to be identical across every
 // entity today, but there is no guarantee that holds forever, and this
 // module should not silently start emitting a different (Lead's own) value
 // shape the moment Lead's own investigation is updated for a Lead-specific

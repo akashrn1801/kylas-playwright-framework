@@ -1,7 +1,7 @@
 import { test, expect, withTaskFormFieldLock } from './taskFormFieldLock';
 // WHY a second, separate `test` import here — mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
-// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// Fix 2 for the dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only
 // protects workers on the SAME filesystem"): confirmed via a complete,
 // per-test code-level audit that every Navigation test below only ever
 // READS field config, never calls configureFieldLimit()/
@@ -39,8 +39,8 @@ import * as path from 'path';
 
 // WHY this is the Task rollout of the Form Field Limit feature — the SAME
 // reusable architecture already proven for Lead/Contact/Company (see
-// LEAD_FEATURE_RETROSPECTIVE.md/LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md/
-// ENTITY_ROLLOUT_PLAN.md), not a re-derivation. Design B (this file =
+// docs/known-issues/form-fields.md/
+// docs/known-issues/form-fields.md), not a re-derivation. Design B (this file =
 // admin-only, zero restrictedPage usage; all restricted-role tests live in
 // tests/rbac/formFields.rbac.spec.ts's own Task block) and full 5-format
 // Regex coverage are both applied from the start here, matching the
@@ -84,7 +84,7 @@ import * as path from 'path';
 //   create/edit forms, unlike Lead/Contact/Company — nothing in this file
 //   needs to account for it.
 // - Task's layoutCache key is "tasks" (hand-verified live via direct
-//   IndexedDB dump, per CLAUDE.md's own standing warning that this key is
+//   IndexedDB dump, per docs/PATTERNS.md P30's warning that this key is
 //   never derivable from the entity name).
 
 const TASK_ENTITY: FormFieldsEntityConfig = { tabLabel: 'Task', urlSlug: 'tasks' };
@@ -136,7 +136,7 @@ async function clearTaskApplicationCache(targetPage: Page): Promise<void> {
 // WHY exactly two Task-mutation paths exist below: mirrors
 // leadFieldLimits.spec.ts's/contactFieldLimits.spec.ts's/
 // companyFieldLimits.spec.ts's own identical split exactly — see
-// LEAD_FEATURE_RETROSPECTIVE.md §1 for the full evidence chain this reuses
+// docs/known-issues/form-fields.md for the full evidence chain this reuses
 // unchanged. Every create/edit call below always passes skipRelation=true
 // (or simply omits assignedTo/relation entirely, on edit) — Relation is
 // expensive (4 entity-type searches) and irrelevant to a field-limit check.

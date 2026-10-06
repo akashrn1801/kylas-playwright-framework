@@ -56,7 +56,7 @@ const GITHUB_API_BASE = 'https://api.github.com';
 // WHY paginated (100/page, GitHub's own per_page max), not a single request:
 // a large sharded run (qa.yml/stage.yml/main.yml/sandbox.yml can already
 // exceed 15 jobs today between the rest-of-suite track and the formFields
-// per-entity track, and per this repo's own known-issues.md entry on
+// per-entity track, and per docs/KNOWN_ISSUES_ACTIVE.md KI-11 on
 // formFields' shard count not self-scaling, job count is expected to keep
 // growing) could exceed a single page well within this feature's lifetime.
 export async function fetchGitHubJobs(
@@ -104,8 +104,8 @@ export async function fetchGitHubJobs(
 }
 
 // WHY pure and separate from fetchGitHubJobs() above (this pipeline's own
-// established enrichment-layer convention — see known-issues.md's
-// "Notification/reporting pipeline" entry, matching FailureDetailBuilder.ts's
+// established enrichment-layer convention — see docs/known-issues/reporting-and-notifications.md's
+// enrichment-convention entry, matching FailureDetailBuilder.ts's
 // precedent): testable with zero network access; the caller wires the
 // loader's real output into this function's input.
 export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {
@@ -203,6 +203,104 @@ export function detectJobOverlaps(jobs: JobTiming[]): JobOverlap[] {
     }
   }
   return overlaps;
+}
+
+// ===================== Recovery events lined up against job windows (2026-10-06) =====================
+
+// WHY this exists: Changes to CI sequencing/fixture creation (qa/stage/main/
+// sandbox.yml run-formfields-tests now `needs: run-tests`; globalSetup skips
+// product fixtures when unused) were made to cut peak concurrent load on the
+// shared backend. Whether they helped can only be judged by lining up how
+// often tests hit the app's 429 page / "Something is broken" boundary /
+// globalSetup transient retries against how many jobs were running at that
+// moment — so each test job gets its own counts next to its own start/end and
+// the peak number of test jobs running concurrently.
+export interface RecoveryEventLike {
+  kind: string;
+  outcome: string;
+  timestamp: string;
+}
+
+export interface JobRecoveryRow {
+  jobName: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  rateLimitPages: number;
+  errorBoundaryPages: number;
+  setupRetries: number;
+  // recoveries whose own retried action threw again (the recovery did NOT save the test)
+  failedAfterRecovery: number;
+  // Peak number of test jobs (names starting `playwright-`) running at once
+  // during this job's whole window, and at the instants its own events fired.
+  peakConcurrentInWindow: number;
+  maxConcurrentAtEvents: number | undefined;
+  // true when no shard label could be attributed to this job (counts are 0
+  // because nothing matched, NOT because it was verified clean)
+  attributed: boolean;
+}
+
+const TEST_JOB_PATTERN = /^playwright-/i;
+
+// Shard labels come from merge-misc-errors.ts (artifact dir minus
+// `misc-errors-`): "<env>-<n>" for the dynamic core shards and
+// "<env>-formfields-<entity>" for the per-entity formFields matrix.
+function jobMatchesShardLabel(jobName: string, label: string): boolean {
+  const formFields = label.match(/^[a-z]+-formfields-(.+)$/i);
+  if (formFields) {
+    return jobName.toLowerCase().includes('formfields') && jobName.includes(`(${formFields[1]})`);
+  }
+  const core = label.match(/^[a-z]+-(\d+)$/i);
+  if (core) {
+    return !/formfields/i.test(jobName) && new RegExp(`\\(shard ${core[1]}/`).test(jobName);
+  }
+  return false;
+}
+
+function concurrentAt(jobs: JobTiming[], tMs: number): number {
+  return jobs.filter(
+    (j) =>
+      TEST_JOB_PATTERN.test(j.name) &&
+      new Date(j.startedAt).getTime() <= tMs &&
+      tMs <= new Date(j.completedAt).getTime()
+  ).length;
+}
+
+export function buildJobRecoveryRows(
+  jobs: JobTiming[],
+  recoveryByShard: { shard: string; events: RecoveryEventLike[] }[] | undefined
+): JobRecoveryRow[] {
+  const shards = recoveryByShard ?? [];
+  const rows: JobRecoveryRow[] = [];
+  for (const job of jobs.filter((j) => TEST_JOB_PATTERN.test(j.name))) {
+    const startMs = new Date(job.startedAt).getTime();
+    const endMs = new Date(job.completedAt).getTime();
+    const matching = shards.filter((sh) => jobMatchesShardLabel(job.name, sh.shard));
+    const events = matching.flatMap((sh) => sh.events);
+    // Peak concurrency over the whole window: it can only change at some job's start instant.
+    const probes = [startMs, ...jobs.map((j) => new Date(j.startedAt).getTime())].filter(
+      (t) => t >= startMs && t <= endMs
+    );
+    const peakConcurrentInWindow = Math.max(0, ...probes.map((t) => concurrentAt(jobs, t)));
+    const atEvents = events
+      .map((e) => new Date(e.timestamp).getTime())
+      .filter((t) => Number.isFinite(t))
+      .map((t) => concurrentAt(jobs, t));
+    rows.push({
+      jobName: job.name,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      durationMs: job.durationMs,
+      rateLimitPages: events.filter((e) => e.kind === 'rate-limit-page').length,
+      errorBoundaryPages: events.filter((e) => e.kind === 'error-boundary-page').length,
+      setupRetries: events.filter((e) => e.kind === 'globalsetup-transient-retry').length,
+      failedAfterRecovery: events.filter((e) => e.outcome === 'failed').length,
+      peakConcurrentInWindow,
+      maxConcurrentAtEvents: atEvents.length > 0 ? Math.max(...atEvents) : undefined,
+      attributed: matching.length > 0,
+    });
+  }
+  return rows.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
 }
 
 // WHY this top-level wrapper exists at all, rather than letting notify.ts

@@ -10,7 +10,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // entities deliberately never get one, unlike Lead/Contact/Deal/Company).
 // QA-only for now (added to QA and Prod as of 2026-07-29 — Stage does not
 // have them yet). MEETING_CUSTOM_FIELD_NAMES is its own single source of
-// truth, per CLAUDE.md's Custom Fields pattern — never import
+// truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import
 // DEAL_CUSTOM_FIELD_NAMES here even where values happen to coincide.
 //
 // WHY 'URLField' (capital URL), not 'UrlField' like the parent entities:

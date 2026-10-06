@@ -8,12 +8,12 @@ import {
   SuiteDrift,
   PassRatePoint,
 } from './RunHistory';
-import { HealthScore, VerdictResult, computeOverallVerdict } from './AutomationHealth';
+import { HealthScore, VerdictResult, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
 import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
-import { JobStats, detectJobOverlaps } from './JobStats';
+import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -98,8 +98,9 @@ export interface EmailContext {
   // matters. Undefined/false renders the same honest "no history yet" state.
   hasHistoryEverExisted?: boolean;
   // WHY: base GitHub blob URL (pinned to this run's exact commit SHA) for
-  // the known-issues.md cross-reference — a specific failure's line number
-  // (FailureDetail.knownIssue.line) is appended as #L<line> at render time.
+  // the known-issues cross-reference — a specific failure's own doc path
+  // (FailureDetail.knownIssue.file) and line number are appended as
+  // /<file>#L<line> at render time.
   // Null when the remote isn't GitHub or couldn't be resolved.
   knownIssuesUrl?: string | null;
   reportFreshness?: ReportFreshness;
@@ -167,7 +168,10 @@ export class EmailTemplate {
     // where the banner below the fold won't be seen until the email is
     // opened — prefixed here so it's visible before that.
     const stalePrefix = ctx.reportFreshness?.isStale ? '⚠️ STALE REPORT — ' : '';
-    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
+    // WHY a separate "Health:" segment (2026-10-06, sandbox Build #186): the
+    // verdict word and icon above come only from this run's own results;
+    // health is its own labeled value, never folded into the headline status.
+    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
   }
 
   html(ctx: EmailContext): string {
@@ -1061,6 +1065,49 @@ ${body}
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Jobs whose execution windows overlapped — ⚠ flags a pair confirmed to share the SAME module (a structural anomaly the current shard design should prevent; investigate if this ever appears). Module attribution is currently only derivable for formFields-track jobs — a rest-of-suite shard overlap is still shown, just without a module tag (see JobStats.ts's own WHY comment).</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${overlapRows}</table>`;
           })();
+    // WHY computed inline from ctx.jobStats.jobs + ctx.miscErrors.recoveryByShard
+    // (2026-10-06), no new EmailContext field: both are already on the context;
+    // see JobStats.buildJobRecoveryRows()'s own WHY comment for what it measures.
+    const recoveryRows = buildJobRecoveryRows(stats.jobs, ctx.miscErrors?.recoveryByShard);
+    const hasAnyRecovery = recoveryRows.some(
+      (r) => r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0
+    );
+    const hhmm = (iso: string): string => new Date(iso).toISOString().slice(11, 16);
+    const recoverySection =
+      recoveryRows.length === 0
+        ? ''
+        : `
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
+      hasAnyRecovery
+        ? 'Times the app showed its 429 page / "Something is broken" error screen, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (UTC times). "Failed" = the retried action threw again after recovery.'
+        : 'No 429 pages, error-boundary screens or globalSetup retries were recorded in any shard this run.'
+    }</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr style="border-bottom:1px solid ${BORDER};">
+        <th align="left" style="padding:4px 0;font-size:10px;color:${MUTED};">Job</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Boundary</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
+        <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
+      </tr>${recoveryRows
+        .map((r) => {
+          const hot = r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0;
+          return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:5px 0;font-size:11.5px;color:${INK};">${this.esc(r.jobName)}${r.attributed ? '' : ` <span style="color:${MUTED};">(no shard data)</span>`}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};">${r.errorBoundaryPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};">${r.setupRetries}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
+        <td style="padding:5px 0 5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${r.peakConcurrentInWindow} / ${r.maxConcurrentAtEvents ?? '—'}</td>
+      </tr>`;
+        })
+        .join('')}
+    </table>`;
     return `
 <tr><td style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
@@ -1069,6 +1116,7 @@ ${body}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
     ${incompleteNote}
     ${overlapsSection}
+    ${recoverySection}
   </div>
 </td></tr>`;
   }
@@ -1207,7 +1255,7 @@ ${body}
     // the information isn't lost, just not clickable there.
     const knownIssueHtml =
       d.knownIssue && knownIssuesUrl
-        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">known-issues.md${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
+        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}/${d.knownIssue.file ?? 'docs/KNOWN_ISSUES_ACTIVE.md'}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">${this.esc(d.knownIssue.file ? (d.knownIssue.file.split('/').pop() ?? d.knownIssue.file) : 'known-issues')}${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
         : '';
 
     return `
@@ -1621,13 +1669,7 @@ ${body}
     // fallback isn't a magic number, just the same computation done inline
     // without the optional signals (history/misc errors/drift) a real caller
     // would normally supply.
-    const passRatePenalty = Math.round((100 - report.passRate) * 0.6);
-    const failPenalty = Math.min(report.failed * 3, 25);
-    const flakyPenalty = Math.min(report.flaky * 1.5, 15);
-    const score = Math.max(0, Math.min(100, Math.round(100 - passRatePenalty - failPenalty - flakyPenalty)));
-    const label: HealthScore['label'] =
-      score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
-    return { score, label, factors: [] };
+    return computeHealthScore(report, null, null, null);
   }
 
   // WHY: takes the report's own startTime, not new Date() (now) — a real bug

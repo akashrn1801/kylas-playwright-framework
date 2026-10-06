@@ -5,7 +5,7 @@ import {
 } from './productsAndServicesFormFieldLock';
 // WHY a second, separate `test` import here — mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import (2026-09-29,
-// Fix 2 for the dated known-issues.md entry, "A cross-process lock only
+// Fix 2 for the dated docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only
 // protects workers on the SAME filesystem"): confirmed via a complete,
 // per-test code-level audit that every Navigation test below only ever
 // READS field config, never calls configureFieldLimit()/
@@ -63,7 +63,7 @@ import * as path from 'path';
 //   other entity built so far in this feature.
 // - This module has NO detail page at all — edit doubles as the only
 //   per-record view (confirmed live, and already documented in
-//   .claude/architecture.md's own deviation note for this module).
+//   docs/known-issues/products-and-services.md's deviation list for this module).
 //   Persisted custom-field values are verified by reading them back from
 //   the still-open EDIT FORM's own input
 //   (ProductsAndServicesPage.assertCustomFieldValueOnEditPage()), never via

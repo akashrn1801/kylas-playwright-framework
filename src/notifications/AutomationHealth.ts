@@ -12,6 +12,37 @@ import { ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 
+// WHY these constants (2026-10-06, sandbox Build #186: 0 failed, 906 passed,
+// 9 flaky, 361 unexpected background errors, 49 recurring failures, 42
+// recurring flaky scored 31/100 "Critical" and the subject read "❌ ...
+// PASSED — HEALTH CRITICAL"): every input except this run's own failures
+// could stack to a Critical band on a run with ZERO failures, and the single
+// verdict icon was derived from that band. Principles now:
+//  1. THIS run's results (pass rate, failures, flaky, drift, staleness) carry
+//     full weight; context inputs (unexpected background errors + recurring
+//     history) are weighted lower and share ONE combined cap.
+//  2. A run with 0 failed tests cannot be Critical (health floors at the
+//     bottom of 'Needs Attention', shown as an explicit factor — never hidden).
+//     History-only evidence is not accepted as proof of a sustained, real
+//     problem: the history inputs are exactly the ones that were inflated
+//     (cross-scope mixing, one record per manual re-run), so a Critical band
+//     requires real failures in this run.
+//  3. The verdict (PASSED/FAILED + icon) comes only from this run's failed
+//     count; health is shown as its own labeled value, not the headline.
+// These are proposed starting points like every constant in this file, not
+// precision-tuned numbers.
+export const FLAKY_BUDGET = 3;
+export const BACKGROUND_ERROR_WEIGHT = 0.5;
+export const BACKGROUND_ERROR_CAP = 8;
+export const RECURRING_FAILURE_WEIGHT = 2;
+export const RECURRING_FAILURE_CAP = 8;
+export const RECURRING_FLAKY_WEIGHT = 1;
+export const RECURRING_FLAKY_CAP = 5;
+// Combined ceiling for background errors + recurring failures + recurring flaky.
+export const CONTEXT_PENALTY_CAP = 15;
+// Lowest score a run with 0 failed tests can show (bottom of 'Needs Attention').
+export const ZERO_FAILURE_SCORE_FLOOR = 50;
+
 export type OverallVerdict = 'clear' | 'caution' | 'blocked';
 export type VerdictTone = 'success' | 'warning' | 'danger';
 
@@ -67,10 +98,18 @@ export function computeHealthScore(
   // WHY: 0.6 weight — a pass-rate shortfall is the single strongest signal of
   // "is this suite healthy," but shouldn't alone be able to zero the score
   // out (a 0% pass rate would otherwise swamp every other factor).
-  const passRatePenalty = Math.round((100 - report.passRate) * 0.6);
+  // WHY computed over EXECUTED tests with flaky counted as passing (2026-10-06):
+  // a flaky test passed on retry and is penalized separately below, and a
+  // skipped test is not a failure — using report.passRate (passed/total)
+  // charged each flaky/skipped test twice (Build #186: 9 flaky + 1 skipped).
+  // A run where nothing executed still scores 0% here.
+  const executed = report.total - report.skipped;
+  const effectivePassRate =
+    executed > 0 ? Math.round(((report.passed + report.flaky) / executed) * 100) : 0;
+  const passRatePenalty = Math.round((100 - effectivePassRate) * 0.6);
   if (passRatePenalty > 0) {
     score -= passRatePenalty;
-    factors.push({ name: 'Pass rate', impact: -passRatePenalty, note: `${report.passRate}% pass rate` });
+    factors.push({ name: 'Pass rate', impact: -passRatePenalty, note: `${effectivePassRate}% of executed tests passed (flaky counted as passed, scored below)` });
   }
 
   const failPenalty = Math.min(report.failed * 3, 25);
@@ -82,17 +121,26 @@ export function computeHealthScore(
   const flakyPenalty = Math.min(report.flaky * 1.5, 15);
   if (flakyPenalty > 0) {
     score -= flakyPenalty;
-    factors.push({ name: 'Flakiness', impact: -flakyPenalty, note: `${report.flaky} flaky test(s)` });
+    factors.push({
+      name: 'Flakiness',
+      impact: -flakyPenalty,
+      note: `${report.flaky} flaky test(s)${report.flaky > FLAKY_BUDGET ? ` — above the budget of ${FLAKY_BUDGET}` : ''}`,
+    });
   }
 
+  // Context inputs (background errors, recurring history) — see the constants
+  // block at the top of this file; each keeps its own line in the breakdown
+  // and the shared CONTEXT_PENALTY_CAP adjustment is applied after them.
+  let contextPenaltyRaw = 0;
   const unexpectedMisc = miscErrors?.unexpectedErrors ?? 0;
-  const miscPenalty = Math.min(unexpectedMisc * 2, 15);
+  const miscPenalty = Math.min(unexpectedMisc * BACKGROUND_ERROR_WEIGHT, BACKGROUND_ERROR_CAP);
   if (miscPenalty > 0) {
     score -= miscPenalty;
+    contextPenaltyRaw += miscPenalty;
     factors.push({
       name: 'Background errors',
       impact: -miscPenalty,
-      note: `${unexpectedMisc} unexpected background error(s)`,
+      note: `${unexpectedMisc} unexpected background error(s) (capped at ${BACKGROUND_ERROR_CAP} points)`,
     });
   }
 
@@ -118,23 +166,44 @@ export function computeHealthScore(
 
   // WHY: failures weighted heavier than flaky here — a test that keeps
   // failing outright across recent runs is a stronger "known, unaddressed
-  // problem" signal than one that keeps eventually passing on retry.
-  const recurringFailurePenalty = Math.min(recurringFailures.length * 8, 24);
+  // problem" signal than one that keeps eventually passing on retry. Both
+  // are weighted BELOW this run's own results (2026-10-06): they are history
+  // about other runs, computed from same-branch/same-scope, one-per-build
+  // history (RunHistory.ts), and this run's own failed count already carries
+  // the full "is it broken now" signal.
+  const recurringFailurePenalty = Math.min(
+    recurringFailures.length * RECURRING_FAILURE_WEIGHT,
+    RECURRING_FAILURE_CAP
+  );
   if (recurringFailurePenalty > 0) {
     score -= recurringFailurePenalty;
+    contextPenaltyRaw += recurringFailurePenalty;
     factors.push({
       name: 'Recurring failures',
       impact: -recurringFailurePenalty,
-      note: `${recurringFailures.length} test(s) recurring failing across recent runs`,
+      note: `${recurringFailures.length} test(s) recurring failing across recent runs (capped at ${RECURRING_FAILURE_CAP} points)`,
     });
   }
-  const recurringFlakyPenalty = Math.min(recurringFlaky.length * 4, 16);
+  const recurringFlakyPenalty = Math.min(
+    recurringFlaky.length * RECURRING_FLAKY_WEIGHT,
+    RECURRING_FLAKY_CAP
+  );
   if (recurringFlakyPenalty > 0) {
     score -= recurringFlakyPenalty;
+    contextPenaltyRaw += recurringFlakyPenalty;
     factors.push({
       name: 'Recurring flakiness',
       impact: -recurringFlakyPenalty,
-      note: `${recurringFlaky.length} test(s) recurring flaky across recent runs`,
+      note: `${recurringFlaky.length} test(s) recurring flaky across recent runs (capped at ${RECURRING_FLAKY_CAP} points)`,
+    });
+  }
+  if (contextPenaltyRaw > CONTEXT_PENALTY_CAP) {
+    const give = contextPenaltyRaw - CONTEXT_PENALTY_CAP;
+    score += give;
+    factors.push({
+      name: 'Context cap',
+      impact: give,
+      note: `background errors + recurring history together can cost at most ${CONTEXT_PENALTY_CAP} points (they summed to ${contextPenaltyRaw})`,
     });
   }
 
@@ -149,6 +218,17 @@ export function computeHealthScore(
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+  // A run with 0 failed tests cannot be Critical — see the constants block at
+  // the top. The raw score stays visible as its own factor line.
+  if (report.failed === 0 && report.status !== 'no-tests-executed' && score < ZERO_FAILURE_SCORE_FLOOR) {
+    const lift = ZERO_FAILURE_SCORE_FLOOR - score;
+    factors.push({
+      name: 'Zero-failure floor',
+      impact: lift,
+      note: `0 failed tests this run, so health cannot fall below ${ZERO_FAILURE_SCORE_FLOOR}/100 (raw score ${score})`,
+    });
+    score = ZERO_FAILURE_SCORE_FLOOR;
+  }
   const label: HealthScore['label'] =
     score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
 
@@ -222,33 +302,30 @@ export function computeOverallVerdict(
       headline: 'Deployment not recommended — suite drift detected',
     };
   }
-  // WHY this branch is the actual fix: a clean run (0 failed) whose health
-  // score is still Critical (background errors, staleness, recurring
-  // history) must say so IN THE BANNER ITSELF, not show a plain "Passed"
-  // that contradicts a "Critical"/"not recommended" verdict shown two
-  // sections later.
-  if (health.label === 'Critical') {
-    return {
-      verdict: 'blocked',
-      bannerLabel: '⚠️ Passed — Health Critical',
-      bannerTone: 'danger',
-      headline: 'Deployment not recommended — automation health is Critical despite a clean run this time',
-    };
-  }
+  // WHY there is no `health.label === 'Critical'` branch any more (2026-10-06):
+  // it produced "⚠️ Passed — Health Critical" with a danger tone — i.e. a red
+  // ❌ subject — for a run with 0 failed tests (sandbox Build #186). The
+  // verdict and icon now come only from THIS run's results; health is
+  // rendered as its own labeled value (subject segment, masthead, Health
+  // Score block). computeHealthScore() also guarantees a 0-failure run never
+  // reaches Critical, so nothing here depends on that label.
   if (report.flaky > 0) {
+    const aboveBudget = report.flaky > FLAKY_BUDGET;
     return {
       verdict: 'caution',
-      bannerLabel: '⚠️ Unstable',
+      bannerLabel: `⚠️ Unstable — ${report.flaky} flaky`,
       bannerTone: 'warning',
-      headline: 'Deployment likely safe — review flaky tests',
+      headline: aboveBudget
+        ? `Deployment likely safe — but ${report.flaky} flaky tests is above the budget of ${FLAKY_BUDGET}; review them`
+        : 'Deployment likely safe — review flaky tests',
     };
   }
   if (health.label === 'Needs Attention') {
     return {
       verdict: 'caution',
-      bannerLabel: '⚠️ Passed — Needs Attention',
+      bannerLabel: '⚠️ Passed',
       bannerTone: 'warning',
-      headline: 'Deployment likely safe — review automation health factors before proceeding',
+      headline: 'Deployment likely safe — automation health needs attention; review the health factors before proceeding',
     };
   }
   return { verdict: 'clear', bannerLabel: '✅ Passed', bannerTone: 'success', headline: 'Deployment recommended' };

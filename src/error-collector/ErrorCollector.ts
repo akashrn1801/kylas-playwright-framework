@@ -33,6 +33,36 @@ export interface MiscError {
   env?: string;
 }
 
+// WHY (2026-10-06): measuring whether sequencing the CI tracks / skipping
+// product fixtures actually reduced load-induced failures needs a COUNT of how
+// often the app's known-bad pages and the globalSetup transient-retry fired —
+// these are recovered-from events, not errors, so they never reach capture()
+// (and must not inflate the unexpected-error counts). Deliberately a separate
+// stream riding the SAME pipeline (worker file -> MiscErrorReporter ->
+// merge-misc-errors -> NotificationService) rather than a second aggregator.
+export type RecoveryEventKind =
+  | 'rate-limit-page'
+  | 'error-boundary-page'
+  | 'globalsetup-transient-retry';
+
+export interface RecoveryEvent {
+  kind: RecoveryEventKind;
+  // 'recovered' / 'failed' = the retried action after recovery succeeded /
+  // threw again; 'retrying' = a globalSetup retry is about to happen (its
+  // final outcome is the job's own pass/fail, not tracked per attempt).
+  outcome: 'recovered' | 'failed' | 'retrying';
+  timestamp: string;
+  testTitle?: string;
+  detail?: string;
+}
+
+// One shard's events, attributed by merge-misc-errors.ts from the shard's own
+// artifact directory name (e.g. "qa-3", "qa-formfields-lead").
+export interface ShardRecoveryEvents {
+  shard: string;
+  events: RecoveryEvent[];
+}
+
 export interface MiscErrorReport {
   capturedAt: string;
   totalErrors: number;
@@ -41,6 +71,10 @@ export interface MiscErrorReport {
   expectedBackgroundNoiseErrors: number;
   byType: Record<string, number>;
   errors: MiscError[];
+  // Optional + additive: absent in reports written before 2026-10-06, so
+  // every existing reader keeps working unchanged.
+  recoveryEvents?: RecoveryEvent[];
+  recoveryByShard?: ShardRecoveryEvents[];
 }
 
 // WHY: Each Playwright worker is a separate OS process running its own
@@ -60,6 +94,13 @@ export interface MiscErrorReport {
 const REPORTS_DIR = path.resolve(process.cwd(), 'reports', process.env.ENV || 'qa');
 const WORKER_ID = process.env.TEST_WORKER_INDEX ?? String(process.pid);
 const OUTPUT_PATH = path.join(REPORTS_DIR, `misc-errors-worker-${WORKER_ID}.json`);
+// WHY a separate file for the main process (globalSetup) — confirmed with a
+// scratch Playwright config: globalSetup runs BEFORE reporter.onBegin(), and
+// MiscErrorReporter.onBegin() deletes every `misc-errors-worker-*.json`, so
+// events written to the pid-named worker file above would be wiped before
+// onEnd() could merge them. This name deliberately does not match that
+// cleanup pattern; globalSetup truncates it at its own start instead.
+export const MAIN_PROCESS_EVENTS_PATH = path.join(REPORTS_DIR, 'recovery-events-main.json');
 
 class ErrorCollectorSingleton {
   private errors: MiscError[] = [];
@@ -67,6 +108,7 @@ class ErrorCollectorSingleton {
   private currentTestTitle = 'unknown';
   private currentTestFile = 'unknown';
   private nodeListenersAttached = false;
+  private recoveryEvents: RecoveryEvent[] = [];
 
   setCurrentTest(title: string, file: string): void {
     this.currentTestTitle = title;
@@ -137,6 +179,43 @@ class ErrorCollectorSingleton {
     });
   }
 
+  // WHY this can never throw or alter control flow: it is called from inside
+  // shared recovery helpers (BasePage.withRateLimitRecovery, globalSetup's
+  // withTransientRetry) whose "never fail the build / behave exactly as
+  // before" contract this measurement must not touch.
+  recordRecoveryEvent(event: Omit<RecoveryEvent, 'timestamp' | 'testTitle'>): void {
+    try {
+      const entry: RecoveryEvent = {
+        ...event,
+        timestamp: new Date().toISOString(),
+        testTitle: this.currentTestTitle,
+      };
+      this.recoveryEvents.push(entry);
+      // Workers have TEST_WORKER_INDEX; the main process (globalSetup) does not.
+      if (process.env.TEST_WORKER_INDEX === undefined) {
+        const dir = path.dirname(MAIN_PROCESS_EVENTS_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+          MAIN_PROCESS_EVENTS_PATH,
+          JSON.stringify({ recoveryEvents: this.recoveryEvents }, null, 2),
+          'utf-8'
+        );
+      } else {
+        this.persist();
+      }
+      console.log(`[RecoveryEvent] ${entry.kind} → ${entry.outcome}${entry.detail ? ` (${entry.detail})` : ''}`);
+    } catch {}
+  }
+
+  // Called once by globalSetup at its start: drops a stale file from a
+  // crashed previous run in the same checkout.
+  resetMainProcessRecoveryEvents(): void {
+    try {
+      this.recoveryEvents = [];
+      fs.rmSync(MAIN_PROCESS_EVENTS_PATH, { force: true });
+    } catch {}
+  }
+
   getReport(): MiscErrorReport {
     const byType: Record<string, number> = {};
     for (const e of this.errors) {
@@ -160,6 +239,7 @@ class ErrorCollectorSingleton {
       expectedRbacErrors,
       byType,
       errors: this.errors,
+      recoveryEvents: this.recoveryEvents,
     };
   }
 

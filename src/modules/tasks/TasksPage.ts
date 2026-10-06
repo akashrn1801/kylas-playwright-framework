@@ -606,7 +606,7 @@ export class TasksPage extends BasePage {
   }
 
   // WHY the optional `options` param — mirrors CompaniesPage.fillCompanyForm()'s
-  // own, more-detailed WHY comment (LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // own, more-detailed WHY comment (docs/known-issues/form-fields.md
   // §5): `options.minimal` skips Description/Due-Date-change/Reminder —
   // but, confirmed live via direct reproduction (a real 3-step diagnostic:
   // Name alone -> "This is a required field"; Name+Type -> still required;
@@ -1050,7 +1050,7 @@ export class TasksPage extends BasePage {
 
   // WHY the optional `onlyField` param (2026-09-23, Form Field Limit
   // feature, Task rollout — reusing the exact reusable architecture proven
-  // for Lead/Contact/Company, see LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md
+  // for Lead/Contact/Company, see docs/known-issues/form-fields.md
   // §5): the pre-existing per-field truthy checks below (`if (cf.textField)`
   // etc.) already made Text/Paragraph/Number/URL safely skippable via an
   // empty-string override, but Checkbox/Date/DateTimePicker/PickList had NO
@@ -1140,7 +1140,7 @@ export class TasksPage extends BasePage {
     // WHY document.activeElement.blur() here, NOT a Tab keypress — mirrors
     // LeadsPage.fillLeadCustomFields()'s/ContactsPage.fillContactCustomFields()'s/
     // CompaniesPage.fillCompanyCustomFields()'s identical, incident-driven
-    // fix (LEAD_FEATURE_RETROSPECTIVE.md §2.8).
+    // fix (docs/known-issues/form-fields.md).
     if (onlyField !== undefined) {
       await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     }

@@ -84,7 +84,7 @@ function lineOf(sourceFile: ts.SourceFile, node: ts.Node): number {
 // would be categorically more accurate but also far more code/runtime cost
 // for a guard script meant to run on every commit — this heuristic has zero
 // known false negatives against this repo's actual current test files (see
-// this script's own verification section in known-issues.md/the session
+// this script's own verification record in the originating session
 // report for the real positive-control run confirming that).
 function isTestRegistrationCall(node: ts.CallExpression): boolean {
   const expr = node.expression;
@@ -231,7 +231,7 @@ function checkFile(
         rule: 'unregistered-shared-config-suite',
         file: relPath,
         line: lineOf(sourceFile, stmt),
-        message: `imports a cross-process lock module ("${spec}") but its directory ("${relDir}") isn't listed in config/sharedConfigSuites.json — a shared-config suite MUST be registered there so scripts/plan-shards.ts excludes it from ordinary bin-packing (see docs/CONTRIBUTING_TESTS.md §C and the 2026-09-29 known-issues.md cross-shard race entry this protects against)`,
+        message: `imports a cross-process lock module ("${spec}") but its directory ("${relDir}") isn't listed in config/sharedConfigSuites.json — a shared-config suite MUST be registered there so scripts/plan-shards.ts excludes it from ordinary bin-packing (see docs/CONTRIBUTING_TESTS.md §C and docs/known-issues/sharding-and-locks.md's cross-shard race entry this protects against)`,
       });
     }
   }

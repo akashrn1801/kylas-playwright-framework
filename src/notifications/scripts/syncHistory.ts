@@ -50,7 +50,7 @@ loadDotEnv();
 // route through ──────────────────────────────────────────────────────────
 //
 // WHY this exists at all: confirmed real, 2026-08-25 (see the dated entry in
-// .claude/known-issues.md's "CI reporting-history ledger" section) — this
+// docs/known-issues/reporting-and-notifications.md's history-ledger entry) — this
 // script's temp clone (see resolveGitRemoteUrl()'s own WHY comment) never
 // received the PIPELINE_TOKEN credential that authenticates every OTHER git
 // operation in this repo's CI, so every `git push` it ever attempted was a
@@ -159,7 +159,7 @@ const MAX_PUSH_RETRIES = 3;
 
 // WHY: confirmed real via TWO separate CI occurrences now — sandbox.yml runs
 // 32748451285 (2026-08-24) and 32822096101 (2026-08-25) — see the dated
-// entries in .claude/known-issues.md's "CI reporting-history ledger" section
+// entries in docs/known-issues/reporting-and-notifications.md's history-ledger entry
 // for both. A push REJECTION on HISTORY_BRANCH_NAME (below) proves the
 // branch already exists on GitHub's primary (a competing writer's push
 // landed first) — but the very next `git fetch` of that same ref, fired
@@ -192,7 +192,7 @@ const MAX_PUSH_RETRIES = 3;
 // ── Git failure classification — an open registry, not an if/else chain ──
 //
 // WHY this exists, replacing an unconditional assumption, not just a wrong
-// one: confirmed real, 2026-08-25 (see .claude/known-issues.md) — the push
+// one: confirmed real, 2026-08-25 (see docs/known-issues/reporting-and-notifications.md) — the push
 // loop below used to log EVERY non-zero exit from `git push` as "rejected
 // (concurrent update)" with NO check of the actual error text at all. That
 // unconditional guess is what hid the real bug (Bug 1 above — no
@@ -431,7 +431,7 @@ function localGitFallback(cmd: string): string | null {
 
 // WHY env-var-injected git config (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/
 // `GIT_CONFIG_VALUE_0`), rather than either alternative considered —
-// confirmed root cause (2026-08-25, see .claude/known-issues.md): this
+// confirmed root cause (2026-08-25, see docs/known-issues/reporting-and-notifications.md): this
 // script's temp clone (created by `git clone` into a fresh `os.tmpdir()`
 // directory — see resolveGitRemoteUrl()'s own WHY comment) has NO
 // relationship to the original checked-out CI workspace's git config, so it
@@ -511,7 +511,7 @@ function shSafe(cmd: string, cwd: string): { ok: boolean; output: string } {
 }
 
 // WHY this exists (2026-09-03, fixes a real false "Suite Drift Detected"
-// alarm — see the dated known-issues.md entry): scripts/reset-sandbox.sh
+// alarm — see docs/known-issues/reporting-and-notifications.md): scripts/reset-sandbox.sh
 // does `git reset --hard origin/dev` then force-pushes sandbox — a hard
 // reset moves the branch pointer to dev's EXACT commit object, never a new
 // one, so a reset run's own commit is always byte-identical to dev's HEAD.
@@ -792,7 +792,7 @@ async function main() {
         // WHY still an assumption, deliberately NOT hardened in this pass:
         // this is the same SHAPE of unverified "if it fails, it must mean
         // X" reasoning as the push classification this fix corrects —
-        // flagged honestly here (and in the dated known-issues.md entry)
+        // flagged honestly here (and in docs/known-issues/reporting-and-notifications.md)
         // rather than silently left implicit, but out of scope for this
         // fix, which is scoped to the two confirmed bugs above (missing
         // credentials, and the push-failure classification specifically).

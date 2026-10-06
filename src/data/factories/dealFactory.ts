@@ -9,7 +9,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // and identical DOM/locator conventions (see BasePage's "Custom Field
 // Helpers"). Deal has NO lookup-type custom field (no Company/Contact
 // Lookup equivalent), unlike Lead. DEAL_CUSTOM_FIELD_NAMES is its own
-// single source of truth, per CLAUDE.md's Custom Fields pattern — never
+// single source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never
 // import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES here even
 // though the values happen to be identical today: each module owns its own
 // field-name constant so the two can diverge safely later.
@@ -45,7 +45,7 @@ export const DEAL_FORM_FIELD_LIMIT_NAMES = {
 // TASK_LAYOUT_CACHE_KEY — the app's IndexedDB `layoutCache` key is not a
 // fixed transformation of the entity name. Trusted directly from this
 // codebase's own already-live-confirmed documentation
-// (.claude/reference-patterns.md §22, which explicitly lists Deal→`deals`
+// (docs/PATTERNS.md P30, which explicitly lists Deal→`deals`
 // among the 4 entities hand-verified together) rather than re-derived from
 // scratch this session — same bar (a hand-verified, live-confirmed
 // constant, never guessed) either way.

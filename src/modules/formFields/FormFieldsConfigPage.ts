@@ -5,7 +5,7 @@ import { logger } from '../../utils/logger';
 
 // WHY this module exists as its own directory, not folded into any single
 // entity's own module (2026-09-21, Form Field Limit feature — full
-// reasoning: FORM_FIELD_LIMIT_INVESTIGATION.md §3.1): the config screen
+// reasoning: docs/known-issues/form-fields.md): the config screen
 // this page object drives (/setup/fields/<entity>/list) is confirmed live
 // to be ONE shared UI with a 9-entity tab strip, not a Lead-specific
 // screen — every mechanic here (tabs, search, min/max ids, the regex
@@ -24,7 +24,7 @@ export interface FormFieldsEntityConfig {
   // The tab's real, live-confirmed visible text on /setup/fields/<slug>/list
   // — confirmed NOT always identical to a module's own name convention
   // (e.g. Products & Services' real tab reads "Product & Service", not
-  // "Products & Services" — FORM_FIELD_LIMIT_INVESTIGATION.md §2.1). Verify
+  // "Products & Services" — docs/known-issues/form-fields.md). Verify
   // live before hardcoding this for any future entity.
   tabLabel: string;
   // The URL path segment for /setup/fields/<urlSlug>/list and
@@ -44,7 +44,7 @@ export interface FieldConfigSnapshot {
 
 // WHY a named constant, not a repeated string literal (3 call sites): this
 // is the app's own real, confirmed UI text for the Regex dropdown's
-// default/blank option (FORM_FIELD_LIMIT_INVESTIGATION.md §2.2/§2.7), not
+// default/blank option (docs/known-issues/form-fields.md), not
 // an arbitrary choice this codebase made up. Naming it once means every
 // place that depends on this exact string — selecting it, or checking
 // whether it's already selected — reads from a single source instead of
@@ -65,9 +65,9 @@ const NO_REGEX_OPTION_LABEL = 'No Regex';
 // in that moment. The only real safeguard is process-level: every test
 // file that calls these methods against the SAME field MUST wrap those
 // tests in `test.describe.configure({ mode: 'serial' })` (see
-// FORM_FIELD_LIMIT_INVESTIGATION.md §3.3 for the full reasoning, and this
+// docs/known-issues/form-fields.md for the full reasoning, and this
 // codebase's own "Sharding order-dependency audit" finding in
-// known-issues.md that `fullyParallel: true` gives zero same-file
+// docs/known-issues/sharding-and-locks.md that `fullyParallel: true` gives zero same-file
 // execution-order guarantee without it). If that scoping is ever
 // accidentally dropped, the SYMPTOM will be a confusing, hard-to-reproduce
 // mismatch between what a test just configured and what
@@ -113,7 +113,7 @@ export class FormFieldsConfigPage extends BasePage {
   // `document.querySelector('.rt-table')` returns exactly one element on
   // this list page — mirroring ProductsAndServicesPage.ts's own
   // listTable()/nameCell() pattern (its actual precedent, not a
-  // reference-patterns.md entry — see the regexFieldLabel() comment below
+  // docs/PATTERNS.md P22 entry — see the regexFieldLabel() comment below
   // for the same correction), which scopes every row lookup through its
   // own listTable() container first rather than trusting a bare class
   // selector. Scoping here the same way removes any dependency on the
@@ -141,7 +141,7 @@ export class FormFieldsConfigPage extends BasePage {
     this.fieldRow(internalName).locator('.rt-td').nth(1);
 
   // WHY fixed ids, not a per-field label lookup (confirmed live,
-  // FORM_FIELD_LIMIT_INVESTIGATION.md §2.1): identical ids/shape confirmed
+  // docs/known-issues/form-fields.md): identical ids/shape confirmed
   // across all 3 field types tested (Text/Number/Paragraph) — a fixed
   // position in this one specific admin config form, not tied to the
   // individual field being edited.
@@ -164,7 +164,7 @@ export class FormFieldsConfigPage extends BasePage {
   // class: react-select always suffixes its open-menu container's class
   // with "-menu" — but so does this app's own Bootstrap `.dropdown-menu`
   // convention (the ellipsis-menu pattern documented in
-  // reference-patterns.md §2 uses it too), so the substring alone is not
+  // docs/PATTERNS.md P3 uses it too), so the substring alone is not
   // sufficient scoping on its own. Confirmed live, specifically on this
   // field-edit page with the Regex dropdown open (not just assumed from
   // the substring match): `[class*="-menu"]` resolves to exactly 4
@@ -195,8 +195,7 @@ export class FormFieldsConfigPage extends BasePage {
     });
 
   // WHY these 3 semantic classes, not the info panel's own container hash
-  // class (confirmed live via direct DOM read, FORM_FIELD_LIMIT_
-  // INVESTIGATION.md §2.7):
+  // class (confirmed live via direct DOM read, docs/known-issues/form-fields.md):
   //   <div>Pattern: <code class="text-primary">...</code></div>
   //   <div>Valid: <span class="text-green">...</span></div>
   //   <div>Invalid: <span class="text-danger">...</span></div>
@@ -228,7 +227,7 @@ export class FormFieldsConfigPage extends BasePage {
   // against this THIRD outcome: a same-origin, session-still-valid landing
   // on a completely different page. This mirrors the identical "wrongPage"
   // classification already built into fixtures/index.ts's
-  // navigateAndConfirmLoggedIn() (documented in .claude/known-issues.md's
+  // navigateAndConfirmLoggedIn() (documented in docs/known-issues/ci-pipelines.md's
   // "First real sharded qa run (Build #239)" entry, root-caused there to
   // the app's own server-side "resume last visited section" behavior
   // colliding with a different concurrent session/tab under real
@@ -595,8 +594,8 @@ export class FormFieldsConfigPage extends BasePage {
   }
 
   // WHY select "No Regex" FIRST, only when a Regex control exists and
-  // isn't already on "No Regex" (confirmed-correct sequence, FORM_FIELD_
-  // LIMIT_INVESTIGATION_FOLLOWUP.md §3.3, live-tested end-to-end against a
+  // isn't already on "No Regex" (confirmed-correct sequence, docs/known-issues/form-fields.md,
+  // live-tested end-to-end against a
   // real regex-active field with a fresh page-load verification
   // afterward): selecting "No Regex" is what lifts the DOM-level
   // `disabled` lock a fixed-pattern regex option puts on Min/Max Length —
@@ -739,7 +738,7 @@ export class FormFieldsConfigPage extends BasePage {
 
   // WHY this feature's RBAC scope is list-visibility only, and deliberately
   // never navigates to an individual field's edit URL (explicit
-  // human-operator decision, FORM_FIELD_LIMIT_INVESTIGATION.md §1.2/§2.6/
+  // human-operator decision, docs/known-issues/form-fields.md/
   // §5): the "Forbidden" page a restricted user genuinely sees there is
   // the exact same component BasePage.navigateTo()'s own
   // isSessionExpiryPage() check already recognizes for an unrelated reason
@@ -786,7 +785,7 @@ export class FormFieldsConfigPage extends BasePage {
   }
 
   // WHY a "URL unchanged after click" check, not a cursor-style read: both
-  // are confirmed-real signals (FORM_FIELD_LIMIT_INVESTIGATION.md §2.6),
+  // are confirmed-real signals (docs/known-issues/form-fields.md),
   // but a genuine no-navigation outcome is the more direct, user-facing
   // proof that the row is truly non-interactive, not just visually styled
   // differently.
@@ -822,7 +821,7 @@ export class FormFieldsConfigPage extends BasePage {
       });
     // WHY waitForURL() timing out is the SUCCESS case here (the same
     // stability-window idiom already proven in this codebase — see
-    // reference-patterns.md §18 — applied to "prove nothing happened"
+    // docs/PATTERNS.md P13 — applied to "prove nothing happened"
     // instead of "prove a menu survived"): a blind fixed-duration sleep here
     // would be exactly the anti-pattern this repo's pre-commit hook blocks
     // (CLAUDE.md rule 2) — a fixed sleep can't distinguish "the click

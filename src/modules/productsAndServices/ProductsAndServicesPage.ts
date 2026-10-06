@@ -11,8 +11,8 @@ import { logger } from '../../utils/logger';
 
 // WHY this page object doesn't follow the standard Sales-page/detail-page
 // shape every other module uses: this is a deliberate, documented deviation
-// — see PRODUCTS_AND_SERVICES_DESIGN.md section 1 and
-// .claude/architecture.md's own deviation note. Key structural facts, all
+// — see docs/known-issues/products-and-services.md and
+// docs/known-issues/products-and-services.md's deviations note. Key structural facts, all
 // confirmed LIVE (2026-08-10), not assumed from the design doc alone:
 //   - Lives on the SETTINGS page (`/setup/products-services/...`), not Sales.
 //   - Create and Edit are FULL-PAGE navigations, NOT a modal
@@ -160,7 +160,7 @@ export class ProductsAndServicesPage extends BasePage {
    * genuine multi-value control (`is-invalid__value-container--is-multi`,
    * real removable chips, an array-valued saved field). This module
    * deliberately selects only ONE option regardless, by design choice (see
-   * PRODUCTS_AND_SERVICES_DESIGN.md section 6) — not because the field is
+   * docs/known-issues/products-and-services.md) — not because the field is
    * single-select. Do not "fix" this into a multi-select helper without a
    * deliberate decision to test multi-select behavior for Units specifically.
    *
@@ -184,7 +184,7 @@ export class ProductsAndServicesPage extends BasePage {
     }
 
     // WHY clear any existing chip(s) FIRST (added 2026-08-10, CRITICAL
-    // INCIDENT — see PRODUCTS_AND_SERVICES_PROGRESS.md): Units is a genuine
+    // INCIDENT — see docs/known-issues/products-and-services.md): Units is a genuine
     // multi-select (confirmed live) — selecting an option ADDS a chip, it
     // never replaces an already-selected one. Once an option is already
     // selected, react-select removes it from the OPEN menu's available list
@@ -303,7 +303,7 @@ export class ProductsAndServicesPage extends BasePage {
 
   private async setIsActive(active: boolean): Promise<void> {
     // WHY the LABEL is clicked, not the checkbox input directly (fixed
-    // 2026-08-10 — see PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 7
+    // 2026-08-10 — see docs/known-issues/products-and-services.md's Batch 7
     // investigation): a real test run confirmed this toggle's
     // `.custom-control-label` overlays the input and intercepts a direct
     // click every time this path is actually exercised — matching the
@@ -349,7 +349,7 @@ export class ProductsAndServicesPage extends BasePage {
 
   // WHY a bounded retry here even though no index-lag was observed live
   // (confirmed instant search results immediately after creation, see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's investigation notes): per this
+  // docs/known-issues/products-and-services.md's investigation notes): per this
   // codebase's own rule 20 (environment-scoping conclusions decay, never
   // assumed permanent) — a defensive retry on the common case (found on
   // attempt 1) protects against a scenario this session's QA-only testing
@@ -398,7 +398,7 @@ export class ProductsAndServicesPage extends BasePage {
     await this.click(this.addButton(), 'Add button (Products & Services list)');
     await this.waitForUrl(/\/products-services\/create/, config.timeouts.navigation);
     // WHY wait for a real form field too, not just the URL (fixed
-    // 2026-08-10 — Batch 7 investigation, PRODUCTS_AND_SERVICES_PROGRESS.md):
+    // 2026-08-10 — Batch 7 investigation, docs/known-issues/products-and-services.md):
     // a real test run confirmed `skipIfCustomFieldsAbsent()`'s instant,
     // zero-wait DOM-presence check can run before the create form's fields
     // (including the custom ones) have actually rendered, producing a false
@@ -439,7 +439,7 @@ export class ProductsAndServicesPage extends BasePage {
   // WHY the optional `options` param (2026-09-23, Form Field Limit feature,
   // Products & Services rollout): mirrors every other entity's identical
   // `{minimal, onlyCustomField}` architecture (see
-  // LEAD_FEATURE_IMPLEMENTATION_CONTEXT.md §5) — confirmed live via direct
+  // docs/known-issues/form-fields.md) — confirmed live via direct
   // incremental reproduction (Name alone -> "This is a required field";
   // Name+Price -> HTTP 200/redirect to list) that Products & Services' own
   // true save-required minimum is just Name + Price, genuinely simpler than
@@ -516,7 +516,7 @@ export class ProductsAndServicesPage extends BasePage {
   // Every existing caller omits it and gets byte-for-byte the original
   // fill-everything behavior. The blur-fix below (document.activeElement.
   // blur(), not a Tab keypress) mirrors the same incident-driven fix
-  // documented in LEAD_FEATURE_RETROSPECTIVE.md §2.8 — a Tab keypress after
+  // documented in docs/known-issues/form-fields.md — a Tab keypress after
   // a single minimal-fill custom-field fill can advance focus into an
   // unrelated react-select and silently open it.
   // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
@@ -685,7 +685,7 @@ export class ProductsAndServicesPage extends BasePage {
   // treating a genuinely-present field as absent and skipping its fill —
   // exactly this codebase's already-documented navigation-drift bug class
   // (six other modules' `waitForEntityDetailPage()`/`waitForEntityListPage()`
-  // fixes — see .claude/known-issues.md), just not yet applied here since
+  // fixes — see docs/known-issues/locators-and-timing.md), just not yet applied here since
   // Products & Services has no detail page for that shared helper to target.
   // Waiting for the Name field's real value (always present, never
   // environment-conditional, unlike custom fields) is the same "real content
@@ -1095,7 +1095,7 @@ export class ProductsAndServicesPage extends BasePage {
    *                 read-after-write lag already documented and fixed
    *                 elsewhere in this codebase via a bounded reload-and-
    *                 retry (assertRightPanelIconVisible()'s own fix,
-   *                 reference-patterns.md §5 — "a fresh mount re-fetches
+   *                 docs/PATTERNS.md P23 — "a fresh mount re-fetches
    *                 the snapshot") — not a guess, the same proven
    *                 mechanism applied to a new instance of the same bug
    *                 class (rule 18). When provided, a failed value-match

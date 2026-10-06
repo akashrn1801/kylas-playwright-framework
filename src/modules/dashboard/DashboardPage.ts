@@ -19,8 +19,8 @@ import {
 // 2's real row/radio/label shape, the Assign Dashboard modal's real
 // structure, and the exact DOM signal behind "Mark as Primary"'s disabled
 // state. Never guessed from prose alone (CLAUDE.md rule 12) — the durable,
-// reusable findings from that investigation live in `.claude/known-issues.md`'s
-// Dashboard section and `.claude/reference-patterns.md` §20; the original
+// reusable findings from that investigation live in `docs/known-issues/dashboard-module.md`
+// and `docs/PATTERNS.md` P54; the original
 // working investigation file was consolidated into those permanent docs and
 // deleted.
 // ──────────────────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ export class DashboardPage extends BasePage {
   // WHY real, stable ids here, unlike every other modal in this flow:
   // confirmed live (§2H, re-confirmed 2026-09-02) — `#confirmModal`/`#cancel`/
   // `#confirm.btn-danger`, matching the shared Note-delete pattern already
-  // documented codebase-wide (.claude/reference-patterns.md §6).
+  // documented codebase-wide (docs/PATTERNS.md P32).
   private readonly deleteConfirmModal = (): Locator => this.page.locator('#confirmModal');
   private readonly deleteConfirmDeleteButton = (): Locator => this.page.locator('button#confirm.btn-danger');
 
@@ -364,7 +364,7 @@ export class DashboardPage extends BasePage {
   // playwright.config.ts never sets `actionTimeout` (confirmed via grep),
   // and Playwright's own real default for that setting is 0 — unbounded —
   // matching the identical, already-documented bug class in
-  // .claude/known-issues.md ("DealsPage.getAssociatedContactId()... having
+  // docs/known-issues/locators-and-timing.md ("DealsPage.getAssociatedContactId()... having
   // no explicit timeout at all"). Live evidence: when an earlier bug left
   // the page mid-wizard/mid-unsaved-create-form (a real, different root
   // cause, tracked separately), this exact unguarded `.innerText()` call
@@ -481,7 +481,7 @@ export class DashboardPage extends BasePage {
   // .locator('a.dropdown-item').filter(...)` — the switcher menu was open
   // and the item existed, but the click never became actionable in time
   // (this codebase's own established "some other DOM churn intercepts a
-  // freshly-opened dropdown" class — see reference-patterns.md §18's
+  // freshly-opened dropdown" class — see docs/PATTERNS.md P13's
   // stability-window pattern, built for the identical symptom on a
   // different control). A single attempt has no way to recover from this;
   // retrying the whole sequence (fresh openSwitcher + fresh click) does,
@@ -791,7 +791,7 @@ export class DashboardPage extends BasePage {
     // WHY a queue backed by the shuffle's own unused remainder ("spares"),
     // not a fixed upfront slice retried in place (locator-reviewer finding,
     // 2026-09-02): mirrors an already-documented lesson elsewhere in this
-    // codebase (.claude/known-issues.md — "retrying the SAME index is
+    // codebase (docs/known-issues/locators-and-timing.md — "retrying the SAME index is
     // sometimes futile; one specific index can be persistently non-
     // actionable while every other index works fine", the reason
     // `BasePage.selectRandomOptionWithRetry()` always re-rolls a fresh index
@@ -943,7 +943,7 @@ export class DashboardPage extends BasePage {
   // just-marked dashboard — the exact same "navigating away cancels/outraces
   // an in-flight mutation" mechanism this session's own render-race
   // investigation already proved for the Add-Dashlet wizard (see
-  // `.claude/known-issues.md`'s Dashboard render-race entry), just hitting a
+  // `docs/KNOWN_ISSUES_ACTIVE.md` KI-05), just hitting a
   // different action. A second, real occurrence in the same evidence set:
   // DB26 (a different test, same action) captured a genuine `HTTP 403 "Can
   // not read the dashboard"` on this exact endpoint — proof the request can
@@ -1029,8 +1029,8 @@ export class DashboardPage extends BasePage {
   // the confirmation MODAL to close (a client-side transition) — no network
   // confirmation the DELETE itself had completed before the caller proceeds
   // to assertDashboardNotInSwitcher(). Same class of gap already fixed for
-  // LeadsPage.deleteLead()/DealsPage.deleteDeal() (known-issues.md's
-  // Sandbox Build #147 entry, both `DELETE /v1/<module>/<id>`) and for this
+  // LeadsPage.deleteLead()/DealsPage.deleteDeal() (docs/known-issues/reports-module.md's
+  // R36/R64 entry, both `DELETE /v1/<module>/<id>`) and for this
   // exact module's own openMarkAsPrimary() (arm-before-click/await-after,
   // mirrored here). Endpoint inferred from that pattern plus this module's
   // own already-confirmed-live sibling (`/v1/dashboards/<id>/
@@ -1085,14 +1085,14 @@ export class DashboardPage extends BasePage {
   // repo's own `ci/reporting-history` ledger to fail together in every one
   // of 8 real historical PROD/main CI runs with zero exceptions (never one
   // without the other), correlating with an already-documented, unresolved
-  // known-issues.md symptom ("stuck dashlet on Default/Productivity
+  // docs/KNOWN_ISSUES_ACTIVE.md KI-05 symptom ("stuck dashlet on Default/Productivity
   // Dashboard, root cause never established"). A live manual PROD
   // reproduction (headed, by the user) found the app functioning correctly
   // — reclassified from suspected app defect to PROD-specific intermittent
   // slowness on that direct evidence. Applies the same, already-proven
   // bounded reload-and-retry pattern used elsewhere for exactly this class
   // of "a permissions/render snapshot taken once at page mount can predate
-  // real data being ready" gap (`.claude/reference-patterns.md` §5,
+  // real data being ready" gap (`docs/PATTERNS.md` P23,
   // `assertRightPanelIconVisible()` across Leads/Deals/Contacts/Companies)
   // — a reload forces a fresh mount/fetch, which a longer wait on the stale
   // mount cannot achieve. Every individual assertion here already used the
@@ -1132,7 +1132,7 @@ export class DashboardPage extends BasePage {
   // unlike `expect().toHaveCount()`/`toBeVisible()`. Called right after
   // `goToDashboard()`, this can race a section's own async dashlet-render
   // (the same class of render-timing gap already documented for Dashboard
-  // elsewhere in this codebase — known-issues.md's Grouped-Smartlists
+  // elsewhere in this codebase — docs/KNOWN_ISSUES_ACTIVE.md KI-05's Grouped-Smartlists
   // render-race), reading a transient 0 and throwing immediately instead of
   // giving the render a real chance to finish. withSessionExpiryRecovery()
   // only retries on session expiry, not on this ordinary race, so it
@@ -1312,7 +1312,7 @@ export class DashboardPage extends BasePage {
   // WHY a single long poll on the ORIGINAL attempt, never a "wait a few
   // seconds, then destroy the wizard and resubmit from scratch" retry
   // (redesigned 2026-09-02, replacing a 2-attempt design of the same date —
-  // see `.claude/known-issues.md`'s Dashboard render-race entry for the full
+  // see `docs/KNOWN_ISSUES_ACTIVE.md` KI-05 for the full
   // evidence): a dedicated live network-trace investigation PROVED, not just
   // suspected, that reopening the wizard on a timeout actively cancels the
   // original attempt's own still-in-flight confirmation request — captured
@@ -1326,7 +1326,7 @@ export class DashboardPage extends BasePage {
   // gives ONE attempt the SAME total time the old design's second attempt
   // had, without ever discarding in-flight work. This does not resolve WHY
   // the underlying render is sometimes slow (still not established whether
-  // that's app-side or environment-side — see known-issues.md) — it only
+  // that's app-side or environment-side — see docs/KNOWN_ISSUES_ACTIVE.md KI-05) — it only
   // stops the test's own logic from making a slow-but-recoverable render
   // unrecoverable.
   //

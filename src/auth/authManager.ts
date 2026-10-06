@@ -809,7 +809,7 @@ export async function isSessionExpiryPage(page: Page): Promise<boolean> {
 // WHY this exists, and why it's a SEPARATE check from isSessionExpiryPage()
 // above rather than folded into it (2026-09-29, confirmed live via trace.zip
 // inspection of sandbox run 36541336794's Company/Task formFields shards —
-// see .claude/known-issues.md's dated entry for the full incident): a
+// see docs/known-issues/session-expiry-and-auth.md for the full incident): a
 // genuinely different app-level page state, with a genuinely different
 // cause and recovery action. Under real concurrent CI load (10 shards x 2
 // workers hammering the same staging backend), the Form Fields list's own

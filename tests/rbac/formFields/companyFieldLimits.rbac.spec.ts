@@ -1,6 +1,6 @@
 import { test as companyTest, expect } from '../../ui/formFields/companyFormFieldLock';
 // WHY this second `test` import (2026-09-29 — Fix 2 for the dated
-// known-issues.md entry, "A cross-process lock only protects workers on the
+// docs/known-issues/sharding-and-locks.md entry, "A cross-process lock only protects workers on the
 // SAME filesystem" / the lock-starvation-amplifier follow-up): mirrors
 // companyFieldLimits.spec.ts's own identical `baseTest` import — see that
 // file's WHY comment for the full reasoning. Confirmed via a complete,
@@ -60,7 +60,7 @@ import { logger } from '../../../src/utils/logger';
 // WHY RBAC assertions here never navigate to an individual field's edit
 // URL directly (`/setup/fields/<slug>/edit/<id>`): a restricted user
 // requesting that URL lands on the same "Forbidden" bootstrap-time page
-// documented in .claude/known-issues.md — colliding with
+// documented in docs/known-issues/sharding-and-locks.md — colliding with
 // authManager.isSessionExpiryPage()'s own recognition of that exact page
 // shape. Restricted-user RBAC here is proven entirely through the LIST
 // page (visible, read-only, no Add Field button, rows not clickable).
@@ -146,7 +146,7 @@ companyTest.describe('Form Field Limits — RBAC › Company', () => {
   // NOTE (2026-10-05): serial mode now lives on each per-category sub-block below, not this outer describe — the
   // reasoning that follows still applies to each sub-block.
   // WHY companyTest.describe.configure({ mode: 'serial' }) IS here (restored
-  // 2026-09-29 — see .claude/known-issues.md's dated 2026-09-29 entry "A
+  // 2026-09-29 — see docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry "A
   // cross-process lock only protects workers on the SAME filesystem"):
   // removed earlier the same day on the reasoning that the auto-applied,
   // scope:'test' companyFormFieldLock fixture's own cross-process lock already makes

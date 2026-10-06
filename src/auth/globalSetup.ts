@@ -3,6 +3,7 @@ import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -26,6 +27,7 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   ErrorCollector.attachNodeListeners();
+  ErrorCollector.resetMainProcessRecoveryEvents();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
   fs.mkdirSync(GLOBAL_SETUP_TRACE_DIR, { recursive: true });
 
@@ -55,7 +57,31 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
     // fresh — see getAccessTokenForRole() below, which reads them directly),
     // and `browser` is still open — though this function doesn't actually
     // need a browser at all, only a standalone API request context.
-    await ensureProductFixtures();
+    // WHY conditional (2026-10-06): see productFixtureNeed.ts — only invocations
+    // that may run a Products & Services spec need the fixtures. Every
+    // ambiguous case resolves to "create", so a wrong skip is not reachable
+    // by an unrecognised command line; and if one ever were, the accessor
+    // (getProductFixture) throws a "no fixture file / fixture not found"
+    // error rather than returning data.
+    const need = selectionNeedsProductFixtures(
+      process.argv.slice(2),
+      _playwrightConfig.projects.map((project) => project.testDir)
+    );
+    if (need.needed) {
+      console.log(`[globalSetup] Product fixtures: creating — ${need.reason}`);
+      await ensureProductFixtures();
+    } else {
+      console.log(`[globalSetup] Product fixtures: SKIPPED — ${need.reason}`);
+      // WHY remove any stale file: a fixture file left by an EARLIER run on a
+      // developer machine would otherwise be read by getProductFixture() as
+      // if it were fresh. Deleting it turns a wrongly-skipped P&S test into a
+      // loud "no fixture file found" error instead of silently stale data.
+      try {
+        fs.rmSync(PRODUCT_FIXTURES_FILE, { force: true });
+      } catch {
+        /* nothing to remove */
+      }
+    }
   } finally {
     await browser.close();
   }
@@ -194,7 +220,7 @@ function resolveRefId(map: Map<string, number>, name: string, fieldLabel: string
 // documented mechanism exactly — the real accessToken lives inside the JWT's
 // own payload (`payload.data.accessToken`), not the raw token string itself.
 // Confirmed live via the identical decode during this module's own
-// investigation (see PRODUCTS_AND_SERVICES_PROGRESS.md).
+// investigation (see docs/known-issues/products-and-services.md).
 async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<string> {
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
@@ -222,7 +248,7 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
 // unprotected HTTP calls per job (2 GETs + 3 product-create POSTs), with
 // ZERO retry anywhere — are exposed to real, transient HTTP 429s under this
 // feature's own increased CI concurrency. The formFields CI carve-out (see
-// .claude/known-issues.md's dated 2026-09-29 entry) raised sandbox's peak
+// docs/known-issues/rate-limits-and-error-pages.md) raised sandbox's peak
 // concurrent globalSetup invocations from 8 to 10 (6 dedicated formFields
 // shards + 4 rest-of-suite shards, all starting within the same ~30s
 // window). Direct evidence this is real, not coincidental: the prior 8-job
@@ -242,7 +268,7 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
 // only delay a real failure by up to ~15s while producing 3x the noise, per
 // this exact codebase's own established distinction elsewhere (e.g.
 // createCompany/createLead/createContact's transient-vs-real-400
-// classification in known-issues.md's "RBAC test-isolation and app-bug
+// classification in docs/known-issues/rbac-and-test-isolation.md's "RBAC test-isolation and app-bug
 // investigations" entry).
 const TRANSIENT_HTTP_ERROR_PATTERN = /\bHTTP (429|5\d\d)\b/;
 
@@ -261,6 +287,15 @@ async function withTransientRetry<T>(description: string, fn: () => Promise<T>):
       const retryable = isTransientHttpError(error) && attempt < maxAttempts;
       if (!retryable) throw error;
       const delay = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1];
+      // WHY record here only (2026-10-06, load measurement): a pure side
+      // observation placed before the existing warn/sleep — the retry count,
+      // backoff and throw conditions above and below are untouched, and
+      // recordRecoveryEvent() can never throw.
+      ErrorCollector.recordRecoveryEvent({
+        kind: 'globalsetup-transient-retry',
+        outcome: 'retrying',
+        detail: `${description}, attempt ${attempt}/${maxAttempts}`,
+      });
       console.warn(
         `[globalSetup] ${description} failed (attempt ${attempt}/${maxAttempts}, transient — ` +
           `${String(error)}) — retrying in ${delay / 1000}s...`
@@ -327,7 +362,7 @@ async function createOneProductFixture(
 
   // WHY this exact body shape, field by field: network-captured live
   // (2026-08-10) from a real UI Save click — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's investigation notes. Not derived
+  // docs/known-issues/products-and-services.md's investigation notes. Not derived
   // from the response shape (which differs in small ways, e.g. `disabled`
   // appears on countryOfOrigin/category's response objects but was absent
   // from the real request's `units` entries) — this is the literal request

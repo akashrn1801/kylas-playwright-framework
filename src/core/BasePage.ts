@@ -14,6 +14,7 @@ import {
   tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
+import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
@@ -355,7 +356,20 @@ export class BasePage {
         );
         await tryRecoverFromAppErrorBoundary(this.page);
       }
-      return await fn();
+      // WHY the retry is wrapped only to RECORD the outcome (2026-10-06, load
+      // measurement — see ErrorCollector.recordRecoveryEvent): the same fn() is
+      // still awaited exactly once, and any error it throws is rethrown
+      // unchanged, so this method's return/throw behavior is identical to
+      // before. recordRecoveryEvent() itself can never throw.
+      const kind = rateLimited ? 'rate-limit-page' : 'error-boundary-page';
+      try {
+        const result = await fn();
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'recovered' });
+        return result;
+      } catch (retryError) {
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'failed' });
+        throw retryError;
+      }
     }
   }
 
@@ -436,7 +450,7 @@ export class BasePage {
   // bigger single wait) because a single bigger timeout can't distinguish
   // "item slow to paint inside an already-open menu" from "menu itself
   // closed/never opened" — the same ambiguity the proven stability-window
-  // (reference-patterns.md §18) and bounded reload-and-retry (§5) patterns
+  // (docs/PATTERNS.md P13) and bounded reload-and-retry (P23) patterns
   // already solve elsewhere in this codebase.
   protected async clickDropdownMenuItemBounded(
     openMenu: () => Promise<void>,
@@ -1566,8 +1580,7 @@ export class BasePage {
   }
 
   // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
-  // (FORM_FIELD_LIMIT_INVESTIGATION.md §2.4, FORM_FIELD_LIMIT_INVESTIGATION_
-  // FOLLOWUP.md §1) that this app caches every entity's create/edit/list
+  // (docs/known-issues/form-fields.md) that this app caches every entity's create/edit/list
   // field layout (including custom-field min/max/regex config) in
   // IndexedDB (`kylasStorage` → `layoutCache` object store, one key per
   // entity), fetched once per browser session and never auto-refreshed —
@@ -1701,7 +1714,7 @@ export class BasePage {
   // and, finding none, classifies the miss as a TRANSIENT backend error
   // and retries the whole create — exactly the wrong interpretation for a
   // value that's permanently, correctly blocked client-side (confirmed
-  // live, FORM_FIELD_LIMIT_INVESTIGATION.md §2.7/§2.8) and would make
+  // live, docs/known-issues/form-fields.md) and would make
   // every such test wait a full navigation timeout for nothing. This is a
   // thin, generic, modal-only click — callers decide for themselves
   // whether/how to wait for a network response, or to assert none fires.
@@ -2074,8 +2087,8 @@ export class BasePage {
     const maxChipsToClear = 50;
     // WHY a bounded number of outer "settle rounds" wrapping the inner
     // per-chip removal loop, not just a single pass (fixed 2026-08-23, real
-    // PS10/sandbox-build-144 recurrence — see
-    // .claude/sandbox-build-144-task-b-chip-clearing.md): the real CI
+    // PS10/Build #144 recurrence — see
+    // docs/known-issues/locators-and-timing.md): the real CI
     // failure's own stack trace proved the inner loop legitimately reached
     // zero chips (it never hit the maxChipsToClear exhaustion path below,
     // which throws a different message) — the defense-in-depth recheck
@@ -2133,7 +2146,7 @@ export class BasePage {
       }
       // WHY a real `waitFor('visible')` TIMING OUT is the SUCCESS case here
       // (mirrors the proven stability-window idiom in
-      // reference-patterns.md §18, applied to the symmetric "reached zero"
+      // docs/PATTERNS.md P13, applied to the symmetric "reached zero"
       // direction instead of "menu opened"): if no chip's remove icon
       // becomes visible again within the window, the zero state genuinely
       // held — a real, condition-based check, not a fixed-duration blind
@@ -2305,7 +2318,7 @@ export class BasePage {
       // instead of empty control space — silently un-selecting that chip
       // instead of reopening the menu. This was the actual root cause of the
       // "chip drop" flake previously attributed to an unconfirmed app-level
-      // React race (see CLAUDE.md's "Lead multi-select fields ('chip drop')
+      // React race (see docs/known-issues/locators-and-timing.md's "Lead multi-select 'chip drop'
       // — root-caused and fixed" entry). The input is a distinct
       // child DOM node with its own small bounding box that never overlaps a
       // chip's remove icon, so clicking it is immune to this collision
@@ -2464,7 +2477,7 @@ export class BasePage {
   //
   // WHY the simple forward-only loop, replacing an earlier, more elaborate
   // bidirectional-navigation version (fixed 2026-08-10 — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md): that version computed the
+  // docs/known-issues/products-and-services.md): that version computed the
   // currently-visible month range via a bounding-rect-filtered DOM read and
   // decided forward-vs-backward from it, specifically to handle a
   // once-observed edge case (target date === field's already-set value, yet
@@ -2498,7 +2511,7 @@ export class BasePage {
 
     // WHY 400ms, not the 1000ms this shape uses in Quotations/Deals' own
     // separate, untouched native date-pickers (fixed 2026-08-10, per the
-    // user's own speed investigation — see PRODUCTS_AND_SERVICES_PROGRESS.md):
+    // user's own speed investigation — see docs/known-issues/products-and-services.md):
     // custom-field dates are always generated 0-30 days out and the
     // calendar always opens on the current month, so at most ONE forward
     // click is ever needed — the real cost was an unconditional ~1000ms
@@ -2529,7 +2542,7 @@ export class BasePage {
     }
     // WHY this retry-with-reopen exists (found live, 2026-08-10, during the
     // user's own navigation-speed investigation — see
-    // PRODUCTS_AND_SERVICES_PROGRESS.md's CRITICAL entry): a real,
+    // docs/known-issues/products-and-services.md's CRITICAL entry): a real,
     // intermittent (~30-50% of real create+edit cycles observed) failure
     // where `dayCell.click()` throws "element was detached from the DOM"
     // after the cell was correctly found — always on the EDIT flow's FIRST
@@ -3145,7 +3158,7 @@ export class BasePage {
     // WHY this specific URL pattern (`/v1/products/(search|lookup)`): the
     // Products module's OWN list/create/duplicate-check flows are confirmed
     // live to use `/v1/products/search` (POST) and `/v1/products/lookup`
-    // (GET) — see PRODUCTS_AND_SERVICES_PROGRESS.md's live-investigation
+    // (GET) — see docs/known-issues/products-and-services.md's live-investigation
     // entry. This module's own async product search is a strong, but NOT
     // independently network-captured, inference that the embedded row search
     // reuses one of these same two endpoints (Kylas's own convention is one

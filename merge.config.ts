@@ -1,7 +1,7 @@
 /**
  * Config used ONLY by `npx playwright merge-reports` (sharded CI, added
  * 2026-09-09 to fix the GitHub Actions 6-hour job-timeout cancellations on
- * qa/stage/sandbox — see .claude/known-issues.md's dated entry). merge-reports
+ * qa/stage/sandbox — see docs/known-issues/sharding-and-locks.md's dated entry). merge-reports
  * reads only the `reporter` field from whatever config it's pointed at via
  * `-c` — everything else here is ignored, so this is deliberately minimal
  * rather than importing/extending playwright.config.ts.

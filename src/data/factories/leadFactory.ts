@@ -132,7 +132,7 @@ export const LEAD_FORM_FIELD_LIMIT_NAMES = {
 
 // WHY this constant, and why it must NOT be derived from LEAD_CUSTOM_FIELD_
 // NAMES or the entity name (2026-09-21, Form Field Limit feature): confirmed
-// live (FORM_FIELD_LIMIT_INVESTIGATION_FOLLOWUP.md §3.2) that the app's
+// live (docs/known-issues/form-fields.md) that the app's
 // IndexedDB `layoutCache` key for an entity is not a fixed transformation of
 // its name — Lead/Deal/Contact happen to be the simple lowercase plural, but
 // Products & Services' real key is "products-services", which no derivation
@@ -216,7 +216,7 @@ export const generateLeadCustomFieldInvalidUrl = (): string => 'not a valid url#
 // WHY these exist as named, shape-aware generators — not a single hardcoded
 // "valid" and "invalid" string per option (2026-09-21, explicit
 // requirement): the Text field's Regex dropdown offers 5 real, fixed-format
-// options, confirmed live via FORM_FIELD_LIMIT_INVESTIGATION.md §2.7's own
+// options, confirmed live via docs/known-issues/form-fields.md's own
 // pattern table. A hardcoded literal per option would silently drift from
 // the app's real pattern if it's ever corrected or re-verified; generating
 // a value FROM the known shape (and having the caller cross-check it
@@ -234,7 +234,7 @@ export const generateLeadCustomFieldInvalidUrl = (): string => 'not a valid url#
 // invalid generator below removes exactly one character from the specific
 // group most likely to reveal an off-by-one in the app's own validation,
 // mirroring the exact shape of invalid example already confirmed live for
-// that option in FORM_FIELD_LIMIT_INVESTIGATION.md §2.7 (e.g. Passport's
+// that option in docs/known-issues/form-fields.md (e.g. Passport's
 // real confirmed invalid example "A123456" is its own valid shape minus
 // one trailing digit — the generator below reproduces that same kind of
 // violation programmatically instead of hardcoding that literal).
@@ -283,8 +283,8 @@ export const generateInvalidPanCardValue = (): string =>
 export const generateValidEmailFormatValue = (): string =>
   `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
 // WHY omitting the TLD segment entirely, not just shortening it: mirrors
-// the exact confirmed invalid example shape from FORM_FIELD_LIMIT_
-// INVESTIGATION.md §2.7 ("john.doe@example" — a real local-part@domain
+// the exact confirmed invalid example shape from
+// docs/known-issues/form-fields.md ("john.doe@example" — a real local-part@domain
 // with no ".tld" at all), the most direct single-constraint violation of
 // the pattern's own `\.[A-Za-z]{2,}$` requirement.
 export const generateInvalidEmailFormatValue = (): string =>
@@ -437,7 +437,7 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
 // Requirement's Products-or-Services/Currency are all confirmed live to be
 // UNCONDITIONALLY random-picked by LeadsPage.fillLeadForm() regardless of
 // what value is passed here (the same class of gap fixed with
-// skipOptionalFields on CallLogsPage — see CLAUDE.md's Call Logs section) —
+// skipOptionalFields on CallLogsPage — see docs/known-issues/locators-and-timing.md) —
 // so blanking them via override would silently have no effect, not
 // genuinely leave them empty. PickList/MultiPickList custom fields are the
 // same. The fields below are the ones CONFIRMED to respect a plain empty-

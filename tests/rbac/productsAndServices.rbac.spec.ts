@@ -181,7 +181,7 @@ test.describe('Products & Services RBAC', () => {
 
   // ─── PS12 ──────────────────────────────────────────────────────────────────
   // WHY no dealName override on the generated data: config.deals.adminDealName
-  // is confirmed stale this session (see PRODUCTS_AND_SERVICES_PROGRESS.md,
+  // is confirmed stale this session (see docs/known-issues/products-and-services.md,
   // Batch 6 piece 2/3 investigation) — omitting it lets fillQuotationForm()
   // fall through to its own random-deal pick instead, avoiding that known
   // config risk entirely.
