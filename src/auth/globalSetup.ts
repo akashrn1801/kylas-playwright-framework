@@ -3,6 +3,7 @@ import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -26,6 +27,7 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   ErrorCollector.attachNodeListeners();
+  ErrorCollector.resetMainProcessRecoveryEvents();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
   fs.mkdirSync(GLOBAL_SETUP_TRACE_DIR, { recursive: true });
 
@@ -55,7 +57,31 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
     // fresh — see getAccessTokenForRole() below, which reads them directly),
     // and `browser` is still open — though this function doesn't actually
     // need a browser at all, only a standalone API request context.
-    await ensureProductFixtures();
+    // WHY conditional (2026-10-06): see productFixtureNeed.ts — only invocations
+    // that may run a Products & Services spec need the fixtures. Every
+    // ambiguous case resolves to "create", so a wrong skip is not reachable
+    // by an unrecognised command line; and if one ever were, the accessor
+    // (getProductFixture) throws a "no fixture file / fixture not found"
+    // error rather than returning data.
+    const need = selectionNeedsProductFixtures(
+      process.argv.slice(2),
+      _playwrightConfig.projects.map((project) => project.testDir)
+    );
+    if (need.needed) {
+      console.log(`[globalSetup] Product fixtures: creating — ${need.reason}`);
+      await ensureProductFixtures();
+    } else {
+      console.log(`[globalSetup] Product fixtures: SKIPPED — ${need.reason}`);
+      // WHY remove any stale file: a fixture file left by an EARLIER run on a
+      // developer machine would otherwise be read by getProductFixture() as
+      // if it were fresh. Deleting it turns a wrongly-skipped P&S test into a
+      // loud "no fixture file found" error instead of silently stale data.
+      try {
+        fs.rmSync(PRODUCT_FIXTURES_FILE, { force: true });
+      } catch {
+        /* nothing to remove */
+      }
+    }
   } finally {
     await browser.close();
   }
@@ -261,6 +287,15 @@ async function withTransientRetry<T>(description: string, fn: () => Promise<T>):
       const retryable = isTransientHttpError(error) && attempt < maxAttempts;
       if (!retryable) throw error;
       const delay = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1];
+      // WHY record here only (2026-10-06, load measurement): a pure side
+      // observation placed before the existing warn/sleep — the retry count,
+      // backoff and throw conditions above and below are untouched, and
+      // recordRecoveryEvent() can never throw.
+      ErrorCollector.recordRecoveryEvent({
+        kind: 'globalsetup-transient-retry',
+        outcome: 'retrying',
+        detail: `${description}, attempt ${attempt}/${maxAttempts}`,
+      });
       console.warn(
         `[globalSetup] ${description} failed (attempt ${attempt}/${maxAttempts}, transient — ` +
           `${String(error)}) — retrying in ${delay / 1000}s...`

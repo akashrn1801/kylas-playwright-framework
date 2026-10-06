@@ -418,8 +418,18 @@ jobs:
   # lock is already fully correct on its own.
   run-formfields-tests:
     name: playwright-formFields (${{ matrix.entity }})
-    needs: detect
-    if: needs.detect.outputs.run_formfields_track == 'true'
+    # WHY sequenced AFTER run-tests (2026-10-06): see qa.yml's identical
+    # comment for the full reasoning. Here the pre-existing run_formfields_track
+    # gate is KEPT and combined with `!cancelled()`: `needs: [detect, run-tests]`
+    # alone would apply the implicit success() gate and skip formFields
+    # whenever any core shard failed. detect stays in `needs` because the
+    # matrix and the gate read its outputs. If run-tests is ever skipped
+    # (e.g. detect failed upstream), run_formfields_track is empty and this job
+    # is skipped by its own gate, exactly as before; if detect succeeded and
+    # run-tests were skipped for any other reason, `!cancelled()` still lets
+    # formFields run.
+    needs: [detect, run-tests]
+    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ubuntu-latest
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from

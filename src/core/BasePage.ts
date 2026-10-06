@@ -14,6 +14,7 @@ import {
   tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
+import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
@@ -355,7 +356,20 @@ export class BasePage {
         );
         await tryRecoverFromAppErrorBoundary(this.page);
       }
-      return await fn();
+      // WHY the retry is wrapped only to RECORD the outcome (2026-10-06, load
+      // measurement — see ErrorCollector.recordRecoveryEvent): the same fn() is
+      // still awaited exactly once, and any error it throws is rethrown
+      // unchanged, so this method's return/throw behavior is identical to
+      // before. recordRecoveryEvent() itself can never throw.
+      const kind = rateLimited ? 'rate-limit-page' : 'error-boundary-page';
+      try {
+        const result = await fn();
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'recovered' });
+        return result;
+      } catch (retryError) {
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'failed' });
+        throw retryError;
+      }
     }
   }
 

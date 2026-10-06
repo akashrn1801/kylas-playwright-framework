@@ -13,7 +13,7 @@ import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
-import { JobStats, detectJobOverlaps } from './JobStats';
+import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -1061,6 +1061,49 @@ ${body}
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Jobs whose execution windows overlapped — ⚠ flags a pair confirmed to share the SAME module (a structural anomaly the current shard design should prevent; investigate if this ever appears). Module attribution is currently only derivable for formFields-track jobs — a rest-of-suite shard overlap is still shown, just without a module tag (see JobStats.ts's own WHY comment).</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${overlapRows}</table>`;
           })();
+    // WHY computed inline from ctx.jobStats.jobs + ctx.miscErrors.recoveryByShard
+    // (2026-10-06), no new EmailContext field: both are already on the context;
+    // see JobStats.buildJobRecoveryRows()'s own WHY comment for what it measures.
+    const recoveryRows = buildJobRecoveryRows(stats.jobs, ctx.miscErrors?.recoveryByShard);
+    const hasAnyRecovery = recoveryRows.some(
+      (r) => r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0
+    );
+    const hhmm = (iso: string): string => new Date(iso).toISOString().slice(11, 16);
+    const recoverySection =
+      recoveryRows.length === 0
+        ? ''
+        : `
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
+      hasAnyRecovery
+        ? 'Times the app showed its 429 page / "Something is broken" error screen, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (UTC times). "Failed" = the retried action threw again after recovery.'
+        : 'No 429 pages, error-boundary screens or globalSetup retries were recorded in any shard this run.'
+    }</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr style="border-bottom:1px solid ${BORDER};">
+        <th align="left" style="padding:4px 0;font-size:10px;color:${MUTED};">Job</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Boundary</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
+        <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
+      </tr>${recoveryRows
+        .map((r) => {
+          const hot = r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0;
+          return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:5px 0;font-size:11.5px;color:${INK};">${this.esc(r.jobName)}${r.attributed ? '' : ` <span style="color:${MUTED};">(no shard data)</span>`}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};">${r.errorBoundaryPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};">${r.setupRetries}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
+        <td style="padding:5px 0 5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${r.peakConcurrentInWindow} / ${r.maxConcurrentAtEvents ?? '—'}</td>
+      </tr>`;
+        })
+        .join('')}
+    </table>`;
     return `
 <tr><td style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
@@ -1069,6 +1112,7 @@ ${body}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
     ${incompleteNote}
     ${overlapsSection}
+    ${recoverySection}
   </div>
 </td></tr>`;
   }

@@ -275,6 +275,20 @@ jobs:
   # future version — the pairing is fixed by this matrix, not derived.
   run-formfields-tests:
     name: playwright-formFields (${{ matrix.entity }})
+    # WHY sequenced AFTER run-tests, and WHY `!cancelled()` (2026-10-06): the
+    # core shards and the 6 formFields shards used to start simultaneously
+    # (10-11 concurrent jobs, each hammering the same shared staging/QA
+    # backend in globalSetup — see .claude/known-issues.md's 2026-09-29 429
+    # entries). Running the tracks back-to-back caps peak concurrency at one
+    # track (5-6 jobs) at the cost of ~2x wall-clock. HARD REQUIREMENT: a
+    # failed, flaky or skipped core shard must NEVER suppress formFields.
+    # `needs: run-tests` alone would apply the implicit `success()` gate and
+    # skip this whole job on any core failure; `!cancelled()` replaces it, so
+    # this job runs after run-tests finishes in ANY result — success, failure
+    # or skipped — and is skipped only when a person cancels the workflow.
+    # merge-and-report (below) still `needs` both tracks with `if: always()`.
+    needs: [run-tests]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
