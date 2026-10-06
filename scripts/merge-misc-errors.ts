@@ -1,7 +1,7 @@
 /**
  * Aggregates each shard's own reports/<env>/misc-errors.json (added
  * 2026-09-09 as part of the qa/stage/sandbox sharding fix — see
- * .claude/known-issues.md's dated entry) into the single final
+ * docs/known-issues/sharding-and-locks.md's sharding entry) into the single final
  * reports/<env>/misc-errors.json that NotificationService.ts reads.
  *
  * WHY this can't just be MiscErrorReporter.ts running again in the merge

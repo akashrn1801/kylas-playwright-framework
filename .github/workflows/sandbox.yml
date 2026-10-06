@@ -14,7 +14,7 @@ on:
 # escapes the ceiling; see qa.yml's own WHY comment for the full reasoning
 # (worker-tuning blocked by the documented --workers=1 credential-race risk;
 # self-hosted runner not needed once sharding clears the ceiling with large
-# margin) and .claude/known-issues.md's dated 2026-09-09 entry for the full
+# margin) and docs/known-issues/sharding-and-locks.md's dated 2026-09-09 entry for the full
 # investigation, INCLUDING a separate, related finding from the same
 # incident: the "Sync run history"/"Send notification email" steps ran
 # during GitHub's post-cancellation grace period and picked up a stale,
@@ -52,7 +52,7 @@ on:
 # Playwright's own internal splitter — it slices the discovered test list
 # purely by count, with zero awareness of file boundaries or shared state.
 # That's the exact mechanism that caused the formFields cross-shard config-
-# mutation race (see .claude/known-issues.md's dated 2026-09-29 entry).
+# mutation race (see docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry).
 # scripts/plan-shards.ts replaces it with a discovery-and-bin-pack planner
 # that treats each spec FILE as the atomic unit — never splits one file
 # across two shards — while still targeting the same 125-tests/shard budget,
@@ -63,7 +63,7 @@ on:
 # must NOT go through this planner: detect-tests.sh can select formFields
 # paths directly for a formFields-specific change, and those must still run,
 # unsharded, exactly as before). Full design/verification history:
-# .claude/known-issues.md's dated 2026-09-29 "Dynamic per-module shard
+# docs/known-issues/sharding-and-locks.md's dated 2026-09-29 "Dynamic per-module shard
 # planner" entry.
 jobs:
   detect:
@@ -172,7 +172,7 @@ jobs:
           # run_formfields_track) is gated on this exact same condition
           # (2026-09-29, planner swapped in same day): the cross-shard
           # config-mutation race this carve-out defends against
-          # (.claude/known-issues.md's dated 2026-09-29 entry) can only ever
+          # (docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry) can only ever
           # happen when run-tests is actually sharded (SHARD_TOTAL>1) — which
           # only happens in this branch. CRITICALLY, this branching must be
           # preserved exactly, not simplified to "always call the planner":
@@ -400,7 +400,7 @@ jobs:
   # protection the moment an entity's UI spec file and its RBAC sibling
   # (which target the exact same shared, account-wide dedicated custom
   # fields) land on two DIFFERENT shards, which run-tests' own count-based
-  # Playwright sharding does not prevent (see .claude/known-issues.md's dated
+  # Playwright sharding does not prevent (see docs/known-issues/sharding-and-locks.md's dated
   # 2026-09-29 entry for the full incident: every one of the 6 entities'
   # UI/RBAC file pairs landed on different shards in that run, producing
   # genuine, evidence-confirmed config-mutation races). Fix: give formFields
@@ -434,7 +434,7 @@ jobs:
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
-    # .claude/known-issues.md's dated 2026-09-29 entry for the full
+    # docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry for the full
     # derivation. 180 gives ~1.6-2x margin over the slowest entity (Lead).
     timeout-minutes: 180
     strategy:
@@ -622,7 +622,7 @@ jobs:
           # never a guessed value.
           WORKERS: ${{ needs.detect.outputs.workers }}
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true

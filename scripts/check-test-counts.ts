@@ -4,8 +4,8 @@
  * scripts/generate-expected-test-counts.ts) and fails with a clear,
  * per-file diff on any mismatch — a test silently added, removed, or moved
  * between files without anyone noticing (this repo's own history has real,
- * confirmed incidents of exactly this — see .claude/known-issues.md's
- * "Suite Drift Detected" entry for the notification-pipeline's own version
+ * confirmed incidents of exactly this — see docs/known-issues/reporting-and-notifications.md's
+ * "Suite Drift" entry for the notification-pipeline's own version
  * of this same problem at the CI-run level; this is the same idea, run
  * locally/pre-commit instead of only after a full CI run completes).
  *

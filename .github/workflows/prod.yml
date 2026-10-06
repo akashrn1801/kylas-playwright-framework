@@ -66,10 +66,10 @@ jobs:
           REPORT_PATH: reports/playwright-report/results.json
           # WHY (2026-09-04): must match the real --workers value the "Run
           # prod-safe tests" step above just used — see
-          # .claude/known-issues.md's dynamic-duration-estimate entry.
+          # docs/known-issues/ci-pipelines.md's dynamic-duration-estimate entry.
           WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true

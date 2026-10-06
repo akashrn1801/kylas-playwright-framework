@@ -15,7 +15,7 @@ on:
 # the job at 6h01m regardless, proving hosted-runner jobs cannot exceed 6
 # hours no matter what timeout-minutes is set to. Sharding is the only fix
 # that actually escapes this ceiling rather than attempting to raise it past
-# a hard platform limit. Full investigation: .claude/known-issues.md's dated
+# a hard platform limit. Full investigation: docs/known-issues/sharding-and-locks.md's dated
 # 2026-09-09 entry.
 #
 # WHY dynamic, not a fixed 4 (redesigned 2026-09-09, same day as the initial
@@ -47,7 +47,7 @@ on:
 # internal splitter — it slices the discovered test list purely by count,
 # with zero awareness of file boundaries or shared state. That's the exact
 # mechanism that caused the formFields cross-shard config-mutation race (see
-# .claude/known-issues.md's dated 2026-09-29 entry) — formFields got a
+# docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry) — formFields got a
 # hand-built fixed-matrix carve-out to route around it, but nothing
 # structurally prevented the NEXT feature with shared, account-wide mutable
 # state from hitting the identical bug, short of a human remembering to
@@ -67,7 +67,7 @@ on:
 # the 125 target, opening one more (smaller) shard rather than exceeding the
 # budget — an expected, correct trade-off of never splitting a file, not a
 # regression. Full design/verification history:
-# .claude/known-issues.md's dated 2026-09-29 "Dynamic per-module shard
+# docs/known-issues/sharding-and-locks.md's dated 2026-09-29 "Dynamic per-module shard
 # planner" entry.
 jobs:
   plan:
@@ -263,7 +263,7 @@ jobs:
   # file and its RBAC sibling (which target the exact same shared, account-
   # wide dedicated custom fields) land on two DIFFERENT shards, which
   # run-tests' own count-based Playwright sharding does not prevent (see
-  # .claude/known-issues.md's dated 2026-09-29 entry for the full incident:
+  # docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry for the full incident:
   # every one of the 6 entities' UI/RBAC file pairs landed on different
   # shards in that run, producing genuine, evidence-confirmed config-
   # mutation races). Fix: give formFields its own fixed, content-addressed
@@ -278,7 +278,7 @@ jobs:
     # WHY sequenced AFTER run-tests, and WHY `!cancelled()` (2026-10-06): the
     # core shards and the 6 formFields shards used to start simultaneously
     # (10-11 concurrent jobs, each hammering the same shared staging/QA
-    # backend in globalSetup — see .claude/known-issues.md's 2026-09-29 429
+    # backend in globalSetup — see docs/known-issues/rate-limits-and-error-pages.md's 2026-09-29 429
     # entries). Running the tracks back-to-back caps peak concurrency at one
     # track (5-6 jobs) at the cost of ~2x wall-clock. HARD REQUIREMENT: a
     # failed, flaky or skipped core shard must NEVER suppress formFields.
@@ -293,7 +293,7 @@ jobs:
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
-    # .claude/known-issues.md's dated 2026-09-29 entry for the full
+    # docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry for the full
     # derivation. 180 gives ~1.6-2x margin over the slowest entity (Lead).
     timeout-minutes: 180
     strategy:
@@ -382,7 +382,7 @@ jobs:
   # individually finished — `if: always()` so a partial/failed/cancelled
   # shard still gets a real report instead of the misleading stale-file
   # fallback that caused the sandbox Build #167 false-"PASSED" incident (see
-  # .claude/known-issues.md's dated entry — that incident is now also
+  # docs/known-issues/sharding-and-locks.md's dated entry — that incident is now also
   # separately hardened in ReportParser.ts/AutomationHealth.ts/
   # EmailTemplate.ts/NotificationService.ts regardless of this sharding
   # change).
@@ -438,11 +438,11 @@ jobs:
           GITHUB_ACTIONS: 'true'
           REPORT_PATH: reports/playwright-report/results.json
           # WHY (2026-09-04): must match the real --workers value the shard
-          # jobs above just used — see .claude/known-issues.md's
+          # jobs above just used — see docs/known-issues/ci-pipelines.md's
           # dynamic-duration-estimate entry.
           WORKERS: '2'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true

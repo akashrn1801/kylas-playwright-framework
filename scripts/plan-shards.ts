@@ -4,8 +4,8 @@
  * planner that keeps every spec FILE atomic — never split mid-file — unlike
  * Playwright's own internal splitter, which slices the discovered test list
  * purely by count with zero awareness of file boundaries. See
- * .claude/known-issues.md's dated 2026-09-29 "Dynamic per-module shard
- * planner" entry for the full incident/design history this fixes (the
+ * docs/known-issues/sharding-and-locks.md's file-atomic planner
+ * entry for the full incident/design history this fixes (the
  * formFields cross-shard config-mutation race).
  *
  * WHY formFields (and any future shared-config suite) is EXCLUDED here, read
@@ -23,8 +23,8 @@
  * accidentally let a shared-config suite's files leak into this planner's
  * own bin-packing and get separated across shards again — the one failure
  * mode this whole file exists to prevent. The file is the single source of
- * truth for BOTH this exclusion and (per docs/design/... if it ships) the
- * fixed formFields workflow matrix — not two independently-maintained lists
+ * truth for BOTH this exclusion and (checked by `npm run check:formfields-matrix-sync`)
+ * the fixed formFields workflow matrix — not two independently-maintained lists
  * that could drift apart.
  *
  * Usage: npx ts-node scripts/plan-shards.ts [--tests-per-shard 125] [<extra playwright --list args, e.g. --grep @regression>]
