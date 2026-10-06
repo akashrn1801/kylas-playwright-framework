@@ -245,7 +245,7 @@ test.describe('Deals RBAC', () => {
   // Manual verification confirmed Company association on Deals works
   // correctly (owner displays as expected) while Contact association has a
   // genuine, pre-existing, confirmed APP-LEVEL bug — the contact never
-  // actually persists to the deal at all (see CLAUDE.md's Known Issues for
+  // actually persists to the deal at all (see docs/known-issues/rbac-and-test-isolation.md for
   // the full evidence trail). Combined into one test, the real Contact bug
   // was masking a working Company feature — every run failed with a single,
   // conflated signal instead of two precise ones. Split into D13a (Company —
@@ -334,7 +334,7 @@ test.describe('Deals RBAC', () => {
   });
 
   // WHY expected to fail: confirmed real, pre-existing app-level bug — Deal's
-  // Contact association does not persist. See CLAUDE.md's Known Issues entry
+  // Contact association does not persist. See docs/known-issues/rbac-and-test-isolation.md
   // for full evidence. This test is deliberately left asserting the CORRECT
   // expected behavior (contact owner = restricted user), not loosened to
   // match the broken actual behavior — per this file's own precedent of
@@ -1249,7 +1249,7 @@ test.describe('Deals RBAC', () => {
     // verifying the contact becomes visible in the "Associated Contacts" UI card,
     // for the restricted user's own view specifically. Deliberately reads the UI,
     // not the API, so it keeps surfacing the confirmed, real, unresolved app-level
-    // display bug (see CLAUDE.md's Known Issues) if still present.
+    // display bug (see docs/known-issues/rbac-and-test-isolation.md) if still present.
     const baselineCount = await dealsPage.getDisplayedAssociatedContactsCount();
     await dealsPage.addContactToDeal();
     // WHY: Real end-state check — reload and re-read the card, don't trust

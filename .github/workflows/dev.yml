@@ -64,13 +64,13 @@ jobs:
           REPORT_PATH: reports/playwright-report/results.json
           # WHY (2026-09-04): must match the real --workers value the "Run
           # smoke tests" step above just used, exactly — see
-          # .claude/known-issues.md's dynamic-duration-estimate entry.
+          # docs/known-issues/ci-pipelines.md's dynamic-duration-estimate entry.
           # computeDurationEstimate() only ever averages runs recorded under
           # the same workers value; a wrong number here would silently
           # corrupt every future estimate for this branch.
           WORKERS: '1'
           # WHY (2026-08-25): syncHistory.ts's own temp clone needs its own
-          # credential — see .claude/known-issues.md's "CI reporting-history
+          # credential — see docs/known-issues/reporting-and-notifications.md's "CI reporting-history
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true
@@ -79,6 +79,12 @@ jobs:
         if: always()
         env:
           ENV: qa
+          # WHY (2026-09-29): Phase 3 items #1/#6 — notify.ts's own
+          # loadJobStatsForCurrentRun() reuses this same PAT (already wired
+          # in for ci/reporting-history git access elsewhere in this
+          # workflow) for a read-only GitHub Jobs API call. Degrades
+          # gracefully (JobStats.ts's own WHY comment) if ever unset.
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_SMTP_HOST: smtp.gmail.com

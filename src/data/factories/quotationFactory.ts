@@ -9,7 +9,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // PickList, Checkbox, Date, DateTimePicker, UrlField — no MultiPickList,
 // same as every child entity). Live on QA today; Stage does not have them
 // yet (as of this writing). QUOTATION_CUSTOM_FIELD_NAMES is its own single
-// source of truth, per CLAUDE.md's Custom Fields pattern — never import
+// source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import
 // another module's constant here even where values happen to coincide.
 //
 // WHY 'URLField' (capital URL), matching Meeting: confirmed live via DOM

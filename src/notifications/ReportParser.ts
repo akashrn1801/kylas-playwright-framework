@@ -27,8 +27,103 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   const fp = file || '';
   const type: 'UI' | 'RBAC' | 'Other' = fp.includes('rbac') ? 'RBAC' : fp.includes('ui') ? 'UI' : 'Other';
   const match = fp.match(/(?:tests\/)?(ui|rbac)\/([^/]+)/);
-  const rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
-  const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  let rawName = match ? match[2].replace(/\.(rbac\.)?spec\.ts$/, '') : 'other';
+
+  // WHY (2026-09-28, Form Field Limit feature): unlike every other module,
+  // this feature's UI specs all share ONE directory
+  // (tests/ui/formFields/<entity>FieldLimits.spec.ts) instead of each
+  // entity getting its own tests/ui/<entity>/ directory — so the
+  // directory-derived name above is the generic feature name "formFields",
+  // not a real per-entity module. Confirmed live: an 18-test run spanning
+  // all 6 entities collapsed into one indistinguishable "UI:FormFields"
+  // row. When the directory-derived name is exactly "formFields", fall
+  // back to the FILENAME itself (which still carries the real entity name)
+  // — generic, not hardcoded to any one entity, so it also covers any
+  // future entity added the same way.
+  let isFieldLimitFile = false;
+  if (rawName.toLowerCase() === 'formfields' && match) {
+    isFieldLimitFile = true;
+    const filenameOnly = fp.split('/').pop() || '';
+    rawName = filenameOnly.replace(/\.(rbac\.)?spec\.ts$/, '');
+  }
+  // Strip the feature-specific filename suffix so the UI side
+  // ("leadFieldLimits") and RBAC side ("leadFormFields") of the SAME
+  // entity normalize to the identical bare name ("lead") — otherwise the
+  // two sides of one entity would still show as separate module rows.
+  rawName = rawName.replace(/(FieldLimits|FormFields)$/i, '');
+
+  // WHY this map (2026-09-28, confirmed live via a real notification email):
+  // this feature's per-entity filenames use the entity's SINGULAR name
+  // (leadFieldLimits.spec.ts -> "lead"), while every pre-existing module's
+  // own directory — and therefore this function's directory-derived name
+  // for every other test in the suite — uses the PLURAL form
+  // (tests/ui/leads/ -> "leads", tests/ui/companies/ -> "companies").
+  // Company/Companies is even irregular (y -> ies), so a generic
+  // trailing-"s" rule can't bridge this. Left unmapped, Module Analytics
+  // shows this feature's tests as an entirely separate, unrelated-looking
+  // module ("Lead") from the entity's real, existing module ("Leads").
+  // Products & Services is deliberately absent — its Field-Limit filename
+  // ("productsAndServicesFieldLimits") already matches its directory name
+  // exactly, so no mapping is needed there.
+  const SINGULAR_TO_CANONICAL_MODULE_NAME: Record<string, string> = {
+    lead: 'leads',
+    contact: 'contacts',
+    company: 'companies',
+    task: 'tasks',
+    deal: 'deals',
+  };
+  rawName = SINGULAR_TO_CANONICAL_MODULE_NAME[rawName.toLowerCase()] ?? rawName;
+
+  // KNOWN, DELIBERATELY-NOT-FIXED DISPLAY QUIRKS (documented here 2026-09-30
+  // after being surfaced for the first time by docs/CONTRIBUTING_TESTS.md's
+  // E6 doc-auto-generation script comparing this function's real output
+  // against the old hand-written README module table):
+  //
+  // 1. This only capitalizes the FIRST character of the raw directory name
+  //    — it does not know about spaces, hyphens, or ampersands a human
+  //    would use in prose. Two real, confirmed consequences:
+  //    - `tests/ui/call-logs/` (hyphenated directory) renders as
+  //      "Call-logs", not "Call Logs".
+  //    - `tests/ui/productsAndServices/` (camelCase directory) renders as
+  //      "ProductsAndServices", not "Products & Services".
+  //    Every other display of these module names elsewhere in this repo
+  //    (README prose, this file's own comments, test-label prefixes)
+  //    uses the human-friendly form — only THIS function's OWN output
+  //    (Module Analytics, the "CI Job Stats"/"Job Time Overlaps" sections,
+  //    and anything else reading `ParsedReport.modules[].name`) shows the
+  //    literal directory-derived form.
+  // 2. `login.spec.ts` genuinely lives in `tests/ui/dashboard/` (see that
+  //    file's own header for why — it deliberately doesn't use the shared
+  //    fixture system, but its FILE PATH still puts it under the Dashboard
+  //    directory) — so this function has always merged Login's own test
+  //    count into the "Dashboard" row, never shown it separately. README's
+  //    former hand-maintained module table drew a manual distinction this
+  //    function has never actually been able to see.
+  //
+  // WHY left as documented quirks, not fixed, despite being easy to
+  // mechanically patch (a display-name lookup table, the same shape as
+  // SINGULAR_TO_CANONICAL_MODULE_NAME above): this function's OUTPUT is
+  // persisted verbatim into `ci/reporting-history`'s per-run records
+  // (`RunHistoryRecord.modules[]`), and every trend/recurring-flaky/
+  // stability computation in `RunHistory.ts` keys off `${type}:${name}`.
+  // Changing the display name today would silently break trend continuity
+  // for these modules across the transition (a "Call-logs" history and a
+  // "Call Logs" history would never match each other), for a
+  // COSMETIC-only gain — a real, non-trivial ripple effect this function's
+  // own callers don't protect against. Revisit deliberately, with an
+  // explicit history-migration plan, if this is ever worth fixing — do not
+  // patch it as a quick side-fix to something else the way it was almost
+  // introduced during unrelated doc-generation work.
+  const canonicalName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+  // WHY a suffixed sub-label rather than a full merge into the bare entity
+  // name: these are a materially different test category (field-limit
+  // validation, not the base CRUD suite) with their own failure/flake
+  // characteristics — collapsing them into the exact same row as e.g.
+  // "Leads" would hide that signal. This still visibly groups under the
+  // same entity name (sorts adjacent, shares the base word) rather than
+  // reading as an unrelated module, while keeping the existing UI/RBAC
+  // split (driven by `type`, unchanged) intact for each.
+  const name = isFieldLimitFile ? `${canonicalName} — Field Limits` : canonicalName;
   return { name, type };
 }
 
@@ -123,6 +218,31 @@ export interface ModuleStats {
   // health/trend and for the Module Analytics "time" column on the target
   // feature list.
   duration: number;
+  // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 3): a
+  // module's own aggregate `duration` above tells you a module is slow, but
+  // not WHICH test(s) inside it are the actual drag — a module could be slow
+  // because every test is moderately slow, or because one single outlier
+  // test dominates the total. Top 3 (not top 1, not the full list) — enough
+  // to distinguish "one outlier" from "broadly slow module" without making
+  // this a second copy of the whole module's test list. Same `TestResult[]`
+  // shape the report-level `slowestTests`/`slowestTestsTop20` already use,
+  // for consistency rather than a lighter, separate display-only type.
+  slowestTests: TestResult[];
+  // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 4a): the
+  // whole-run `totalRetries`/`retriesFromNonCleanTests`/
+  // `retriesFromCleanSweeps` split (see ParsedReport's own WHY comment for
+  // the full mechanism/incident) answers "how much retrying happened
+  // overall" but not "which module is actually causing it" — a run-wide
+  // number can't tell a reader whether one `.serial`-mode file is
+  // responsible for the bulk of it or it's spread evenly. Same
+  // genuine-vs-swept split as the whole-run fields, computed per module in
+  // the identical single pass, for the identical reason: a module full of
+  // tests swept into ANOTHER test's serial-block retry (itself never
+  // failing) must not look the same as a module whose own tests are
+  // genuinely flaky/failing and retrying.
+  totalRetries: number;
+  retriesFromNonCleanTests: number;
+  retriesFromCleanSweeps: number;
 }
 
 export interface ParsedReport {
@@ -154,6 +274,25 @@ export interface ParsedReport {
   uiCount: number;
   rbacCount: number;
   totalRetries: number;
+  // WHY this split, not just totalRetries (2026-09-29, real confusion this
+  // caused — user-reported: "222 retries recorded, but only 8 failed + 30
+  // flaky (38 non-clean-first-try tests) — that doesn't reconcile"):
+  // totalRetries sums `allResults.length - 1` across EVERY test, including
+  // ones that themselves passed on every attempt they were ever recorded
+  // for. That happens for real, at scale, whenever any file uses
+  // `test.describe.configure({ mode: 'serial' })` — Playwright retries the
+  // WHOLE serial block on ANY single test's failure, re-running every test
+  // in it (already-passed ones included), each contributing its own
+  // `retries >= 1` despite never itself having failed (confirmed and
+  // already documented independently for quotations.spec.ts's identical
+  // shape — see docs/known-issues/reporting-and-notifications.md's retry-count entry). 222 is
+  // arithmetically correct; it just isn't what a reader expecting "222
+  // individually-retried tests" would assume. Splitting into genuine
+  // (failed/flaky tests' own retries) vs. swept (passed tests' retries,
+  // caused by someone ELSE's failure in the same serial block) lets the
+  // email state the real reconciliation instead of a bare, confusing total.
+  retriesFromNonCleanTests: number;
+  retriesFromCleanSweeps: number;
   // WHY: sourced from Playwright's own raw.config — real, not guessed. Feeds
   // the new Environment Info block (browsers actually exercised, worker
   // count Playwright itself resolved, and the Playwright version that
@@ -316,10 +455,16 @@ export class ReportParser {
     const startTime = raw.stats?.startTime || raw.startTime || new Date().toISOString();
     const endTime = new Date(new Date(startTime).getTime() + duration).toISOString();
     const moduleMap = new Map<string, ModuleStats>();
+    // WHY a separate map, not pushed straight onto ModuleStats (2026-09-29):
+    // keeps the raw per-test refs out of ModuleStats until the final sort —
+    // ModuleStats is the exported, long-lived shape (serialized into
+    // history/reports elsewhere); building its `slowestTests` in one pass at
+    // the end avoids re-sorting on every push.
+    const moduleTestsMap = new Map<string, TestResult[]>();
     for (const r of results) {
       const { name, type } = deriveModuleFromFile(r.file);
       const key = `${type}:${name}`;
-      if (!moduleMap.has(key))
+      if (!moduleMap.has(key)) {
         moduleMap.set(key, {
           name,
           type,
@@ -329,7 +474,13 @@ export class ReportParser {
           flaky: 0,
           skipped: 0,
           duration: 0,
+          slowestTests: [],
+          totalRetries: 0,
+          retriesFromNonCleanTests: 0,
+          retriesFromCleanSweeps: 0,
         });
+        moduleTestsMap.set(key, []);
+      }
       const mod = moduleMap.get(key)!;
       mod.total++;
       mod.duration += r.duration;
@@ -337,6 +488,25 @@ export class ReportParser {
       if (r.status === 'failed') mod.failed++;
       if (r.status === 'flaky') mod.flaky++;
       if (r.status === 'skipped') mod.skipped++;
+      // WHY the identical genuine-vs-swept split as the whole-run
+      // totalRetries/retriesFromNonCleanTests/retriesFromCleanSweeps
+      // computed further below, just per-module (2026-09-29, Phase 3 item
+      // 4a) — see ModuleStats.totalRetries' own WHY comment.
+      mod.totalRetries += r.retries;
+      if (r.status === 'failed' || r.status === 'flaky') {
+        mod.retriesFromNonCleanTests += r.retries;
+      }
+      moduleTestsMap.get(key)!.push(r);
+    }
+    for (const mod of moduleMap.values()) {
+      mod.retriesFromCleanSweeps = mod.totalRetries - mod.retriesFromNonCleanTests;
+    }
+    // WHY top 3, a named constant (2026-09-29): see ModuleStats.slowestTests'
+    // own WHY comment for the reasoning behind 3, not 1 or the full list.
+    const MODULE_SLOWEST_TOP_N = 3;
+    for (const [key, mod] of moduleMap) {
+      const modResults = moduleTestsMap.get(key) ?? [];
+      mod.slowestTests = [...modResults].sort((a, b) => b.duration - a.duration).slice(0, MODULE_SLOWEST_TOP_N);
     }
     const modules = Array.from(moduleMap.values()).sort(
       (a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name)
@@ -347,6 +517,10 @@ export class ReportParser {
     const uiCount = results.filter((r) => r.file?.includes('ui')).length;
     const rbacCount = results.filter((r) => r.file?.includes('rbac')).length;
     const totalRetries = results.reduce((sum, r) => sum + r.retries, 0);
+    const retriesFromNonCleanTests = results
+      .filter((r) => r.status === 'failed' || r.status === 'flaky')
+      .reduce((sum, r) => sum + r.retries, 0);
+    const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
     const projects: string[] = Array.isArray(raw.config?.projects)
       ? raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name))
       : [];
@@ -370,6 +544,8 @@ export class ReportParser {
       uiCount,
       rbacCount,
       totalRetries,
+      retriesFromNonCleanTests,
+      retriesFromCleanSweeps,
       playwrightVersion: raw.config?.version,
       workers: raw.config?.workers,
       projects,

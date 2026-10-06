@@ -1,8 +1,9 @@
-import { Page, expect, Locator, Response } from '@playwright/test';
+import { Page, expect, Locator, Response, Request } from '@playwright/test';
 import { BasePage } from '../../core/BasePage';
 import {
   LeadData,
   LeadCustomFieldData,
+  LeadCustomFieldKey,
   LEAD_CUSTOM_FIELD_NAMES,
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
@@ -757,41 +758,118 @@ export class LeadsPage extends BasePage {
   // whatever was actually selected live — PickList/MultiPickList options are
   // read from the DOM at fill time, so the caller's `data` object needs to
   // be updated to reflect reality before it's used for later verification.
-  private async fillLeadCustomFields(data: LeadData): Promise<void> {
+  // WHY the optional `onlyField` param (2026-09-22, Form Field Limit feature
+  // root-cause fix): confirmed live via direct log evidence that this
+  // method's unconditional fill of all 9 custom fields is the real cause of
+  // the FFL9/FFL15 "Save click fires, zero network request" failures —
+  // `leadFieldLimits.spec.ts`'s tests configure a narrow min/max on ONE
+  // field, then this method still fills every OTHER field (including the
+  // constrained one, via generateLeadData()'s fixed-length random default)
+  // regardless of what's actually under test, so a value that violates the
+  // just-configured constraint gets typed, the app's own real inline
+  // validation correctly blocks Save, and the resulting "no response"
+  // symptom was being misclassified as a flaky backend timeout (see
+  // saveLead()'s own updated formError-priority fix below). `onlyField`,
+  // when provided, fills ONLY that one field and skips the other 8 entirely
+  // — every existing caller omits it and gets byte-for-byte the same
+  // fill-everything behavior as before.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see LEAD_FORM_FIELD_LIMIT_NAMES's
+  // own comment in leadFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than LEAD_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Lead test). Every existing caller omits this and gets byte-for-byte the
+  // original behavior.
+  private async fillLeadCustomFields(
+    data: LeadData,
+    onlyField?: LeadCustomFieldKey,
+    fieldNameOverride?: string
+  ): Promise<void> {
     await this.openOtherDetailsFormSection();
     const cf = data.customFields;
+    const wants = (key: LeadCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
 
-    await this.fillTextLikeCustomField(
-      LEAD_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field'
-    );
-    await this.fillTextLikeCustomField(
-      LEAD_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text'
-    );
-    await this.fillTextLikeCustomField(LEAD_CUSTOM_FIELD_NAMES.number, String(cf.number), 'Number');
-    await this.fillTextLikeCustomField(LEAD_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
-    await this.setCheckboxCustomField(LEAD_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
-    await this.selectDateCustomField(LEAD_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
-    await this.selectDateTimeCustomField(
-      LEAD_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker'
-    );
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? LEAD_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number'
+      );
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(LEAD_CUSTOM_FIELD_NAMES.urlField, cf.urlField, 'URL Field');
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(LEAD_CUSTOM_FIELD_NAMES.checkbox, cf.checkbox, 'Checkbox');
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(LEAD_CUSTOM_FIELD_NAMES.date, cf.date, 'Date');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        LEAD_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        LEAD_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+    if (wants('multiPickList')) {
+      const pickedValues = await this.selectMultiPicklistCustomField(
+        LEAD_CUSTOM_FIELD_NAMES.multiPickList,
+        'Multi Pick List'
+      );
+      if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    }
 
-    const pickedValue = await this.selectPicklistCustomField(
-      LEAD_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
-
-    const pickedValues = await this.selectMultiPicklistCustomField(
-      LEAD_CUSTOM_FIELD_NAMES.multiPickList,
-      'Multi Pick List'
-    );
-    if (pickedValues.length > 0) cf.multiPickList = pickedValues;
+    // WHY document.activeElement.blur() here, NOT a Tab keypress (real,
+    // confirmed live regression, corrected 2026-09-22 — a same-day fix to
+    // this same block): a Tab press was tried first and genuinely fixed
+    // FFL5's blur problem, but introduced a NEW, worse live bug — confirmed
+    // via a captured failure screenshot showing the "Pick List" react-select
+    // menu wide open (Monday-Friday options visible) during an FFL16 run
+    // that only ever fills the Number field. Tab doesn't just remove focus
+    // from the just-filled field, it ADVANCES focus to the next element in
+    // DOM tab order — which, depending on which field was under test, can
+    // land on a completely unrelated react-select control and open it via
+    // its own focus-triggered menu behavior. That unexpectedly-opened menu's
+    // portal wrapper is the most plausible source of the `css-1dsbpcp`
+    // overlay independently observed blocking the Save button (see
+    // clickSaveButtonAndVerifyRequestFires()'s own WHY comment) — an overlay
+    // this fix was never supposed to create in the first place. Calling
+    // `.blur()` directly on whatever currently holds focus (the field this
+    // method just filled, and nothing else) removes focus without moving it
+    // anywhere — no side effect on any other field, no risk of triggering an
+    // unrelated control's own focus behavior.
+    // WHY `onlyField !== undefined` still gates this (unchanged from the
+    // original fix): this is only needed in the single-field minimal-fill
+    // path — the original full fill already blurs every field for free via
+    // the next field's own interaction, so this would be a no-op there
+    // anyway; scoping it avoids running an extra evaluate() call on every
+    // one of this method's many other, unaffected callers.
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   // WHY: thin Lead-flavored wrapper over BasePage.selectLookupCustomField().
@@ -988,7 +1066,27 @@ export class LeadsPage extends BasePage {
   // populated fieldErrors -> genuine (NOT transient, already surfaced via
   // assertNoFormErrors). Scoped to POST /v1/leads/ excluding /reports/, same
   // as captureLeadIdFromResponse's existing hardening.
-  private async captureLeadCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+  // WHY the `noResponseObserved` field (added 2026-09-22, Form Field Limit
+  // feature root-cause fix): the `transient: true` returned from the catch
+  // branch below and the `transient: true` returned from a genuinely-
+  // received, classified-as-transient response body (a few lines up) used to
+  // be indistinguishable to the caller — both were just `transient: true`.
+  // But they mean very different things: a received response classified as
+  // transient is a real backend signal (retrying is the right call); the
+  // catch branch firing means NO response was ever observed at all, which is
+  // equally consistent with "the backend was slow" (the original 2026-08-11
+  // reasoning below) AND with "the client never submitted because a real,
+  // known validation error already blocked it" (root-caused 2026-09-22 — see
+  // fillLeadCustomFields()'s own WHY comment). `saveLead()` needs to tell
+  // these apart: when a formError is ALSO known AND no response was ever
+  // observed, the formError is almost certainly the real explanation and
+  // should be surfaced directly instead of retried as if it were a backend
+  // flake.
+  private async captureLeadCreateOutcome(): Promise<{
+    id: number | null;
+    transient: boolean;
+    noResponseObserved: boolean;
+  }> {
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -1001,11 +1099,11 @@ export class LeadsPage extends BasePage {
       const status = response.status();
       const body = await response.json().catch(() => ({}) as Record<string, unknown>);
       if (status === 200 || status === 201) {
-        const id = ((body?.id as number | undefined) ?? (body?.data as { id?: number } | undefined)?.id ?? null) as
-          | number
-          | null;
+        const id = ((body?.id as number | undefined) ??
+          (body?.data as { id?: number } | undefined)?.id ??
+          null) as number | null;
         logger.success(`Captured lead ID: ${id} from ${response.url()}`);
-        return { id, transient: false };
+        return { id, transient: false, noResponseObserved: false };
       }
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
@@ -1013,13 +1111,15 @@ export class LeadsPage extends BasePage {
       const transient =
         !hasFieldErrors &&
         (status >= 500 ||
-          /unexpected error occurred|internal server error|something didn't work as expected/i.test(message));
+          /unexpected error occurred|internal server error|something didn't work as expected/i.test(
+            message
+          ));
       logger.warn(
         `Lead create returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
           `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
       );
-      return { id: null, transient };
+      return { id: null, transient, noResponseObserved: false };
     } catch (error) {
       // WHY reclassified from non-transient to transient (fixed 2026-08-11,
       // staging run failure — Group C, call-logs.rbac.spec.ts via
@@ -1036,8 +1136,13 @@ export class LeadsPage extends BasePage {
       // observed a response" as retryable, same as a confirmed transient
       // backend error, lets the existing retry mechanism attempt recovery
       // instead of failing immediately on what may just be a timing miss.
-      logger.warn(`Lead create response not captured (${String(error)}) — treating as TRANSIENT (will retry whole create)`);
-      return { id: null, transient: true };
+      // `noResponseObserved: true` here lets saveLead() additionally check
+      // for a known formError before accepting this "maybe transient"
+      // framing at face value — see this method's own top-level WHY comment.
+      logger.warn(
+        `Lead create response not captured (${String(error)}) — treating as TRANSIENT (will retry whole create)`
+      );
+      return { id: null, transient: true, noResponseObserved: true };
     }
   }
 
@@ -1083,18 +1188,43 @@ export class LeadsPage extends BasePage {
     logger.success('On Leads List page');
   }
 
+  // WHY a bounded retry, not a single fixed 10s wait (real, confirmed live
+  // fix, 2026-09-22 — FFL11's own captured failure screenshot): the "Add
+  // Lead" modal opens in two visible stages — the container/title render
+  // immediately, but the actual form fields render moments later, still
+  // showing grey shimmer/skeleton placeholders in the failure screenshot
+  // even after a full 10s wait. This is a genuine, occasional real-latency
+  // race (matching the same class of "content didn't finish rendering in
+  // time" symptom already fixed elsewhere in this codebase via bounded
+  // reload-and-retry, e.g. assertRightPanelIconVisible()/CallLogsPage's
+  // openLogACallForm()), not a deterministic bug — closing the still-loading
+  // modal and reopening it gives the content a fresh, full 10s window rather
+  // than only ever getting one attempt. Bounded to 3 attempts and rethrows
+  // the real error on final exhaustion — never silently swallowed.
   async clickAddLead(): Promise<void> {
     logger.info('Clicking Add Lead');
+    const maxAttempts = 3;
 
-    await this.click(this.addButton(), 'add lead button');
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await this.click(this.addButton(), 'add lead button');
 
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.firstNameInput()).toBeVisible({
-        timeout: 10000,
-      })
-    );
-
-    logger.success('Lead form opened');
+      try {
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.firstNameInput()).toBeVisible({
+            timeout: 10000,
+          })
+        );
+        logger.success('Lead form opened');
+        return;
+      } catch (error) {
+        if (attempt === maxAttempts) throw error;
+        logger.warn(
+          `Add Lead modal did not finish rendering within 10s (attempt ${attempt}/${maxAttempts}) — ` +
+            'closing and retrying'
+        );
+        await this.closeModalIfOpen();
+      }
+    }
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1122,181 +1252,301 @@ export class LeadsPage extends BasePage {
     // WHY: On details page, current stage uses .in-progress-stage .stage-name
     this.page.locator('.in-progress-stage .stage-name').first();
 
-  async fillLeadForm(data: LeadData): Promise<void> {
+  // WHY extracted as its own public method, not left inline inside
+  // fillLeadForm() (2026-09-22, Form Field Limits pipeline-attachment gap
+  // fix — real, confirmed live finding): leadFieldLimits.spec.ts's own
+  // lightweight Lead-creation helpers (openAddLeadAndFillCustomField()/
+  // createBareLead()) deliberately never call fillLeadForm() (see that
+  // file's own WHY comment — fillLeadForm() fills the ENTIRE form and would
+  // slow down and expose ~40 narrow boundary tests to unrelated failure
+  // modes), which meant every Lead this feature creates skipped pipeline
+  // selection entirely — unlike every other Lead-creating flow in this
+  // codebase, which always goes through fillLeadForm(). Live evidence: a
+  // real run surfaced repeated "Uhoh! There is no pipeline attached with
+  // the lead" errors traced directly to these pipeline-less Leads. Rather
+  // than duplicate fillLeadForm()'s own pipeline-selection logic a second
+  // time in the test file (rule 1 — reuse before building), this exact
+  // mechanism is pulled out into its own method so BOTH the full
+  // fillLeadForm() path and any lightweight creation helper can call the
+  // identical, already-proven selection logic. Public (not private) so
+  // leadFieldLimits.spec.ts's own test-file helpers can call it directly —
+  // still page-object-owned locator logic, never a raw Locator manipulated
+  // from the test file itself (CLAUDE.md's own "no locators in test files"
+  // rule).
+  // WHY a bounded 3-attempt retry with LOUD exhaustion logging, not the
+  // original single-attempt try/catch that silently logged an innocuous
+  // "already selected or not available — skipping" on ANY failure (real,
+  // confirmed live regression, found 2026-09-22 in the same verification
+  // run this method's own extraction was built to fix): a full-suite run
+  // showed 11 DISTINCT Leads created through this method's new call sites
+  // (openAddLeadAndFillCustomField()/createBareLead()) still ending up
+  // with no pipeline attached — "Pipeline already selected or not
+  // available — skipping" fired 11 times, and every one of those Leads
+  // later hit the exact "Uhoh! There is no pipeline attached with the
+  // lead" (error code 002056) error this whole fix exists to eliminate.
+  // Root cause: this method's original single 5000ms attempt was proven
+  // safe in its ORIGINAL position inside fillLeadForm() (running after
+  // firstName/lastName/Salutation are already filled — real elapsed time
+  // for the pipeline dropdown's own async option-list fetch to complete),
+  // but the new call sites invoke it much earlier in the form's lifecycle
+  // (immediately after the modal opens), where that same fetch can
+  // genuinely still be in flight. The old catch-all silently treated
+  // "the option list never loaded in time" identically to "a pipeline is
+  // already selected" — masking a real, repeatable failure as a harmless
+  // no-op. Fixed with a real bounded retry (matching this codebase's own
+  // established rule-2 convention — bounded, retry-capable interactions,
+  // never a single unbounded-looking attempt that fails silently) PLUS an
+  // explicit, positive check for "already has a value" (the
+  // `[class*="__single-value"]` class, the same established pattern
+  // already used elsewhere in this file for Country) — so a genuine
+  // already-selected state is still a fast, correct no-op, while a
+  // genuinely-not-yet-loaded dropdown gets real retries instead of one
+  // guess, and true exhaustion is a loud warning, never a silent skip.
+  async selectFirstAvailablePipeline(): Promise<void> {
+    const maxAttempts = 3;
+    const perAttemptTimeoutMs = 5000;
+    const pipelineIndicator = this.pipelineInput().locator('.is-invalid__dropdown-indicator');
+    const pipelineSingleValue = this.pipelineInput().locator('[class*="__single-value"]');
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      logger.info(`Selecting pipeline (attempt ${attempt}/${maxAttempts})`);
+      try {
+        await pipelineIndicator.waitFor({ state: 'visible', timeout: perAttemptTimeoutMs });
+        await pipelineIndicator.click();
+        const pipelineOption = this.page.locator('.is-invalid__option').first();
+        await pipelineOption.waitFor({ state: 'visible', timeout: perAttemptTimeoutMs });
+        await pipelineOption.click();
+        logger.success('Pipeline selected');
+        return;
+      } catch (error) {
+        if ((await pipelineSingleValue.count()) > 0) {
+          logger.info('Pipeline already has a value selected — skipping');
+          return;
+        }
+        if (attempt === maxAttempts) {
+          logger.warn(
+            `selectFirstAvailablePipeline: exhausted ${maxAttempts} attempts (${String(error)}) — ` +
+              'the pipeline dropdown/options never became available. Proceeding WITHOUT a pipeline ' +
+              'selected — this Lead is likely to fail downstream operations requiring one (e.g. ' +
+              '"Uhoh! There is no pipeline attached with the lead", error code 002056).'
+          );
+          return;
+        }
+      }
+    }
+  }
+
+  // WHY the optional `options` param (2026-09-22, Form Field Limit feature
+  // root-cause fix — see fillLeadCustomFields()'s own WHY comment for the
+  // full evidence chain): `options.minimal`, when true, skips every field
+  // this method fills EXCEPT Last Name, Salutation, and Pipeline (the one
+  // genuinely-required-for-save field, per the real, previously-confirmed
+  // "Uhoh! There is no pipeline attached with the lead" failure mode this
+  // form already guards against elsewhere) — Communication/Location/
+  // Professional/Company/Requirement/Campaign Information are entirely
+  // untouched. Combined with `options.onlyCustomField` (threaded through to
+  // fillLeadCustomFields()), this lets a caller create/update a Lead with
+  // ONLY the one field it actually cares about ever filled, so a narrow
+  // account-wide field-length constraint configured on a DIFFERENT field
+  // (which every other section's random default data has no awareness of)
+  // can never block this specific save. Every existing caller omits
+  // `options` and gets byte-for-byte the original full-form-fill behavior.
+  async fillLeadForm(
+    data: LeadData,
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
+  ): Promise<void> {
     logger.info('Filling lead form');
+    const minimal = options?.minimal === true;
 
     await this.disableRequiredFieldsToggle();
 
-    await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    if (!minimal) {
+      await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    }
 
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
 
     // WHY: Salutation is part of the default General Information section —
     // visible without needing disableRequiredFieldsToggle(), unlike Campaign
-    // Information/Other Details below.
+    // Information/Other Details below. Kept even in minimal mode — cheap, a
+    // standard (not custom) field with no length/format constraint to
+    // violate, and not implicated in the failure this mode exists to avoid.
     await this.fillLeadSalutation(data);
 
     // WHY: Pipeline must be selected before Pipeline Stage —
-    // Stage options depend on the selected pipeline.
-    logger.info('Selecting pipeline');
-    const pipelineIndicator = this.pipelineInput().locator('.is-invalid__dropdown-indicator');
-    try {
-      await pipelineIndicator.waitFor({ state: 'visible', timeout: 5000 });
-      await pipelineIndicator.click();
-      const pipelineOption = this.page.locator('.is-invalid__option').first();
-      await pipelineOption.waitFor({ state: 'visible', timeout: 5000 });
-      await pipelineOption.click();
-      logger.success('Pipeline selected');
-    } catch {
-      logger.info('Pipeline already selected or not available — skipping');
+    // Stage options depend on the selected pipeline. Kept in minimal mode —
+    // see this method's own top-level WHY comment.
+    await this.selectFirstAvailablePipeline();
+
+    if (!minimal) {
+      await this.click(
+        this.addEmailButton(),
+        'add email button',
+        true // force: CSS overlay intercepts pointer events on GHA
+      );
+
+      await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
+
+      await this.fill(this.emailInput(), data.email, 'email');
+
+      await this.click(this.addPhoneButton(), 'add phone button');
+
+      await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
+      // WHY: the phone input can detach and re-attach once more right after
+      // this visibility check (a real React re-render on GHA, not a guessed
+      // delay) — retry the fill itself on that real failure by re-waiting
+      // for visibility and re-attempting, rather than sleeping a fixed
+      // duration and hoping the re-render has already finished by then.
+      try {
+        await this.fill(this.phoneInput(), data.phone, 'phone');
+      } catch {
+        await expect(this.phoneInput()).toBeVisible({ timeout: 5000 });
+        await this.fill(this.phoneInput(), data.phone, 'phone');
+      }
+
+      // WHY: Timezone sits at the tail of the Communication section, right
+      // before Location begins (confirmed live 2026-07-16 DOM order) — filled
+      // here to match the form's own top-to-bottom order, same convention as
+      // every other field in this method. Mutated in place with whatever was
+      // actually selected, same reasoning as salutation/campaign/source.
+      data.timezone = await this.selectRandomFromSingleReactSelect(
+        this.timezoneControl(),
+        'Timezone'
+      );
+
+      // WHY: GPS-or-manual fill for Lead's OWN address (Location section) —
+      // scoped to the Location section container so this doesn't collide with
+      // Professional's separate Company Address GPS trigger (confirmed live
+      // Lead's form has two identically-labeled "Get GPS Address" triggers).
+      // Mutates data.address in place, same reasoning as Contact's identical
+      // call site.
+      data.address = await this.fillAddressViaGpsOrManual(
+        this.addressInput(),
+        data.address,
+        'address',
+        this.getFormSectionContainer('Location')
+      );
+
+      await this.fill(this.cityInput(), data.city, 'city');
+
+      await this.fill(this.stateInput(), data.state, 'state');
+
+      // WHY: Country must be filled AFTER address (GPS or manual) — confirmed
+      // live a successful GPS selection auto-populates Country for free, but
+      // the manual-fallback path does not, so an explicit random selection is
+      // still needed in that case. Detecting "already has a value" via the
+      // react-select's own `__single-value` class (vs. the `__placeholder`
+      // class shown before anything is selected) avoids overwriting a real
+      // GPS-derived country with an unrelated random one.
+      const countrySingleValue = this.countryControl().locator('[class*="__single-value"]');
+      const countryAlreadySet = await countrySingleValue.isVisible().catch(() => false);
+      if (countryAlreadySet) {
+        const gpsCountry = (await countrySingleValue.innerText()).trim();
+        data.country = gpsCountry;
+        logger.info(`Country already auto-populated by GPS address selection: ${gpsCountry}`);
+      } else {
+        data.country = await this.selectRandomFromSingleReactSelect(
+          this.countryControl(),
+          'Country'
+        );
+      }
+
+      await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
+
+      await this.fill(this.facebookInput(), data.facebook, 'facebook');
+
+      await this.fill(this.twitterInput(), data.twitter, 'twitter');
+
+      await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
+
+      await this.fill(this.companyNameInput(), data.companyName, 'company name');
+
+      await this.fill(this.departmentInput(), data.department, 'department');
+
+      await this.fill(this.designationInput(), data.designation, 'designation');
+
+      // WHY: Company Industry/Business Type/Company Employees fill here, right
+      // after Designation and before Company Address — confirmed live DOM
+      // order (2026-07-16). Mutated in place, same reasoning as every other
+      // react-select in this method.
+      data.companyIndustry = await this.selectRandomFromSingleReactSelect(
+        this.companyIndustryControl(),
+        'Company Industry'
+      );
+
+      data.companyBusinessType = await this.selectRandomFromSingleReactSelect(
+        this.companyBusinessTypeControl(),
+        'Business Type'
+      );
+
+      data.companyEmployees = await this.selectRandomFromSingleReactSelect(
+        this.companyEmployeesControl(),
+        'Company Employees'
+      );
+
+      await this.fill(
+        this.companyAnnualRevenueInput(),
+        String(data.companyAnnualRevenue),
+        'company annual revenue'
+      );
+
+      await this.fill(this.companyWebsiteInput(), data.companyWebsite, 'company website');
+
+      await this.fill(this.companyAddressInput(), data.companyAddress, 'company address');
+
+      await this.fill(this.companyCityInput(), data.companyCity, 'company city');
+
+      await this.fill(this.companyStateInput(), data.companyState, 'company state');
+
+      await this.fill(this.companyZipcodeInput(), data.companyZipcode, 'company zipcode');
+
+      // Pipeline Stage (optional)
+      // WHY: Confirmed live (2026-07-07) — 'Open' is the app's own default
+      // pipeline stage on a new lead (same auto-populate-on-create behavior
+      // already confirmed live for Deals' pipelineStage). Every current
+      // create-time caller only ever requests 'Open', so this manual
+      // click-the-indicator-then-click-the-option interaction was always
+      // redundant work reselecting a value already there — and the proven
+      // source of a severe flake: one run saw the indicator's click blocked by
+      // an intercepting `.search-autocomplete` overlay for 755 retries before
+      // the whole 8-minute test timeout fired. Skip the interaction entirely
+      // when the target is the default; still supports a genuine non-default
+      // stage if a caller ever needs one at creation time.
+      if (data.pipelineStage && data.pipelineStage !== 'Open') {
+        logger.info(`Selecting pipeline stage: ${data.pipelineStage}`);
+        const indicator = this.pipelineStageDropdownIndicator();
+        await indicator.waitFor({ state: 'visible', timeout: 10000 });
+        await indicator.scrollIntoViewIfNeeded();
+        await indicator.click();
+        const stageOption = this.page
+          .locator('.is-invalid__option')
+          .filter({ hasText: data.pipelineStage })
+          .first();
+        await stageOption.waitFor({ state: 'visible', timeout: 10000 });
+        await stageOption.click();
+        logger.success(`Pipeline stage selected: ${data.pipelineStage}`);
+      } else if (data.pipelineStage === 'Open') {
+        logger.info("Pipeline stage 'Open' is already the default — skipping redundant selection");
+      }
+
+      // WHY: fill order matches the form's own top-to-bottom DOM order —
+      // Requirement, then Campaign Information, then Other Details (confirmed
+      // live 2026-07-08). Keeping fill order aligned with visual order avoids
+      // any risk of one section's interaction (scrolling, focus, react-select
+      // menu portals) landing on the wrong section's fields.
+      await this.fillLeadRequirement(data);
+
+      await this.fillLeadCampaignInfo(data);
     }
 
-    await this.click(
-      this.addEmailButton(),
-      'add email button',
-      true // force: CSS overlay intercepts pointer events on GHA
-    );
-
-    await this.withSessionExpiryRecovery(() => expect(this.emailInput()).toBeVisible());
-
-    await this.fill(this.emailInput(), data.email, 'email');
-
-    await this.click(this.addPhoneButton(), 'add phone button');
-
-    await this.withSessionExpiryRecovery(() => expect(this.phoneInput()).toBeVisible());
-    // WHY: Phone input briefly detaches after React re-render on GHA — wait for stability
-    await this.page.waitForTimeout(500);
-    await this.fill(this.phoneInput(), data.phone, 'phone');
-
-    // WHY: Timezone sits at the tail of the Communication section, right
-    // before Location begins (confirmed live 2026-07-16 DOM order) — filled
-    // here to match the form's own top-to-bottom order, same convention as
-    // every other field in this method. Mutated in place with whatever was
-    // actually selected, same reasoning as salutation/campaign/source.
-    data.timezone = await this.selectRandomFromSingleReactSelect(this.timezoneControl(), 'Timezone');
-
-    // WHY: GPS-or-manual fill for Lead's OWN address (Location section) —
-    // scoped to the Location section container so this doesn't collide with
-    // Professional's separate Company Address GPS trigger (confirmed live
-    // Lead's form has two identically-labeled "Get GPS Address" triggers).
-    // Mutates data.address in place, same reasoning as Contact's identical
-    // call site.
-    data.address = await this.fillAddressViaGpsOrManual(
-      this.addressInput(),
-      data.address,
-      'address',
-      this.getFormSectionContainer('Location')
-    );
-
-    await this.fill(this.cityInput(), data.city, 'city');
-
-    await this.fill(this.stateInput(), data.state, 'state');
-
-    // WHY: Country must be filled AFTER address (GPS or manual) — confirmed
-    // live a successful GPS selection auto-populates Country for free, but
-    // the manual-fallback path does not, so an explicit random selection is
-    // still needed in that case. Detecting "already has a value" via the
-    // react-select's own `__single-value` class (vs. the `__placeholder`
-    // class shown before anything is selected) avoids overwriting a real
-    // GPS-derived country with an unrelated random one.
-    const countrySingleValue = this.countryControl().locator('[class*="__single-value"]');
-    const countryAlreadySet = await countrySingleValue.isVisible().catch(() => false);
-    if (countryAlreadySet) {
-      const gpsCountry = (await countrySingleValue.innerText()).trim();
-      data.country = gpsCountry;
-      logger.info(`Country already auto-populated by GPS address selection: ${gpsCountry}`);
-    } else {
-      data.country = await this.selectRandomFromSingleReactSelect(this.countryControl(), 'Country');
+    // WHY conditional, not an unconditional call (2026-09-22): in minimal
+    // mode with no `onlyCustomField` named (e.g. createBareLead()'s use
+    // case — a plain edit-target Lead with no field under test at all),
+    // filling zero custom fields is the correct, intended behavior — not an
+    // oversight. Every other combination (non-minimal, or minimal WITH a
+    // named field) still reaches fillLeadCustomFields() exactly as before.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillLeadCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
-
-    await this.fill(this.zipcodeInput(), data.zipcode, 'zipcode');
-
-    await this.fill(this.facebookInput(), data.facebook, 'facebook');
-
-    await this.fill(this.twitterInput(), data.twitter, 'twitter');
-
-    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin');
-
-    await this.fill(this.companyNameInput(), data.companyName, 'company name');
-
-    await this.fill(this.departmentInput(), data.department, 'department');
-
-    await this.fill(this.designationInput(), data.designation, 'designation');
-
-    // WHY: Company Industry/Business Type/Company Employees fill here, right
-    // after Designation and before Company Address — confirmed live DOM
-    // order (2026-07-16). Mutated in place, same reasoning as every other
-    // react-select in this method.
-    data.companyIndustry = await this.selectRandomFromSingleReactSelect(
-      this.companyIndustryControl(),
-      'Company Industry'
-    );
-
-    data.companyBusinessType = await this.selectRandomFromSingleReactSelect(
-      this.companyBusinessTypeControl(),
-      'Business Type'
-    );
-
-    data.companyEmployees = await this.selectRandomFromSingleReactSelect(
-      this.companyEmployeesControl(),
-      'Company Employees'
-    );
-
-    await this.fill(
-      this.companyAnnualRevenueInput(),
-      String(data.companyAnnualRevenue),
-      'company annual revenue'
-    );
-
-    await this.fill(this.companyWebsiteInput(), data.companyWebsite, 'company website');
-
-    await this.fill(this.companyAddressInput(), data.companyAddress, 'company address');
-
-    await this.fill(this.companyCityInput(), data.companyCity, 'company city');
-
-    await this.fill(this.companyStateInput(), data.companyState, 'company state');
-
-    await this.fill(this.companyZipcodeInput(), data.companyZipcode, 'company zipcode');
-
-    // Pipeline Stage (optional)
-    // WHY: Confirmed live (2026-07-07) — 'Open' is the app's own default
-    // pipeline stage on a new lead (same auto-populate-on-create behavior
-    // already confirmed live for Deals' pipelineStage). Every current
-    // create-time caller only ever requests 'Open', so this manual
-    // click-the-indicator-then-click-the-option interaction was always
-    // redundant work reselecting a value already there — and the proven
-    // source of a severe flake: one run saw the indicator's click blocked by
-    // an intercepting `.search-autocomplete` overlay for 755 retries before
-    // the whole 8-minute test timeout fired. Skip the interaction entirely
-    // when the target is the default; still supports a genuine non-default
-    // stage if a caller ever needs one at creation time.
-    if (data.pipelineStage && data.pipelineStage !== 'Open') {
-      logger.info(`Selecting pipeline stage: ${data.pipelineStage}`);
-      const indicator = this.pipelineStageDropdownIndicator();
-      await indicator.waitFor({ state: 'visible', timeout: 10000 });
-      await indicator.scrollIntoViewIfNeeded();
-      await indicator.click();
-      const stageOption = this.page
-        .locator('.is-invalid__option')
-        .filter({ hasText: data.pipelineStage })
-        .first();
-      await stageOption.waitFor({ state: 'visible', timeout: 10000 });
-      await stageOption.click();
-      logger.success(`Pipeline stage selected: ${data.pipelineStage}`);
-    } else if (data.pipelineStage === 'Open') {
-      logger.info("Pipeline stage 'Open' is already the default — skipping redundant selection");
-    }
-
-    // WHY: fill order matches the form's own top-to-bottom DOM order —
-    // Requirement, then Campaign Information, then Other Details (confirmed
-    // live 2026-07-08). Keeping fill order aligned with visual order avoids
-    // any risk of one section's interaction (scrolling, focus, react-select
-    // menu portals) landing on the wrong section's fields.
-    await this.fillLeadRequirement(data);
-
-    await this.fillLeadCampaignInfo(data);
-
-    await this.fillLeadCustomFields(data);
 
     logger.success('Lead form filled');
   }
@@ -1327,12 +1577,121 @@ export class LeadsPage extends BasePage {
     logger.success(`Pipeline stage changed to: ${newStage}`);
   }
 
+  // WHY this exists at all — real, DIRECTLY CAUGHT root cause, 2026-09-22,
+  // superseding the "genuinely unexplained real-environment condition"
+  // conclusion this codebase's own history had previously settled on for
+  // FFL36 (see leadFieldLimits.spec.ts's own extensive WHY comment on
+  // saveAndCaptureLeadId()'s maxAttempts — that conclusion is now known to
+  // be incomplete, not wrong about the SYMPTOM, but wrong about WHERE the
+  // problem lives): a fresh diagnostic pass (captureNetworkDuringSave(),
+  // instrumenting every request/response/requestfailed event around the
+  // exact save-button click) caught this live, 4 times in a row in one
+  // single run, with byte-for-byte identical evidence every time — a
+  // COMPLETE ABSENCE of any request to `/v1/leads` for the full 60-second
+  // wait, not a slow or failed one. Only third-party background noise
+  // (headway/stripe/viasocket) appears in the captured window. Combined
+  // with zero captured `pageerror`/`console-error` events in the same
+  // window (ruling out an uncaught client-side exception inside the click
+  // handler) and Playwright's own click() resolving cleanly (ruling out a
+  // stuck/covered/disabled element at click time, which Playwright's own
+  // actionability checks would have thrown on) — the only evidence-
+  // consistent explanation left is that the click event itself is being
+  // intercepted/swallowed SOMEWHERE between the browser dispatching it and
+  // React's own bubble-phase delegated handler ever seeing it. This is the
+  // exact same failure family already confirmed and fixed once in this
+  // codebase for a different element (a react-select menu) — see
+  // `docs/PATTERNS.md` P13: the `viasocket.com` chatbot
+  // widget, embedded on every page, is confirmed to perform its own async
+  // DOM/event work shortly after page interactions; the captured evidence
+  // here directly shows its own `embedfrontend.viasocket.com/cdn-cgi/
+  // zaraz/t` tracking call firing within ~1s of the Save click on one of
+  // the four captured occurrences. §18's own fix for the react-select case
+  // was a "verify the effect actually landed, retry if not" pattern rather
+  // than a longer wait — this applies the identical shape to the Save
+  // button: verify a real network EFFECT of the click (a REQUEST being
+  // initiated, not a response — the response is what the existing 60s
+  // wait already covers) within a short window, and retry the click itself
+  // (not a full form reset) if it didn't.
+  //
+  // WHY this is purely additive, never a new failure mode: the caller's
+  // own captureLeadCreateOutcome() response-wait is armed BEFORE this is
+  // called and keeps running throughout — if every click-verify attempt
+  // here is exhausted with no request ever observed, this simply returns
+  // and the pre-existing 60s response-wait/TransientLeadSaveError
+  // classification takes over exactly as it did before this fix existed.
+  // WHY a 4-second verify window: real successful saves are directly
+  // evidenced elsewhere in this same investigation to complete in as
+  // little as 239ms — 4s is generous margin above genuine success timing
+  // while being 15x faster than waiting out the old 60s-per-attempt cost
+  // on a click that, per the evidence above, was never going to produce a
+  // request at all. WHY retrying the SAME still-open form rather than
+  // resetting: the click itself is the suspected failure point, not the
+  // form's own state — re-clicking the same button is the minimal,
+  // targeted remedy; a full reset is already the existing, proven fallback
+  // one layer up (saveAndCaptureLeadId()/createLead()) if this exhausts.
+  private async clickSaveButtonAndVerifyRequestFires(): Promise<void> {
+    const CLICK_VERIFY_WINDOW_MS = 4000;
+    const MAX_CLICK_ATTEMPTS = 3;
+    const isCreateLeadRequest = (req: Request): boolean =>
+      req.url().includes('/v1/leads') &&
+      !req.url().includes('/reports/') &&
+      req.method() === 'POST';
+
+    for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
+      const requestFiredPromise = this.page
+        .waitForRequest(isCreateLeadRequest, { timeout: CLICK_VERIFY_WINDOW_MS })
+        .then(() => true)
+        .catch(() => false);
+      // WHY this wait (added 2026-09-22, real live evidence): the exact
+      // `css-1dsbpcp` overlay already root-caused and fixed for the Multi
+      // Pick List reopen-click (BasePage.ts's waitForClickTargetUnobstructed())
+      // was independently observed live blocking THIS Save button click too —
+      // `TimeoutError: locator.click: Timeout 15000ms exceeded... <div
+      // class="css-1dsbpcp"></div> from <div class="css-qh6yz6">…</div>
+      // subtree intercepts pointer events`, confirmed via a real FFL15
+      // failure. Proof this overlay is not scoped to one widget — see that
+      // method's own updated WHY comment.
+      await this.waitForClickTargetUnobstructed(this.saveButton());
+      await this.click(
+        this.saveButton(),
+        `save button (click-verify attempt ${attempt}/${MAX_CLICK_ATTEMPTS})`
+      );
+      const requestFired = await requestFiredPromise;
+      if (requestFired) return;
+      // WHY this message's cause is now stated as confirmed, not open
+      // (root-caused 2026-09-22 via direct log evidence — see
+      // fillLeadCustomFields()'s WHY comment): the app's real onClick
+      // handler fires (confirmed via prior live React fiber instrumentation)
+      // but correctly declines to submit because a real, genuine inline
+      // validation error is present — most commonly a custom field's value
+      // (typically a leftover, unrelated-to-this-test-case random default
+      // from generateLeadData()) violating an account-wide min/max/regex
+      // constraint some earlier or concurrent test configured on that field.
+      // This is the app behaving correctly, not a click race or a backend
+      // flake — see saveLead()'s own updated formError-priority handling
+      // immediately below, which now surfaces this real error directly
+      // instead of letting it be misclassified as transient.
+      logger.warn(
+        `Save button click resolved but no create-lead request was observed within ` +
+          `${CLICK_VERIFY_WINDOW_MS}ms (attempt ${attempt}/${MAX_CLICK_ATTEMPTS}) — most likely a real, ` +
+          'genuine inline validation error is blocking submission (see the form-error check right ' +
+          'after this exhausts)' +
+          (attempt < MAX_CLICK_ATTEMPTS ? ' — retrying the click on the same, still-open form' : '')
+      );
+    }
+    logger.warn(
+      `Save button click-verify exhausted ${MAX_CLICK_ATTEMPTS} attempts with no create-lead request ` +
+        'observed — falling through to the existing response-wait, which will classify this as transient ' +
+        'if it times out'
+    );
+  }
+
   async saveLead(): Promise<number | null> {
     logger.info('Saving lead');
 
     const outcomePromise = this.captureLeadCreateOutcome();
 
-    await this.click(this.saveButton(), 'save button');
+    await this.clickSaveButtonAndVerifyRequestFires();
 
     // WHY capture the form-error instead of throwing immediately (ported
     // 2026-07-22 from CompaniesPage.saveCompany — same proven ordering fix):
@@ -1354,6 +1713,29 @@ export class LeadsPage extends BasePage {
       await this.waitForLeadListPage();
       logger.success('Lead saved successfully');
       return outcome.id;
+    }
+
+    // WHY formError takes priority here, specifically when NO response was
+    // ever observed (root-caused 2026-09-22 — direct log evidence, see
+    // fillLeadCustomFields()'s WHY comment): `outcome.transient` is `true`
+    // in two genuinely different situations that captureLeadCreateOutcome()
+    // now distinguishes via `noResponseObserved`. When a real response body
+    // was received and classified as transient (`noResponseObserved:
+    // false`), the ORIGINAL ordering below still applies unchanged — that
+    // case is a real backend signal, and the existing reasoning (a transient
+    // backend error can also surface as a generic toast that shouldn't
+    // pre-empt the retry) still holds. But when NO response was ever
+    // observed AND a real formError was captured, retrying as "maybe the
+    // backend was just slow" is almost always wrong — the client never even
+    // attempted the request because its own validation already blocked it,
+    // and every retry will fail identically for the exact same reason
+    // (confirmed live: FFL9/FFL15 each exhausted all 3 of createLead()'s
+    // retries, ~5-8 minutes, with the identical "no request" symptom on
+    // every single attempt). Surfacing the real, already-known error here
+    // instead fails fast and loudly with the actual cause, rather than
+    // masking it behind a misleading transient-backend classification.
+    if (outcome.noResponseObserved && formError) {
+      throw formError;
     }
 
     // Transient backend rejection → distinct, catchable error so createLead()
@@ -1427,16 +1809,30 @@ export class LeadsPage extends BasePage {
     logger.success('Edit modal opened');
   }
 
-  async fillEditForm(data: LeadData): Promise<void> {
+  // WHY the optional `options` param (2026-09-22, Form Field Limit feature
+  // root-cause fix — see fillLeadForm()'s own WHY comment for the full
+  // evidence chain, which applies identically here): `options.minimal` skips
+  // First Name/Requirement/Social, keeping only Last Name/Salutation/the one
+  // custom field named by `options.onlyCustomField` — avoiding both the
+  // constraint-violation risk AND fillLeadRequirement()'s own Multi Pick
+  // List interaction, neither of which this feature's tests have any reason
+  // to exercise. Every existing caller omits `options` and is unaffected.
+  async fillEditForm(
+    data: LeadData,
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
+  ): Promise<void> {
     logger.info('Updating lead form');
+    const minimal = options?.minimal === true;
 
-    await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    if (!minimal) {
+      await this.fill(this.firstNameInput(), data.firstName, 'first name');
+    }
 
     await this.fill(this.lastNameInput(), data.lastName, 'last name');
 
     // WHY: Salutation is part of the default General Information section —
     // visible on edit without needing disableRequiredFieldsToggle(), same as
-    // on create.
+    // on create. Kept in minimal mode — see this method's own WHY comment.
     await this.fillLeadSalutation(data);
 
     // WHY: the "Other Details"/Requirement sections (and their fields) are
@@ -1444,26 +1840,32 @@ export class LeadsPage extends BasePage {
     // so the update path can reach them, not just create.
     await this.disableRequiredFieldsToggle();
 
-    // WHY: Salutation/Products/Currency/Budget must work on both create and
-    // update (unlike Campaign Information, which is create-only per its own
-    // explicit scope) — fill order still matches DOM order (Requirement
-    // before Other Details).
-    await this.fillLeadRequirement(data);
+    if (!minimal) {
+      // WHY: Salutation/Products/Currency/Budget must work on both create and
+      // update (unlike Campaign Information, which is create-only per its own
+      // explicit scope) — fill order still matches DOM order (Requirement
+      // before Other Details).
+      await this.fillLeadRequirement(data);
 
-    // WHY Social (facebook/twitter/linkedIn) added here (2026-09-08, Hide-
-    // Empty-Fields work): previously edit-only scoped to firstName/lastName/
-    // Salutation/Requirement/custom-fields (see this method's own historical
-    // scoping note in known-issues.md) — Social was deliberately left out
-    // because every other candidate needing edit support so far was a
-    // react-select (real re-selection risk on a pre-filled form). Social's
-    // 3 fields are plain `<input>` fills, identical risk profile to
-    // firstName/lastName/requirementName already handled above — safe,
-    // additive extension, not a react-select re-selection case.
-    await this.fill(this.facebookInput(), data.facebook, 'facebook (edit)');
-    await this.fill(this.twitterInput(), data.twitter, 'twitter (edit)');
-    await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin (edit)');
+      // WHY Social (facebook/twitter/linkedIn) added here (2026-09-08, Hide-
+      // Empty-Fields work): previously edit-only scoped to firstName/lastName/
+      // Salutation/Requirement/custom-fields (see this method's own historical
+      // scoping note in docs/known-issues/rbac-and-test-isolation.md) — Social was deliberately left out
+      // because every other candidate needing edit support so far was a
+      // react-select (real re-selection risk on a pre-filled form). Social's
+      // 3 fields are plain `<input>` fills, identical risk profile to
+      // firstName/lastName/requirementName already handled above — safe,
+      // additive extension, not a react-select re-selection case.
+      await this.fill(this.facebookInput(), data.facebook, 'facebook (edit)');
+      await this.fill(this.twitterInput(), data.twitter, 'twitter (edit)');
+      await this.fill(this.linkedInInput(), data.linkedIn, 'linkedin (edit)');
+    }
 
-    await this.fillLeadCustomFields(data);
+    // WHY conditional — see fillLeadForm()'s identical, more-detailed WHY
+    // comment on its own equivalent call site.
+    if (!minimal || options?.onlyCustomField) {
+      await this.fillLeadCustomFields(data, options?.onlyCustomField, options?.onlyCustomFieldName);
+    }
 
     logger.success('Edit form updated');
   }
@@ -1490,6 +1892,11 @@ export class LeadsPage extends BasePage {
       config.timeouts.navigation
     ).catch(() => null);
 
+    // WHY: same real, confirmed overlay as the create-path Save click — see
+    // clickSaveButtonAndVerifyRequestFires()'s own WHY comment for the
+    // evidence. Applied here too since it's the identical button/mechanism,
+    // just reached via the edit form instead of create.
+    await this.waitForClickTargetUnobstructed(this.saveButton());
     await this.click(this.saveButton(), 'save button');
 
     await this.assertNoFormErrors('lead edit form');
@@ -1569,7 +1976,15 @@ export class LeadsPage extends BasePage {
   // companyEmployees are all reassigned on the object it's given) — cloning
   // here ensures a retry always starts from the caller's original, still-
   // clean `data`, never attempt 1's partially-mutated leftovers.
-  async createLead(data: LeadData): Promise<number | null> {
+  // WHY the optional `options` param (2026-09-22, Form Field Limit feature
+  // root-cause fix): threaded straight through to fillLeadForm() — see that
+  // method's own WHY comment. createLead()'s own retry/save control flow is
+  // completely untouched; only what gets FILLED changes. Every existing
+  // caller omits `options` and gets the original, unmodified behavior.
+  async createLead(
+    data: LeadData,
+    options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
+  ): Promise<number | null> {
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22 from
       // CompaniesPage.createCompany after leads.rbac.spec.ts:38 hit the
@@ -1583,7 +1998,7 @@ export class LeadsPage extends BasePage {
         const attemptData = { ...data };
         try {
           await this.clickAddLead();
-          await this.fillLeadForm(attemptData);
+          await this.fillLeadForm(attemptData, options);
           return await this.saveLead();
         } catch (error) {
           if (error instanceof TransientLeadSaveError && attempt < maxAttempts) {
@@ -1760,7 +2175,7 @@ export class LeadsPage extends BasePage {
     // WHY: Capture the DELETE response before clicking — never end a mutation
     // with only a fixed-duration sleep (CLAUDE.md rule #2). Mirrors
     // DealsPage.deleteDeal()'s already-proven shape; see
-    // .claude/known-issues.md's Build #147 entry for why the previous
+    // docs/known-issues/locators-and-timing.md's Build #147 entry for why the previous
     // unconditional 1s pause here was masking a real "report count checked
     // before the delete actually committed" failure.
     const deleteResponsePromise = this.armResponseWaitWithRecovery(
@@ -1829,7 +2244,7 @@ export class LeadsPage extends BasePage {
       .catch(() => false);
     if (emailFieldReady) {
       // WHY this second wait (mirrors DealsPage.cloneDeal()'s proven
-      // Name-field pre-fill-content check, reference-patterns.md §4): the
+      // Name-field pre-fill-content check, docs/PATTERNS.md P5): the
       // field being VISIBLE doesn't guarantee its pre-filled VALUE has
       // committed yet — waiting for a real, non-empty value is the actual
       // readiness signal the original comment above incorrectly assumed
@@ -1841,7 +2256,9 @@ export class LeadsPage extends BasePage {
           { timeout: 5000 }
         )
       ).catch(() =>
-        logger.warn('Clone email field visible but pre-fill value not observed in time — proceeding anyway')
+        logger.warn(
+          'Clone email field visible but pre-fill value not observed in time — proceeding anyway'
+        )
       );
       const timestamp = Date.now();
       const newEmail = `clone${timestamp}@testkylas.com`;
@@ -1850,13 +2267,18 @@ export class LeadsPage extends BasePage {
       // hardened for ContactsPage.cloneContact()): confirm the fill()
       // itself actually committed before Save can race ahead of it.
       await this.withSessionExpiryRecovery(() =>
-        expect(emailInput, 'Clone email field should show the newly-filled value').toHaveValue(newEmail, {
-          timeout: 5000,
-        })
+        expect(emailInput, 'Clone email field should show the newly-filled value').toHaveValue(
+          newEmail,
+          {
+            timeout: 5000,
+          }
+        )
       );
       logger.debug('Clone email updated to unique value');
     } else {
-      logger.warn('Clone email field never became visible — skipping (may not exist for this entity)');
+      logger.warn(
+        'Clone email field never became visible — skipping (may not exist for this entity)'
+      );
     }
     // WHY: Change phone to unique value — same phone as original causes
     // duplicate error. Same waitFor('visible')-over-isVisible() fix as
@@ -1876,13 +2298,18 @@ export class LeadsPage extends BasePage {
       await phoneInput.fill('');
       await phoneInput.fill(phone);
       await this.withSessionExpiryRecovery(() =>
-        expect(phoneInput, 'Clone phone field should show the newly-filled value').toHaveValue(phone, {
-          timeout: 5000,
-        })
+        expect(phoneInput, 'Clone phone field should show the newly-filled value').toHaveValue(
+          phone,
+          {
+            timeout: 5000,
+          }
+        )
       );
       logger.debug(`Clone phone updated: ${phone}`);
     } else {
-      logger.warn('Clone phone field never became visible — skipping (may not exist for this entity)');
+      logger.warn(
+        'Clone phone field never became visible — skipping (may not exist for this entity)'
+      );
     }
     // WHY: Capture POST response before saving
     const cloneIdPromise = this.captureLeadIdFromResponse();
@@ -1908,7 +2335,10 @@ export class LeadsPage extends BasePage {
     return clonedId;
   }
 
-  async assertClonedLeadLastName(originalLastName: string, clonedId?: number | null): Promise<void> {
+  async assertClonedLeadLastName(
+    originalLastName: string,
+    clonedId?: number | null
+  ): Promise<void> {
     const clonedLastName = `${originalLastName} Copy`;
     // WHY: Confirmed live on both staging and QA — searching the leads list
     // for "<lastName> Copy" is unreliable. The list search does a loose,
@@ -2172,10 +2602,16 @@ export class LeadsPage extends BasePage {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+        const userOption = this.page
+          .locator('.is-invalid__option')
+          .filter({ hasText: 'User' })
+          .first();
         await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
         await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        await this.shareToUserInput().waitFor({
+          state: 'visible',
+          timeout: config.timeouts.expect,
+        });
         return;
       } catch (error) {
         lastError = error;
@@ -2341,10 +2777,7 @@ export class LeadsPage extends BasePage {
   // second call on an already-disabled toggle is a documented no-op.
   async skipIfCustomFieldsAbsent(): Promise<void> {
     await this.disableRequiredFieldsToggle();
-    await this.skipDedicatedCustomFieldTestIfAbsent(
-      Object.values(LEAD_CUSTOM_FIELD_NAMES),
-      'Lead'
-    );
+    await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(LEAD_CUSTOM_FIELD_NAMES), 'Lead');
   }
 
   async assertLeadCustomFieldsOnDetail(data: LeadData): Promise<void> {

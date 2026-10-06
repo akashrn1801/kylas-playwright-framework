@@ -4,7 +4,7 @@ import { ReportEntityType } from './reportFactory';
 // ──────────────────────────────────────────────────────────────────────────
 // Dashboard — dashlet-type / entity-availability constants
 // ──────────────────────────────────────────────────────────────────────────
-// WHY every value below is copied verbatim from DASHBOARD_INVESTIGATION.md
+// WHY every value below is copied verbatim from docs/known-issues/dashboard-module.md
 // §2E (live-confirmed against QA via Playwright MCP, 2026-09-01) — never
 // invented/guessed. Confirmed real radio `value`s, not the on-screen labels
 // (CLAUDE.md rule 6): Call Log's real value is `call`, not `call_log`/
@@ -16,7 +16,7 @@ export type DashletType = (typeof DASHLET_TYPE_OPTIONS)[number];
 
 // WHY 'Grouped Smartlists' for multilist, not 'Multilist': confirmed live —
 // the radio's real `value` is `multilist` but its on-screen label is
-// "Grouped Smartlists" (DASHBOARD_INVESTIGATION.md §2E) — a genuine
+// "Grouped Smartlists" (docs/known-issues/dashboard-module.md) — a genuine
 // value/label naming difference, kept explicit here rather than derived.
 export const DASHLET_TYPE_LABELS: Record<DashletType, string> = {
   smartlist: 'Smartlist',
@@ -101,7 +101,7 @@ export interface DashboardData {
 
 // WHY the `QA-Auto-Dashboard-<timestamp>` prefix (build decision #1):
 // mirrors this repo's existing ADM<timestamp>/[QA-Auto] naming conventions
-// (.claude/architecture.md's Test Data Factories section) — every disposable
+// (docs/ARCHITECTURE.md's data-factories section) — every disposable
 // dashboard a test creates must be distinguishable at a glance and safely
 // deletable in teardown without risking a real, human-created dashboard.
 export function generateDashboardData(overrides: Partial<DashboardData> = {}): DashboardData {
@@ -116,8 +116,8 @@ export function generateDashboardData(overrides: Partial<DashboardData> = {}): D
 // generateAdminReportData(): needed specifically for the RBAC cross-role
 // tests (27/28) where an admin-owned dashboard's name must be unambiguously
 // distinguishable from anything a restricted user might create/see — same
-// reasoning as every other module's generateAdminXxxData() (.claude/
-// architecture.md's Test Data Factories section).
+// reasoning as every other module's generateAdminXxxData() (docs/ARCHITECTURE.md's
+// data-factories section).
 export function generateAdminDashboardData(overrides: Partial<DashboardData> = {}): DashboardData {
   const timestamp = Date.now().toString();
   return {

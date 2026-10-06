@@ -16,9 +16,9 @@ pipeline {
         // below already assumes a single human-gated run at a time, and an
         // unguarded second build is exactly what produces the extra "@2"-style
         // workspace and the false "NO TEST REPORT AVAILABLE" alert investigated
-        // in .claude/known-issues.md (2026-09-10 entry). NOTE: this does NOT
-        // fully close the credential-race risk documented in CLAUDE.md's
-        // "Concurrent-Worker Credential File Race" section for 'main' and
+        // in docs/known-issues/session-expiry-and-auth.md (2026-09-10 entry). NOTE: this does NOT
+        // fully close the credential-race risk documented in
+        // docs/known-issues/session-expiry-and-auth.md's "Concurrent-Worker Credential File Race" entry for 'main' and
         // 'prod' specifically — both branches resolve to the SAME PROD
         // credentials in the Setup Environment stage below, and
         // disableConcurrentBuilds() cannot prevent a 'main' build and a 'prod'
@@ -30,7 +30,7 @@ pipeline {
         disableConcurrentBuilds()
         // WHY 48 HOURS, and why this is now a last-resort backstop, not the
         // real enforcement mechanism (redesigned 2026-09-09 — see
-        // .claude/known-issues.md's dated entry for the full investigation):
+        // docs/known-issues/ci-pipelines.md's dated entry for the full investigation):
         // this single global timeout used to be the ONLY bound on the whole
         // pipeline, covering Checkout+Install+Setup+ClearAuth+ApprovalGate+
         // RunTests combined — a single wall-clock budget trying to serve two
@@ -65,7 +65,7 @@ pipeline {
 
         stage('Checkout') {
             // WHY a per-stage timeout (2026-09-09, Option C — see
-            // .claude/known-issues.md's dated entry): this stage's own risk
+            // docs/known-issues/ci-pipelines.md's dated entry): this stage's own risk
             // (a slow/hung git checkout) doesn't scale with test count, so a
             // small fixed bound is genuinely correct here, not a guess that
             // will need periodic recalibration the way the old shared global
@@ -250,7 +250,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     // alert) vs. "tests were attempted but something genuinely
                     // prevented a report" (a real infra failure — still alert,
                     // preserving the original 2026-09-09 intent of
-                    // sendReportUnavailableAlert()). See .claude/known-issues.md's
+                    // sendReportUnavailableAlert()). See docs/known-issues/ci-pipelines.md's
                     // 2026-09-10 entry for the full investigation this fixes.
                     env.TESTS_ATTEMPTED = 'true'
                     // WHY: Dynamic timeout — scales automatically as the suite grows.
@@ -274,7 +274,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     // branch below is matched to the EXACT mechanism its own
                     // GitHub Actions workflow uses (dev.yml/qa.yml/prod.yml's
                     // own --grep tags; sandbox.yml's own detect-tests.sh via
-                    // BASE_BRANCH=dev) — see .claude/known-issues.md's dated
+                    // BASE_BRANCH=dev) — see docs/known-issues/ci-pipelines.md's dated
                     // entry for the full root-cause writeup and the GitHub-
                     // Actions-vs-Jenkinsfile comparison table this was built
                     // from. prod's own pre-existing, already-correct @prodSafe
@@ -330,7 +330,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
                     echo "Detected ${testCount} tests (branch: ${env.BRANCH_NAME}) — dynamic timeout set to ${computedTimeoutMinutes} minutes"
                     // WHY this is now the ONLY meaningful bound on this stage
-                    // (2026-09-09, Option C — see .claude/known-issues.md's
+                    // (2026-09-09, Option C — see docs/known-issues/ci-pipelines.md's
                     // dated entry): the old pipeline-wide options{} timeout
                     // used to ALSO cap this stage from above, and had
                     // silently drifted smaller than this computed value
@@ -350,7 +350,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     // hard platform constraint documented in options{}'s own
                     // WHY comment). That means 48h, while sized with a
                     // multi-year real margin today (see the math in
-                    // .claude/known-issues.md's dated entry), IS still a
+                    // docs/known-issues/ci-pipelines.md's dated entry), IS still a
                     // static number with a real, calculable expiration point
                     // as this formula's own output keeps growing — exactly
                     // the property that made the OLD 300-min outer timeout
@@ -381,7 +381,7 @@ REPORT_PATH=reports/playwright-report/results.json
                             "options{} block) — margin is only ${backstopMarginMinutes} min. Raise BOTH the " +
                             "options{} timeout() value above AND this stage's outerBackstopMinutes constant now, " +
                             "before this repeats the exact drift that silently broke the old 300-min outer ceiling " +
-                            "twice already. See .claude/known-issues.md's dated 2026-09-09 entry for the full history."
+                            "twice already. See docs/known-issues/ci-pipelines.md's dated 2026-09-09 entry for the full history."
                         )
                     }
                     // WHY additive only, not replacing computedTimeoutMinutes above
@@ -391,7 +391,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     // was explicitly considered and rejected for prod/main
                     // specifically — a wrong/thin-sample computed value could kill
                     // a legitimate build, where a wrong printed line cannot. See
-                    // .claude/known-issues.md's dynamic-duration-estimate entry.
+                    // docs/known-issues/ci-pipelines.md's dynamic-duration-estimate entry.
                     // WHY no explicit ENV= here (fixed 2026-09-04, caught before
                     // any live run): this stage's own `when` block admits ANY
                     // manually-triggered build via `triggeredBy 'UserIdCause'`,
@@ -449,7 +449,7 @@ REPORT_PATH=reports/playwright-report/results.json
                     // runSource:"jenkins" entries) — this push has always been
                     // fully anonymous and has always failed, the exact same root
                     // cause already found and fixed for GitHub Actions
-                    // (.claude/known-issues.md's "CI reporting-history ledger"
+                    // (docs/known-issues/reporting-and-notifications.md's "CI reporting-history ledger"
                     // section), just never diagnosed for Jenkins. BRANCH_NAME
                     // needs no explicit derivation here — env.BRANCH_NAME is
                     // already Jenkins-native for this multibranch job and is
@@ -478,7 +478,7 @@ REPORT_PATH=reports/playwright-report/results.json
                 // of 'Run Tests' preserves the real-crash alert (TESTS_ATTEMPTED
                 // is set the moment that stage is entered, before anything can
                 // fail) while skipping the false one. Full investigation:
-                // .claude/known-issues.md's 2026-09-10 entry.
+                // docs/known-issues/ci-pipelines.md's 2026-09-10 entry.
                 if (env.TESTS_ATTEMPTED == 'true') {
                     try {
                         sh 'npm run notify || true'

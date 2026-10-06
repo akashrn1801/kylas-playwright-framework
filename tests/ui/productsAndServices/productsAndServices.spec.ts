@@ -70,7 +70,7 @@ test.describe('Products & Services', () => {
   // productsAndServicesFactory.ts). This test can still run alongside other
   // tests in the same invocation, so it must leave the fixture exactly as it
   // found it, mirroring the same restore discipline already proven earlier
-  // this session (see PRODUCTS_AND_SERVICES_PROGRESS.md's adminActive
+  // this session (see docs/known-issues/products-and-services.md's adminActive
   // verification entries).
   // WHY `canonical` now reads directly from `fixture` (the persisted
   // getProductFixture() record), not a separately-recomputed constant:
@@ -108,7 +108,7 @@ test.describe('Products & Services', () => {
     // rather than either masking the original error or vanishing silently.
     // WHY restoreError is tracked and escalated EVEN when testError is
     // undefined: a real incident (CRITICAL INCIDENT, 2026-08-10 — see
-    // PRODUCTS_AND_SERVICES_PROGRESS.md) proved the earlier version of this
+    // docs/known-issues/products-and-services.md) proved the earlier version of this
     // block only rethrew `testError` — a restore-only failure (the `try`
     // block's own action+assertion succeeding, then the restore silently
     // failing) was logged but never failed the test, letting a "✓ passed"
@@ -187,7 +187,7 @@ test.describe('Products & Services', () => {
   // WHY this test reuses the existing PERMANENT `inactive` fixture rather
   // than creating a new dedicated product, despite this test's own original
   // title: this session's absolute "no new products, for any reason"
-  // constraint (added mid-session — see PRODUCTS_AND_SERVICES_PROGRESS.md)
+  // constraint (added mid-session — see docs/known-issues/products-and-services.md)
   // postdates this test's original naming. The `inactive` fixture
   // (AutoFixture Inactive Product) already exists specifically for this
   // exact cross-module exclusion-check purpose, so reusing it here is the
@@ -214,7 +214,7 @@ test.describe('Products & Services', () => {
   // attachment coverage on a fresh record for BOTH roles across Leads/Deals/
   // Quotations. PS10 (RBAC file) already covers the restricted-role case for
   // Leads — this is its admin-role mirror, confirmed missing via a real gap
-  // audit (2026-08-10, see PRODUCTS_AND_SERVICES_PROGRESS.md).
+  // audit (2026-08-10, see docs/known-issues/products-and-services.md).
   test('@regression admin should select admin-owned active product fixture on a new lead', async ({
     adminPage,
   }) => {
