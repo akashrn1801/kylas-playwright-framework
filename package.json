@@ -31,6 +31,8 @@
     "generate:test-counts": "ts-node scripts/generate-expected-test-counts.ts",
     "new:module": "ts-node scripts/new-module.ts",
     "update:doc-numbers": "ts-node scripts/update-doc-numbers.ts",
+    "docs:refresh": "ts-node scripts/update-doc-numbers.ts",
+    "check:docs": "ts-node scripts/check-docs.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
     "format": "prettier --write .",
     "clean": "rm -rf test-results reports/ allure-results",

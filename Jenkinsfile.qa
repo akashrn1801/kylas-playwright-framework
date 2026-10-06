@@ -8,7 +8,7 @@ pipeline {
     // WHY (2026-09-10): this job has NO approval gate — a second manual
     // "Build Now" while one is already running would start immediately,
     // racing the same shared QA admin/restricted credentials (the
-    // Jenkins-job-level version of the risk CLAUDE.md's "Concurrent-Worker
+    // Jenkins-job-level version of the risk docs/known-issues/session-expiry-and-auth.md's "Concurrent-Worker
     // Credential File Race" section already documents at the Playwright-
     // worker level). Not an intentional use case for this pipeline.
     disableConcurrentBuilds()
