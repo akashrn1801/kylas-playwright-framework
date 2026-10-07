@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 2fa56be
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -54,6 +54,11 @@
 - **Status:** unverified (implemented 2026-10-06, uncommitted; only static checks done: `tsc`, `eslint`, actionlint with no new findings, `check:test-counts` unchanged) · **Since:** 2026-10-06
 - **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Open items, none of them confirmed: (1) the tool has never run against a real app and its `FormFieldsConfigPage` selectors were not re-confirmed live; (2) a field absent in an env counts as a failure (exit 1), check on the first dry-run, esp. staging/prod; (3) entity tab labels/URL slugs were copied from the specs' `*_ENTITY` constants; (4) retry/deadline values come from `globalSetup`, a full 18-field pass was never timed, the 25-min step / 35-min job timeouts are guesses; (5) whether job-level `continue-on-error` protects the run conclusion when the job times out; (6) whether a run waiting for environment approval holds its concurrency group; (7) whether one approval covers the new `main.yml` job or it needs its own (if unapproved, `merge-and-report` and the email wait); (8) behaviour of `always()` jobs after a normal cancel vs force-cancel; (9) one pending run per group: a pending `stage` push can be displaced by a `sandbox` push (no `workflow_dispatch` on sandbox); (10) Jenkins jobs and `staging-promotion-gate.yml` are outside the groups; (11) the email section was typechecked, never viewed rendered.
 - **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 (no `concurrency:` guard) is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
+
+### KI-36 — Sandbox formFields split never exercised in a real CI run
+- **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
+- **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29

@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents behind how CI splits the suite (6h ceiling, file-atomic planner, formFields carve-out/sequencing) and how shared account-wide config is protected.
 > **Read when:** Changing a workflow's shard/`needs:` structure, `scripts/plan-shards.ts`, `config/sharedConfigSuites.json`, `tests/ui/formFields/formFieldLockFactory.ts`, or adding a test that depends on order or on shared config.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 2fa56be
 
 Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the new `concurrency:` groups, KI-34) are in `docs/KNOWN_ISSUES_ACTIVE.md`. The decisions are summarised in `docs/adr/`.
 
@@ -62,6 +62,13 @@ Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the
 - **Fix:** `run-formfields-tests` gets `needs: [run-tests]` (sandbox: `[detect, run-tests]`) plus `if: ${{ !cancelled() }}` — `needs` alone would skip formFields after any core failure. Product fixtures are created only when the invocation may run a Products & Services spec (`src/auth/productFixtureNeed.ts`; ambiguous → create; stale fixture file deleted on skip). A `max-parallel` cap was evaluated and not added. Cost: wall-clock roughly doubles for the sharded pipelines. `main.yml` caveat: all jobs carry `environment: production`, so required reviewers could produce a second approval prompt.
 - **Revert:** Delete the `needs`/`if` lines on `run-formfields-tests` in the four workflows; replace the `selectionNeedsProductFixtures` block in `globalSetup.ts` with a bare `await ensureProductFixtures();`.
 - **Commit:** `1bd03cc`.
+
+### Sandbox selective run put all formFields tests on one shard — 2026-10-07
+- **Symptom:** sandbox run 37658909999 changed only `src/modules/formFields/FormFieldsConfigPage.ts`. `detect-tests.sh` logged "Module detected: formFields", did not escalate; `detect` set `run_formfields_track=false`, `shard_total=1`. One job, `playwright-selective (shard 1/1)`, ran all 417 formFields tests on one machine (timeout 180); the 6-entity `run-formfields-tests` matrix never ran.
+- **Root cause:** the selective branch of the `detect` step deliberately passed formFields paths through `$TARGET` unchanged, on the assumption that a 1-shard run is race-free and "finishes in minutes". The race was indeed absent, but the duration assumption was false (the per-entity matrix exists because one entity takes ~80-110 min at workers=2) and the carve-out was bypassed.
+- **Fix:** `.github/scripts/split-formfields-target.sh` removes formFields paths from the scoped target by the `config/sharedConfigSuites.json` path prefixes (same rule as `plan-shards.ts`); `run_formfields_track=true` whenever any were selected (all 6 entities); `run-tests` is skipped via the new `run_scoped_tests` output when nothing else is left; a count check (formFields + scoped == original) fails the step on any lost/duplicated test. Verified only by running the real `decide` script locally on synthetic changed-file lists, actionlint and `--list` counts; no CI run. Open: [KI-36](../KNOWN_ISSUES_ACTIVE.md).
+- **Revert:** restore the pre-change `else` branch of the `decide` step in `sandbox.yml`, remove the `run_scoped_tests` output and the `if` on `run-tests`, delete `split-formfields-target.sh`.
+- **Commit:** not committed yet. See [ADR 0002](../adr/0002-formfields-carve-out-from-sharding.md) amendment.
 
 ### No `concurrency:` guard on any workflow — guard added 2026-10-06, not yet proven (was KI-10)
 - **Symptom:** `grep concurrency .github/workflows/*.yml` returned nothing (since 2026-09-29): runs of `qa/stage/main/sandbox` on one account could overlap, stacking concurrent jobs and interleaving account-wide form-field config changes.

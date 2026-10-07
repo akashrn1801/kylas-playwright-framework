@@ -3,7 +3,7 @@
 > **Purpose:** How this repo's CI is built — the four sharded GitHub workflows, the shard planner, the formFields carve-out and its sequencing, the other pipelines, required secrets, and timeouts.
 > **Read when:** Editing any `.github/workflows/*`, `Jenkinsfile*` or `scripts/plan-shards.ts`; judging whether "CI is green" actually covers your change; adding a shared-config test suite.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 2fa56be
 
 All figures in tables below are generated (`npm run docs:refresh`), never hand-typed. If a number looks wrong, refresh; do not edit it.
 
@@ -73,7 +73,7 @@ flowchart LR
 | Job | Needs | Runs when | `timeout-minutes` |
 |---|---|---|---|
 | `plan` (`detect` in sandbox) | none | always | 15 (`plan`); sandbox `detect`: no explicit value |
-| `run-tests` | `plan` / `detect` | all plan outputs present | 180 |
+| `run-tests` | `plan` / `detect` | all plan outputs present (sandbox: also `run_scoped_tests == 'true'`, i.e. skipped when only formFields was selected) | 180 |
 | `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `run_formfields_track == 'true'` | 180 |
 | `reset-field-config` | `run-tests`, `run-formfields-tests` | `always()` (sandbox: also `run_formfields_track == 'true'`) | 35 job / 25 step |
 | `merge-and-report` | all of the above incl. `reset-field-config` | `always()` | 30 |
@@ -114,9 +114,18 @@ Decision record: [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md); l
 `sandbox.yml`'s `detect` step runs `detect-tests.sh` to choose a target, then:
 
 1. **Escalated** (`TARGET == "--grep @regression"`, triggered by changes under `src/core/`, `src/fixtures/`, `src/auth/`, `playwright.config.ts`, or critical `config/config.ts` edits): calls the planner and enables the formFields track.
-2. **Selective** (any other target): planner-free; emits one shard with an empty `files` list, and `run-tests` falls back to `$TARGET` with `--shard=1/1`. It must stay planner-free because `detect-tests.sh` can select formFields paths directly, and the planner's exclusion would silently drop them.
+2. **Selective** (any other target): planner-free (the planner would drop explicitly selected paths). `.github/scripts/split-formfields-target.sh` splits `$TARGET` by the `config/sharedConfigSuites.json` path prefixes (`tests/ui/formFields/`, `tests/rbac/formFields/`, not a grep substring): formFields paths go to the per-entity matrix (`run_formfields_track=true`, **all 6 entities**, since the matrix is fixed and the lock is per entity), the rest goes to `run-tests` as one `--shard=1/1` shard. The step fails loudly if formFields count + scoped count != original count (never run twice, never dropped). Since 2026-10-07; before that a formFields selection ran every formFields test as one job (run 37658909999).
 
-Workers: 2 when the rest-of-suite count is above 50, else 1; the formFields track is always 2. `detect-tests.sh` maps changed files to modules (module dir, `tests/ui/<m>/`, `tests/rbac/<m>.rbac.spec.ts` or `tests/rbac/<m>/`, factories via a singular→plural table) and also greps formFields specs for import dependencies.
+| Case | `run_scoped_tests` | `run-tests` | `run-formfields-tests` (6 jobs) | blobs expected by `merge-and-report` |
+|---|---|---|---|---|
+| formFields only | false | skipped (not failed) | runs (`!cancelled()`) | 0 + 6 |
+| formFields + other module | true | other module only, 1 shard | runs | 1 + 6 |
+| escalated `@regression` | true | planner shards, formFields excluded | runs | N + 6 |
+| no formFields (path target or `@smoke`) | true | as before | skipped | 1 |
+
+`--grep @smoke` (fallback) still matches 18 `@smoke` formFields tests inside the single scoped shard; deliberately unchanged (small, read-only).
+
+Workers: 2 when the rest-of-suite count is above 50, else 1; the formFields track is always 2. `detect-tests.sh` maps changed files to modules (module dir, `tests/ui/<m>/`, `tests/rbac/<m>.rbac.spec.ts` or `tests/rbac/<m>/`, factories via a singular→plural table) and also greps formFields specs for import dependencies (a page object/factory they import selects formFields too).
 
 ## 5. Other pipelines
 
