@@ -273,7 +273,7 @@ test.describe('Contacts RBAC', () => {
 
     // WHY: assert on the underlying network response, not just "save threw"
     // — distinguishes "correctly denied for the expected reason" from any
-    // other unrelated failure (per CLAUDE.md's audit rule on negative/RBAC
+    // other unrelated failure (per docs/PATTERNS.md RBAC rules on negative/RBAC
     // assertions never conflating "correctly absent" with "failed to load").
     // WHY: hardened 2026-07-19 — bare '/v1/meetings' substring had no
     // /reports/ exclusion, same ID-capture-shaped bug class fixed at 10

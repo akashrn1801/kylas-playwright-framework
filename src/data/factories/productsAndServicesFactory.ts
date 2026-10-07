@@ -10,7 +10,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // test run (redesigned 2026-08-11, reversing the original "3 permanent
 // fixtures, created once, reused forever" model; confirmed and approved) —
 // and disposable data for the rare test that needs a throwaway product. See
-// .claude/architecture.md's deviation note for the full rationale — do not
+// docs/known-issues/products-and-services.md's deviations section for the full rationale — do not
 // "normalize" this file toward generateXxxData()/generateAdminXxxData()/
 // generateSharedXxxData() being the only data source the way every other
 // factory is.
@@ -254,7 +254,7 @@ export function generateProductsAndServicesData(
     description: faker.commerce.productDescription(),
     // WHY alphanumeric + timestamp: mirrors companyFactory.ts's uniqueText1/2
     // pattern — the closest existing "must be unique" field precedent in this
-    // codebase (see PRODUCTS_AND_SERVICES_PROGRESS.md investigation notes).
+    // codebase (see docs/known-issues/products-and-services.md).
     hsnSacCode: `${faker.string.alphanumeric(6).toUpperCase()}-${ts}`,
     // WHY 'India' (not randomized): confirmed live to exist as a real option
     // on this form; matches this codebase's own existing default-country
@@ -281,7 +281,7 @@ export function generateProductsAndServicesData(
 // (confirmed via `GET /v1/products/layout?view=create` on QA AND staging —
 // both show the identical 8 fields below; PROD confirmed to have none of
 // them yet). PRODUCTS_CUSTOM_FIELD_NAMES is its own single source of truth,
-// per CLAUDE.md's Custom Fields pattern — never import
+// per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never import
 // COMPANY_CUSTOM_FIELD_NAMES/DEAL_CUSTOM_FIELD_NAMES here even though the
 // values happen to be identical today: each module owns its own field-name
 // constant so the two can diverge safely later.
@@ -298,6 +298,33 @@ export const PRODUCTS_CUSTOM_FIELD_NAMES = {
 
 export type ProductsCustomFieldKey = keyof typeof PRODUCTS_CUSTOM_FIELD_NAMES;
 
+// WHY this separate constant (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see CompanyFactory.ts's COMPANY_FORM_FIELD_LIMIT_NAMES for
+// the full incident): dedicated fields, confirmed live on QA (internal
+// names cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph
+// — Products & Services uses the "plain" DOM suffix convention on the
+// create/edit form, `_input_cf<name>`, unlike the other 5 entities' legacy
+// `_input_customFieldValues.cf<name>`, confirmed live and unchanged by this
+// field swap). This feature's own test files must use ONLY this constant,
+// never PRODUCTS_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const PRODUCTS_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
+// WHY this constant, and why it must NOT be derived from the entity name
+// (Form Field Limit feature, Products & Services rollout, 2026-09-23): the
+// app's IndexedDB `layoutCache` key is not a fixed transformation of the
+// entity name — CONFIRMED as the standing counter-example in this
+// codebase's own docs (docs/PATTERNS.md P30): Lead/Deal/
+// Contact all use the simple lowercase-plural rule, but Products & Services
+// uses the hyphenated `products-services`, which that rule does not
+// predict. Trusted directly from that already-live-confirmed documentation
+// rather than re-derived from scratch this session — same bar (a hand-
+// verified, live-confirmed constant, never guessed) either way.
+export const PRODUCTS_LAYOUT_CACHE_KEY = 'products-services';
+
 export interface ProductsCustomFieldData {
   textField: string;
   paragraphText: string;
@@ -313,6 +340,50 @@ export interface ProductsCustomFieldData {
   dateTimePicker: Date;
   urlField: string;
 }
+
+// ── Invalid values for negative testing (Form Field Limit feature) ──────
+export const generateProductsCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
+export const generateProductsCustomFieldInvalidParagraphText = (max = 2550): string =>
+  'B'.repeat(max + 1);
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY duplicated here rather than imported from another module's factory:
+// mirrors this file's own top-of-file "never import another module's
+// constants" reasoning — each module owns its own field-name/value-shape
+// constants so they can diverge safely later. Every value here is still
+// cross-checked against the pattern read LIVE off the config page at
+// test-run time (never trusted from the generator alone).
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
 
 export function generateProductsCustomFieldData(
   overrides: Partial<ProductsCustomFieldData> = {}

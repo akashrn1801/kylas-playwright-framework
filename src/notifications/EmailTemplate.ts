@@ -3,15 +3,17 @@ import {
   RunDelta,
   RecurringIssue,
   ModuleTrend,
+  ModuleStabilityTrend,
   SlowTestTrend,
   SuiteDrift,
   PassRatePoint,
 } from './RunHistory';
-import { HealthScore, VerdictResult, computeOverallVerdict } from './AutomationHealth';
+import { HealthScore, VerdictResult, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
 import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
+import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -54,9 +56,25 @@ export interface EmailContext {
   recurringFlaky?: RecurringIssue[];
   recurringFailures?: RecurringIssue[];
   moduleTrend?: ModuleTrend[];
+  // WHY a separate field, not folded into moduleTrend (2026-09-29, Phase 3
+  // reporting enhancement item 5): moduleTrend answers "better/worse than
+  // the single most recent run"; this answers "trending toward instability
+  // over the last N runs" — a genuinely different question, computed by a
+  // genuinely different function (computeModuleStabilityTrend()) — see that
+  // function's own WHY comment in RunHistory.ts for why it isn't folded into
+  // the existing one.
+  moduleStabilityTrend?: ModuleStabilityTrend[];
   slowTestTrend?: SlowTestTrend[];
   suiteDrift?: SuiteDrift | null;
   passRateSeries?: PassRatePoint[];
+  // WHY optional, GitHub-Actions-only (2026-09-29, Phase 3 items #1/#6) —
+  // see JobStats.ts's own WHY comment for why Jenkins has no equivalent and
+  // why this degrades to undefined rather than throwing on any fetch
+  // failure. Rendered by buildJobStatsSection() only when both `jobs.length
+  // > 0` (item #1 — per-job timing) — `totalJobMinutes` (item #6) is shown
+  // alongside it, not as a separate section, since both come from the same
+  // single API call and answer closely related questions.
+  jobStats?: JobStats;
   // WHY: computed once by NotificationService from FailureAnalyzer/
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
@@ -80,8 +98,9 @@ export interface EmailContext {
   // matters. Undefined/false renders the same honest "no history yet" state.
   hasHistoryEverExisted?: boolean;
   // WHY: base GitHub blob URL (pinned to this run's exact commit SHA) for
-  // the known-issues.md cross-reference — a specific failure's line number
-  // (FailureDetail.knownIssue.line) is appended as #L<line> at render time.
+  // the known-issues cross-reference — a specific failure's own doc path
+  // (FailureDetail.knownIssue.file) and line number are appended as
+  // /<file>#L<line> at render time.
   // Null when the remote isn't GitHub or couldn't be resolved.
   knownIssuesUrl?: string | null;
   reportFreshness?: ReportFreshness;
@@ -149,7 +168,10 @@ export class EmailTemplate {
     // where the banner below the fold won't be seen until the email is
     // opened — prefixed here so it's visible before that.
     const stalePrefix = ctx.reportFreshness?.isStale ? '⚠️ STALE REPORT — ' : '';
-    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
+    // WHY a separate "Health:" segment (2026-10-06, sandbox Build #186): the
+    // verdict word and icon above come only from this run's own results;
+    // health is its own labeled value, never folded into the headline status.
+    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
   }
 
   html(ctx: EmailContext): string {
@@ -178,6 +200,8 @@ export class EmailTemplate {
       this.buildTrendSection(ctx, testAnchors),
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
+      this.buildModuleSlowestTestsSection(ctx),
+      this.buildJobStatsSection(ctx),
       this.buildFlakyTestsSection(ctx),
       this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
@@ -495,6 +519,20 @@ ${body}
     const passRateSubtext = previousRun
       ? this.deltaSubtext(report.passRate - this.passRateOf(previousRun), '%')
       : undefined;
+    // WHY this subtext (2026-09-29, real reader confusion: "222 retries
+    // recorded, but only 8 failed + 30 flaky — that doesn't reconcile"):
+    // totalRetries sums every test's own retry count, including tests that
+    // passed on every attempt they were ever recorded for but still got
+    // re-run because a DIFFERENT test's failure forced a whole
+    // `.serial`-mode block to retry from the top (see
+    // ReportParser.ts's retriesFromCleanSweeps WHY comment for the full
+    // mechanism). Only rendered when sweeps actually contributed anything,
+    // matching this file's existing "signal chips only render when
+    // nonzero" convention.
+    const retriesSubtext =
+      report.retriesFromCleanSweeps > 0
+        ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
+        : undefined;
 
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
@@ -513,7 +551,12 @@ ${body}
       },
       { value: this.formatDuration(report.duration), label: 'Duration' },
       { value: String(report.modules.length), label: 'Modules' },
-      { value: String(report.totalRetries), label: 'Retries', variant: report.totalRetries > 0 ? 'warn' : 'neutral' },
+      {
+        value: String(report.totalRetries),
+        label: 'Retries',
+        variant: report.totalRetries > 0 ? 'warn' : 'neutral',
+        subtext: retriesSubtext,
+      },
     ]);
 
     // WHY: signal chips only render when nonzero — an empty run shouldn't be
@@ -748,6 +791,12 @@ ${body}
   private buildModuleAnalytics(ctx: EmailContext): string {
     const { report } = ctx;
     const trendByKey = new Map((ctx.moduleTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
+    // WHY a separate lookup, not merged into trendByKey (2026-09-29, Phase 3
+    // item 5): the two answer different questions — see ModuleStabilityTrend's
+    // own WHY comment in RunHistory.ts. Rendered as a second, smaller line
+    // under the existing single-run arrow rather than a whole new table,
+    // per the "extend the existing mechanism, don't build parallel" note.
+    const stabilityByKey = new Map((ctx.moduleStabilityTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
 
     const scored = report.modules
       .map((m) => ({
@@ -784,12 +833,46 @@ ${body}
               : trend.direction === 'worsening'
                 ? `<span style="color:${FAIL};">▼</span>`
                 : `<span style="color:${MUTED};">–</span>`;
+        // WHY only rendered when direction !== 'insufficient-data' (2026-09-29,
+        // Phase 3 item 5): fewer than 4 matching-scope runs in history isn't a
+        // real trend to report — rendering nothing there is more honest than
+        // a misleadingly confident "stable" on too little data.
+        const stability = stabilityByKey.get(`${m.type}:${m.name}`);
+        const stabilityBadge =
+          !stability || stability.direction === 'insufficient-data'
+            ? ''
+            : `<div style="font-size:9px;margin-top:2px;color:${
+                stability.direction === 'worsening' ? FAIL : stability.direction === 'improving' ? SUCCESS : MUTED
+              };">${
+                stability.direction === 'worsening'
+                  ? '⚠ worsening'
+                  : stability.direction === 'improving'
+                    ? '✓ improving'
+                    : '– stable'
+              } (${stability.failRate + stability.flakyRate}% unstable / last ${stability.runsConsidered})</div>`;
         const flakyCell = m.flaky > 0
           ? `<a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${m.flaky}</a>`
           : String(m.flaky);
         const failedCell = m.failed > 0
           ? `<a href="#section-failed-tests" style="color:${FAIL};text-decoration:none;">${m.failed}</a>`
           : String(m.failed);
+        // WHY this cell exists (2026-09-29, Phase 3 item 4a): see
+        // ModuleStats.totalRetries' own WHY comment — a per-module retry
+        // count, honestly split the same way the whole-run KPI tile already
+        // is, so a reader can tell which module is actually driving the
+        // run's total retries rather than only seeing one aggregate number.
+        // Rendered as "–" when zero (matches this table's other zero-value
+        // conventions), a plain count when every retry there is genuine, or
+        // a count plus a small swept-count annotation when any exist —
+        // mirrors buildKpiDashboard()'s retriesSubtext shape exactly.
+        const retriesCell =
+          m.totalRetries === 0
+            ? `<span style="color:${MUTED};">–</span>`
+            : `<span style="color:${WARN};font-weight:700;">${m.totalRetries}</span>${
+                m.retriesFromCleanSweeps > 0
+                  ? `<div style="font-size:9px;color:${MUTED};margin-top:2px;">${m.retriesFromNonCleanTests} genuine, ${m.retriesFromCleanSweeps} swept</div>`
+                  : ''
+              }`;
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
@@ -797,7 +880,8 @@ ${body}
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
-        <td style="padding:8px;text-align:center;">${trendGlyph}</td>
+        <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
+        <td style="padding:8px;text-align:center;">${trendGlyph}${stabilityBadge}</td>
       </tr>`;
       })
       .join('');
@@ -815,6 +899,7 @@ ${body}
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${WARN};font-weight:600;">Flaky</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Progress</th>
+      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Trend</th>
     </tr>
     ${rows}
@@ -850,6 +935,188 @@ ${body}
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Slowest Tests (Top 5)</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+  </div>
+</td></tr>`;
+  }
+
+  // ===================== Slowest tests by module =====================
+
+  // WHY this section exists, separate from buildSlowTestsSection() above
+  // (2026-09-29, Phase 3 reporting enhancement item 3): the whole-run top-5
+  // can be dominated by one or two modules, hiding that a DIFFERENT module
+  // also has its own real drag — a module's own slowestTests (ReportParser's
+  // per-module top 3) surfaces that regardless of how the whole-run top-5
+  // happens to be distributed. Modules are ordered by their OWN worst test's
+  // duration, descending — the module most worth investigating first, not
+  // report.modules' own health-score order (buildModuleAnalytics' ordering
+  // answers a different question: "which module is least healthy," not
+  // "which module's runtime is worst").
+  private buildModuleSlowestTestsSection(ctx: EmailContext): string {
+    const { report } = ctx;
+    const modulesWithTests = report.modules.filter((m) => m.slowestTests.length > 0);
+    if (modulesWithTests.length === 0) return '';
+    const sortedModules = [...modulesWithTests].sort(
+      (a, b) => (b.slowestTests[0]?.duration ?? 0) - (a.slowestTests[0]?.duration ?? 0)
+    );
+    const moduleBlocks = sortedModules
+      .map((m) => {
+        const typeStyle =
+          m.type === 'UI'
+            ? `background:#EFF3FE;color:${ACCENT};`
+            : m.type === 'RBAC'
+              ? `background:${SUCCESS_BG};color:${SUCCESS};`
+              : `background:${CANVAS_TINT};color:${SLATE};`;
+        const rows = m.slowestTests
+          .map(
+            (t: TestResult) => `
+        <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+          <td style="padding:4px 0 4px 12px;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
+          <td style="padding:4px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(t.duration / 1000)}s`)}</td>
+        </tr>`
+          )
+          .join('');
+        return `
+      <tr>
+        <td style="padding:10px 0 4px;" colspan="2">
+          <span style="font-size:12px;font-weight:700;color:${INK};">${this.esc(m.name)}</span>
+          <span style="${typeStyle}padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;margin-left:6px;">${m.type}</span>
+        </td>
+      </tr>
+      ${rows}`;
+      })
+      .join('');
+    return `
+<tr><td style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">Slowest Tests by Module (Top 3 each)</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Ranked by each module's own worst test — surfaces drag a whole-run top-5 can hide</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moduleBlocks}</table>
+  </div>
+</td></tr>`;
+  }
+
+  // ===================== CI job stats =====================
+
+  // WHY this section exists (2026-09-29, Phase 3 items #1 + #6, sharing one
+  // GitHub Jobs API call per JobStats.ts's own WHY comment): item #6 (total
+  // CI job-minutes) answers "what did this run cost in summed compute,"
+  // genuinely different from wall-clock duration once a run is sharded
+  // across N parallel jobs — a 5-shard run finishing in ~90 min of
+  // wall-clock time can easily represent 400+ minutes of summed job-minutes.
+  // Item #1 (per-job timestamps) is the breakdown backing that total —
+  // shown as one table rather than two sections since both come from the
+  // exact same `ctx.jobStats` payload. GitHub-Actions-only: `ctx.jobStats`
+  // is undefined for every Jenkins/local run (graceful omission, matching
+  // buildModuleSlowestTestsSection()'s own "return '' when nothing to show"
+  // convention above) or whenever the live API call itself failed for any
+  // reason — never a broken-looking empty section.
+  private buildJobStatsSection(ctx: EmailContext): string {
+    const stats = ctx.jobStats;
+    if (!stats || stats.jobs.length === 0) return '';
+    const sortedJobs = [...stats.jobs].sort((a, b) => b.durationMs - a.durationMs);
+    const rows = sortedJobs
+      .map(
+        (j) => `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(j.name)}</td>
+        <td style="padding:6px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(j.durationMs / 60000)}m`)}</td>
+      </tr>`
+      )
+      .join('');
+    // WHY a plural-safe note only when incompleteJobCount > 0, not always:
+    // most runs have zero incomplete jobs by the time this section renders
+    // (this merge+notify job itself is the one common exception — it's
+    // still `in_progress` at query time, with no `completed_at` yet, so
+    // JobStats.computeJobStats() correctly excludes it) — an always-present
+    // "0 jobs excluded" line would be noise on the common case.
+    const incompleteNote =
+      stats.incompleteJobCount > 0
+        ? `<div style="font-size:11px;color:${MUTED};margin-top:8px;">${stats.incompleteJobCount} job${stats.incompleteJobCount === 1 ? '' : 's'} still in progress at query time (excluded from the total above) — typically this merge+notify job itself.</div>`
+        : '';
+    // WHY computed here, inline, rather than a separate EmailContext field
+    // (2026-09-29, Phase 3 item 2 v1): detectJobOverlaps() is a pure
+    // function fully derivable from ctx.jobStats.jobs, which is already on
+    // the context — threading a second, redundant field for the exact same
+    // underlying data would duplicate a single source of truth for no
+    // benefit. See JobStats.ts's own WHY comment on this section for the
+    // real, honest scope limit: module-tag attribution (the `sameModuleTag`
+    // flag) only exists for formFields-track jobs; every other overlap is
+    // still reported, just without a module tag, never silently dropped.
+    const overlaps = detectJobOverlaps(stats.jobs);
+    const overlapsSection =
+      overlaps.length === 0
+        ? ''
+        : (() => {
+            const flaggedFirst = [...overlaps].sort(
+              (a, b) => (b.sameModuleTag ? 1 : 0) - (a.sameModuleTag ? 1 : 0) || b.overlapDurationMs - a.overlapDurationMs
+            );
+            const overlapRows = flaggedFirst
+              .map((o) => {
+                const flagged = o.sameModuleTag !== undefined;
+                return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:6px 0;font-size:11.5px;color:${flagged ? FAIL : INK};font-weight:${flagged ? '700' : '400'};">${flagged ? '⚠ ' : ''}${this.esc(o.jobA)} ↔ ${this.esc(o.jobB)}${flagged ? ` <span style="font-size:10px;color:${FAIL};">(same module: ${this.esc(o.sameModuleTag!)})</span>` : ''}</td>
+        <td style="padding:6px 0;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${Math.round(o.overlapDurationMs / 60000)}m`)}</td>
+      </tr>`;
+              })
+              .join('');
+            return `
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Job Time Overlaps</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Jobs whose execution windows overlapped — ⚠ flags a pair confirmed to share the SAME module (a structural anomaly the current shard design should prevent; investigate if this ever appears). Module attribution is currently only derivable for formFields-track jobs — a rest-of-suite shard overlap is still shown, just without a module tag (see JobStats.ts's own WHY comment).</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${overlapRows}</table>`;
+          })();
+    // WHY computed inline from ctx.jobStats.jobs + ctx.miscErrors.recoveryByShard
+    // (2026-10-06), no new EmailContext field: both are already on the context;
+    // see JobStats.buildJobRecoveryRows()'s own WHY comment for what it measures.
+    const recoveryRows = buildJobRecoveryRows(stats.jobs, ctx.miscErrors?.recoveryByShard);
+    const hasAnyRecovery = recoveryRows.some(
+      (r) => r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0
+    );
+    const hhmm = (iso: string): string => new Date(iso).toISOString().slice(11, 16);
+    const recoverySection =
+      recoveryRows.length === 0
+        ? ''
+        : `
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
+      hasAnyRecovery
+        ? 'Times the app showed its 429 page / "Something is broken" error screen, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (UTC times). "Failed" = the retried action threw again after recovery.'
+        : 'No 429 pages, error-boundary screens or globalSetup retries were recorded in any shard this run.'
+    }</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr style="border-bottom:1px solid ${BORDER};">
+        <th align="left" style="padding:4px 0;font-size:10px;color:${MUTED};">Job</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Boundary</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
+        <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
+      </tr>${recoveryRows
+        .map((r) => {
+          const hot = r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0;
+          return `
+      <tr style="border-bottom:1px solid ${CANVAS_TINT};">
+        <td style="padding:5px 0;font-size:11.5px;color:${INK};">${this.esc(r.jobName)}${r.attributed ? '' : ` <span style="color:${MUTED};">(no shard data)</span>`}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};">${r.errorBoundaryPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};">${r.setupRetries}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
+        <td style="padding:5px 0 5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${r.peakConcurrentInWindow} / ${r.maxConcurrentAtEvents ?? '—'}</td>
+      </tr>`;
+        })
+        .join('')}
+    </table>`;
+    return `
+<tr><td style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">CI Job Stats</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Total summed compute across every completed job in this run: <strong style="color:${INK};">${this.mono(`${stats.totalJobMinutes}m`)}</strong> (genuinely different from wall-clock duration once sharded)</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+    ${incompleteNote}
+    ${overlapsSection}
+    ${recoverySection}
   </div>
 </td></tr>`;
   }
@@ -988,7 +1255,7 @@ ${body}
     // the information isn't lost, just not clickable there.
     const knownIssueHtml =
       d.knownIssue && knownIssuesUrl
-        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">known-issues.md${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
+        ? `<div style="margin-top:6px;font-size:10.5px;color:${INK};">Related history: <a href="${this.escAttr(`${knownIssuesUrl}/${d.knownIssue.file ?? 'docs/KNOWN_ISSUES_ACTIVE.md'}#L${d.knownIssue.line}`)}" style="color:${ACCENT};">${this.esc(d.knownIssue.file ? (d.knownIssue.file.split('/').pop() ?? d.knownIssue.file) : 'known-issues')}${d.knownIssue.kind === 'method-name' ? ` — this code (\`${this.esc(d.knownIssue.matchedPhrase)}\`) has documented history` : ' — a matching prior incident'}</a></div>`
         : '';
 
     return `
@@ -1402,13 +1669,7 @@ ${body}
     // fallback isn't a magic number, just the same computation done inline
     // without the optional signals (history/misc errors/drift) a real caller
     // would normally supply.
-    const passRatePenalty = Math.round((100 - report.passRate) * 0.6);
-    const failPenalty = Math.min(report.failed * 3, 25);
-    const flakyPenalty = Math.min(report.flaky * 1.5, 15);
-    const score = Math.max(0, Math.min(100, Math.round(100 - passRatePenalty - failPenalty - flakyPenalty)));
-    const label: HealthScore['label'] =
-      score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
-    return { score, label, factors: [] };
+    return computeHealthScore(report, null, null, null);
   }
 
   // WHY: takes the report's own startTime, not new Date() (now) — a real bug

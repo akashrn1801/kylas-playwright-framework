@@ -5,7 +5,7 @@
 // would violate the "no duplicated logic" bar for no benefit. Entity-owned
 // pieces (each module's own <MODULE>_CUSTOM_FIELD_NAMES / CustomFieldData
 // interface / generateXCustomFieldData()) stay separate per factory per
-// CLAUDE.md's Custom Fields pattern — only this genuinely generic piece
+// docs/ARCHITECTURE.md's custom-fields section — only this genuinely generic piece
 // moved out.
 export function randomFutureDateWithinOneMonth(): Date {
   const today = new Date();

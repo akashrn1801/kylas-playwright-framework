@@ -9,7 +9,7 @@ import { generateReportData } from '../../../src/data/factories/reportFactory';
 import { logger } from '../../../src/utils/logger';
 
 // WHY label prefix 'DB' — the first label assigned to this brand-new module,
-// per .claude/architecture.md §13's per-module letter-prefix convention (a
+// per docs/PATTERNS.md P33's per-module letter-prefix convention (a
 // grep of every existing logger.success('<PREFIX>N passed') call across the
 // whole test suite confirmed 'DB' is not already in use). UI (DB1-DB15,
 // DB29-DB45) and RBAC (DB16-DB28, DB46-DB62) share one continuous numbering
@@ -20,7 +20,7 @@ import { logger } from '../../../src/utils/logger';
 // Dashboard: build guardrail — those two shared dashboards have a live,
 // reproduced stuck-dashlet SYMPTOM where Report-type dashlets can get
 // permanently stuck loading with no way to remove them via the UI (root
-// cause never established — see `.claude/known-issues.md`'s Dashboard
+// cause never established — see `docs/known-issues/dashboard-module.md`'s Dashboard
 // section). Tests 2-6, which DO run against Default Dashboard, only ever
 // collapse/expand sections or enter-then-cancel edit mode — never add or
 // save a dashlet there.
@@ -75,7 +75,7 @@ test.describe('Dashboard', () => {
   // concurrently) — disproving the leading hypothesis that earlier failures
   // were a concurrent-session artifact. Per explicit direction, this
   // coverage was removed rather than debugged further (not essential enough
-  // to justify continued investigation) — see `.claude/known-issues.md`'s
+  // to justify continued investigation) — see `docs/known-issues/dashboard-module.md`'s
   // Dashboard section for the full evidence and final disposition.
   // `expandSection()` itself is NOT dead code and remains exercised
   // (required to succeed, not just called) by DB2's and DB4's own setup/
@@ -188,7 +188,7 @@ test.describe('Dashboard', () => {
   // (creating a fresh dashboard) for the remaining tests — THREE separate
   // dashboards existed across one 17-test run, not one, silently violating
   // the whole design's own "one shared dashboard" premise the moment any
-  // failure occurred. Two fixes were weighed (see `.claude/known-issues.md`'s
+  // failure occurred. Two fixes were weighed (see `docs/known-issues/dashboard-module.md`'s
   // Dashboard section for the full tradeoffs writeup): forcing
   // `test.describe.configure({mode:'serial'})` would have restored the "one
   // dashboard" guarantee, but this codebase already has a directly-relevant,
@@ -209,7 +209,7 @@ test.describe('Dashboard', () => {
   // WHY the render-race noted in DashboardPage.addDashlet()'s own comment
   // (a rapid-succession dashlet add occasionally not rendering) was
   // explicitly OUT OF SCOPE here: a dedicated root-cause investigation (see
-  // `.claude/known-issues.md`'s Dashboard section) found and fixed one real
+  // `docs/known-issues/dashboard-module.md`'s Dashboard section) found and fixed one real
   // contributing test-side defect, but the render-race itself remains open —
   // if a specific entity/type combination hits it, that specific test fails
   // on its own with a clear, attributable message, which is itself useful
@@ -217,7 +217,7 @@ test.describe('Dashboard', () => {
   // (DB3's own expand-after-collapse investigation, also out of scope at the
   // time this comment was originally written, was later resolved by
   // removing that test — see its own removal note above and
-  // `.claude/known-issues.md`'s Dashboard section.)
+  // `docs/known-issues/dashboard-module.md`'s Dashboard section.)
 
   // ── Smartlist × 5 entities ──
   test('@regression DB29 add Smartlist dashlet for Lead', async ({ adminPage }) => {

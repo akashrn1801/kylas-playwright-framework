@@ -43,7 +43,7 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.goToMeetingsList();
     // WHY reverted to addInvitee default (2026-09-07): a prior version of
     // this fix passed addInvitee=false, but deeper investigation
-    // (PROD_BUILD4_INVESTIGATION.md, Cluster 2.1) found the same 422 also
+    // (docs/known-issues/locators-and-timing.md, Cluster 2.1) found the same 422 also
     // occurs on 3 other call sites that never select an invitee at all —
     // proving the invitee pick is not the actual cause, so removing it here
     // provided no real protection. Reverted to keep this test's real-world

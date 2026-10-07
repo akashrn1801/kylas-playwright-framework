@@ -9,7 +9,7 @@ import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 // and identical DOM/locator conventions (see BasePage's "Custom Field
 // Helpers"). Deal has NO lookup-type custom field (no Company/Contact
 // Lookup equivalent), unlike Lead. DEAL_CUSTOM_FIELD_NAMES is its own
-// single source of truth, per CLAUDE.md's Custom Fields pattern — never
+// single source of truth, per docs/PATTERNS.md P21/P58 (custom-fields pattern) — never
 // import LEAD_CUSTOM_FIELD_NAMES/CONTACT_CUSTOM_FIELD_NAMES here even
 // though the values happen to be identical today: each module owns its own
 // field-name constant so the two can diverge safely later.
@@ -26,6 +26,73 @@ export const DEAL_CUSTOM_FIELD_NAMES = {
 } as const;
 
 export type DealCustomFieldKey = keyof typeof DEAL_CUSTOM_FIELD_NAMES;
+
+// WHY this separate constant (2026-09-28, post-sandbox-CI cross-shard
+// collision fix — see CompanyFactory.ts's COMPANY_FORM_FIELD_LIMIT_NAMES for
+// the full incident): dedicated fields, confirmed live on QA (internal
+// names cfFormFieldLimitText/cfFormFieldLimitNumber/cfFormFieldLimitParagraph).
+// This feature's own test files must use ONLY this constant, never
+// DEAL_CUSTOM_FIELD_NAMES, for the 3 field types it exercises.
+export const DEAL_FORM_FIELD_LIMIT_NAMES = {
+  textField: 'FormFieldLimitText',
+  paragraphText: 'FormFieldLimitParagraph',
+  number: 'FormFieldLimitNumber',
+} as const;
+
+// WHY this constant, and why it must NOT be derived from the entity name
+// (Form Field Limit feature, Deal rollout, 2026-09-23): same reasoning as
+// LEAD_LAYOUT_CACHE_KEY/CONTACT_LAYOUT_CACHE_KEY/COMPANY_LAYOUT_CACHE_KEY/
+// TASK_LAYOUT_CACHE_KEY — the app's IndexedDB `layoutCache` key is not a
+// fixed transformation of the entity name. Trusted directly from this
+// codebase's own already-live-confirmed documentation
+// (docs/PATTERNS.md P30, which explicitly lists Deal→`deals`
+// among the 4 entities hand-verified together) rather than re-derived from
+// scratch this session — same bar (a hand-verified, live-confirmed
+// constant, never guessed) either way.
+export const DEAL_LAYOUT_CACHE_KEY = 'deals';
+
+// ── Invalid values for negative testing (Form Field Limit feature) ──────
+export const generateDealCustomFieldInvalidTextField = (max = 255): string => 'A'.repeat(max + 1);
+export const generateDealCustomFieldInvalidParagraphText = (max = 2550): string => 'B'.repeat(max + 1);
+
+// ── Text field Regex format generators (Form Field Limit feature) ────────
+// WHY duplicated here rather than imported from another module's factory:
+// mirrors this file's own top-of-file "never import another module's
+// constants" reasoning — each module owns its own field-name/value-shape
+// constants so they can diverge safely later. Every value here is still
+// cross-checked against the pattern read LIVE off the config page at
+// test-run time (never trusted from the generator alone).
+const randomUppercaseLetters = (count: number): string =>
+  faker.string.alpha({ length: count, casing: 'upper' });
+const randomDigits = (count: number): string => faker.string.numeric(count);
+
+export const generateValidPanCardValue = (): string =>
+  `${randomUppercaseLetters(5)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+export const generateInvalidPanCardValue = (): string =>
+  `${randomUppercaseLetters(4)}${randomDigits(4)}${randomUppercaseLetters(1)}`;
+
+export const generateValidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@example.com`;
+export const generateInvalidEmailFormatValue = (): string =>
+  `${faker.string.alpha({ length: 8, casing: 'lower' })}@${faker.string.alpha({
+    length: 6,
+    casing: 'lower',
+  })}`;
+
+export const generateValidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(7)}`;
+export const generateInvalidDriverLicenceValue = (): string =>
+  `${randomUppercaseLetters(2)} ${randomDigits(2)} ${randomDigits(4)} ${randomDigits(6)}`;
+
+export const generateValidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(7)}`;
+export const generateInvalidVotingCardValue = (): string =>
+  `${randomUppercaseLetters(3)}${randomDigits(5)}`;
+
+export const generateValidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(7)}`;
+export const generateInvalidPassportValue = (): string =>
+  `${randomUppercaseLetters(1)}${randomDigits(6)}`;
 
 export interface DealCustomFieldData {
   textField: string;

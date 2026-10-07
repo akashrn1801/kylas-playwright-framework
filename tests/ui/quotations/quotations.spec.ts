@@ -383,7 +383,7 @@ test.describe('Quotations — UI', () => {
   // larger piece of work, not attempted here — deliberately not scope-crept
   // into this fix). The flaky generic "Uh-oh, something didn't work as
   // expected" backend error observed on this test in the 2026-08-11 staging
-  // run is tracked separately in .claude/known-issues.md as ordinary
+  // run is tracked separately in docs/KNOWN_ISSUES_ACTIVE.md as ordinary
   // transient staging-load flakiness, confirmed NOT tied to contact count
   // (there is no contact-count logic currently executing at all).
   test('@regression admin should create and save a basic quotation with no contacts attached', async ({ adminPage }) => {

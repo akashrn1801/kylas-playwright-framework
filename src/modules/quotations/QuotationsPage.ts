@@ -362,7 +362,7 @@ export class QuotationsPage extends BasePage {
   // already-proven fix here rather than inventing a new approach: check
   // whether the menu opened after the clear click, and press Escape if so.
   // Not yet independently re-verified live for the specific Company/
-  // Contact fields calling this method — flagged in known-issues.md
+  // Contact fields calling this method — flagged in docs/known-issues/locators-and-timing.md
   // pending that confirmation.
   private async clearIsInvalidField(control: Locator): Promise<void> {
     const clearButton = control.locator('[class*="__clear-indicator"], [aria-label="Clear"]');
@@ -728,7 +728,7 @@ export class QuotationsPage extends BasePage {
       // selecting one, so this never fires for the Deal-panel context where
       // associatedDeal is already populated. Selecting a deal here — rather
       // than giving up — matches this app's own real constraint (a
-      // Quotation is always deal-based; see CLAUDE.md's Quotations
+      // Quotation is always deal-based; see docs/PATTERNS.md P60's Quotations
       // pre-created-on-deals note) and is the only way to reliably save a
       // quotation with a product from these two panel contexts.
       const dealValue = await this.dealInput()
@@ -902,7 +902,7 @@ export class QuotationsPage extends BasePage {
     // WHY this.click() instead of a bare .click() (2026-08-09, root-caused via
     // live staging repro of the quotations.rbac.spec.ts:304 sandbox failure):
     // a raw `.click()` here had no timeout at all (this codebase has no global
-    // actionTimeout — see .claude/known-issues.md), so if waitForListReady()'s
+    // actionTimeout — see docs/known-issues/locators-and-timing.md), so if waitForListReady()'s
     // now-fixed readiness check still somehow returned before the button
     // rendered, this click would hang until the outer test timeout instead of
     // failing loud. this.click() bounds the wait to config.timeouts.navigation
@@ -1168,7 +1168,7 @@ export class QuotationsPage extends BasePage {
   async fillOwner(ownerName: string): Promise<void> {
     // WHY bounded click + retry (2026-08-09, Task 4 sweep — this was one of
     // the known-unfixed unbounded-click instances named in
-    // .claude/reference-patterns.md §3): both clicks previously had no
+    // docs/PATTERNS.md P4): both clicks previously had no
     // timeout at all. Mirrors the already-proven
     // CompaniesPage/LeadsPage.openUserShareTypeSearch() bounded-click +
     // 3-attempt-retry shape for the identical "open react-select, click an
