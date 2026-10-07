@@ -3,7 +3,7 @@
 > **Purpose:** Symptom → likely cause → first check → where it is documented, for failures seen in this repo's CI and local runs.
 > **Read when:** A CI run or local run failed and you need to know whether it is a code bug, an app bug, an environment effect or a pipeline problem.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-07 @ 2fa56be
 
 Every row comes from a real incident. "Documented" links point at the resolved-history topic file; open items are in [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md). Check that first: your failure may already be a tracked open item.
 
@@ -54,6 +54,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | Symptom | Likely cause | First check | Documented |
 |---|---|---|---|
 | "Save button click resolved but no create request was observed within 4000ms", retried 3x identically | Client-side validation block: a still-active Min/Max or Regex setting left by another test makes the filled value invalid, so no request fires | What did the last field-config call leave behind? Does the filled value satisfy it? Not a backend or timing bug | [form-fields](./known-issues/form-fields.md) |
+| Next formFields run starts with a non-blank Min/Max/Regex on a dedicated field (previous run killed/cancelled, or the email says "dedicated form-field limit(s) could not be reset") | Leftover limits on a `cfFormFieldLimit*` field; the reset tool exists but is unproven on a real app ([KI-34](./KNOWN_ISSUES_ACTIVE.md)) | `npm run reset:field-config -- --env <env> --dry-run` (read-only, lists non-blank fields), then the same without `--dry-run`; prod needs `--confirm-prod`. Run only while no CI run is active on that account | [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md) |
 | formFields test fails on a disabled Min-Length input or a wrong Regex label | Shared account-wide field config mutated by a test in a different file/shard | Are UI and RBAC files of that entity on one shard? Lock heartbeat | [form-fields](./known-issues/form-fields.md), [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md) |
 | A test hangs for minutes with no error | Unbounded click/wait, or shared lock acquisition starving | The lock files under `.locks/`; a missing `test.setTimeout(480000)` | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
 | "ID not captured after save" / `waitForResponse` timeout | Unversioned ID-capture predicate matched an unrelated request, or session expired mid-wait | Predicate must match `/v1/<module>/` and exclude `/reports/`; use `armResponseWaitWithRecovery()` | [locators-and-timing](./known-issues/locators-and-timing.md) |

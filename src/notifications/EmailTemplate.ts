@@ -14,6 +14,7 @@ import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetai
 import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
+import { FieldConfigResetReport } from './FieldConfigReset';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -75,6 +76,11 @@ export interface EmailContext {
   // alongside it, not as a separate section, since both come from the same
   // single API call and answer closely related questions.
   jobStats?: JobStats;
+  // WHY optional, same graceful-absence pattern as miscErrors/jobStats (ADR 0009):
+  // the post-run dedicated form-field reset's outcome, read from
+  // reports/<env>/field-config-reset.json. Informational only — it never feeds
+  // the verdict, health score or any count.
+  fieldConfigReset?: FieldConfigResetReport | null;
   // WHY: computed once by NotificationService from FailureAnalyzer/
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
@@ -206,6 +212,7 @@ export class EmailTemplate {
       this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
+      this.buildFieldConfigResetSection(ctx.fieldConfigReset, ctx.env),
       this.buildActionRequiredSection(ctx, health, clusters),
       this.buildEnvironmentInfoBlock(ctx),
       this.buildCiCdInfoBlock(ctx),
@@ -1358,6 +1365,46 @@ ${body}
   }
 
   // ===================== Background errors =====================
+
+  // WHY a one-line row when everything is clean and a warning box otherwise
+  // (ADR 0009): a failed or partial reset of the dedicated form-field limits
+  // leaves stale config that poisons the NEXT formFields run, so it must be
+  // visible in the email — but it is a post-run housekeeping result, so it is
+  // rendered as its own section and never touches the verdict, health score or
+  // any test count. Returns '' when no report exists (job skipped / artifact
+  // absent), matching buildJobStatsSection()'s graceful-omission convention.
+  private buildFieldConfigResetSection(
+    reset: FieldConfigResetReport | null | undefined,
+    env: string
+  ): string {
+    if (!reset || reset.mode !== 'reset') return '';
+    const failed = reset.records.filter((r) => r.status === 'failed');
+    const cleared = reset.records.filter((r) => r.status === 'cleared').length;
+    const clean = reset.complete && failed.length === 0 && reset.records.length === reset.totalFields;
+    if (clean) {
+      return `
+<tr><td id="section-field-config-reset" style="padding:8px 28px;">
+  <div style="font-size:12px;color:${SLATE};">Dedicated form-field limits: all ${reset.totalFields} fields blank after this run${cleared > 0 ? ` (${cleared} had to be cleared)` : ''}.</div>
+</td></tr>`;
+    }
+    const headline = reset.complete
+      ? `${failed.length} of ${reset.totalFields} dedicated form-field limit(s) could not be reset or verified`
+      : `The dedicated form-field reset did not finish (${reset.records.length} of ${reset.totalFields} fields reached — job timed out or was cancelled)`;
+    const rows = failed
+      .map(
+        (r) =>
+          `<tr><td style="padding:3px 8px;font-size:12px;color:${INK};">${this.esc(r.entity)} / ${this.mono(r.field)}</td><td style="padding:3px 8px;font-size:12px;color:${SLATE};">${this.esc(r.before)} &rarr; ${this.esc(r.after)}</td><td style="padding:3px 8px;font-size:12px;color:${FAIL};">${this.esc(this.truncate(redactSensitiveText(r.error ?? 'failed'), 160))}</td></tr>`
+      )
+      .join('');
+    return `
+<tr><td id="section-field-config-reset" style="padding:8px 28px;">
+  <div style="border:1px solid ${WARN_BORDER};background:${WARN_BG};border-radius:6px;padding:16px;">
+    <div style="font-size:13px;font-weight:700;color:${WARN};">${this.esc(headline)}</div>
+    <div style="font-size:12px;color:${SLATE};margin-top:4px;">Test results above are unaffected. Stale limits can break the next formFields run: run ${this.mono(`npm run reset:field-config -- --env ${env} --dry-run`)}, then the same command without --dry-run (docs/RUNBOOK.md).</div>
+    ${rows ? `<table style="margin-top:8px;border-collapse:collapse;width:100%;">${rows}</table>` : ''}
+  </div>
+</td></tr>`;
+  }
 
   private buildBackgroundErrorsSection(miscErrors: MiscErrorReport | null | undefined): string {
     if (!miscErrors || miscErrors.totalErrors === 0) {

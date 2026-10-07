@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-07 @ 2fa56be
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -50,10 +50,10 @@
 
 ## B. Infrastructure and CI
 
-### KI-10 — No `concurrency:` guard on any sharded workflow
-- **Status:** open (verified: `grep concurrency .github/workflows/*.yml` → no matches) · **Since:** 2026-09-29
-- **What:** `qa.yml`, `stage.yml`, `main.yml`, `sandbox.yml` can run simultaneously across branches with no queuing or cancel-in-progress, stacking tens of concurrent jobs and raising concurrent `globalSetup` pressure (the HTTP 429 mechanism, [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md)).
-- **Next check:** confirm the account's concurrent-job allowance (not knowable from the repo); then decide per-branch `group:` + `cancel-in-progress`. Workflow edits need your review. See [CI_PIPELINES.md](./CI_PIPELINES.md).
+### KI-34 — Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed
+- **Status:** unverified (implemented 2026-10-06, uncommitted; only static checks done: `tsc`, `eslint`, actionlint with no new findings, `check:test-counts` unchanged) · **Since:** 2026-10-06
+- **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Open items, none of them confirmed: (1) the tool has never run against a real app and its `FormFieldsConfigPage` selectors were not re-confirmed live; (2) a field absent in an env counts as a failure (exit 1), check on the first dry-run, esp. staging/prod; (3) entity tab labels/URL slugs were copied from the specs' `*_ENTITY` constants; (4) retry/deadline values come from `globalSetup`, a full 18-field pass was never timed, the 25-min step / 35-min job timeouts are guesses; (5) whether job-level `continue-on-error` protects the run conclusion when the job times out; (6) whether a run waiting for environment approval holds its concurrency group; (7) whether one approval covers the new `main.yml` job or it needs its own (if unapproved, `merge-and-report` and the email wait); (8) behaviour of `always()` jobs after a normal cancel vs force-cancel; (9) one pending run per group: a pending `stage` push can be displaced by a `sandbox` push (no `workflow_dispatch` on sandbox); (10) Jenkins jobs and `staging-promotion-gate.yml` are outside the groups; (11) the email section was typechecked, never viewed rendered.
+- **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 (no `concurrency:` guard) is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -134,6 +134,11 @@
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
+
+### KI-35 — Products & Services fix from `b0c6b38` not ported
+- **Status:** open, not ported; no current failure attributed to it · **Since:** 2026-10-07 (finding from the 2026-10-06 checkpoint)
+- **What:** unported fix in tag `archive/custom-field-char-limit-v2-20260919` (commit `b0c6b38`; tag/commit not re-checked on 2026-10-07). `ProductsAndServicesPage.saveEditedProduct()` clicks Save right after `.fill()` without `blur()` + `waitForLoadState('networkidle')` (re-checked in the current file: it arms the PUT wait, clicks Save, asserts no form errors), which could silently drop `customFieldValues`. `selectFromReactSelect()` leaves the Units multi-select menu open (the claim was not re-checked live).
+- **Next check:** revisit if P&S edit tests flake; reproduce live before porting (rule 10). See [products-and-services.md](./known-issues/products-and-services.md).
 
 ---
 

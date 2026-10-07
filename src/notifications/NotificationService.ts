@@ -6,6 +6,7 @@
 
 import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
+import { loadFieldConfigReset } from './FieldConfigReset';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
 import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
@@ -334,6 +335,7 @@ export class NotificationService {
       runSource: input.runSource,
       allureUrl: input.allureUrl,
       jobStats: input.jobStats,
+      fieldConfigReset: loadFieldConfigReset(input.env),
       miscErrors,
       historyDelta: historyDeltaFile.delta,
       recurringFlaky: historyDeltaFile.recurringFlaky,
