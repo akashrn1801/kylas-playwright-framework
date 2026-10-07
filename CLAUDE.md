@@ -1,250 +1,74 @@
-# CLAUDE.md — Standing Engineering Instructions
-
-Core, always-apply rules for working on this codebase, kept lean on purpose — every line here loads into every session regardless of relevance, so detailed reference material lives in the imported files below instead of inline. For end-user/project-overview documentation (setup, running tests, CI matrix, troubleshooting), see `README.md`. For confirmed, real Kylas application bugs, see `APPLICATION_BUGS.md`.
-
-**Imported reference files** (full detail, loaded on demand — not duplicated here):
-@.claude/architecture.md
-@.claude/reference-patterns.md
-@.claude/known-issues.md
-@.claude/AGENT_DELEGATION_GUIDE.md
-
----
-
-## Table of Contents
-
-1. [Quick Reference](#quick-reference)
-2. [The 25 Standing Rules](#the-25-standing-rules)
-3. [Architecture Summary](#architecture-summary) — full detail in `.claude/architecture.md`
-4. [Key Conventions](#key-conventions)
-5. [Reference Patterns Index](#reference-patterns-index) — full detail in `.claude/reference-patterns.md`
-6. [CI/CD Quick Reference](#cicd-quick-reference)
-7. [Module Status](#module-status)
-8. [Framework Reliability Overhaul & Agent System](#framework-reliability-overhaul--agent-system) — full delegation detail in `.claude/AGENT_DELEGATION_GUIDE.md`
-9. [Known Issues — Critical / Do Not Touch](#known-issues--critical--do-not-touch) — full investigation history in `.claude/known-issues.md`
-10. [Dev-Branch Lint-Fix Drift](#dev-branch-lint-fix-drift)
-11. [Concurrent-Worker Credential File Race](#concurrent-worker-credential-file-race)
-12. [When You're Stuck](#when-youre-stuck)
-
----
-
-## Quick Reference
-
-- **Branch strategy:** `feature/* → dev → qa → stage → prod → main` (full mechanics in `README.md`'s Git Workflow section)
-- **Never:** push/merge (user only), use `waitForTimeout()`, hardcode test data
-- **Always:** use real condition-based waits, create fresh test data, check for session expiry
-- **When in doubt:** verify with live evidence, not assumption
-- **Tech stack:** Playwright `^1.60.0` + TypeScript `^6.0.3` (strict, ES2022), Node `>=20.0.0`/npm `>=10.0.0`, `@faker-js/faker` `^10.4.0`, Allure + Playwright HTML reporters, ErrorCollector for passive error tracking, Playwright MCP (installed 2026-08-01, live investigation only)
-
----
-
-## The 25 Standing Rules
-
-Apply these to **every change, every time, no exceptions.**
-
-1. **Reuse before building.** Before writing any new interaction/assertion logic, check whether an existing BasePage helper or Lead/Contact pattern already does this. This codebase has repeatedly duplicated the same logic across modules instead of sharing it — don't add another instance of that anti-pattern. If something genuinely needs new logic, build it once, generically, in BasePage — not copy-pasted per module.
-
-2. **No unbounded clicks/actions.** Never write a raw `.click()`/`.fill()`/`.waitFor()` with no timeout and no retry. This exact "click registers but nothing visibly happens" React-timing race has already been found and fixed in Companies, Deals, Contacts, Quotations, and the Share-modal flow across 4 modules. Any new interaction must be bounded (a real timeout) and either retry-capable or fail loudly and fast — never hang silently for the full test timeout.
-
-3. **Session-expiry protection is mandatory.** Any new raw Playwright assertion (`expect().toBeVisible/toHaveText/toHaveURL`, etc.) written directly in a module file — not already wrapped by an existing BasePage helper — must be wrapped in `withSessionExpiryRecovery()`. This codebase has had this exact gap recur repeatedly (5+ times across different sessions) specifically because new code forgets this. Check this every single time, not just when told to.
-
-4. **No hardcoded dropdown options, ever.** Any picklist/multi-picklist/dropdown must read its real options live from the DOM at runtime. Never hardcode an option string, index, or assumed count — option lists can and do grow/shrink over time and differ across environments.
-
-5. **Test data must be genuinely fresh, never randomly reused.** Any test needing an isolated/controlled entity (for RBAC checks, permission boundaries, or anything where "this specific record has zero prior access/history" matters) must create that record fresh in the test itself — never rely on a randomly-selected pre-existing record. This exact mistake produced a false conclusion once already (the CR9 test-isolation bug).
-
-6. **Locators must be built on internal names, never display labels.** Custom field display labels can be renamed by account admins; internal field names cannot change. Any new locator must key off the internal name (confirmed via the field's settings screen), never the on-screen text.
-
-7. **Check field/feature presence before assuming it exists everywhere.** Anything environment-conditional (a custom field, a config value, a feature flag) must be presence-checked and gracefully skipped (with a clear log line) if absent — never assumed to exist identically across qa/stage/prod. Environments diverge, and this codebase has already been burned by assuming otherwise.
-
-8. **Don't trust a single passing run.** Before calling anything "fixed" or "verified," re-run the specific test 3-5 times in isolation, zero flakiness accepted. A test passing once proves nothing on its own in this codebase's history.
-
-9. **Ripple-check any shared code change.** Before modifying any method used by more than one caller (BasePage helpers, `fillXForm()`/`fillEditForm()`, any shared factory function), grep every consumer and confirm the change is purely additive. Treat shared code as high blast radius by default.
-
-10. **Never patch a symptom without a confirmed root cause.** If a bug can be reproduced, root-cause it with real evidence before fixing. If it CANNOT be reproduced, don't just document and walk away — do a thorough code review to find plausible failure modes and apply a defensive hardening fix, clearly labeled as "hardened based on review, root cause not confirmed" rather than overstated as a proven fix.
-
-11. **No silent scope expansion or silent scope-narrowing.** If you find an unrelated bug while working, STOP and report it — don't fix it silently (scope creep) and don't ignore it silently either. Flag it, let the human decide whether it's in-scope now or a tracked follow-up.
-
-12. **Check real, live evidence over assumption — always.** Verify live/fresh rather than trusting an old investigation's conclusion or your own inference, especially if any real-world data (test data volume, environment config, account settings) could plausibly have changed since.
-
-13. **No commits, no pushes, ever, without explicit permission.** All git operations beyond creating a branch are performed by the user only.
-
-14. **Document with real evidence, not narrative.** Any CLAUDE.md/README.md update must include concrete evidence (exact error text, real IDs, actual pass counts, timestamps) — not a prose summary alone.
-
-15. **ID-capture from a network response must match a versioned, specific path — never a bare substring.** Found and fixed in 3 places where `captureXxxIdFromResponse()` matched `.includes('/deals')`/`.includes('companies')` with no version prefix, occasionally matching an unrelated background request that raced ahead with no `id` field. Any new response-capture predicate must require the real versioned path (`/v1/<module>/`) and explicitly exclude `/reports/`.
-
-16. **Session expiry has more than one symptom — protect against all of them.** Confirmed: a `/signIn` redirect, a distinct "Forbidden" bootstrap-time page with the URL unchanged, and a `waitForResponse()`/ID-capture promise sitting after an already-covered click that can still silently time out. Any new awaited network-response promise needs its own explicit protection; any new page-state check should use the shared `isSessionExpiryPage()`-style check, not a bare URL match.
-
-17. **A locator that is unique today can become ambiguous the moment a sibling field/button is added elsewhere in the DOM.** Confirmed twice (a Company Phones substring collision; Deal's estimated-closure-date field breaking once Deal gained its own Date/DateTimePicker custom fields). Prefer the narrowest reliable scope over a broad substring/placeholder/text match, and treat "currently unique" as temporary, not permanent.
-
-18. **A bug class fixed in one place is not fixed everywhere — sweep the whole codebase, and explicitly document any instance you deliberately leave unfixed.** The unbounded-click race (rule 2) is still unfixed in `QuotationsPage.fillOwner()` and parts of `LeadsPage.ts` — see `.claude/reference-patterns.md` §3. When you fix a bug class, grep for every other instance in the same pass.
-
-19. **Retry budgets and timeouts must be sized per real observed latency for that specific environment — never copied uniformly across qa/staging/prod, and a retry-exhaustion fallback must never silently guess.** `CallLogsPage.searchAndSelectEntity()`'s staging budget is thinner than qa's/prod's despite needing its full budget to recover from real indexing lag; its exhaustion path also silently clicks the first option instead of failing loudly.
-
-20. **Environment-scoping conclusions decay over time — a "qa/prod-only" or "small dataset" finding must be re-verified, not assumed permanent.** QA/staging data grows unboundedly; an earlier "stage's option list is too small to trigger this" conclusion went stale once stage's data grew to the same scale weeks later.
-
-21. **A single isolated, unloaded local repro run is not proof a flake doesn't exist — some bugs only manifest under real concurrent CI load.** In each confirmed case the correct response was defensive hardening (clearly labeled, per rule 10) or accepting a genuinely uncertain, load-dependent flake — never dismissing it as "couldn't reproduce, so not real."
-
-22. **Never log a field's raw value without checking whether it's sensitive.** A generic `BasePage.fill()` used to log every filled value verbatim, including real QA admin/restricted passwords, into every `login.spec.ts` log file. Any new logging of a filled/typed value must check the field's purpose (a description/name pattern like `password|token|secret|api[_-]?key`) and redact — never assume a DOM `type="password"` attribute will always be present.
-
-23. **This repo's CI has genuinely divergent scope and safety nets per branch — verify which pipeline actually protects a given change before trusting "CI is green."** See [CI/CD Quick Reference](#cicd-quick-reference) and README.md's full matrix.
-
-24. **Any generated report/log/evidence file that a later run can overwrite should be treated as ephemeral.** `reports/<env>/misc-errors.json` is overwritten by every subsequent Playwright invocation, even a single isolated test run in the same environment. Copy or rename anything you intend to reference later before running more tests against the same environment.
-
-25. **Before concluding local work is lost, uncommitted, or unmerged, verify actual git state.** Check `git reflog`/`git stash list` before treating uncommitted changes as gone, and `git fetch` before trusting a local branch's view of what's merged/ahead/behind.
-
----
-
-## Architecture Summary
-
-Full detail: `.claude/architecture.md` (imported above).
-
-- **File layout:** `src/core/BasePage.ts` (shared base class), `src/fixtures/index.ts` (custom fixtures — always import `test`/`expect` from here, never `@playwright/test` directly, except `login.spec.ts`), `src/auth/` (globalSetup + AuthManager + per-env storage states), `src/modules/<module>/<Module>Page.ts`, `src/data/factories/<module>Factory.ts`, `src/error-collector/`, `src/reporters/MiscErrorReporter.ts`, `src/notifications/`. Tests: `tests/ui/<module>/` and `tests/rbac/<module>.rbac.spec.ts`. `config/config.ts` is the single source of truth for env vars/timeouts/retry config and owns `buildApiUrl(path)` — the only canonical URL-normalization function; do not hand-roll another copy (two confirmed bugs already came from that).
-- **Fixtures:** `adminPage`/`restrictedPage` attach ErrorCollector + session-expiry listeners before first navigation, race sign-in vs. landing on `/sales/`, and proactively refresh a near-expiring session via `AuthManager.ensureFreshSession()`.
-- **Page objects** follow a fixed 10-section order (retryConfig → locators → constructor → private helpers → navigation → form actions → search & open → edit actions → assertions → workflow wrappers). Locators are always lazily-evaluated arrow functions.
-- **Factories** export `generateXxxData()` / `generateAdminXxxData()` (`ADM<timestamp>`) / `generateSharedXxxData()` (`SHR<timestamp>`) — the prefix convention exists because QA/staging data never gets cleaned up, so a distinguishing prefix is the only reliable way to make an RBAC negative-assertion trustworthy.
-- **Custom fields** (Lead/Contact/Deal/Company, 9 fields each) are environment-conditional — every BasePage custom-field method must presence-check and never throw on absence. Full field-by-field mechanism in `.claude/reference-patterns.md` §9–10.
-- **ErrorCollector** passively captures pageerror/console-error/requestfailed/4xx-5xx on every test, classified into Noise / Expected-RBAC / Known-background-noise before anything is reported as unexpected.
-
----
-
-## Key Conventions
-
-- **NEVER import from `@playwright/test` in test files** — always use `src/fixtures/index.ts` (except `login.spec.ts`, by design).
-- **NEVER hardcode test data** — use factories (`generateXxxData()`).
-- **NEVER put locators in test files** — all locators live in the page object.
-- **ALWAYS extend `BasePage`** for page objects.
-- **Use `logger.*`, never `console.log`**, for all logging. Never log a filled/typed value without checking it isn't sensitive (rule 22).
-- **Tags:** `@smoke` (navigation/happy-path only), `@regression` (full functional + RBAC), `@prodSafe` (read-only, safe against real production data). Every test carries at least one; many carry two.
-- **`test.setTimeout(480000)`** on any test that creates/edits records — local runs can be slow.
-- **Commit message format:** `feat: ...` / `fix: ...` / `chore: ...` / `ci: ...` / `refactor: ...`
-- **Session-expiry quick patterns:** wrap new assertions in `withSessionExpiryRecovery()` (rule 3); guard `waitForResponse()` promises with `armResponseWaitWithRecovery()`, or wrap a whole workflow method in `withSessionExpiryRetry()` (rule 16); use `authManager.isSessionExpiryPage(page)`, never a bare URL check. Full architectural history in `.claude/known-issues.md`.
-- **`@typescript-eslint/no-explicit-any` is a hard ESLint error, not a warning, and is blocked at pre-commit** — upgraded 2026-08-06 after 17 `any`-type warnings had silently accumulated across the codebase over time with no real enforcement gate (a warning never failed `npm run lint` or blocked a commit). Both `eslint.config.js` (the active flat config under this repo's ESLint v10) and the now-inert legacy `.eslintrc.json` were updated for consistency. `scripts/hooks/pre-commit` (and the installed `.git/hooks/pre-commit`) now run ESLint on staged `.ts` files and block the commit on any error. When you hit this, find or define the real, specific type for the value — never silence it with `unknown` or another vague type (see `.claude/known-issues.md` for the 9-file cleanup that fixed the original 17, including two cases where the "real type" was an official Node/`@types/node` type already available, and one case where removing a redundant `any` cast surfaced a genuine `tsc` narrowing gap unrelated to any behavior bug).
-
----
-
-## Reference Patterns Index
-
-Full code + evidence for all 20 in `.claude/reference-patterns.md` (imported above) — read that file instead of re-reading source for these recurring shapes:
-
-1. `waitForXDetailsPage()` — URL + domcontentloaded + API response (superseded by `waitForEntityDetailPage()`/`waitForEntityListPage()` for list/detail readiness specifically)
-2. Ellipsis menu pattern
-3. Share modal pattern (3-char search minimum, JS label click) — also documents the still-unfixed unbounded-click instances (rule 18)
-4. Clone pattern (duplicate-avoidance, ID capture before save) — also documents the `DealsPage.cloneDeal()` React-timing race
-5. Right panel icon pattern (SVG ID map + dual-selector locator) — also documents the SVG-collision bug and the reload-and-retry visibility fix
-6. Note add/delete with baseline-relative count assertion
-7. Add deal from modal (pipeline + product row + part payments + response listener)
-8. Add contact from modal — exact field IDs from live DOM
-9. Custom Fields pattern (generic helpers + per-module constants + environment safety contract)
-10. Custom field Internal Name vs. Label — renaming a display label is always safe
-11. CKEditor 5 description field — must reach the internal data model directly, never the DOM
-12. Deal's product-row control is the same underlying component as Quotation's — confirmed live
-13. Test label naming convention — per-module letter prefix
-14. react-beautiful-dnd draggable single-select row pattern (Reports' Dimensions/Metrics)
-15. Dual react-select class family on one form — don't assume one family applies uniformly
-16. Three-separate-full-page-routes pattern — an alternative to the modal-over-detail-page convention
-17. Paginated validation-error carousel banner — distinct from a single toast/inline error
-18. Stability-window fix pattern — for a third-party-widget-triggered react-select race (repo-wide risk, not module-specific — see Known Issues below)
-19. Factory field-naming gotcha — name TypeScript properties after the real API field, never the on-screen label
-20. Dashboard's Add-Dashlet wizard — per-dashlet-type entity availability, a cross-module dependency on Reports, and Grouped Smartlists' genuine multi-select (test-imposed 2-4 cap, no real app cap)
-21. Hide Empty Fields toggle — per-module tab-collapse vs. field-only behavior, exclusions (relationship cards, Meetings' Description, Quotations' 0-values)
-
----
-
-## CI/CD Quick Reference
-
-- GitHub Actions: `dev.yml`, `qa.yml`, `stage.yml`, `prod.yml`, `main.yml`, `sandbox.yml`, `staging-promotion-gate.yml`
-- Jenkins: `Jenkinsfile` (multi-branch, primary for prod/main), `Jenkinsfile.qa`, `Jenkinsfile.staging`, `Jenkinsfile.prod`, `Jenkinsfile.sandbox` (all Jenkins paths except the base `Jenkinsfile` are manual-only fallbacks, not primary)
-- `sandbox.yml`: selective test detection via `.github/scripts/detect-tests.sh`, based on changed file paths.
-- Worker count is controlled by CLI `--workers` (always wins over `playwright.config.ts`/`WORKERS` env var) — see rule 23 for why "CI passed" doesn't mean the same thing on every branch, and `README.md`'s full per-branch matrix for exact trigger/scope/worker-count per pipeline.
-
----
-
-## Module Status
-
-Verified fresh via `npx playwright test --project=chromium --list` as of 2026-09-09: **515 tests across 23 spec files, 12 modules** (grown from 453 on 2026-09-02 — the +62 is almost entirely the 2026-09-08 "Hide Empty Fields" feature adding one UI+RBAC test pair to each of 8 modules; module/spec-file counts themselves are unchanged). Full per-module UI/RBAC breakdown table lives in `README.md`'s Project Overview — any older count anywhere is stale and should be re-run, not trusted (rule 12/20).
-
-**Last full regression evidence (2026-07-28):** all 10 UI+RBAC spec files touched by that session's work (Companies, Contacts, Deals, Leads, Tasks) run in full on stage: **189 passed, 0 failed, 0 flaky, 4 expected skips** (193 total). Two unrelated network-connectivity drops and one memory-pressure process kill occurred mid-verification (confirmed via direct `curl`/`free -h` evidence) — each discarded its own polluted partial data and was re-run clean.
-
----
-
-## Framework Reliability Overhaul & Agent System
-
-A multi-agent initiative (started 2026-08-01) to automate QA, testing, and investigation. Full delegation chains, manual-request table, and hooks detail: `.claude/AGENT_DELEGATION_GUIDE.md` (imported above).
-
-**13 Specialized Subagents** (in `.claude/agents/`): `flaky-test-auditor`, `locator-reviewer`, `self-healing-locator-scout`, `resilience-architect`, `enterprise-code-reviewer`, `pipeline-guard`, `security-dependency-auditor`, `test-coverage-strategist`, `failure-triage-investigator`, `discovery-agent`, `test-data-lifecycle-manager`, `release-readiness-summarizer`, `accessibility-auditor`.
-
-**In short:** editing a Page Object/spec → `locator-reviewer` (real `PostToolUse` hook, see below). Pushing → `flaky-test-auditor` + `enterprise-code-reviewer` gate. A test failure → `failure-triage-investigator` classifies app-bug vs. code-bug first, always, before any fix. An investigation finding an uncovered flow → `test-coverage-strategist` writes tests, never auto-merged.
-
-**Hooks (real, installed to `.git/hooks/`, tracked in `scripts/hooks/`):** hard-deny on `git push`/`git merge`/`gh pr merge`; a verified-working pre-commit hook blocking `waitForTimeout()`; a verified-working pre-push hook checking for the same plus hardcoded URLs; a real Claude Code `PostToolUse` hook (`.claude/settings.json`, matcher `Write|Edit`) that reminds to invoke `locator-reviewer` on Page Object/spec edits.
-
-**Playwright MCP** (installed 2026-08-01, QA/stage only, disabled on Prod): only agents 3/4/9/13 have access, gated behind approval, and must follow the `.claude/evidence/{agent-name}/{date-slug}/` protocol.
-
----
-
-## Known Issues — Critical / Do Not Touch
-
-Full investigation history (every bug class, architectural overhaul, and inconclusive flake, with dates and evidence): `.claude/known-issues.md` (imported above). This is only the highest-signal digest — read the full file before touching anything related.
-
-- **Session-expiry recovery is a deliberate 5-phase architecture** (`withSessionExpiryRecovery()`, `withSessionExpiryRetry()`, `ensureFreshSession()`, `authManager.isSessionExpiryPage()`) built after 5 independent partial fixes failed to hold. Don't hand-roll a 6th mechanism — extend the existing combinators.
-- **`page.route()`-based network interception (`route.fetch()`) is confirmed unusable against this backend** — it broke unrelated saves with generic `HTTP 400` errors even on requests nowhere near a 401. Don't re-attempt this approach for session recovery.
-- **`config.buildApiUrl()` is the only canonical URL-normalization function.** Two independent, confirmed bugs (the login URL, then `DealsPage.fetchCurrentDealApiData()`) came from hand-rolled copies assuming `config.apiBaseUrl` always includes `/v1`. The second bug survived a ripple-check that found the exact line but didn't read what it did — a match is not the same as understanding it.
-- **ID-capture predicates must use a versioned path (`/v1/<module>/`), never a bare substring** — 3 confirmed false-positive incidents from `.includes('/deals')`-style matches.
-- **`BasePage.selectRandomOptionWithRetry()` is the canonical react-select random-pick helper** (7 call sites already migrated) — don't write a new inline unbounded read+click for this shape.
-- **Known unfixed unbounded-click races:** parts of `LeadsPage.ts` (close-reason radio, convert-to-deal product selection), several `QuotationsPage.ts` random-option pickers. (`QuotationsPage.fillOwner()` was fixed 2026-08-09 — see below.)
-- **`DealsPage.fillDealForm()`'s associated contact/company pick is deliberately randomized** (a 2026-07-05 CI-hang fix) — pass `associatedContactName`/`associatedCompanyName` on `DealData` whenever ownership matters for a new Deals test.
-- **Custom-field methods must presence-check and never throw on absence** — the environment-safety contract (`.claude/reference-patterns.md` §9). Fields get added to qa/stage/prod weeks apart, by hand.
-- **Several investigated flakes are formally INCONCLUSIVE, not resolved** — do not re-close them without new evidence: `quotations.rbac.spec.ts:380`, `call-logs.spec.ts:391`, `meetings.spec.ts:120`, `tasks.rbac.spec.ts:69`, the 2026-08-03 HTTP-500-on-meeting-creation and Deals-RBAC-Task-permission-timeout pair, and the original 2026-07-06 unexplained Deals Call-permission flake. Full detail and evidence-gap analysis for each in `.claude/known-issues.md`.
-- **Confirmed real Kylas application bugs** (not code bugs) live in `APPLICATION_BUGS.md`, not here.
-- **A third-party-widget-triggered react-select race is a repo-wide risk, confirmed and fixed once (Reports), documented for reuse everywhere.** The `viasocket.com` chatbot widget embedded on every page can tear down a just-opened react-select menu 20–160ms after it opens — any react-select interaction anywhere in this codebase is theoretically exposed, not just where it was found. Blocking the widget's domain via `page.route().abort()` is confirmed unsafe (hung the whole browser session 30 minutes); waiting for the widget's own network response first is confirmed insufficient (the re-render lands 130–160ms after the response). The proven fix — a stability-window retry — is `.claude/reference-patterns.md` §18; full incident detail in `.claude/known-issues.md`.
-- **Playwright's `dependencies` project feature is confirmed unsafe for this repo's CI shape — do not reach for it to make one project run "after everything else."** Confirmed live via a disposable scratch project: a dependency project silently bypasses `--grep` filtering for the whole dependency, even when that dependency is also explicitly co-selected on the same command line — and invoking it in a separate command instead re-runs the entire dependency suite a second time (no cross-invocation dedup). Full evidence and the self-contained-per-test alternative that was chosen instead (for Reports' run-count verification) are in `.claude/known-issues.md`'s "Reports module" section.
-- **With `fullyParallel: true` (set globally here), same-file tests are NOT guaranteed to land in the same CI shard — `test.describe.configure({ mode: 'serial' })` is the only mechanism that keeps a block of tests atomic under sharding.** Confirmed by reading Playwright's own sharding source, not assumed. Any new test that depends on execution order or worker-adjacency with another test must be wrapped in `.serial` — the file boundary alone provides zero protection. A full audit (2026-09-09) found no existing ordering dependency anywhere in the suite. Full detail: `.claude/known-issues.md`'s "Sharding order-dependency audit" section.
-- **5 sandbox failures root-caused and fixed 2026-08-09** (CL39, CL32/CL33, D28, Quotations detail-verify — sandbox run `31269450132`, confirmed real `--workers=2`): a test-data `entityType`-mismatch bug (not the initially-suspected "date-time picker hang" — CL39's real failure was in the Call Type dropdown, verified via live deterministic reproduction), a shared-`#editEntityModal`-reuse gap in `DealsPage.cloneDeal()`/`TasksPage.cloneTaskViaEllipsis()` (now both check `.modal-title` before trusting the modal, matching sibling flows that already did), `QuotationsPage.waitForListReady()` never actually checking readiness (fixed to race the list container against the create button, mirroring `CallLogsPage`'s proven pattern), and a genuine **Kylas application-side JS race** in the Log-a-Call modal under concurrent multi-session access (live-captured `TypeError` in the app's own `openCallLogForm` — see `APPLICATION_BUGS.md` #1). Full evidence and fix detail in `.claude/known-issues.md`.
-- **`CompaniesPage`/`LeadsPage.openUserShareTypeSearch()` still has a `waitForTimeout(500)` after the `Escape` keypress in its catch/retry backoff** — the pre-commit hook caught this exact anti-pattern in `QuotationsPage.fillOwner()` (2026-08-09) because `fillOwner()` was written by copying this method's pattern verbatim, blind wait included; `fillOwner()` was fixed to wait for `.is-invalid__menu` to become hidden instead, but the **original source of the copied pattern in Companies/Leads was left untouched** (outside this session's diff) and is now the one remaining known instance of this exact anti-pattern in the codebase. Apply the identical condition-based fix there in a future session.
-- **Verify a mutation via its own stable end-state, not a transient UI/modal snapshot, wherever possible.** Confirmed twice this session in different modules — `DealsPage.cloneDeal()`'s redesign (2026-08-23), and independently for Reports' Save As feature (flagged there as a follow-up, not yet fixed). A UI value read mid-modal/mid-transition can be caught before the underlying data has actually committed — producing either a flaky false-negative, or, worse, letting genuinely wrong data through if the check is made non-fatal without a real end-state backstop (proven live: a first Deals-clone redesign attempt did exactly this and saved a clone with a stale name before the fix was corrected). Prefer capturing a hard signal (a network-response ID, a URL change) plus a content check on the target's own separately-loaded, settled page. Full incident and the generalized pattern: `.claude/known-issues.md`'s Sandbox Build #144 entry and `.claude/reference-patterns.md` §4.
-- **"Index lag" is not a default explanation for a live search returning zero/wrong results — confirmed wrong twice now.** `CallLogsPage`'s Associated Deal field (a data-linkage bug) and `BasePage.searchAndSelectByName()`'s first-word-only search token against Products & Services' never-cleaned, ever-growing fixture pool (2026-08-23) were both initially suspected as search-index lag and were actually something else entirely. Before reaching for `config.searchRetry`-style retries, check whether the search TERM itself is specific enough to discriminate the target — retrying a non-discriminating query just returns the same wrong results again.
-- **The `ci/reporting-history` ledger branch has never actually received data in any real CI run — confirmed via `git fetch` returning no such remote ref.** Root cause: no GitHub Actions workflow running `history:sync` has `permissions: contents: write`. The notification email's Trend/recurring-flaky/regression features are correctly coded but have only ever run against empty history. Fix proposed and applied on `fix/ci-reporting-history-permissions-20260824` (mirrors `staging-promotion-gate.yml`'s existing `permissions: contents: write` + `PIPELINE_TOKEN` pattern) but not yet merged to `dev`. Full detail: `.claude/known-issues.md`.
-
----
-
-## Dev-Branch Lint-Fix Drift
-
-**Confirmed via `git diff origin/dev origin/{qa,stage,prod,main}` — `dev` is missing 3 lint-fix hunks that are identically present on qa, stage, prod, AND main:**
-
-1. `src/modules/call-logs/CallLogsPage.ts` — a blank/whitespace-only comment line above the `document.querySelector(...).removeAttribute("aria-hidden")` eval-string call should be `// eslint-disable-next-line @typescript-eslint/no-implied-eval`.
-2. `src/modules/tasks/TasksPage.ts` — the import from `@data/factories/taskFactory` is missing the `TaskCustomFieldKey` named import that the other 4 branches already have.
-3. `src/reporters/MiscErrorReporter.ts` — two blank/whitespace-only comment lines above `onBegin`/`onEnd` should each be `// eslint-disable-next-line @typescript-eslint/no-unused-vars`.
-
-**Why this lives here, not in `APPLICATION_BUGS.md`:** this is a repo/branch-hygiene gap in test-framework code (lint suppressions and an unused import), not a defect in the Kylas application itself — `APPLICATION_BUGS.md` is deliberately scoped to real product bugs only, and mixing in engineering-process issues would dilute that file's signal.
-
-**Action needed:** backport these 3 hunks into `dev` (cherry-pick the relevant commit from qa/stage/prod/main, or hand-apply the diff) so `dev` doesn't silently regress lint status the moment someone edits near these lines. Per rule 13, this requires the user to actually perform the git operation.
-
----
-
-## Concurrent-Worker Credential File Race
-
-**Confirmed real, found 2026-08-07/08 during the Task custom-fields / multi-select-cap verification work — `AuthManager` has no locking around writes to the shared `storageStates/<env>/<role>.json` file.** Every worker process for a given role (`admin`/`restricted`) reads and writes the *same* credential file. If one worker detects a bad session mid-run and does a forced re-login (`Storage state cleared for role: admin` → fresh login → `Storage state saved: .../admin.json`), it can overwrite that file while a **different** worker's in-flight request still depends on the old session/token — producing a spurious ID-capture timeout with no connection to any real bug in the code under test.
-
-**Observed real occurrence:** `tests/ui/leads/leads.spec.ts:226` (L38 — renumbered from L12 on 2026-08-11 to resolve a duplicate-numbering collision with `leads.rbac.spec.ts`'s separate L12, "admin should mark lead as Closed Unqualified via Close Lead dropdown select reason and verify stage") failed with `Error: Lead ID not captured after save — cannot proceed (save likely failed silently)`, traced to `Lead create response not captured (TimeoutError: page.waitForResponse: Timeout 60000ms exceeded while waiting for event "response")`. At almost the exact same timestamp, a **different concurrent worker** in the same run logged `admin page did not land on /sales/ ... forcing a fresh login and retrying`, cleared, and overwrote the shared `admin.json` — while the failing test's create-POST wait was still in flight, both workers acting as the same `admin` role. Run: full Lead UI+RBAC regression on QA, `--workers=2`, 2026-08-07 ~04:39 UTC. Re-ran the specific failing test 3x immediately after in single-worker isolation: 3/3 clean — consistent with, not disproof of, a concurrency-dependent root cause, since isolation removes the second worker needed to trigger the race in the first place (rule 21).
-
-**This is the same broader bug family as the already-documented Lead session-expiry/ID-capture issue (`leads.rbac.spec.ts:398`, see `.claude/known-issues.md`), but a distinct, more specific candidate mechanism** — a cross-worker shared-credential-file collision, not a single page's mid-test session expiry. Reported as a real, concrete correlation, not a proven-from-one-occurrence root cause.
-
-**Until this is fixed with proper file locking or per-worker isolated credential files, ALWAYS run with `--workers=1` — this is not just a convention, it's a correctness requirement given the current architecture.** Any `--workers>1` run's "all passed" result should be treated as **less trustworthy** than an equivalent `--workers=1` run — not because anything is necessarily broken by it, but because the test conditions weren't the safe, standard ones. (Concretely: the 2026-08-07/08 Lead/Deal/Contact/Company regression runs verifying the multi-select cap fix were run with `--workers=2` — their "all passed" results carry this same caveat, flagged honestly rather than left implicit.)
-
-**The ORIGINAL full regression run this same session — 3.3 hours, 308 tests, establishing that the `any`-type cleanup plus the docs/hooks consolidation work caused zero regressions — also ran under `--workers=2`, not just the smaller Lead/Deal/Contact/Company verification above.** This is recorded explicitly, not glossed over: **the human has reviewed this risk and made a conscious, informed decision to proceed with pushing despite it, rather than re-running under `--workers=1`, given the extensive additional verification already performed tonight** — individual live re-runs, isolated confirmations, and root-cause investigation of every discovered issue (including this exact race, caught and diagnosed the same night). This is a documented, deliberate risk-acceptance decision, not an unnoticed gap.
-
-**Not fixed tonight, deliberately** — implementing proper locking or per-worker isolated credential files is its own separate, potentially significant piece of work, not something to fold into an unrelated fix.
-
-**Second confirmed occurrence, a more severe manifestation (2026-08-09, commit `9c9a710`, sandbox CI, confirmed real `--workers=2`, 17:31–17:42 UTC window):** `tests/ui/quotations/quotations.spec.ts:422` ("admin should create a quotation with all custom fields and verify on details") failed with a genuine backend `HTTP 500` on `POST /quotations/` — but tracing the raw CI log minute-by-minute first surfaced the real trigger: **three consecutive rapid re-authentication cycles** in ~6 minutes, each following the identical pattern of "headless re-auth succeeds" → "redirected to `/signIn` again within 1-3 seconds" (17:33:07→17:33:11, then 17:37:11→17:37:13, then finally holding at 17:39:15→17:39:19). A legitimate ~10.4h-lifetime JWT cannot expire in 3 seconds — this is the same cross-worker credential-file collision as the original L12 occurrence, corroborated directly by 5 separate `Creating authenticated browser context for role: admin` log lines within a 90-second window (17:32:11–17:33:07), far more than one worker's own sequential test pacing would produce. The HTTP 500 on the eventual save is the most plausible downstream consequence of an admin account that had just undergone 3 rapid forced re-logins, not an independent backend bug — `saveQuotationHandlingInaccessibleEntities()` (the method that threw) was confirmed via `git diff` to be byte-identical to its pre-session version. Two further failures in the same CI run (`companies.spec.ts:237`'s CO12, and `quotations.spec.ts:23`'s serial-mode retry cascade) were traced to the same time window but ruled out as caused by this race directly — CO12 to an unrelated, already-documented (2026-07-06/07) Companies-side card-refetch timing issue, and the `:23` retry to `quotations.spec.ts`'s own `test.describe.configure({mode:'serial'})` re-running the whole file after Q29's failure (quotations.spec.ts's own Q29 — renamed from T22 on 2026-08-10, then renumbered from Q22 to Q29 on 2026-08-11 to resolve a duplicate-numbering collision with quotations.rbac.spec.ts's separate Q22), crashing during browser-context setup before any page code ran. Re-ran Q29 live on staging in true single-worker isolation immediately after: passed cleanly in 47.5s with zero background errors — consistent with, not proof of, the concurrency-dependent theory (same reasoning as the original L12 occurrence, rule 21).
-
-**This occurrence also demonstrates the bounded `openCreateForm()` fix (2026-08-09, same-night Quotations root-cause work) improves this race's diagnosability rather than masking or worsening it.** Before that fix, `openCreateForm()`'s "Add Quotation" button click was fully unbounded — the exact same credential-race conditions would have made that click hang silently for the entire 480s test timeout with no error, no recovery attempt logged, and no useful signal beyond a bare timeout. With the fix, the same race surfaced as a clean, fully-diagnosable 6-minute recovery-and-fail sequence — a real error, a full trace.zip, and a complete session-expiry log trail pinpointing exactly where and why it happened. The fix did not cause or worsen this pre-existing race; it made an existing failure mode legible for the first time.
-
----
-
-## When You're Stuck
-
-1. **Flaky test?** → Ask `failure-triage-investigator` (classifies app bug vs. code bug first, always)
-2. **Broken locator?** → Ask `self-healing-locator-scout` (finds live correct element)
-3. **Slow flow?** → Ask `resilience-architect` (measures real timing, proposes wait strategy)
-4. **Code quality?** → Ask `enterprise-code-reviewer` (pre-push gate)
-5. **Before promoting?** → Ask `pipeline-guard` + `release-readiness-summarizer`
-
-Never silently patch a flaky test or hide a real bug — classify first, then fix.
+# CLAUDE.md — Router
+
+> **Purpose:** The only file loaded into every session: standing rules, key commands, a "task → read this" table, and the Definition of Done. Everything else is read on demand.
+> **Read when:** always (it is auto-loaded). Keep it a router — detail belongs in `docs/`.
+> **Size budget:** 10k chars (hard cap 60k)
+> **Last verified:** 2026-10-06 @ 1bd03cc
+
+Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Never push/merge — the user does all git.
+
+## Task → read this (do not read more than the row says)
+
+| If you are… | Read |
+|---|---|
+| adding/changing a test in an existing module | [docs/CONTRIBUTING_TESTS.md](docs/CONTRIBUTING_TESTS.md) §A, then [docs/PATTERNS.md](docs/PATTERNS.md) |
+| adding a new module / a shared-account-config feature | [docs/CONTRIBUTING_TESTS.md](docs/CONTRIBUTING_TESTS.md) §B / §C, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/adr/](docs/adr/README.md) |
+| triaging a CI/test failure | [docs/RUNBOOK.md](docs/RUNBOOK.md) → [docs/KNOWN_ISSUES_ACTIVE.md](docs/KNOWN_ISSUES_ACTIVE.md) |
+| touching workflows, sharding, locks | [docs/CI_PIPELINES.md](docs/CI_PIPELINES.md), [docs/known-issues/sharding-and-locks.md](docs/known-issues/sharding-and-locks.md) |
+| touching the email / run history | [docs/REPORTING.md](docs/REPORTING.md) |
+| needing structure / how it fits together | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| asking "has this broken before?" | [docs/known-issues/README.md](docs/known-issues/README.md) (topic index) |
+| asking "why was it built this way?" | [docs/adr/README.md](docs/adr/README.md) |
+| unsure what a term means | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
+| suspecting a real Kylas product bug | [APPLICATION_BUGS.md](APPLICATION_BUGS.md) |
+| delegating to a subagent (13 in `.claude/agents/`) | [.claude/AGENT_DELEGATION_GUIDE.md](.claude/AGENT_DELEGATION_GUIDE.md) |
+| onboarding a human / setup / git workflow | [README.md](README.md) |
+
+## Key commands
+
+`npx tsc --noEmit` · `npm run lint` · `npm run check:conventions` · `npm run check:test-counts` (baseline: `npm run generate:test-counts`) · `npm run docs:refresh` · `npm run check:docs` · `ENV=qa npx playwright test <path> --project=chromium --workers=1` · `npm run new:module`. Use `npx playwright test <paths> <flags>` — not `npm run test:<module> -- <flags>` (args attach to the trailing `npm run notify`).
+
+## Conventions
+
+Import `test`/`expect` from `src/fixtures/index.ts` (never `@playwright/test`; sole exception `login.spec.ts`) · factories, never hardcoded data · locators only in page objects, which extend `BasePage` (10-section order) · `logger.*`, never `console.log` · every test has `@smoke`/`@regression`/`@prodSafe` (`@prodSafe` = read-only) · `test.setTimeout(480000)` on create/edit tests · no `any` (ESLint error, blocked pre-commit) · no `waitForTimeout()` (blocked pre-commit/pre-push) · commits `feat:`/`fix:`/`chore:`/`ci:`/`refactor:`/`docs:`.
+
+## The 25 standing rules (apply to every change)
+
+1. **Reuse before building** — check BasePage helpers/Lead–Contact patterns first; new generic logic goes in BasePage once.
+2. **No unbounded click/fill/waitFor** — bounded timeout plus retry or fail fast (the React "click registers, nothing happens" race).
+3. **Raw `expect()` in module files → `withSessionExpiryRecovery()`.** Every time.
+4. **No hardcoded dropdown options/indexes/counts** — read options live.
+5. **Fresh data for isolation** — RBAC/permission tests create their own record; never a random pre-existing one.
+6. **Locators on internal field names, never display labels.**
+7. **Presence-check anything env-conditional** (custom fields, flags); skip with a log line, never throw.
+8. **One pass proves nothing** — re-run 3–5× in isolation before "fixed".
+9. **Ripple-check shared code** — grep every consumer; change must be additive.
+10. **No symptom patch without confirmed root cause**; if unreproducible, label it "hardened, root cause not confirmed".
+11. **Unrelated bug found → stop and report**; neither fix nor ignore silently.
+12. **Live evidence over assumption**; old conclusions decay.
+13. **No commits/pushes/merges without explicit permission.**
+14. **Docs carry real evidence** (error text, IDs, counts) — and follow the Definition of Done below.
+15. **ID capture uses a versioned `/v1/<module>/` path**, excludes `/reports/`, never a bare substring.
+16. **Session expiry has several symptoms** (`/signIn`, "Forbidden" page, silent `waitForResponse` timeout) — use `isSessionExpiryPage()` and `armResponseWaitWithRecovery()`; extend the combinators, don't add a 6th mechanism.
+17. **"Unique today" is not unique tomorrow** — narrowest reliable scope.
+18. **Fix a bug class everywhere** (grep) and record deliberate leftovers in the active-issues file.
+19. **Retry budgets sized per environment from measured latency**; exhaustion fails loudly, never guesses.
+20. **Environment-scoping conclusions decay** — re-verify "qa-only"/"small dataset" claims.
+21. **A clean local run doesn't disprove a load-dependent flake** — defensive hardening, labeled.
+22. **Never log a sensitive field's raw value** (`password|token|secret|api key`) — redact.
+23. **CI differs per branch** — check which pipeline actually protects the change ([docs/CI_PIPELINES.md](docs/CI_PIPELINES.md)).
+24. **Reports/logs are overwritten by later runs** — copy evidence before re-running.
+25. **Verify git state (`reflog`, `stash list`, `fetch`) before concluding work is lost.**
+
+Full mechanics for each rule are in [docs/PATTERNS.md](docs/PATTERNS.md); ripple/session-expiry/lock history in [docs/known-issues/](docs/known-issues/README.md).
+
+## Definition of Done — a task is not done until all six are true
+
+1. `npm run docs:refresh` run — test counts, module table, tag counts, shard plan and the CI matrix are regenerated from the real repo (never type them; `npm run generate:test-counts` first if the suite changed).
+2. One line added to [CHANGELOG.md](CHANGELOG.md) (newest first).
+3. Issue found → entry in [docs/KNOWN_ISSUES_ACTIVE.md](docs/KNOWN_ISSUES_ACTIVE.md). Issue closed → ≤15-line summary moved to its `docs/known-issues/<topic>.md` and the active entry deleted.
+4. Design decision made or reversed → ADR added or updated in `docs/adr/`.
+5. `Last verified` updated on every doc you touched (date + `git rev-parse --short HEAD`).
+6. `npm run check:docs` passes (add `-- --live` before a PR).
+
+Size policy (why this file stays small): every doc has a size budget; the full policy and the incident template are in [docs/CONTRIBUTING_TESTS.md](docs/CONTRIBUTING_TESTS.md#size-policy). Never `@`-import a large file here — imports load into every session.

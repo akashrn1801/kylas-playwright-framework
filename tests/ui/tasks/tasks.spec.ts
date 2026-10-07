@@ -357,7 +357,7 @@ test.describe('Tasks', () => {
   // Paragraph Text/URL Field are the only genuinely blankable fields.
   // WHY a baseline-relative "Description" count, not assertFieldLabelHidden
   // (confirmed live via direct investigation, matching this repo's already-
-  // established baseline-relative-count pattern — reference-patterns.md
+  // established baseline-relative-count pattern — docs/PATTERNS.md P32
   // §6): the literal text "Description" occurs TWICE on this page even with
   // the field genuinely blank — the real field label (which DOES respond to
   // the toggle) plus one separate, always-present occurrence elsewhere in
@@ -460,7 +460,7 @@ test.describe('Tasks', () => {
     // WHY a plain page.reload(), not a second goToTaskDetailsById() call
     // (confirmed live via direct investigation, matching this repo's own
     // "verify via stable end-state, not a transient UI snapshot" principle
-    // — known-issues.md): the edit DID genuinely persist (confirmed present
+    // — docs/known-issues/locators-and-timing.md): the edit DID genuinely persist (confirmed present
     // after a fresh reload), but Task's in-place detail panel does not
     // refresh its own DOM after an edit-modal save — a real, Task-specific
     // staleness gap, not a genuine auto-reveal failure. A second

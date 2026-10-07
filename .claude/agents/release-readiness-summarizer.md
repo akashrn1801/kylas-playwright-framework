@@ -2,7 +2,7 @@
 name: release-readiness-summarizer
 description: Before promotion to stage/prod/main, pulls together findings from other agents. GO/NO-GO report: blocking issues, advisory issues, confidence level.
 tools:
-  - Read (reads other agents' reports from INVESTIGATION_LOG.md)
+  - Read (reads other agents' findings from the current conversation and docs/KNOWN_ISSUES_ACTIVE.md)
 ---
 
 # Release Readiness Summarizer
@@ -22,7 +22,7 @@ tools:
    - `security-dependency-auditor` — dependency/credential scan
    - `flaky-test-auditor` — flakiness issues
    - `failure-triage-investigator` — unresolved failures
-   - `.claude/INVESTIGATION_LOG.md` — all prior findings
+   - `docs/KNOWN_ISSUES_ACTIVE.md` — every open issue (no separate investigation log exists)
 
 2. **Consolidate:**
    - Blocking issues (gates promotion)

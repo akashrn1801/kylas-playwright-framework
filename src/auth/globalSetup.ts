@@ -3,6 +3,7 @@ import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -26,6 +27,7 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
 
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   ErrorCollector.attachNodeListeners();
+  ErrorCollector.resetMainProcessRecoveryEvents();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
   fs.mkdirSync(GLOBAL_SETUP_TRACE_DIR, { recursive: true });
 
@@ -55,7 +57,31 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
     // fresh — see getAccessTokenForRole() below, which reads them directly),
     // and `browser` is still open — though this function doesn't actually
     // need a browser at all, only a standalone API request context.
-    await ensureProductFixtures();
+    // WHY conditional (2026-10-06): see productFixtureNeed.ts — only invocations
+    // that may run a Products & Services spec need the fixtures. Every
+    // ambiguous case resolves to "create", so a wrong skip is not reachable
+    // by an unrecognised command line; and if one ever were, the accessor
+    // (getProductFixture) throws a "no fixture file / fixture not found"
+    // error rather than returning data.
+    const need = selectionNeedsProductFixtures(
+      process.argv.slice(2),
+      _playwrightConfig.projects.map((project) => project.testDir)
+    );
+    if (need.needed) {
+      console.log(`[globalSetup] Product fixtures: creating — ${need.reason}`);
+      await ensureProductFixtures();
+    } else {
+      console.log(`[globalSetup] Product fixtures: SKIPPED — ${need.reason}`);
+      // WHY remove any stale file: a fixture file left by an EARLIER run on a
+      // developer machine would otherwise be read by getProductFixture() as
+      // if it were fresh. Deleting it turns a wrongly-skipped P&S test into a
+      // loud "no fixture file found" error instead of silently stale data.
+      try {
+        fs.rmSync(PRODUCT_FIXTURES_FILE, { force: true });
+      } catch {
+        /* nothing to remove */
+      }
+    }
   } finally {
     await browser.close();
   }
@@ -194,7 +220,7 @@ function resolveRefId(map: Map<string, number>, name: string, fieldLabel: string
 // documented mechanism exactly — the real accessToken lives inside the JWT's
 // own payload (`payload.data.accessToken`), not the raw token string itself.
 // Confirmed live via the identical decode during this module's own
-// investigation (see PRODUCTS_AND_SERVICES_PROGRESS.md).
+// investigation (see docs/known-issues/products-and-services.md).
 async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<string> {
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
@@ -215,6 +241,73 @@ async function getAccessTokenForRole(role: 'admin' | 'restricted'): Promise<stri
   );
 }
 
+// WHY this retry helper exists, and why it mirrors setupRole()'s own
+// 3-attempt/backoff shape rather than inventing a new one (2026-09-29, real
+// sandbox run 36537195806): confirmed via direct evidence that
+// loadProductReferenceData()/createOneProductFixture() — together, 5
+// unprotected HTTP calls per job (2 GETs + 3 product-create POSTs), with
+// ZERO retry anywhere — are exposed to real, transient HTTP 429s under this
+// feature's own increased CI concurrency. The formFields CI carve-out (see
+// docs/known-issues/rate-limits-and-error-pages.md) raised sandbox's peak
+// concurrent globalSetup invocations from 8 to 10 (6 dedicated formFields
+// shards + 4 rest-of-suite shards, all starting within the same ~30s
+// window). Direct evidence this is real, not coincidental: the prior 8-job
+// run shows ZERO occurrences of a 429 on this exact call anywhere in its
+// log; the first 10-job run had exactly ONE — on the *last*-starting job of
+// the ten, landing in what was most plausibly an already-saturated
+// rate-limit window from the other 9's near-simultaneous calls (9/10
+// succeeded outright). This is a genuinely transient, load-dependent
+// condition — not a hard "10 concurrent always fails" ceiling — so a bounded
+// retry is the proportionate fix, not reducing job parallelism (which would
+// roughly double this track's wall-clock time to buy protection against a
+// failure mode a retry already fully absorbs).
+//
+// WHY retry only 429/5xx, never a real 4xx (400/404/422/etc.): those
+// indicate something is actually wrong (bad request shape, missing
+// reference data, real validation failure) — blindly retrying one would
+// only delay a real failure by up to ~15s while producing 3x the noise, per
+// this exact codebase's own established distinction elsewhere (e.g.
+// createCompany/createLead/createContact's transient-vs-real-400
+// classification in docs/known-issues/rbac-and-test-isolation.md's "RBAC test-isolation and app-bug
+// investigations" entry).
+const TRANSIENT_HTTP_ERROR_PATTERN = /\bHTTP (429|5\d\d)\b/;
+
+function isTransientHttpError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_HTTP_ERROR_PATTERN.test(message);
+}
+
+async function withTransientRetry<T>(description: string, fn: () => Promise<T>): Promise<T> {
+  const maxAttempts = 3;
+  const backoffMs = [5000, 10000];
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const retryable = isTransientHttpError(error) && attempt < maxAttempts;
+      if (!retryable) throw error;
+      const delay = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1];
+      // WHY record here only (2026-10-06, load measurement): a pure side
+      // observation placed before the existing warn/sleep — the retry count,
+      // backoff and throw conditions above and below are untouched, and
+      // recordRecoveryEvent() can never throw.
+      ErrorCollector.recordRecoveryEvent({
+        kind: 'globalsetup-transient-retry',
+        outcome: 'retrying',
+        detail: `${description}, attempt ${attempt}/${maxAttempts}`,
+      });
+      console.warn(
+        `[globalSetup] ${description} failed (attempt ${attempt}/${maxAttempts}, transient — ` +
+          `${String(error)}) — retrying in ${delay / 1000}s...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  // Unreachable — the loop above always either returns or throws, kept only
+  // to satisfy TypeScript's control-flow analysis.
+  throw new Error(`[globalSetup] ${description}: exhausted retries with no error captured`);
+}
+
 // WHY failure here is the SAME severity as a login failure (hard stop, not a
 // caught-and-continue): per the design doc's guardrail #4 — a silently
 // missing/wrong fixture would otherwise surface many specs later as a
@@ -226,7 +319,9 @@ async function ensureProductFixtures(): Promise<void> {
   const adminToken = await getAccessTokenForRole('admin');
   const apiContext = await apiRequest.newContext();
   try {
-    const referenceData = await loadProductReferenceData(apiContext, adminToken);
+    const referenceData = await withTransientRetry('loadProductReferenceData', () =>
+      loadProductReferenceData(apiContext, adminToken)
+    );
     const records: Partial<Record<ProductFixtureKey, ProductFixtureRecord>> = {};
     // WHY generated exactly once per run, here: this is the ONE call site —
     // globalSetup runs in its own process, separate from every test worker,
@@ -239,11 +334,9 @@ async function ensureProductFixtures(): Promise<void> {
       console.log(
         `[globalSetup] Creating fresh product fixture: ${fixture.key} ("${fixture.data.name}")`
       );
-      records[fixture.key] = await createOneProductFixture(
-        apiContext,
-        adminToken,
-        fixture,
-        referenceData
+      records[fixture.key] = await withTransientRetry(
+        `createOneProductFixture(${fixture.key})`,
+        () => createOneProductFixture(apiContext, adminToken, fixture, referenceData)
       );
     }
 
@@ -269,7 +362,7 @@ async function createOneProductFixture(
 
   // WHY this exact body shape, field by field: network-captured live
   // (2026-08-10) from a real UI Save click — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's investigation notes. Not derived
+  // docs/known-issues/products-and-services.md's investigation notes. Not derived
   // from the response shape (which differs in small ways, e.g. `disabled`
   // appears on countryOfOrigin/category's response objects but was absent
   // from the real request's `units` entries) — this is the literal request
@@ -426,6 +519,42 @@ async function setupRole(
       }
 
       await context.storageState({ path: stateFile });
+
+      // WHY this verify-and-retry loop (2026-09-28, real sandbox failure —
+      // shard 4/8's globalSetup crashed entirely with "Could not extract an
+      // access token from the saved storage state for role: restricted",
+      // thrown 4 seconds after this exact storageState() call, from inside
+      // ensureProductFixtures()'s own getAccessTokenForRole() read of the
+      // same file): under real concurrent load — 8 shards each logging in
+      // fresh as the SAME shared admin/restricted staging accounts within
+      // the same ~90s window — the app's own client-side write of
+      // localStorage.token can plausibly lag slightly behind the /sales/
+      // redirect this function already waits for above, or the account's
+      // session can be transiently disturbed by a concurrent login
+      // elsewhere. A bounded re-capture here is a real condition-based
+      // check (the existing getAccessTokenForRole() decode either succeeds
+      // or it doesn't), not a blind wait, and is far cheaper than falling
+      // through to this function's own full outer 3-attempt re-login retry
+      // for what is most plausibly a sub-second timing gap. Root cause not
+      // fully confirmed (a single occurrence, not yet reproduced on demand)
+      // — this is defensive hardening per CLAUDE.md rule 10, not a proven
+      // fix; if this loop's own warning log recurs, that's real evidence
+      // toward whichever mechanism is actually at play.
+      const tokenVerifyAttempts = 3;
+      for (let i = 1; i <= tokenVerifyAttempts; i++) {
+        try {
+          await getAccessTokenForRole(role);
+          break;
+        } catch (verifyError) {
+          if (i === tokenVerifyAttempts) throw verifyError;
+          console.warn(
+            `[globalSetup] Saved storage state for ${role} has no decodable token yet ` +
+              `(attempt ${i}/${tokenVerifyAttempts}) — re-capturing in 2s...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await context.storageState({ path: stateFile });
+        }
+      }
       console.log(`[globalSetup] State saved for: ${role}`);
 
       // Save captured display name to userNames.json

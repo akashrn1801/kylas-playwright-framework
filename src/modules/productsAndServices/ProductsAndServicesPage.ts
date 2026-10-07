@@ -3,6 +3,7 @@ import { BasePage } from '../../core/BasePage';
 import {
   ProductsAndServicesData,
   ProductsCustomFieldData,
+  ProductsCustomFieldKey,
   PRODUCTS_CUSTOM_FIELD_NAMES,
 } from '../../data/factories/productsAndServicesFactory';
 import { config } from '../../../config/config';
@@ -10,8 +11,8 @@ import { logger } from '../../utils/logger';
 
 // WHY this page object doesn't follow the standard Sales-page/detail-page
 // shape every other module uses: this is a deliberate, documented deviation
-// — see PRODUCTS_AND_SERVICES_DESIGN.md section 1 and
-// .claude/architecture.md's own deviation note. Key structural facts, all
+// — see docs/known-issues/products-and-services.md and
+// docs/known-issues/products-and-services.md's deviations note. Key structural facts, all
 // confirmed LIVE (2026-08-10), not assumed from the design doc alone:
 //   - Lives on the SETTINGS page (`/setup/products-services/...`), not Sales.
 //   - Create and Edit are FULL-PAGE navigations, NOT a modal
@@ -159,7 +160,7 @@ export class ProductsAndServicesPage extends BasePage {
    * genuine multi-value control (`is-invalid__value-container--is-multi`,
    * real removable chips, an array-valued saved field). This module
    * deliberately selects only ONE option regardless, by design choice (see
-   * PRODUCTS_AND_SERVICES_DESIGN.md section 6) — not because the field is
+   * docs/known-issues/products-and-services.md) — not because the field is
    * single-select. Do not "fix" this into a multi-select helper without a
    * deliberate decision to test multi-select behavior for Units specifically.
    *
@@ -183,7 +184,7 @@ export class ProductsAndServicesPage extends BasePage {
     }
 
     // WHY clear any existing chip(s) FIRST (added 2026-08-10, CRITICAL
-    // INCIDENT — see PRODUCTS_AND_SERVICES_PROGRESS.md): Units is a genuine
+    // INCIDENT — see docs/known-issues/products-and-services.md): Units is a genuine
     // multi-select (confirmed live) — selecting an option ADDS a chip, it
     // never replaces an already-selected one. Once an option is already
     // selected, react-select removes it from the OPEN menu's available list
@@ -302,7 +303,7 @@ export class ProductsAndServicesPage extends BasePage {
 
   private async setIsActive(active: boolean): Promise<void> {
     // WHY the LABEL is clicked, not the checkbox input directly (fixed
-    // 2026-08-10 — see PRODUCTS_AND_SERVICES_PROGRESS.md's Batch 7
+    // 2026-08-10 — see docs/known-issues/products-and-services.md's Batch 7
     // investigation): a real test run confirmed this toggle's
     // `.custom-control-label` overlays the input and intercepts a direct
     // click every time this path is actually exercised — matching the
@@ -348,7 +349,7 @@ export class ProductsAndServicesPage extends BasePage {
 
   // WHY a bounded retry here even though no index-lag was observed live
   // (confirmed instant search results immediately after creation, see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md's investigation notes): per this
+  // docs/known-issues/products-and-services.md's investigation notes): per this
   // codebase's own rule 20 (environment-scoping conclusions decay, never
   // assumed permanent) — a defensive retry on the common case (found on
   // attempt 1) protects against a scenario this session's QA-only testing
@@ -397,17 +398,30 @@ export class ProductsAndServicesPage extends BasePage {
     await this.click(this.addButton(), 'Add button (Products & Services list)');
     await this.waitForUrl(/\/products-services\/create/, config.timeouts.navigation);
     // WHY wait for a real form field too, not just the URL (fixed
-    // 2026-08-10 — Batch 7 investigation, PRODUCTS_AND_SERVICES_PROGRESS.md):
+    // 2026-08-10 — Batch 7 investigation, docs/known-issues/products-and-services.md):
     // a real test run confirmed `skipIfCustomFieldsAbsent()`'s instant,
     // zero-wait DOM-presence check can run before the create form's fields
     // (including the custom ones) have actually rendered, producing a false
     // "absent" skip on an environment where they demonstrably exist (live-
     // reproduced and disproven the same session). The URL matching first
     // does not guarantee the form's own content has painted yet.
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.nameInput(), 'Products & Services create form should be visible').toBeVisible({
-        timeout: config.timeouts.expect,
-      })
+    // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
+    // failure, sandbox run 36573185433: FFRPS9's own "Products & Services
+    // create form should be visible" timeout was NOT the 10s
+    // config.timeouts.expect being too aggressive for real render latency —
+    // both this page's own screenshot AND the restricted user's separately-
+    // captured screenshot showed the app's own HTTP-429 "Too many requests"
+    // error page verbatim, replacing the create form entirely. A longer
+    // timeout would not have helped: that page never resolves into the real
+    // form on its own. Nested outside withSessionExpiryRecovery so either
+    // recovery class can independently catch and retry this same assertion,
+    // mirroring FormFieldsConfigPage.open()'s established composition.
+    await this.withRateLimitRecovery(() =>
+      this.withSessionExpiryRecovery(() =>
+        expect(this.nameInput(), 'Products & Services create form should be visible').toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      )
     );
     logger.info('Opened Products & Services create form');
   }
@@ -422,32 +436,52 @@ export class ProductsAndServicesPage extends BasePage {
   // custom-field test supplies it. Mirrors
   // `QuotationsPage.fillAndSaveQuotationFromPanel()`'s identical
   // additive-optional-param precedent.
+  // WHY the optional `options` param (2026-09-23, Form Field Limit feature,
+  // Products & Services rollout): mirrors every other entity's identical
+  // `{minimal, onlyCustomField}` architecture (see
+  // docs/known-issues/form-fields.md) — confirmed live via direct
+  // incremental reproduction (Name alone -> "This is a required field";
+  // Name+Price -> HTTP 200/redirect to list) that Products & Services' own
+  // true save-required minimum is just Name + Price, genuinely simpler than
+  // every other entity built so far in this feature. `minimal: true`
+  // therefore skips Description/HSN-SAC/Country/Category/Units/Active
+  // entirely — all six are already optional server-side, confirmed by this
+  // same live test. Every existing caller omits `options` and gets
+  // byte-for-byte the original fill-everything behavior.
   async fillProductsAndServicesForm(
     data: ProductsAndServicesData,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    options?: {
+      minimal?: boolean;
+      onlyCustomField?: ProductsCustomFieldKey;
+      onlyCustomFieldName?: string;
+    }
   ): Promise<void> {
+    const minimal = options?.minimal === true;
     await this.fill(this.nameInput(), data.name, 'product name');
     await this.fill(this.priceInput(), String(data.price), 'price');
-    await this.setDescriptionViaCkEditor(data.description);
-    if (data.hsnSacCode) {
-      await this.fill(this.hsnSacInput(), data.hsnSacCode, 'HSN/SAC code');
+    if (!minimal) {
+      await this.setDescriptionViaCkEditor(data.description);
+      if (data.hsnSacCode) {
+        await this.fill(this.hsnSacInput(), data.hsnSacCode, 'HSN/SAC code');
+      }
+      if (data.countryOfOrigin) {
+        await this.selectFromReactSelect(
+          this.countryOfOriginAnchor(),
+          data.countryOfOrigin,
+          'Country of Origin'
+        );
+      }
+      if (data.category) {
+        await this.selectFromReactSelect(this.categoryAnchor(), data.category, 'Category');
+      }
+      if (data.units) {
+        await this.selectFromReactSelect(this.unitsAnchor(), data.units, 'Units');
+      }
+      await this.setIsActive(data.isActive);
     }
-    if (data.countryOfOrigin) {
-      await this.selectFromReactSelect(
-        this.countryOfOriginAnchor(),
-        data.countryOfOrigin,
-        'Country of Origin'
-      );
-    }
-    if (data.category) {
-      await this.selectFromReactSelect(this.categoryAnchor(), data.category, 'Category');
-    }
-    if (data.units) {
-      await this.selectFromReactSelect(this.unitsAnchor(), data.units, 'Units');
-    }
-    await this.setIsActive(data.isActive);
-    if (customFields) {
-      await this.fillProductsCustomFields(customFields);
+    if (customFields && (!minimal || options?.onlyCustomField)) {
+      await this.fillProductsCustomFields(customFields, options?.onlyCustomField, options?.onlyCustomFieldName);
     }
     logger.success('Products & Services form filled');
   }
@@ -474,50 +508,98 @@ export class ProductsAndServicesPage extends BasePage {
    * `CompaniesPage.fillCompanyCustomFields()`'s structure exactly, adjusted
    * for the 2 fields Products doesn't have.
    */
-  private async fillProductsCustomFields(cf: ProductsCustomFieldData): Promise<void> {
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.textField,
-      cf.textField,
-      'Text Field',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
-      cf.paragraphText,
-      'Paragraph Text',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.number,
-      String(cf.number),
-      'Number',
-      'plain'
-    );
-    await this.fillTextLikeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.urlField,
-      cf.urlField,
-      'URL Field',
-      'plain'
-    );
-    await this.setCheckboxCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.checkbox,
-      cf.checkbox,
-      'Checkbox',
-      'plain'
-    );
-    await this.selectDateCustomField(PRODUCTS_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
-    await this.selectDateTimeCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.dateTimePicker,
-      cf.dateTimePicker,
-      'Date Time Picker',
-      'plain'
-    );
-    const pickedValue = await this.selectPicklistCustomField(
-      PRODUCTS_CUSTOM_FIELD_NAMES.pickList,
-      'Pick List',
-      'plain'
-    );
-    if (pickedValue !== null) cf.pickList = pickedValue;
+  // WHY the optional `onlyField` param (2026-09-23, Form Field Limit
+  // feature, Products & Services rollout): mirrors
+  // CompaniesPage.fillCompanyCustomFields()'s/TasksPage.fillTaskCustomFields()'s
+  // identical, already-proven `wants(onlyField)` architecture — fills ONLY
+  // the one field under test and skips the other 7 entirely when provided.
+  // Every existing caller omits it and gets byte-for-byte the original
+  // fill-everything behavior. The blur-fix below (document.activeElement.
+  // blur(), not a Tab keypress) mirrors the same incident-driven fix
+  // documented in docs/known-issues/form-fields.md — a Tab keypress after
+  // a single minimal-fill custom-field fill can advance focus into an
+  // unrelated react-select and silently open it.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see
+  // PRODUCTS_FORM_FIELD_LIMIT_NAMES's own comment in
+  // productsAndServicesFactory.ts for the full incident): lets a caller fill
+  // the ONE field `onlyField` selects using a DIFFERENT real internal name
+  // than PRODUCTS_CUSTOM_FIELD_NAMES's own hardcoded value below, without
+  // touching that shared constant (still used, unchanged, by every other
+  // Products & Services test). Every existing caller omits this and gets
+  // byte-for-byte the original behavior. Still always passes `'plain'` —
+  // this override changes WHICH field is targeted, never the suffix
+  // convention, which is a property of this entity, not of the field.
+  private async fillProductsCustomFields(
+    cf: ProductsCustomFieldData,
+    onlyField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
+  ): Promise<void> {
+    const wants = (key: ProductsCustomFieldKey): boolean => onlyField === undefined || onlyField === key;
+
+    if (wants('textField')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.textField,
+        cf.textField,
+        'Text Field',
+        'plain'
+      );
+    }
+    if (wants('paragraphText')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.paragraphText,
+        cf.paragraphText,
+        'Paragraph Text',
+        'plain'
+      );
+    }
+    if (wants('number')) {
+      await this.fillTextLikeCustomField(
+        fieldNameOverride ?? PRODUCTS_CUSTOM_FIELD_NAMES.number,
+        String(cf.number),
+        'Number',
+        'plain'
+      );
+    }
+    if (wants('urlField')) {
+      await this.fillTextLikeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.urlField,
+        cf.urlField,
+        'URL Field',
+        'plain'
+      );
+    }
+    if (wants('checkbox')) {
+      await this.setCheckboxCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.checkbox,
+        cf.checkbox,
+        'Checkbox',
+        'plain'
+      );
+    }
+    if (wants('date')) {
+      await this.selectDateCustomField(PRODUCTS_CUSTOM_FIELD_NAMES.date, cf.date, 'Date', 'plain');
+    }
+    if (wants('dateTimePicker')) {
+      await this.selectDateTimeCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.dateTimePicker,
+        cf.dateTimePicker,
+        'Date Time Picker',
+        'plain'
+      );
+    }
+    if (wants('pickList')) {
+      const pickedValue = await this.selectPicklistCustomField(
+        PRODUCTS_CUSTOM_FIELD_NAMES.pickList,
+        'Pick List',
+        'plain'
+      );
+      if (pickedValue !== null) cf.pickList = pickedValue;
+    }
+
+    if (onlyField !== undefined) {
+      await this.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    }
   }
 
   /**
@@ -603,7 +685,7 @@ export class ProductsAndServicesPage extends BasePage {
   // treating a genuinely-present field as absent and skipping its fill —
   // exactly this codebase's already-documented navigation-drift bug class
   // (six other modules' `waitForEntityDetailPage()`/`waitForEntityListPage()`
-  // fixes — see .claude/known-issues.md), just not yet applied here since
+  // fixes — see docs/known-issues/locators-and-timing.md), just not yet applied here since
   // Products & Services has no detail page for that shared helper to target.
   // Waiting for the Name field's real value (always present, never
   // environment-conditional, unlike custom fields) is the same "real content
@@ -612,8 +694,18 @@ export class ProductsAndServicesPage extends BasePage {
     if (/^\d+$/.test(nameOrId)) {
       await this.navigateTo(`${config.appUrl}/setup/products-services/edit/${nameOrId}`);
       await this.waitForUrl(/\/products-services\/edit\//, config.timeouts.navigation);
-      await this.withSessionExpiryRecovery(() =>
-        expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
+      // WHY also wrapped in withRateLimitRecovery() (2026-09-30 — real CI
+      // failures, sandbox run 36663556957: FFPS24/FFPS21 both failed here
+      // with the Name input entirely absent from the DOM after navigating
+      // to the edit page — the same "app rendered a known-bad state instead
+      // of the real form" signature already confirmed for Company/Task in
+      // this same run, just without a captured intercepting-element name
+      // since this assertion never clicks anything — see
+      // authManager.isAppErrorBoundaryPage()'s own WHY comment).
+      await this.withRateLimitRecovery(() =>
+        this.withSessionExpiryRecovery(() =>
+          expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
+        )
       );
       logger.info(`Opened product for edit by id: ${nameOrId}`);
       return;
@@ -638,9 +730,26 @@ export class ProductsAndServicesPage extends BasePage {
   // any test. Leaving `name` out of this method's own parameter surface
   // makes that guardrail structurally true here, rather than relying purely
   // on test-level discipline to never pass it.
+  // WHY the optional `onlyCustomField` param (2026-09-23, Form Field Limit
+  // feature): `changes` being a Partial already gives this method a
+  // "minimal edit" capability every other entity's fillEditForm() had to be
+  // newly built to get — a caller passing `{}` already touches nothing but
+  // custom fields. `onlyCustomField` extends that same minimality down into
+  // the custom-field fill itself, matching every other entity's identical
+  // capability. Every existing caller omits it and gets byte-for-byte the
+  // original fill-every-provided-custom-field behavior.
+  // WHY the optional `fieldNameOverride` param (2026-09-28, Form Field Limit
+  // feature's cross-shard-collision fix — see PRODUCTS_FORM_FIELD_LIMIT_NAMES's
+  // own comment in productsAndServicesFactory.ts): mirrors this method's own
+  // existing `onlyCustomField` standalone-parameter convention (not nested
+  // in an options object, unlike every other entity's fillEditForm()) —
+  // threaded straight through to fillProductsCustomFields() below. Every
+  // existing caller omits it and gets byte-for-byte the original behavior.
   async fillEditForm(
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    onlyCustomField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     if (changes.price !== undefined) {
       await this.fill(this.priceInput(), String(changes.price), 'price (edit)');
@@ -668,7 +777,7 @@ export class ProductsAndServicesPage extends BasePage {
       await this.setIsActive(changes.isActive);
     }
     if (customFields) {
-      await this.fillProductsCustomFields(customFields);
+      await this.fillProductsCustomFields(customFields, onlyCustomField, fieldNameOverride);
     }
     logger.success('Product edit form filled');
   }
@@ -684,9 +793,45 @@ export class ProductsAndServicesPage extends BasePage {
    * method itself since it only needs to observe the UI outcome, not the
    * request shape.
    */
+  // WHY this now waits for the real PUT response before declaring success
+  // (real bug found live, 2026-09-23 — final verification run for the Form
+  // Field Limit feature): this method previously had no network wait at
+  // all, only a client-side "no error toast" check and a URL-redirect
+  // check, both satisfiable before the actual PUT /v1/products/{id}
+  // request finishes persisting server-side. A caller that immediately
+  // re-opens the edit page and reads a just-saved custom field's value
+  // (this feature's own assertCustomFieldValueOnEditPage()) can race the
+  // real database write — confirmed live: 4 failures in the same run
+  // (FFPS8/FFPS18/FFPS21/FFRPS5), each reading back an empty or not-yet-
+  // rendered field immediately after saveEditedProduct() returned. This is
+  // the SAME bug class already found and fixed for
+  // CompaniesPage.saveEditedCompany()/LeadsPage.saveEditedLead() (rule
+  // 18 — a bug class fixed in one place is not fixed everywhere) — never
+  // applied here until now. Capture and await the real update response
+  // BEFORE declaring success, mirroring saveEditedCompany()'s exact
+  // pattern.
   async saveEditedProduct(): Promise<void> {
+    const updateResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        /\/v1\/products\/\d+$/.test(new URL(res.url()).pathname) && res.request().method() === 'PUT',
+      'product update response',
+      config.timeouts.navigation
+    ).catch(() => null);
+
     await this.click(this.saveButton(), 'Save (product edit)');
     await this.assertNoFormErrors('product edit form');
+
+    const updateResponse = await updateResponsePromise;
+    // WHY fail-fast, not silently proceed: same convention as
+    // saveEditedCompany() — a failed/slow update that never persisted
+    // server-side must not be silently reported as success, letting
+    // callers proceed as if the edit took effect.
+    if (!updateResponse) {
+      throw new Error(
+        'Product update (PUT /v1/products/{id}) response not captured after save — cannot proceed (update likely failed silently or did not persist in time)'
+      );
+    }
+
     await this.waitForUrl(/\/products-services\/list/, config.timeouts.navigation);
     logger.success('Product edit saved');
   }
@@ -916,17 +1061,111 @@ export class ProductsAndServicesPage extends BasePage {
     logger.success('Product fields verified on edit page');
   }
 
+  /**
+   * Asserts a single custom field's persisted VALUE by reading it back from
+   * the still-open EDIT FORM's own input — the only verification mechanism
+   * available for this module (2026-09-23, Form Field Limit feature).
+   *
+   * WHY this cannot reuse BasePage.assertCustomFieldOnDetail() the way
+   * every other entity in this feature does: that method reads a rendered,
+   * read-only DETAIL-page display — Products & Services has no detail page
+   * at all (edit doubles as the only per-record view, confirmed live, see
+   * this class's own header comment). The value must instead be read back
+   * from the field's own `<input>`/`<textarea>` via `.inputValue()`, using
+   * the exact same suffix-matching locator BasePage's other custom-field
+   * helpers already use (widened from `private` to `protected` specifically
+   * to enable this reuse rather than duplicating the locator logic here —
+   * see that method's own WHY comment in BasePage.ts).
+   *
+   * @param nameOrId Same contract as openProductForEdit() — call this with
+   *                 the edit page ALREADY open (mirrors
+   *                 assertProductFieldsOnEditPage()'s own convention).
+   * @param reloadRetryId WHY this optional param (real bug found live,
+   *                 2026-09-23 — a --workers=2-only run against JUST this
+   *                 module's own tests, no other entity concurrently
+   *                 competing for its lock, still reproduced 4-5 failures
+   *                 out of ~70 tests: the custom field's own `<input>`
+   *                 exists and is genuinely attached, but its value reads
+   *                 back EMPTY moments after a real, already-accepted
+   *                 create/edit save — confirmed via a dedicated live
+   *                 diagnostic that the IDENTICAL create+immediate-read
+   *                 sequence succeeds on the very first attempt, 1/1, in
+   *                 true `--workers=1` isolation (zero concurrent load).
+   *                 This is the same class of real, load-dependent
+   *                 read-after-write lag already documented and fixed
+   *                 elsewhere in this codebase via a bounded reload-and-
+   *                 retry (assertRightPanelIconVisible()'s own fix,
+   *                 docs/PATTERNS.md P23 — "a fresh mount re-fetches
+   *                 the snapshot") — not a guess, the same proven
+   *                 mechanism applied to a new instance of the same bug
+   *                 class (rule 18). When provided, a failed value-match
+   *                 triggers up to 2 additional attempts, each starting
+   *                 with a fresh `openProductForEdit(reloadRetryId)`
+   *                 (a real navigation + re-fetch, not just re-reading the
+   *                 same stale DOM). Omitted by no current caller — every
+   *                 call site that can supply an id now does, since every
+   *                 one of them is exposed to this same race; left
+   *                 optional only so a future caller without an id at
+   *                 hand still compiles and gets the single-attempt
+   *                 behavor, matching this method's original contract.
+   */
+  async assertCustomFieldValueOnEditPage(
+    fieldName: string,
+    expectedValue: string,
+    description = fieldName,
+    reloadRetryId?: string
+  ): Promise<void> {
+    const input = this.customFieldInputLocator(fieldName, 'plain');
+    const maxAttempts = reloadRetryId ? 3 : 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && reloadRetryId) {
+        logger.warn(
+          `${description} read back empty/mismatched on attempt ${attempt - 1}/${maxAttempts} — ` +
+            `reloading the edit page and retrying (suspected concurrent-load read-after-write lag)`
+        );
+        await this.openProductForEdit(reloadRetryId);
+      }
+
+      const matched = await this.withSessionExpiryRecovery(() =>
+        expect(input)
+          .toHaveValue(expectedValue, { timeout: config.timeouts.expect })
+          .then(() => true)
+          .catch(() => false)
+      );
+
+      if (matched) {
+        logger.success(`Confirmed ${description} = "${expectedValue}" on the product edit form`);
+        return;
+      }
+
+      if (attempt === maxAttempts) {
+        await this.withSessionExpiryRecovery(() =>
+          expect(
+            input,
+            `Expected ${description} to hold "${expectedValue}" on the edit form (after ${maxAttempts} attempt(s))`
+          ).toHaveValue(expectedValue, { timeout: config.timeouts.expect })
+        );
+      }
+    }
+  }
+
   // ─── 10. Workflow wrappers ──────────────────────────────────────────────────
 
   async createProduct(
     data: ProductsAndServicesData,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    options?: {
+      minimal?: boolean;
+      onlyCustomField?: ProductsCustomFieldKey;
+      onlyCustomFieldName?: string;
+    }
   ): Promise<{ id: string | null }> {
     return this.withSessionExpiryRetry(async () => {
       const attemptData = { ...data };
       await this.goToProductsAndServicesList();
       await this.goToCreateProductForm();
-      await this.fillProductsAndServicesForm(attemptData, customFields);
+      await this.fillProductsAndServicesForm(attemptData, customFields, options);
       const result = await this.saveProduct();
       logger.success(`Product created: ${attemptData.name} (id: ${result.id})`);
       return result;
@@ -936,12 +1175,14 @@ export class ProductsAndServicesPage extends BasePage {
   async updateProduct(
     changes: Partial<Omit<ProductsAndServicesData, 'name'>>,
     nameOrId: string,
-    customFields?: ProductsCustomFieldData
+    customFields?: ProductsCustomFieldData,
+    onlyCustomField?: ProductsCustomFieldKey,
+    fieldNameOverride?: string
   ): Promise<void> {
     return this.withSessionExpiryRetry(async () => {
       const attemptChanges = { ...changes };
       await this.openProductForEdit(nameOrId);
-      await this.fillEditForm(attemptChanges, customFields);
+      await this.fillEditForm(attemptChanges, customFields, onlyCustomField, fieldNameOverride);
       await this.saveEditedProduct();
       logger.success(`Product updated: ${nameOrId}`);
     }, 'updateProduct');

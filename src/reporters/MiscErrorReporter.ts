@@ -1,7 +1,12 @@
 import type { Reporter, FullConfig, Suite, FullResult } from '@playwright/test/reporter';
 import * as fs from 'fs';
 import * as path from 'path';
-import { MiscError, MiscErrorReport } from '../error-collector/ErrorCollector';
+import {
+  MiscError,
+  MiscErrorReport,
+  RecoveryEvent,
+  MAIN_PROCESS_EVENTS_PATH,
+} from '../error-collector/ErrorCollector';
 
 // WHY: Confirmed live (2026-07-07) — namespaced by env to match
 // ErrorCollector.ts's REPORTS_DIR, so two concurrent runs against different
@@ -54,12 +59,16 @@ class MiscErrorReporter implements Reporter {
       const workerFiles = fs.readdirSync(dir).filter((f) => WORKER_FILE_PATTERN.test(f));
 
       const mergedErrors: MiscError[] = [];
+      const mergedRecoveryEvents: RecoveryEvent[] = [];
       for (const file of workerFiles) {
         const filePath = path.join(dir, file);
         try {
           const workerReport = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as MiscErrorReport;
           if (Array.isArray(workerReport.errors)) {
             mergedErrors.push(...workerReport.errors);
+          }
+          if (Array.isArray(workerReport.recoveryEvents)) {
+            mergedRecoveryEvents.push(...workerReport.recoveryEvents);
           }
         } catch {
           /* skip unreadable/partial worker file */
@@ -70,6 +79,24 @@ class MiscErrorReporter implements Reporter {
             /* already removed */
           }
         }
+      }
+
+      // WHY a separate read: events recorded in the MAIN process (globalSetup's
+      // transient retries) live in their own file — see ErrorCollector.ts's
+      // MAIN_PROCESS_EVENTS_PATH WHY comment for why they can't ride the
+      // per-worker files that onBegin() cleans up.
+      try {
+        if (fs.existsSync(MAIN_PROCESS_EVENTS_PATH)) {
+          const mainReport = JSON.parse(fs.readFileSync(MAIN_PROCESS_EVENTS_PATH, 'utf-8')) as {
+            recoveryEvents?: RecoveryEvent[];
+          };
+          if (Array.isArray(mainReport.recoveryEvents)) {
+            mergedRecoveryEvents.push(...mainReport.recoveryEvents);
+          }
+          fs.unlinkSync(MAIN_PROCESS_EVENTS_PATH);
+        }
+      } catch {
+        /* unreadable main-process events file — informational only */
       }
 
       const byType: Record<string, number> = {};
@@ -97,6 +124,7 @@ class MiscErrorReporter implements Reporter {
         ).length,
         byType,
         errors: mergedErrors,
+        recoveryEvents: mergedRecoveryEvents,
       };
 
       fs.writeFileSync(OUTPUT_PATH, JSON.stringify(merged, null, 2), 'utf-8');
@@ -112,6 +140,17 @@ class MiscErrorReporter implements Reporter {
         return;
       }
       const report = JSON.parse(fs.readFileSync(OUTPUT_PATH, 'utf-8')) as MiscErrorReport;
+      const recovery = report.recoveryEvents ?? [];
+      if (recovery.length > 0) {
+        const counts: Record<string, number> = {};
+        for (const e of recovery) counts[e.kind] = (counts[e.kind] || 0) + 1;
+        console.log(
+          `\n🔁 [Recovery] ${recovery.length} recovered-from app/setup event(s) this run: ` +
+            Object.entries(counts)
+              .map(([kind, n]) => `${kind}=${n}`)
+              .join(', ')
+        );
+      }
       if (report.totalErrors === 0) {
         console.log('\n✅ [MiscErrors] No background errors captured during this run.\n');
         return;

@@ -8,8 +8,13 @@ import {
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
+  isRateLimitedPage,
+  tryRecoverFromRateLimit,
+  isAppErrorBoundaryPage,
+  tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
+import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
@@ -21,6 +26,20 @@ export class BasePage {
 
   constructor(page: Page) {
     this.page = page;
+  }
+
+  // WHY a public getter, not just leaving `page` protected (added
+  // 2026-09-22): a small, deliberate, additive exception to normally never
+  // reaching into a page object's internals from a test file — needed
+  // specifically so test-file-level diagnostic instrumentation (e.g.
+  // attaching temporary request/response listeners around one specific
+  // action to capture live network evidence for an intermittent,
+  // not-yet-root-caused failure) can access the underlying Page without
+  // page objects needing to expose a new method for every possible
+  // diagnostic need. Read-only, changes nothing about the page object's
+  // own behavior.
+  getPage(): Page {
+    return this.page;
   }
 
   // ─── Navigation ───────────────────────────────────────────
@@ -292,6 +311,68 @@ export class BasePage {
     }
   }
 
+  // WHY a separate combinator from withSessionExpiryRecovery() above, not a
+  // merged one (2026-09-29 — see isRateLimitedPage()'s own WHY comment in
+  // authManager.ts for the full incident this fixes): the SHAPE is
+  // deliberately identical (try/catch, detect a specific known page state,
+  // recover, retry once) per the standing instruction to reuse that shape
+  // rather than invent a new one — but the detection and recovery action are
+  // both genuinely different from session expiry, so keeping them as two
+  // single-purpose functions matches this file's own existing precedent
+  // (one function, one job) rather than blurring two unrelated recovery
+  // classes into one conditional-branching mega-function.
+  //
+  // WHY this method ALSO now checks isAppErrorBoundaryPage() (2026-09-30),
+  // NOT split into a third, separate withAppErrorRecovery() combinator: that
+  // "one function, one job" precedent above was about session-expiry vs.
+  // rate-limiting specifically, because those two need genuinely DIFFERENT
+  // recovery actions (re-login vs. a page refresh) — splitting them kept
+  // each recovery ACTION single-purpose. The 429 rate-limit page and this
+  // app-error-boundary state (see authManager.ts's own WHY comment on
+  // isAppErrorBoundaryPage() for the real CI evidence) both need the
+  // IDENTICAL remedy: reload and retry once. Detecting either condition
+  // here and reusing the same retry-once shape is the correct application
+  // of "one job," not a violation of it — the job is "recover from a known-
+  // bad, reload-fixable app page state," and both conditions are instances
+  // of that one job. A future condition needing a DIFFERENT recovery action
+  // should still get its own combinator, matching the original reasoning.
+  protected async withRateLimitRecovery<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      const rateLimited = await isRateLimitedPage(this.page);
+      const appErrorBoundary = !rateLimited && (await isAppErrorBoundaryPage(this.page));
+      if (!rateLimited && !appErrorBoundary) {
+        throw error;
+      }
+      if (rateLimited) {
+        logger.warn(
+          'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+        );
+        await tryRecoverFromRateLimit(this.page);
+      } else {
+        logger.warn(
+          'A wrapped call failed while the app showed its own generic error-boundary ("Something is broken") state — attempting one-time recovery'
+        );
+        await tryRecoverFromAppErrorBoundary(this.page);
+      }
+      // WHY the retry is wrapped only to RECORD the outcome (2026-10-06, load
+      // measurement — see ErrorCollector.recordRecoveryEvent): the same fn() is
+      // still awaited exactly once, and any error it throws is rethrown
+      // unchanged, so this method's return/throw behavior is identical to
+      // before. recordRecoveryEvent() itself can never throw.
+      const kind = rateLimited ? 'rate-limit-page' : 'error-boundary-page';
+      try {
+        const result = await fn();
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'recovered' });
+        return result;
+      } catch (retryError) {
+        ErrorCollector.recordRecoveryEvent({ kind, outcome: 'failed' });
+        throw retryError;
+      }
+    }
+  }
+
   async reloadPage(): Promise<void> {
     logger.info('Reloading page');
     await this.page.reload({ waitUntil: 'domcontentloaded' });
@@ -369,7 +450,7 @@ export class BasePage {
   // bigger single wait) because a single bigger timeout can't distinguish
   // "item slow to paint inside an already-open menu" from "menu itself
   // closed/never opened" — the same ambiguity the proven stability-window
-  // (reference-patterns.md §18) and bounded reload-and-retry (§5) patterns
+  // (docs/PATTERNS.md P13) and bounded reload-and-retry (P23) patterns
   // already solve elsewhere in this codebase.
   protected async clickDropdownMenuItemBounded(
     openMenu: () => Promise<void>,
@@ -476,6 +557,63 @@ export class BasePage {
       await locator.clear();
       await locator.fill(value);
     }
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // that every standard (non-custom) field across this app's create/edit
+  // forms is addressable by its real HTML `name` attribute (e.g.
+  // `input[name="lastName"]`, `input[name="firstName"]`) — the exact same
+  // convention LeadsPage's own private lastNameInput()/firstNameInput()
+  // locators already use internally. This feature's own tests need to
+  // fill exactly ONE standard field (Last Name — required before a Lead
+  // can be saved at all) without going through LeadsPage.fillLeadForm(),
+  // which fills the entire form (GPS address lookups, multiple react-
+  // selects, campaign fields) and would make 40+ narrow custom-field
+  // boundary tests dramatically slower and exposed to unrelated failure
+  // modes that have nothing to do with what those tests actually verify.
+  // Generalized here, not added as a one-off in a test file, because (a)
+  // CLAUDE.md's own convention forbids locators in test files — every
+  // locator must live in a page object — and (b) this mechanism is
+  // genuinely entity-agnostic (every module's standard fields share this
+  // same `name`-attribute convention), not specific to Lead or to this
+  // feature, so it belongs here rather than as a Lead-specific addition.
+  async fillStandardField(name: string, value: string, description = name): Promise<void> {
+    await this.fill(this.page.locator(`input[name="${name}"]`), value, description);
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // that an entity's detail-page tab strip is addressable by the real,
+  // semantic `data-targetid` HTML attribute (e.g.
+  // `a[data-targetid="Other Details"]`) — the exact same convention
+  // LeadsPage's own private otherDetailsDetailPageTab()/
+  // requirementDetailPageTab() locators already use internally, confirmed
+  // to generalize across every entity with this tabbed-detail-page shape
+  // (not something newly invented for this feature). This feature's own
+  // tests need to reach the "Other Details" tab (where every Lead custom
+  // field renders) to verify a persisted value via
+  // BasePage.assertCustomFieldOnDetail() — confirmed live that this tab's
+  // content is not present in the DOM until clicked (unlike this file's
+  // own carousel-slide handling, which keeps every slide mounted but
+  // CSS-hidden — a genuinely different mechanism), so skipping this click
+  // is not a safe shortcut. Generalized here rather than duplicated per
+  // module for the same reasoning as fillStandardField() just above.
+  async clickDetailPageTab(tabName: string, description = `"${tabName}" tab`): Promise<void> {
+    // WHY wrapped in withRateLimitRecovery() (2026-09-29 formFields lock-starvation
+    // investigation, item 1/Company): confirmed via a real CI failure's own captured
+    // page snapshot (FFRCO9/FFRCO6, sandbox run 36573185433) that the underlying
+    // click()'s 120s waitFor() timeout on this exact locator was NOT a missing
+    // render-prerequisite wait — the page had already been replaced by the app's
+    // own "Whoa! Too many requests at once!" 429 error page (see
+    // authManager.isRateLimitedPage()'s WHY comment for the full incident),
+    // reached via a call site Fix 1 (FormFieldsConfigPage.open()/searchField())
+    // never covered: this method is called directly against a Lead/Contact/
+    // Company/Task detail page, not the Form Fields config screen. Every real
+    // consumer of this method is a formFields spec (confirmed via full-repo
+    // grep) — the same rate-limit exposure that already required this recovery
+    // wrapper elsewhere in this feature, not a genuinely new render-timing gap.
+    await this.withRateLimitRecovery(() =>
+      this.click(this.page.locator(`a[data-targetid="${tabName}"]`), description)
+    );
   }
 
   async selectOption(locator: Locator, value: string, description = 'dropdown'): Promise<void> {
@@ -860,28 +998,133 @@ export class BasePage {
     tableLocator: Locator,
     description: string
   ): Promise<void> {
+    // WHY deadline-aware, not a flat config.timeouts.navigation everywhere
+    // (2026-09-30 — real, root-caused CI failure, sandbox run 36611987924
+    // (job 109552721989, shard 5/5): productsAndServices.rbac.spec.ts:20
+    // ("PS6" — "restricted user should navigate to products and services
+    // list") failed identically on BOTH attempts with `page.reload: Target
+    // page, context or browser has been closed`. Root cause, confirmed via
+    // direct log evidence, not guessed: PS6 is the ONLY test in that file
+    // with no explicit `test.setTimeout()` override (every one of its 6
+    // siblings calls `test.setTimeout(480000)`), leaving it on CI's default
+    // `playwright.config.ts` test-level timeout of exactly 120000ms — the
+    // SAME number `config.timeouts.navigation` resolves to in this exact CI
+    // environment (`sandbox.yml`'s `NAVIGATION_TIMEOUT=120000`). This
+    // method's own worst-case unwrapped time (initial race + a full
+    // assertTableVisible + reload + a second full assertTableVisible) can
+    // exceed 120s on its own — so whenever the FIRST attempt genuinely runs
+    // its own close-to-full budget, the OUTER Playwright test timeout
+    // (started earlier, at test-body entry) fires FIRST and tears down the
+    // browser context WHILE this method is still mid-recovery — which is
+    // exactly what "Target page, context or browser has been closed" during
+    // the reload attempt means, and exactly why it reproduced identically
+    // on the automatic retry (a deterministic budget collision, not random
+    // flakiness). This is the same class of bug already fixed once before
+    // in this codebase for fixtures/index.ts's `navigateAndConfirmLoggedIn()`
+    // (2026-08-26) — the identical remedy is applied here: consult the
+    // CURRENT test's own real remaining timeout budget via `test.info()`
+    // (already imported in this file, confirmed live elsewhere — see
+    // `test.skip(...)` above), cap every internal wait to what's actually
+    // left, and fail FAST with a clear, attributable diagnostic instead of
+    // attempting a doomed reload-and-retry that Playwright's own opaque
+    // test-timeout would silently kill anyway. Deliberately does NOT
+    // replace the immediate, isolated fix already applied to PS6 itself
+    // (adding its own missing `test.setTimeout(480000)`, matching every
+    // sibling test in the same file) — that closes THIS exact exposure
+    // immediately; this closes the general RISK CLASS for every other
+    // current and future caller of this shared method (Deals/Companies/
+    // Contacts/Leads/Tasks/Quotations/Products & Services) that might have
+    // the same gap without anyone having hit it yet.
+    const testInfo = test.info();
+    // WHY 0.85, the same fraction fixtures/index.ts's own deadline-aware fix
+    // uses (SETUP_DEADLINE_FRACTION) — leaves real headroom for whatever the
+    // calling test does AFTER this method returns, not 100% of the test's
+    // own budget consumed by list-readiness alone.
+    const DEADLINE_FRACTION = 0.85;
+    // WHY Date.now() here, not a true test-start timestamp (2026-09-30):
+    // this Playwright version's TestInfo has no `startTime`/live-elapsed-time
+    // property at all (confirmed via its own .d.ts — `duration` is
+    // documented as "always zero before the test finishes," useless for a
+    // live deadline) — the exact same constraint fixtures/index.ts's own
+    // `navigateAndConfirmLoggedIn()` precedent already works within (it
+    // anchors its own deadline the identical way: `Date.now() +
+    // testInfo.timeout * SETUP_DEADLINE_FRACTION`, not a true start time).
+    // Honest limitation, stated plainly: this UNDERSTATES total elapsed test
+    // time by whatever ran before this method was first called (fixture
+    // setup, any earlier navigation) — but this method is always called
+    // early in a test (right after a "go to list" navigation), so that gap
+    // is typically a few seconds against a 120s+ budget, not the dominant
+    // factor. This still directly and completely closes the confirmed real
+    // failure (PS6's own collision was overwhelmingly time spent INSIDE this
+    // method, not before it), even though it isn't a mathematically perfect
+    // deadline.
+    // WHY testInfo.timeout === 0 is treated as "no deadline constraint at
+    // all," not "deadline is right now": Playwright's own documented
+    // convention is that a timeout of 0 means UNLIMITED — a test that
+    // deliberately opts into no timeout (`test.setTimeout(0)`) must get this
+    // method's original, un-capped behavior, not an artificial 0ms deadline
+    // that would make every wait below fail instantly.
+    const deadline = testInfo.timeout > 0 ? Date.now() + testInfo.timeout * DEADLINE_FRACTION : Infinity;
+    // WHY Math.max(..., a real floor), mirroring fixtures/index.ts's
+    // identical guard: Playwright's own `timeout` option treats `0` as
+    // "wait forever," the opposite of what a near-zero remaining budget
+    // should mean here — this floor guarantees a real, small, still-
+    // meaningful wait is attempted (and can still fail fast on its own
+    // terms) rather than silently becoming an unbounded wait.
+    const MIN_STEP_BUDGET_MS = 5000;
+    const boundedTimeout = (): number =>
+      Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
+
     await this.page.waitForLoadState('domcontentloaded');
     await Promise.race([
-      this.page
-        .waitForResponse(responsePredicate, { timeout: config.timeouts.navigation })
-        .catch(() => null),
-      tableLocator
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
+      this.page.waitForResponse(responsePredicate, { timeout: boundedTimeout() }).catch(() => null),
+      tableLocator.waitFor({ state: 'visible', timeout: boundedTimeout() }).catch(() => null),
     ]);
 
+    // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
+    // evidence, sandbox run 36573185433: FFRPS5's own "Products & Services
+    // list table should be visible" failure). Direct screenshot evidence
+    // (both the admin and restricted user's pages) confirmed the app's own
+    // HTTP-429 "Too many requests" error page had replaced the list entirely
+    // — and the raw CI log confirmed this method's EXISTING reload-and-retry
+    // fallback below already fired once and still failed a second time
+    // (the retry landed on the same, still-active rate limit, not a genuine
+    // navigation-drift race this fallback was originally built for). Nested
+    // outside withSessionExpiryRecovery so either recovery class can
+    // independently catch and retry, mirroring the composition already
+    // established elsewhere in this feature (FormFieldsConfigPage.open()).
+    // This is a shared method (Deals/Companies/Contacts/Leads/Tasks/
+    // Quotations/Products & Services all call it) — purely additive, adds
+    // one more recovery layer without changing behavior for any non-429
+    // failure, so every consumer benefits from the same protection.
     const assertTableVisible = (): Promise<void> =>
-      this.withSessionExpiryRecovery(() =>
-        expect(tableLocator, `${description} list table should be visible`).toBeVisible({
-          timeout: config.timeouts.navigation,
-        })
+      this.withRateLimitRecovery(() =>
+        this.withSessionExpiryRecovery(() =>
+          expect(tableLocator, `${description} list table should be visible`).toBeVisible({
+            timeout: boundedTimeout(),
+          })
+        )
       );
 
     try {
       await assertTableVisible();
     } catch (error) {
+      // WHY fail fast here instead of always attempting the reload-and-retry
+      // (2026-09-30, see this method's own top WHY comment): if too little
+      // real budget remains to safely attempt BOTH a reload and another full
+      // wait, doing so anyway just reproduces the exact "context closed
+      // mid-recovery" symptom this fix exists to prevent — a real, honest,
+      // immediately-attributable failure here is strictly more useful than a
+      // confusing downstream Playwright-teardown error.
+      const MIN_VIABLE_RETRY_BUDGET_MS = 15000;
+      const remaining = deadline - Date.now();
+      if (Number.isFinite(deadline) && remaining < MIN_VIABLE_RETRY_BUDGET_MS) {
+        throw new Error(
+          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)}`
+        );
+      }
       logger.warn(
-        `${description} list table not visible within ${config.timeouts.navigation}ms (possible navigation drift) — reloading and retrying once: ${String(error)}`
+        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)}`
       );
       await this.page.reload({ waitUntil: 'domcontentloaded' });
       await assertTableVisible();
@@ -1055,7 +1298,22 @@ export class BasePage {
       : `_input_customFieldValues.cf${fieldName}`;
   }
 
-  private customFieldInputLocator(
+  // WHY 'protected', not 'private' (2026-09-23, Products & Services rollout
+  // of the Form Field Limit feature): Products & Services has no detail
+  // page at all (edit doubles as the only per-record view, confirmed live —
+  // see ProductsAndServicesPage's own class-level comment), so verifying a
+  // custom field's persisted value after save must read it back from the
+  // still-open EDIT FORM's own input, not a rendered detail-page display
+  // the way assertCustomFieldOnDetail() does for every other module. No
+  // other module needs this — every other entity has a real detail page.
+  // Widening access (never narrowing, never changing behavior) is the
+  // minimal, purely-additive way to let ProductsAndServicesPage reuse this
+  // exact same suffix-matching locator logic rather than duplicating it —
+  // per CLAUDE.md rule 1 ("build once, generically, in BasePage"). Zero
+  // impact on any existing caller: every current use of this method is
+  // still `this.customFieldInputLocator(...)` from inside BasePage itself
+  // or a subclass, unchanged.
+  protected customFieldInputLocator(
     fieldName: string,
     suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Locator {
@@ -1145,6 +1403,50 @@ export class BasePage {
       value,
       `custom field: ${description}`
     );
+  }
+
+  // WHY this exists (real, confirmed live bug, 2026-09-21 — found via a
+  // FormFields feature test, FFL18, that reproduced 3/3 in TRUE isolation,
+  // --workers=1, zero other load, ruling out backend flakiness): a caller
+  // that has just revealed the custom-field section via
+  // disableRequiredFieldsToggle() can hit that method's "already disabled,
+  // skip click" fast path (its state persists across sessions — confirmed
+  // live 2026-07-08) — which, unlike its own "click to disable" path,
+  // provides NO settling wait at all before returning. A caller that
+  // immediately calls fillTextLikeCustomField()/isCustomFieldPresent()
+  // right after can catch the custom-field section before it has genuinely
+  // finished rendering — the field then gets silently treated as "absent
+  // in this environment" (that method's own correct, by-design
+  // environment-safety contract for a GENUINELY missing field), when it is
+  // actually just not rendered YET. Confirmed via direct log evidence:
+  // "Custom field "Number" (cfNumber) not found in this environment —
+  // skipping fill" on a test where the field is known to exist and had
+  // been successfully filled moments earlier by an adjacent test in the
+  // same suite. This method gives a bounded, best-effort settling wait —
+  // NOT a hard requirement, since the field might be genuinely absent in
+  // some environment — the existing presence-checked fill/assert methods
+  // still make the authoritative absent-vs-present call afterward; this
+  // only removes the specific "checked before render completed" false
+  // negative. Deliberately scoped as a new, additive method rather than
+  // modifying disableRequiredFieldsToggle() itself, which is duplicated
+  // per-module (Leads/Companies/Contacts each own a private copy) and used
+  // by every existing test in those modules — changing its own timing
+  // behavior would be a much higher-blast-radius change than adding one
+  // new, opt-in wait a caller can choose to use.
+  async waitForCustomFieldToSettle(
+    fieldName: string,
+    suffixStyle: CustomFieldSuffixStyle = 'legacy',
+    timeoutMs = 5000
+  ): Promise<void> {
+    await this.customFieldInputLocator(fieldName, suffixStyle)
+      .first()
+      .waitFor({ state: 'attached', timeout: timeoutMs })
+      .catch(() => {
+        /* genuinely absent, or still not rendered after this bounded
+           wait — either way, the caller's own presence-checked method
+           (e.g. fillTextLikeCustomField()) makes the final determination,
+           not this best-effort settle. */
+      });
   }
 
   async setCheckboxCustomField(
@@ -1275,6 +1577,152 @@ export class BasePage {
       return null;
     }
     return result.data;
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): confirmed live
+  // (docs/known-issues/form-fields.md) that this app caches every entity's create/edit/list
+  // field layout (including custom-field min/max/regex config) in
+  // IndexedDB (`kylasStorage` → `layoutCache` object store, one key per
+  // entity), fetched once per browser session and never auto-refreshed —
+  // not on page reload, not on the list's own "Refresh" button. The only
+  // way to force a fresh fetch, confirmed live, is to clear that one
+  // entity's own cache entry. A full logout/login round-trip also works
+  // (confirmed) but is far slower and clears the entire session, not just
+  // this one cache entry — the scoped IndexedDB delete below was confirmed
+  // (follow-up doc §1) to be a clean, working, much faster equivalent: it
+  // leaves the auth token and every other cache store completely
+  // untouched, and was proven correct with a real before/after
+  // config-value round-trip (not saved → cleared → refetched → correct
+  // new value), not just a "still blank" check.
+  //
+  // WHY this takes the raw layoutCache key STRING, not an entity name to
+  // derive it from: confirmed live (follow-up doc §3.2) that this key is
+  // NOT a fixed transformation of the entity's name — Lead/Deal/Contact
+  // all happen to be the simple lowercase plural ("leads"/"deals"/
+  // "contacts"), but Products & Services' real key is "products-services",
+  // which no single derivation rule predicts (its own inner layout data
+  // separately uses "PRODUCT" singular, and its real API layout path uses
+  // yet a third shape — three different identifiers for one entity, none
+  // mechanically derivable from another). `IDBObjectStore.delete()` on a
+  // nonexistent key does not error — it silently deletes nothing — so a
+  // wrong guess here would fail silently, not loudly, surfacing only much
+  // later as an unrelated-looking flaky test. Each entity module must own
+  // and pass its own hand-verified key (e.g. LEAD_LAYOUT_CACHE_KEY in
+  // leadFactory.ts) — this method must never contain entity-name-to-key
+  // derivation logic or a per-entity lookup table of its own; that
+  // per-entity knowledge belongs with each entity's own factory/constants,
+  // the same place LEAD_CUSTOM_FIELD_NAMES already lives, keeping this
+  // file itself entity-agnostic — its own established convention (see
+  // fetchAuthenticatedApiData() just above).
+  //
+  // WHY a typed discriminated-union result, not a bare Promise<void>
+  // (following fetchAuthenticatedApiData()'s own shape above): a caller
+  // needs to distinguish "already absent" (key-not-found — arguably fine,
+  // idempotent) from a genuine failure (db/store missing, or a thrown
+  // exception) rather than a single opaque success/failure boolean.
+  async clearApplicationCache(layoutCacheKey: string): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        reason: 'db-not-found' | 'store-not-found' | 'key-not-found' | 'exception';
+        message?: string;
+      }
+  > {
+    type Result =
+      | { ok: true }
+      | {
+          ok: false;
+          reason: 'db-not-found' | 'store-not-found' | 'key-not-found' | 'exception';
+          message?: string;
+        };
+    const result: Result = await this.page.evaluate(async (key): Promise<Result> => {
+      const DB_NAME = 'kylasStorage';
+      const STORE_NAME = 'layoutCache';
+      try {
+        const dbs = (await indexedDB.databases?.()) ?? [];
+        if (!dbs.some((d) => d.name === DB_NAME)) {
+          return { ok: false, reason: 'db-not-found' };
+        }
+        return await new Promise<Result>((resolve) => {
+          const openReq = indexedDB.open(DB_NAME);
+          openReq.onerror = () =>
+            resolve({ ok: false, reason: 'exception', message: String(openReq.error) });
+          openReq.onsuccess = () => {
+            const db = openReq.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+              resolve({ ok: false, reason: 'store-not-found' });
+              return;
+            }
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const getReq = store.get(key);
+            getReq.onerror = () =>
+              resolve({ ok: false, reason: 'exception', message: String(getReq.error) });
+            getReq.onsuccess = () => {
+              if (getReq.result === undefined) {
+                resolve({ ok: false, reason: 'key-not-found' });
+                return;
+              }
+              const delReq = store.delete(key);
+              delReq.onsuccess = () => resolve({ ok: true });
+              delReq.onerror = () =>
+                resolve({ ok: false, reason: 'exception', message: String(delReq.error) });
+            };
+          };
+        });
+      } catch (e) {
+        return { ok: false, reason: 'exception', message: String(e) };
+      }
+    }, layoutCacheKey);
+
+    // WHY 'key-not-found' logs at info, not warn (real, confirmed live noise
+    // — 2026-09-22): this method's own WHY comment above already establishes
+    // that an absent key is an expected, idempotent no-op, not a failure —
+    // callers (e.g. tests/ui/formFields/leadFieldLimits.spec.ts's
+    // clearLeadApplicationCache()) already honor that by never failing on
+    // it. Logging it via logger.warn() alongside genuine failures
+    // ('db-not-found', 'store-not-found', 'exception') contradicted that
+    // documented contract and produced a misleading WARN on every run
+    // touching a session that has never cached this key yet — routinely
+    // true for every restricted-role test in that file, so it fired on
+    // effectively every run rather than only on a real problem. Every other
+    // reason is still a genuine, unexpected condition and stays at warn.
+    if (result.ok) {
+      logger.success(`clearApplicationCache: cleared layoutCache key "${layoutCacheKey}"`);
+    } else if (result.reason === 'key-not-found') {
+      logger.info(
+        `clearApplicationCache: layoutCache key "${layoutCacheKey}" was already absent — nothing to clear`
+      );
+    } else {
+      logger.warn(
+        `clearApplicationCache: failed to clear layoutCache key "${layoutCacheKey}" (${result.reason}` +
+          `${result.message ? ` — ${result.message}` : ''})`
+      );
+    }
+    return result;
+  }
+
+  // WHY this exists (2026-09-21, Form Field Limit feature): every entity's
+  // create/edit modal shares the same `#editEntityModal` structure and the
+  // same `.save-button` class — already treated as shared, generic markup
+  // elsewhere in this file (see getFormSectionContainer()'s own default
+  // `this.page.locator('#editEntityModal')`). Custom-field validation
+  // tests for this feature need to click Save and observe whether a
+  // network request fires at all. Going through e.g. LeadsPage.saveLead()'s
+  // own response-wait wrapper is wrong for this specific need: that method
+  // waits up to config.timeouts.navigation for a create/update response
+  // and, finding none, classifies the miss as a TRANSIENT backend error
+  // and retries the whole create — exactly the wrong interpretation for a
+  // value that's permanently, correctly blocked client-side (confirmed
+  // live, docs/known-issues/form-fields.md) and would make
+  // every such test wait a full navigation timeout for nothing. This is a
+  // thin, generic, modal-only click — callers decide for themselves
+  // whether/how to wait for a network response, or to assert none fires.
+  async clickModalSaveButton(context = 'entity modal'): Promise<void> {
+    await this.click(
+      this.page.locator('#editEntityModal button.save-button'),
+      `Save (${context})`
+    );
   }
 
   // WHY this exists (2026-07-30, found via a real CI failure): every
@@ -1639,8 +2087,8 @@ export class BasePage {
     const maxChipsToClear = 50;
     // WHY a bounded number of outer "settle rounds" wrapping the inner
     // per-chip removal loop, not just a single pass (fixed 2026-08-23, real
-    // PS10/sandbox-build-144 recurrence — see
-    // .claude/sandbox-build-144-task-b-chip-clearing.md): the real CI
+    // PS10/Build #144 recurrence — see
+    // docs/known-issues/locators-and-timing.md): the real CI
     // failure's own stack trace proved the inner loop legitimately reached
     // zero chips (it never hit the maxChipsToClear exhaustion path below,
     // which throws a different message) — the defense-in-depth recheck
@@ -1698,7 +2146,7 @@ export class BasePage {
       }
       // WHY a real `waitFor('visible')` TIMING OUT is the SUCCESS case here
       // (mirrors the proven stability-window idiom in
-      // reference-patterns.md §18, applied to the symmetric "reached zero"
+      // docs/PATTERNS.md P13, applied to the symmetric "reached zero"
       // direction instead of "menu opened"): if no chip's remove icon
       // becomes visible again within the window, the zero state genuinely
       // held — a real, condition-based check, not a fixed-duration blind
@@ -1725,6 +2173,86 @@ export class BasePage {
       throw new Error(
         `${description}: ${remainingChips} chip(s) still present after ${maxSettleRounds} settle rounds — clearing is unreliable`
       );
+    }
+  }
+
+  // WHY this exists (real, confirmed live 2026-09-22 — direct evidence from a
+  // headed reproduction, exact Playwright error text captured): the reopen
+  // click on a multi-select's own <input> below was observed blocked for a
+  // full 15s (Playwright's own internal actionability retry loop, ~26
+  // attempts) by a react-select-internal element (`css-<hash>` — an emotion-
+  // generated class, NOT the app's own `.is-invalid__menu` BEM class this
+  // method already checks) that was still sitting over the input and
+  // "intercepting pointer events". Checking `.is-invalid__menu` visibility
+  // alone (as the two call sites below already did before this fix) is
+  // therefore insufficient — it can read "closed" while a DIFFERENT, unnamed
+  // wrapper element still physically covers the click target. Rather than
+  // guessing the wrapper's own class name (emotion hashes are build-
+  // specific, not a stable selector to key off) or blindly lengthening the
+  // click timeout (delays the same failure, doesn't fix it), this polls the
+  // REAL element actually sitting at the click point via
+  // document.elementFromPoint() and proceeds only once it genuinely resolves
+  // to the intended target (or a descendant of it) — the same direct,
+  // ground-truth check `locator.click()`'s own actionability logic uses
+  // internally, just performed BEFORE committing to the click so a still-
+  // lingering wrapper is waited out instead of retried-and-failed against.
+  // Bounded and best-effort: if the target never clears, this simply returns
+  // early and lets the real click below run (and fail with its own clear,
+  // diagnostic "intercepts pointer events" error) rather than hanging
+  // indefinitely.
+  //
+  // WHY `protected`, not `private` (2026-09-22): the ORIGINAL theory that
+  // this was specifically react-select's own menu-close-transition wrapper
+  // is now confirmed too narrow — the identical `css-1dsbpcp` class (from
+  // the identical `css-qh6yz6` subtree) was independently observed live
+  // blocking a completely unrelated element (LeadsPage's Save button, which
+  // has no react-select menu anywhere nearby) the same day. Whatever this
+  // overlay actually is, it is not scoped to one widget or one page — this
+  // helper needed to become reusable by a subclass (LeadsPage) for its own,
+  // unrelated click site rather than staying a BasePage-internal-only
+  // implementation detail of one react-select helper.
+  // WHY compared against the locator's OWN resolved element, not a
+  // hardcoded selector list (corrected 2026-09-22, same day as the
+  // `protected` visibility change above — see that WHY comment): the
+  // original `target?.closest('input, [class*="__control"]')` check only
+  // ever matched a react-select input, so it silently did nothing useful
+  // when this method was reused for LeadsPage's Save button (a `<button>`,
+  // matching neither pattern) — confirmed live: LeadsPage's Save-button
+  // click-site hit the identical `css-1dsbpcp` overlay this method exists to
+  // wait out, and adding the call without first fixing this match logic
+  // would have been a no-op fix. Grabbing the locator's real ElementHandle
+  // and comparing it directly against whatever `document.elementFromPoint()`
+  // returns (an exact match, or a containment check either direction, to
+  // tolerate the point resolving to a child/ancestor of the real target)
+  // works identically for any element type — a button, an input, a
+  // react-select control — with no per-caller selector guessing needed.
+  protected async waitForClickTargetUnobstructed(
+    locator: Locator,
+    timeoutMs = 5000
+  ): Promise<void> {
+    const handle = await locator.elementHandle().catch(() => null);
+    if (!handle) return;
+    try {
+      const box = await locator.boundingBox().catch(() => null);
+      if (!box) return;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      await this.page
+        .waitForFunction(
+          ({ el, cx, cy }: { el: Element; cx: number; cy: number }) => {
+            const atPoint = document.elementFromPoint(cx, cy);
+            if (!atPoint) return false;
+            return atPoint === el || el.contains(atPoint) || atPoint.contains(el);
+          },
+          { el: handle, cx, cy },
+          { timeout: timeoutMs }
+        )
+        .catch(() => {
+          /* best-effort — the real click immediately after this still runs and
+             surfaces its own clear error if something is genuinely still stuck. */
+        });
+    } finally {
+      await handle.dispose().catch(() => {});
     }
   }
 
@@ -1790,7 +2318,7 @@ export class BasePage {
       // instead of empty control space — silently un-selecting that chip
       // instead of reopening the menu. This was the actual root cause of the
       // "chip drop" flake previously attributed to an unconfirmed app-level
-      // React race (see CLAUDE.md's "Lead multi-select fields ('chip drop')
+      // React race (see docs/known-issues/locators-and-timing.md's "Lead multi-select 'chip drop'
       // — root-caused and fixed" entry). The input is a distinct
       // child DOM node with its own small bounding box that never overlaps a
       // chip's remove icon, so clicking it is immune to this collision
@@ -1803,6 +2331,7 @@ export class BasePage {
         .isVisible()
         .catch(() => false);
       if (!menuOpen) {
+        await this.waitForClickTargetUnobstructed(controlInput);
         await this.click(controlInput, `multi-select control: ${description}`);
         await this.page
           .locator('.is-invalid__menu .is-invalid__option')
@@ -1840,6 +2369,7 @@ export class BasePage {
           .isVisible()
           .catch(() => false);
         if (!menuOpenForRetry) {
+          await this.waitForClickTargetUnobstructed(controlInput);
           await this.click(controlInput, `multi-select control: ${description}`);
           await this.page
             .locator('.is-invalid__menu .is-invalid__option')
@@ -1861,6 +2391,29 @@ export class BasePage {
       selected.push(optionText);
     }
     await this.page.keyboard.press('Escape');
+    // WHY wait for the menu to actually become hidden here, not just
+    // press Escape and move on (real, confirmed live finding, 2026-09-22 —
+    // found while investigating a Lead-create Save click that fires its
+    // real React handler yet produces no request): `press('Escape')` only
+    // guarantees the key EVENT was dispatched — it says nothing about
+    // whether the resulting React state update (closing this menu,
+    // committing the final selection into whatever parent form state a
+    // Save handler later reads) has actually completed by the time the
+    // very next statement runs. Live log evidence showed this method
+    // returning and the caller's own Save click firing within the SAME
+    // millisecond with zero gap in between — a timing a real user clicking
+    // through the UI could never produce (moving a mouse from this control
+    // to a Save button always costs real, perceptible time). Waiting for a
+    // real, observable signal that the menu has genuinely closed — not an
+    // arbitrary sleep — gives React's own state update the same natural
+    // settling time a human's normal pace would have provided for free.
+    await this.page
+      .locator('.is-invalid__menu')
+      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
+      .catch(() => {
+        /* already hidden, or never opened this specific instance — either
+           way, nothing further to wait for here. */
+      });
 
     // WHY: confirmed live (2026-07-08) — every individual chip can verify as
     // landed at the moment it's clicked (the per-click check above), yet a
@@ -1924,7 +2477,7 @@ export class BasePage {
   //
   // WHY the simple forward-only loop, replacing an earlier, more elaborate
   // bidirectional-navigation version (fixed 2026-08-10 — see
-  // PRODUCTS_AND_SERVICES_PROGRESS.md): that version computed the
+  // docs/known-issues/products-and-services.md): that version computed the
   // currently-visible month range via a bounding-rect-filtered DOM read and
   // decided forward-vs-backward from it, specifically to handle a
   // once-observed edge case (target date === field's already-set value, yet
@@ -1958,7 +2511,7 @@ export class BasePage {
 
     // WHY 400ms, not the 1000ms this shape uses in Quotations/Deals' own
     // separate, untouched native date-pickers (fixed 2026-08-10, per the
-    // user's own speed investigation — see PRODUCTS_AND_SERVICES_PROGRESS.md):
+    // user's own speed investigation — see docs/known-issues/products-and-services.md):
     // custom-field dates are always generated 0-30 days out and the
     // calendar always opens on the current month, so at most ONE forward
     // click is ever needed — the real cost was an unconditional ~1000ms
@@ -1989,7 +2542,7 @@ export class BasePage {
     }
     // WHY this retry-with-reopen exists (found live, 2026-08-10, during the
     // user's own navigation-speed investigation — see
-    // PRODUCTS_AND_SERVICES_PROGRESS.md's CRITICAL entry): a real,
+    // docs/known-issues/products-and-services.md's CRITICAL entry): a real,
     // intermittent (~30-50% of real create+edit cycles observed) failure
     // where `dayCell.click()` throws "element was detached from the DOM"
     // after the cell was correctly found — always on the EDIT flow's FIRST
@@ -2605,7 +3158,7 @@ export class BasePage {
     // WHY this specific URL pattern (`/v1/products/(search|lookup)`): the
     // Products module's OWN list/create/duplicate-check flows are confirmed
     // live to use `/v1/products/search` (POST) and `/v1/products/lookup`
-    // (GET) — see PRODUCTS_AND_SERVICES_PROGRESS.md's live-investigation
+    // (GET) — see docs/known-issues/products-and-services.md's live-investigation
     // entry. This module's own async product search is a strong, but NOT
     // independently network-captured, inference that the embedded row search
     // reuses one of these same two endpoints (Kylas's own convention is one
