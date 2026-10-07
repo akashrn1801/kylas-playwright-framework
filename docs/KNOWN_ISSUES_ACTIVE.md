@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-08 @ 2fa56be
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -54,6 +54,11 @@
 - **Status:** open (verified: `grep concurrency .github/workflows/*.yml` → no matches) · **Since:** 2026-09-29
 - **What:** `qa.yml`, `stage.yml`, `main.yml`, `sandbox.yml` can run simultaneously across branches with no queuing or cancel-in-progress, stacking tens of concurrent jobs and raising concurrent `globalSetup` pressure (the HTTP 429 mechanism, [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md)).
 - **Next check:** confirm the account's concurrent-job allowance (not knowable from the repo); then decide per-branch `group:` + `cancel-in-progress`. Workflow edits need your review. See [CI_PIPELINES.md](./CI_PIPELINES.md).
+
+### KI-34 — Sandbox formFields split never exercised in a real CI run
+- **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
+- **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29

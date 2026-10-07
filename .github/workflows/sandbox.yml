@@ -37,7 +37,8 @@ on:
 # sharding every sandbox run into N parallel jobs would waste N-1 whole
 # extra runners (each paying ~5-8 min of npm ci/browser-install overhead) on
 # the common case of a small selective run that finishes in minutes on its
-# own. The `detect` job below decides shard count from the SAME condition
+# own (true for non-formFields selections only; since 2026-10-07 formFields
+# selections always go to the per-entity matrix, never to run-tests). The `detect` job below decides shard count from the SAME condition
 # detect-tests.sh already uses to escalate (TARGET == "--grep @regression"):
 # when escalated, shard count is computed LIVE from the real test count via
 # the identical `ceil(testCount / 125)` formula qa.yml/stage.yml/main.yml
@@ -75,12 +76,17 @@ jobs:
       shards_json: ${{ steps.decide.outputs.shards_json }}
       workers: ${{ steps.decide.outputs.workers }}
       test_count: ${{ steps.decide.outputs.test_count }}
-      # WHY (2026-09-29): see the "decide" step's own WHY comment on the
-      # formFields carve-out. Only 'true' when TARGET is the escalated
-      # full-regression case — the ONLY case where run-tests is ever
-      # actually sharded (SHARD_TOTAL>1), which is the only case the
-      # cross-shard race this carve-out defends against can occur in.
+      # WHY (2026-09-29, widened 2026-10-07): see the "decide" step's own WHY
+      # comment on the formFields carve-out. 'true' when TARGET is the
+      # escalated full-regression case OR when the selected paths include
+      # formFields tests (run 37658909999: a FormFieldsConfigPage.ts-only
+      # change ran all 417 formFields tests as ONE job). In both cases the
+      # per-entity matrix runs them and run-tests never does.
       run_formfields_track: ${{ steps.decide.outputs.run_formfields_track }}
+      # WHY (2026-10-07): 'false' when the selected scope is formFields tests
+      # ONLY — run-tests then has nothing left to run and is skipped (see its
+      # own `if`). 'true' for the escalated, smoke and every other case.
+      run_scoped_tests: ${{ steps.decide.outputs.run_scoped_tests }}
       formfields_entities_json: ${{ steps.sharedConfig.outputs.formfields_entities_json }}
     steps:
       - uses: actions/checkout@v5
@@ -169,23 +175,25 @@ jobs:
           # split tests across more than one GitHub Actions runner.
           #
           # WHY the formFields carve-out (scripts/plan-shards.ts /
-          # run_formfields_track) is gated on this exact same condition
-          # (2026-09-29, planner swapped in same day): the cross-shard
-          # config-mutation race this carve-out defends against
-          # (docs/known-issues/sharding-and-locks.md's dated 2026-09-29 entry) can only ever
-          # happen when run-tests is actually sharded (SHARD_TOTAL>1) — which
-          # only happens in this branch. CRITICALLY, this branching must be
-          # preserved exactly, not simplified to "always call the planner":
-          # in the small-selective (else) branch below, detect-tests.sh CAN
-          # select formFields paths directly (e.g. a change to a formFields
-          # spec/page-object file) — those tests must still run, unsharded,
-          # via $TARGET as-is. Routing that branch through plan-shards.ts
-          # too would silently DROP those formFields tests entirely (the
-          # script's hardcoded exclusion has no awareness of "were these
-          # explicitly selected on purpose") — a real regression, not a
-          # safety improvement, since SHARD_TOTAL is always 1 there anyway,
-          # meaning the existing local lock is already fully correct on its
-          # own with zero cross-shard exposure to defend against.
+          # run_formfields_track) has two entry points (2026-09-29, widened
+          # 2026-10-07 after run 37658909999): formFields tests must NEVER run
+          # inside run-tests, whichever way they were selected.
+          #   1. Escalated ("--grep @regression"): plan-shards.ts excludes
+          #      them by path prefix (config/sharedConfigSuites.json).
+          #   2. Path target (detect-tests.sh selected tests/ui/formFields/ +
+          #      tests/rbac/formFields/, directly or via a content-based
+          #      dependency): split-formfields-target.sh removes those paths
+          #      from the scoped target with the SAME path-prefix rule, and
+          #      the per-entity matrix runs them. Before this, case 2 ran all
+          #      417 formFields tests as one `--shard=1/1` job (the exact
+          #      single-machine run the matrix exists to avoid; the old
+          #      comment here wrongly called that "safe"). All 6 entities run
+          #      whenever any formFields path is selected: the matrix is
+          #      fixed (one job per entity) and the lock is per entity.
+          # A "--grep @smoke" fallback also matches the few @smoke formFields
+          # tests; that is deliberately unchanged (small, read-only, see
+          # docs/known-issues/sharding-and-locks.md 2026-10-07 entry).
+          RUN_SCOPED_TESTS=true
           if [ "$TARGET" = "--grep @regression" ]; then
             RUN_FORMFIELDS_TRACK=true
             # WHY scripts/plan-shards.ts here, not the old inline arithmetic:
@@ -199,17 +207,69 @@ jobs:
             TEST_COUNT_REST=$(grep '^test_count=' "$GITHUB_OUTPUT" | tail -1 | cut -d'=' -f2)
             echo "Rest-of-suite test count (excluding formFields, carved out separately): $TEST_COUNT_REST"
           else
-            RUN_FORMFIELDS_TRACK=false
-            TEST_COUNT_REST=$TEST_COUNT
-            # WHY files:[] here (2026-09-29): an empty file list signals to
-            # run-tests below "no file-atomic plan was computed for this
-            # branch — fall back to running $TARGET as-is via --shard=1/1",
-            # exactly matching this branch's pre-existing, unchanged
-            # behavior. See run-tests' own WHY comment for how it branches
-            # on this.
-            echo "shard_total=1" >> "$GITHUB_OUTPUT"
-            echo "shards_json=[{\"shardId\":1,\"files\":[],\"testCount\":$TEST_COUNT}]" >> "$GITHUB_OUTPUT"
-            echo "test_count=$TEST_COUNT" >> "$GITHUB_OUTPUT"
+            SPLIT=$(bash .github/scripts/split-formfields-target.sh "$TARGET")
+            FF_SELECTED=$(echo "$SPLIT" | grep '^formfields_selected=' | cut -d'=' -f2-)
+            FF_TARGET=$(echo "$SPLIT" | grep '^formfields_target=' | cut -d'=' -f2-)
+            REST_TARGET=$(echo "$SPLIT" | grep '^rest_target=' | cut -d'=' -f2-)
+            echo "formFields selected: $FF_SELECTED | formFields paths: '$FF_TARGET' | scoped paths: '$REST_TARGET'"
+            RUN_FORMFIELDS_TRACK=$FF_SELECTED
+            if [ "$FF_SELECTED" = "true" ]; then
+              # Guard "never run twice, never drop": the two halves must add
+              # up to exactly the original target's test count.
+              set +e
+              FF_LIST=$(npx playwright test --project=chromium --list $FF_TARGET 2>&1)
+              FF_EXIT=$?
+              set -e
+              if [ "$FF_EXIT" -ne 0 ]; then
+                echo "::error::npx playwright test --list failed (exit $FF_EXIT) for formFields paths '$FF_TARGET'. Full output:"
+                echo "$FF_LIST"
+                exit 1
+              fi
+              FF_COUNT=$(echo "$FF_LIST" | grep -c "chromium" || true)
+              if [ -n "$REST_TARGET" ]; then
+                set +e
+                REST_LIST=$(npx playwright test --project=chromium --list $REST_TARGET 2>&1)
+                REST_EXIT=$?
+                set -e
+                if [ "$REST_EXIT" -ne 0 ]; then
+                  echo "::error::npx playwright test --list failed (exit $REST_EXIT) for scoped paths '$REST_TARGET'. Full output:"
+                  echo "$REST_LIST"
+                  exit 1
+                fi
+                TEST_COUNT_REST=$(echo "$REST_LIST" | grep -c "chromium" || true)
+              else
+                TEST_COUNT_REST=0
+              fi
+              if [ $((FF_COUNT + TEST_COUNT_REST)) -ne "$TEST_COUNT" ]; then
+                echo "::error::formFields split lost or duplicated tests: formFields $FF_COUNT + scoped $TEST_COUNT_REST != original $TEST_COUNT (target '$TARGET')."
+                exit 1
+              fi
+              echo "formFields tests moved to the per-entity matrix: $FF_COUNT | scoped tests left for run-tests: $TEST_COUNT_REST"
+              TARGET=$REST_TARGET
+            else
+              TEST_COUNT_REST=$TEST_COUNT
+            fi
+            if [ -z "$TARGET" ]; then
+              # formFields-only change: nothing left for run-tests. It is
+              # skipped via its own `if`; shard_total=0 keeps merge-and-report's
+              # expected-blob count at exactly the 6 matrix reports. The dummy
+              # shards_json entry is never executed — it only keeps the matrix
+              # expression valid.
+              RUN_SCOPED_TESTS=false
+              echo "shard_total=0" >> "$GITHUB_OUTPUT"
+              echo "shards_json=[{\"shardId\":1,\"files\":[],\"testCount\":0}]" >> "$GITHUB_OUTPUT"
+              echo "test_count=0" >> "$GITHUB_OUTPUT"
+            else
+              # WHY files:[] here (2026-09-29): an empty file list signals to
+              # run-tests below "no file-atomic plan was computed for this
+              # branch — fall back to running $TARGET as-is via --shard=1/1",
+              # exactly matching this branch's pre-existing, unchanged
+              # behavior. See run-tests' own WHY comment for how it branches
+              # on this.
+              echo "shard_total=1" >> "$GITHUB_OUTPUT"
+              echo "shards_json=[{\"shardId\":1,\"files\":[],\"testCount\":$TEST_COUNT_REST}]" >> "$GITHUB_OUTPUT"
+              echo "test_count=$TEST_COUNT_REST" >> "$GITHUB_OUTPUT"
+            fi
           fi
           # WHY sized off TEST_COUNT_REST, not the original TEST_COUNT
           # (2026-09-29): WORKERS now governs only run-tests' own invocation
@@ -231,6 +291,7 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
           echo "run_formfields_track=$RUN_FORMFIELDS_TRACK" >> "$GITHUB_OUTPUT"
+          echo "run_scoped_tests=$RUN_SCOPED_TESTS" >> "$GITHUB_OUTPUT"
 
       # WHY this step exists (2026-09-30, Part 2/E1 of the contributor-guide-
       # and-guardrails work — see docs/CONTRIBUTING_TESTS.md §C and
@@ -251,12 +312,19 @@ jobs:
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
     needs: detect
+    # WHY (2026-10-07): skipped when the selection was formFields-only — all of
+    # it runs in run-formfields-tests, so nothing is left here and a "no tests
+    # found" failure cannot happen. Skipped (not failed) lets
+    # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
+    if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ubuntu-latest
-    # WHY 180 (2026-09-09): sized for the escalated (4-shard, ~90 min/shard
-    # projected — identical scope/reasoning to qa.yml's own 499-test shard)
-    # case, which is the only one that could ever approach a timeout. The
-    # common, non-escalated case finishes in minutes and never approaches
-    # this regardless of the ceiling chosen.
+    # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
+    # escalated (~90 min/shard projected, qa.yml's shard budget) case.
+    # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
+    # formFields selection ran all 417 formFields tests here as one job. They
+    # now always go to run-formfields-tests, so what is left is the selected
+    # non-formFields modules. 180 is kept: no measured scoped-run duration
+    # contradicts it (none was measured; unverified).
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -334,11 +402,9 @@ jobs:
           # atomic, no --shard flag). An EMPTY file list means the common,
           # non-escalated case (detect job's else branch) — preserved
           # completely unchanged from before this fix: run $TARGET as-is via
-          # --shard=1/1, which may legitimately include formFields paths
-          # directly (detect-tests.sh can select them for a formFields-
-          # specific change) — safe here because this path is, by
-          # construction, always exactly 1 shard, so no cross-shard race is
-          # possible.
+          # --shard=1/1. Since 2026-10-07 $TARGET never contains formFields
+          # paths (the detect job strips them via split-formfields-target.sh);
+          # they run only in run-formfields-tests.
           if [ -n "$FILES" ]; then
             echo "Running (file-atomic): npx playwright test --project=chromium $TARGET --workers=$WORKERS $FILES"
             npx playwright test --project=chromium $TARGET --workers=$WORKERS $FILES \
@@ -411,11 +477,11 @@ jobs:
   # shards run-tests itself computes, how the suite grows, or how
   # Playwright's internal grouping behaves in a future version — the
   # pairing is fixed by this matrix, not derived. Gated on
-  # run_formfields_track (see the detect job's own WHY comment): only the
-  # escalated full-regression case ever shards run-tests at all, so this is
-  # the only case where the race this job defends against can occur — the
-  # small-selective case always runs as one shard, where the existing local
-  # lock is already fully correct on its own.
+  # run_formfields_track (see the detect job's own WHY comment): true for the
+  # escalated full-regression case AND whenever the selection includes
+  # formFields paths (2026-10-07; the old "small selective runs are one shard
+  # so the local lock suffices" reasoning ran 417 tests on one machine, run
+  # 37658909999).
   run-formfields-tests:
     name: playwright-formFields (${{ matrix.entity }})
     # WHY sequenced AFTER run-tests (2026-10-06): see qa.yml's identical
