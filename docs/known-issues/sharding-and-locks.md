@@ -3,9 +3,9 @@
 > **Purpose:** Resolved incidents behind how CI splits the suite (6h ceiling, file-atomic planner, formFields carve-out/sequencing) and how shared account-wide config is protected.
 > **Read when:** Changing a workflow's shard/`needs:` structure, `scripts/plan-shards.ts`, `config/sharedConfigSuites.json`, `tests/ui/formFields/formFieldLockFactory.ts`, or adding a test that depends on order or on shared config.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-07 @ 2fa56be
 
-Open follow-ups (non-scaling formFields matrix, missing `concurrency:` guard) are in `docs/KNOWN_ISSUES_ACTIVE.md`. The decisions are summarised in `docs/adr/`.
+Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the new `concurrency:` groups, KI-34) are in `docs/KNOWN_ISSUES_ACTIVE.md`. The decisions are summarised in `docs/adr/`.
 
 ### GitHub-hosted jobs have a hard 6-hour ceiling — 2026-09-08/09
 - **Symptom:** qa, stage and escalated sandbox runs were killed at 6h01–6h02m with "The job has exceeded the maximum execution time of 6h0m0s", even where `timeout-minutes: 480` was set.
@@ -62,3 +62,10 @@ Open follow-ups (non-scaling formFields matrix, missing `concurrency:` guard) ar
 - **Fix:** `run-formfields-tests` gets `needs: [run-tests]` (sandbox: `[detect, run-tests]`) plus `if: ${{ !cancelled() }}` — `needs` alone would skip formFields after any core failure. Product fixtures are created only when the invocation may run a Products & Services spec (`src/auth/productFixtureNeed.ts`; ambiguous → create; stale fixture file deleted on skip). A `max-parallel` cap was evaluated and not added. Cost: wall-clock roughly doubles for the sharded pipelines. `main.yml` caveat: all jobs carry `environment: production`, so required reviewers could produce a second approval prompt.
 - **Revert:** Delete the `needs`/`if` lines on `run-formfields-tests` in the four workflows; replace the `selectionNeedsProductFixtures` block in `globalSetup.ts` with a bare `await ensureProductFixtures();`.
 - **Commit:** `1bd03cc`.
+
+### No `concurrency:` guard on any workflow — guard added 2026-10-06, not yet proven (was KI-10)
+- **Symptom:** `grep concurrency .github/workflows/*.yml` returned nothing (since 2026-09-29): runs of `qa/stage/main/sandbox` on one account could overlap, stacking concurrent jobs and interleaving account-wide form-field config changes.
+- **Root cause:** none configured; the file lock only coordinates processes on one machine.
+- **Fix:** workflow-level `concurrency:` per account, `cancel-in-progress: false`: `kylas-qa` (`qa.yml`), `kylas-staging` (`stage.yml`, `sandbox.yml`), `kylas-prod` (`main.yml`, `prod.yml`); `dev.yml` untouched. Verified only by actionlint (syntax); runtime behaviour (approval-wait holding the group, pending-run displacement, Jenkins not covered) is open in KI-34.
+- **Revert:** delete the `concurrency:` blocks in those five files.
+- **Commit:** not committed yet. [ADR 0009](../adr/0009-field-config-reset-and-account-lock.md).
