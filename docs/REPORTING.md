@@ -3,7 +3,7 @@
 > **Purpose:** How a test run becomes a summary email, a history ledger entry and a background-error report; what each `src/notifications` module owns.
 > **Read when:** Changing anything under `src/notifications/`, `src/reporters/`, `src/error-collector/`, or `scripts/merge-misc-errors.ts`; debugging an odd email or an empty trend section.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-07 @ 2fa56be
 
 ## 1. Data flow
 
@@ -36,11 +36,12 @@ Local runs trigger `notify` through `posttest` (skipped when `$CI` is set). In C
 | `JobStats.ts` | GitHub Actions only: Jobs API → per-job durations, total job-minutes (completed jobs only), time-overlap detection between jobs, per-shard recovery-event rows. Degrades to `null` on any failure. |
 | `EmailTemplate.ts` | HTML renderer: an orchestrator plus one `buildXxx()` per section; carries `REPORT_ENGINE_VERSION`, independent of `package.json`. |
 | `src/notifications/config/notificationConfig.ts`, `adapters/EmailAdapter.ts` | SMTP settings (Gmail, Zoho fallback) and recipient lists, per-branch first then per-environment. |
+| `FieldConfigReset.ts` | Shared shape and loader for `reports/<env>/field-config-reset.json`, written by `scripts/reset-field-config.ts`; returns `null` on any problem so the email just omits the line. |
 | `redact.ts` | Secret scrubbing for anything printed. |
 
 ## 3. Email sections
 
-Stale-report warning (first, above the masthead, only when stale) · masthead with Automation Health and a full-width status banner · colour-coded ENV / BRANCH / BUILD / SOURCE badges · Executive Summary (deployment recommendation, suite drift, clusters) · health score with factors · KPI tiles (total, passed, failed, skipped, flaky, pass rate, duration, retries with genuine vs swept split) and signal chips · trend (delta, pass-rate sparkline, recurring flaky/failing, modules trending worse) · Module Analytics (ranked by health; retries column; stability trend line) · Slowest Tests (whole run) and Slowest per module · Flaky Tests with historical frequency · Failure Clusters (each failure keeps full detail; "Related history" link when the index matches) · background errors (unexpected / Expected RBAC / Known background noise, app vs infra) · Action Required · Environment · CI/CD and Artifacts (run URL, re-run link only when real, history-ledger link) · CI Job Stats (GitHub only: per-job times, total job-minutes, time overlaps, load signals by job) · footer.
+Stale-report warning (first, above the masthead, only when stale) · masthead with Automation Health and a full-width status banner · colour-coded ENV / BRANCH / BUILD / SOURCE badges · Executive Summary (deployment recommendation, suite drift, clusters) · health score with factors · KPI tiles (total, passed, failed, skipped, flaky, pass rate, duration, retries with genuine vs swept split) and signal chips · trend (delta, pass-rate sparkline, recurring flaky/failing, modules trending worse) · Module Analytics (ranked by health; retries column; stability trend line) · Slowest Tests (whole run) and Slowest per module · Flaky Tests with historical frequency · Failure Clusters (each failure keeps full detail; "Related history" link when the index matches) · dedicated form-field reset line (informational only: one line when all 18 fields are blank, a warning box listing failed fields or an unfinished reset; omitted when `reports/<env>/field-config-reset.json` is absent or the mode is `dry-run`; never changes verdict, health score or counts; `FieldConfigReset.ts`, [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md); never viewed rendered) · background errors (unexpected / Expected RBAC / Known background noise, app vs infra) · Action Required · Environment · CI/CD and Artifacts (run URL, re-run link only when real, history-ledger link) · CI Job Stats (GitHub only: per-job times, total job-minutes, time overlaps, load signals by job) · footer.
 
 ## 4. Run history ledger (`ci/reporting-history`)
 
