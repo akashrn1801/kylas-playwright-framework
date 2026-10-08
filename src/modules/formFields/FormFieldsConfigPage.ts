@@ -50,7 +50,9 @@ export interface FieldConfigSnapshot {
 // whether it's already selected — reads from a single source instead of
 // three independent literals that could silently drift apart if the text
 // is ever re-verified and found to have changed.
-const NO_REGEX_OPTION_LABEL = 'No Regex';
+// Exported (2026-10-07) so scripts/reset-field-config.ts judges "blank" against
+// this same single source instead of a second copy of the literal.
+export const NO_REGEX_OPTION_LABEL = 'No Regex';
 
 // WHY this class's config-mutating methods (configureFieldLimit,
 // configureFieldRegex, clearFieldConfiguration) are NOT internally

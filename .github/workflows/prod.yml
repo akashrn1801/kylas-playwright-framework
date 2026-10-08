@@ -10,6 +10,22 @@ on:
         description: 'Why are you running against Prod?'
         required: true
         default: 'Manual verification'
+# WHY one workflow-level concurrency group PER ACCOUNT, never cancelling (ADR 0009):
+# runs of these workflows share one account whose form-field
+# configuration is account-wide, so overlapping runs on it can corrupt each other's
+# limits (the cross-shard race in docs/known-issues/sharding-and-locks.md, one
+# level up). `kylas-prod` is shared by main.yml and prod.yml, which both drive the same prod
+# account. dev.yml is deliberately NOT in any group.
+# `cancel-in-progress: false` makes a
+# newer run WAIT for the running one instead of killing it.
+# GitHub caveat: a group holds ONE running and ONE pending run. A third run
+# arriving while one is pending CANCELS the pending one (it never starts and
+# sends no email). Only workflows in this repository are covered; a Jenkins job
+# on the same account is not.
+concurrency:
+  group: kylas-prod
+  cancel-in-progress: false
+
 jobs:
   run-tests:
     name: playwright-ci
@@ -27,8 +43,11 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: npm ci
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
       - name: Run prod-safe tests
         env:
           ENV: prod
