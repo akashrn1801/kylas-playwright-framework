@@ -103,7 +103,11 @@ jobs:
       # ONLY — run-tests then has nothing left to run and is skipped (see its
       # own `if`). 'true' for the escalated, smoke and every other case.
       run_scoped_tests: ${{ steps.decide.outputs.run_scoped_tests }}
-      formfields_entities_json: ${{ steps.sharedConfig.outputs.formfields_entities_json }}
+      # WHY from `decide` (2026-10-08): sandbox runs only the SELECTED formFields
+      # entities, so the matrix list comes from detect-tests.sh, not straight
+      # from config/sharedConfigSuites.json. Never empty: ["none"] when the
+      # track is off (the job is then skipped by run_formfields_track).
+      formfields_entities_json: ${{ steps.decide.outputs.formfields_entities_json }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -144,8 +148,17 @@ jobs:
           STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
           STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
         run: |
+          export FORMFIELDS_ENTITIES_OUT="$RUNNER_TEMP/formfields_entities.json"
+          rm -f "$FORMFIELDS_ENTITIES_OUT"
           TARGET=$(bash .github/scripts/detect-tests.sh)
           echo "Detected test target: $TARGET"
+          DETECT_FF_ENTITIES_JSON=$(grep '^formfields_entities_json=' "$FORMFIELDS_ENTITIES_OUT" 2>/dev/null | cut -d'=' -f2- || true)
+          if [ -z "$DETECT_FF_ENTITIES_JSON" ]; then
+            echo "::error::detect-tests.sh did not write its formFields entity list to $FORMFIELDS_ENTITIES_OUT — cannot size the formFields matrix."
+            exit 1
+          fi
+          echo "formFields entities per detect-tests.sh: $DETECT_FF_ENTITIES_JSON"
+          FF_ENTITIES_JSON='["none"]'
           # WHY dynamic workers preserved unchanged from the pre-sharding
           # design (2 for large targets, 1 for small ones) — sharding and
           # per-shard worker count are independent levers; this fix does not
@@ -203,15 +216,18 @@ jobs:
           #      the per-entity matrix runs them. Before this, case 2 ran all
           #      417 formFields tests as one `--shard=1/1` job (the exact
           #      single-machine run the matrix exists to avoid; the old
-          #      comment here wrongly called that "safe"). All 6 entities run
-          #      whenever any formFields path is selected: the matrix is
-          #      fixed (one job per entity) and the lock is per entity.
+          #      comment here wrongly called that "safe"). Since 2026-10-08
+          #      only the SELECTED entities run (detect-tests.sh maps changed
+          #      files to entities; a shared formFields file or an escalated
+          #      run selects all of them). Each entity's UI + RBAC pair stays
+          #      one job, and the lock is per entity.
           # A "--grep @smoke" fallback also matches the few @smoke formFields
           # tests; that is deliberately unchanged (small, read-only, see
           # docs/known-issues/sharding-and-locks.md 2026-10-07 entry).
           RUN_SCOPED_TESTS=true
           if [ "$TARGET" = "--grep @regression" ]; then
             RUN_FORMFIELDS_TRACK=true
+            FF_ENTITIES_JSON=$DETECT_FF_ENTITIES_JSON
             # WHY scripts/plan-shards.ts here, not the old inline arithmetic:
             # see this workflow's own top-of-file WHY comment for the full
             # file-atomic-bin-packing rationale. The script writes its own
@@ -226,10 +242,19 @@ jobs:
             SPLIT=$(bash .github/scripts/split-formfields-target.sh "$TARGET")
             FF_SELECTED=$(echo "$SPLIT" | grep '^formfields_selected=' | cut -d'=' -f2-)
             FF_TARGET=$(echo "$SPLIT" | grep '^formfields_target=' | cut -d'=' -f2-)
+            FF_SPLIT_ENTITIES=$(echo "$SPLIT" | grep '^formfields_entities=' | cut -d'=' -f2-)
             REST_TARGET=$(echo "$SPLIT" | grep '^rest_target=' | cut -d'=' -f2-)
             echo "formFields selected: $FF_SELECTED | formFields paths: '$FF_TARGET' | scoped paths: '$REST_TARGET'"
             RUN_FORMFIELDS_TRACK=$FF_SELECTED
+            # Cross-check: the entities detect-tests.sh selected must be exactly
+            # the entities the split's formFields paths cover (or both empty).
+            DETECT_FF_LIST=$(node -e 'const l=JSON.parse(process.argv[1]).filter((e)=>e!=="none"); console.log(l.sort().join(","))' "$DETECT_FF_ENTITIES_JSON")
+            if [ "$DETECT_FF_LIST" != "$FF_SPLIT_ENTITIES" ]; then
+              echo "::error::formFields entity mismatch: detect-tests.sh selected '$DETECT_FF_LIST' but the split's formFields paths cover '$FF_SPLIT_ENTITIES' (target '$TARGET'). Refusing to size the matrix from either."
+              exit 1
+            fi
             if [ "$FF_SELECTED" = "true" ]; then
+              FF_ENTITIES_JSON=$DETECT_FF_ENTITIES_JSON
               # Guard "never run twice, never drop": the two halves must add
               # up to exactly the original target's test count.
               set +e
@@ -268,7 +293,8 @@ jobs:
             if [ -z "$TARGET" ]; then
               # formFields-only change: nothing left for run-tests. It is
               # skipped via its own `if`; shard_total=0 keeps merge-and-report's
-              # expected-blob count at exactly the 6 matrix reports. The dummy
+              # expected-blob count at exactly the selected formFields entities'
+              # reports (one per entity in formfields_entities_json). The dummy
               # shards_json entry is never executed — it only keeps the matrix
               # expression valid.
               RUN_SCOPED_TESTS=false
@@ -307,23 +333,9 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
           echo "run_formfields_track=$RUN_FORMFIELDS_TRACK" >> "$GITHUB_OUTPUT"
+          echo "formfields_entities_json=$FF_ENTITIES_JSON" >> "$GITHUB_OUTPUT"
+          echo "formFields matrix: track=$RUN_FORMFIELDS_TRACK entities=$FF_ENTITIES_JSON"
           echo "run_scoped_tests=$RUN_SCOPED_TESTS" >> "$GITHUB_OUTPUT"
-
-      # WHY this step exists (2026-09-30, Part 2/E1 of the contributor-guide-
-      # and-guardrails work — see docs/CONTRIBUTING_TESTS.md §C and
-      # config/sharedConfigSuites.json's own header): see qa.yml's identical
-      # step for the full reasoning — one shared source of truth for the
-      # run-formfields-tests matrix below instead of 4 independently
-      # hardcoded copies. No new latency concern here specifically (unlike
-      # qa.yml/stage.yml/main.yml) — run-formfields-tests already depends on
-      # this job (`needs: detect`) for its own run_formfields_track gate.
-      - name: Read shared-config-suite entities for the formFields job matrix
-        id: sharedConfig
-        run: |
-          node -e "
-            const cfg = require('./config/sharedConfigSuites.json');
-            console.log('formfields_entities_json=' + JSON.stringify(cfg.formFields.entities));
-          " >> "$GITHUB_OUTPUT"
 
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
@@ -609,7 +621,11 @@ jobs:
   # WHY this job exists and how it is isolated from the verdict (ADR 0009): the
   # formFields tests clean up after themselves, but a killed/cancelled run or a
   # failed afterAll can leave Min/Max/Regex limits on the 18 dedicated fields
-  # (cfFormFieldLimit{Text,Number,Paragraph} x 6 entities). Core tests never
+  # (cfFormFieldLimit{Text,Number,Paragraph} x 6 entities). Since 2026-10-08
+  # only the selected entities run, but this still resets all 18: the reset
+  # script has no per-entity flag, resetting an untouched field is a no-op
+  # that restores the same blank baseline, and it keeps the starting state
+  # of the NEXT run (which may select other entities) known. Core tests never
   # touch these fields (docs/known-issues/form-fields.md), so leftovers only
   # poison the NEXT formFields run's starting state — this restores the baseline.
   # `if: always()` runs it after both tracks in ANY result. GitHub limits: a
@@ -731,13 +747,17 @@ jobs:
         # green "PASSED 277/277" email and a normal history record. The script
         # hands the counts to history:sync and notify. It always exits 0 so the
         # merge, history, notify and reset steps still run — see the script.
-        # Expected = core shards + 6 formFields entities when that track ran
-        # (reset-field-config uploads field-config-reset-*, which this pattern
-        # does not match, so it never counts as a shard).
+        # Expected = core shards + the SELECTED formFields entities when that
+        # track ran (2026-10-08: no longer a fixed 6; one blob per entity in
+        # formfields_entities_json). reset-field-config uploads
+        # field-config-reset-*, which this pattern does not match, so it never
+        # counts as a shard.
+        env:
+          FF_ENTITIES_JSON: ${{ needs.detect.outputs.formfields_entities_json }}
         run: |
           FORMFIELDS_SHARDS=0
           if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
-            FORMFIELDS_SHARDS=6
+            FORMFIELDS_SHARDS=$(node -e 'console.log(JSON.parse(process.env.FF_ENTITIES_JSON).filter((e)=>e!=="none").length)')
           fi
           bash .github/scripts/verify-shard-completeness.sh staging "${{ needs.detect.outputs.shard_total }}" "$FORMFIELDS_SHARDS"
 
