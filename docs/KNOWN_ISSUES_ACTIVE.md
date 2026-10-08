@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-08 @ 2576128
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -151,10 +151,13 @@
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
 
-### KI-35 — Products & Services fix from `b0c6b38` not ported
-- **Status:** open, not ported; no current failure attributed to it · **Since:** 2026-10-07 (finding from the 2026-10-06 checkpoint)
-- **What:** unported fix in tag `archive/custom-field-char-limit-v2-20260919` (commit `b0c6b38`; tag/commit not re-checked on 2026-10-07). `ProductsAndServicesPage.saveEditedProduct()` clicks Save right after `.fill()` without `blur()` + `waitForLoadState('networkidle')` (re-checked in the current file: it arms the PUT wait, clicks Save, asserts no form errors), which could silently drop `customFieldValues`. `selectFromReactSelect()` leaves the Units multi-select menu open (the claim was not re-checked live).
-- **Next check:** revisit if P&S edit tests flake; reproduce live before porting (rule 10). See [products-and-services.md](./known-issues/products-and-services.md).
+### KI-35 — Products & Services Units menu stays open; `b0c6b38` part 2 not ported
+- **Status:** part 1 ported 2026-10-08 (uncommitted), **not verified on QA**; part 2 open, not ported · **Since:** 2026-10-07
+- **Symptom:** `productsAndServices.rbac.spec.ts` :46 and :75 fail on both attempts: `locator.click` timed out on `label[for="0_88_input_isActive"]` (`setIsActive()`), log says `<div class="css-1dsbpcp">` intercepts pointer events (QA run 37733648349 shard 5/5; also run 37508203253). The trace shows that div is the react-select menu's full-viewport overlay (`position: fixed; inset: 0`, first child of `div.is-invalid__menu`); the screenshot shows the Units list open with "Pieces (p)" selected, the Units input focused. `selectFromReactSelect()` swallowed the hidden-wait timeout with `.catch(() => {})`.
+- **Fix (part 1 of `b0c6b38`, ported by hand):** after a pick, if `.is-invalid__menu` is still visible, press Escape once and wait for hidden (`timeouts.expect`); still visible, throw an error naming the field. Single-selects (Country, Category) are already hidden, so the branch is skipped.
+- **Revert:** restore the bare `.waitFor({ state: 'hidden' }).catch(() => {})` in `selectFromReactSelect()` (`ProductsAndServicesPage.ts`).
+- **NOT verified:** that this fixes QA (no live run was made); that Escape alone closes the menu; why QA differs from other environments (only the user's word that they pass).
+- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. The current evidence (the failure above) does not involve it; unported pending a decision. See [products-and-services.md](./known-issues/products-and-services.md).
 
 ---
 

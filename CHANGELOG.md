@@ -3,7 +3,7 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-08 @ 2576128
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
@@ -11,6 +11,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 - 2026-10-08 — ci: sandbox runs only the formFields entities selected by changed files (entity spec/lock files, direct-import page objects/factories; shared files and escalated runs select all); matrix, split guard and expected blob count follow the selection; qa/stage/main unchanged (run 37753304635; KI-38; ADR 0002 amendment; uncommitted)
 - 2026-10-08 — fix: install script terminates a leftover `apt-get` after a timed-out attempt, adds `DPkg::Lock::Timeout 60` and a 570 s total budget so retries cannot collide with the dpkg lock (run 37753304635; cause not confirmed; KI-37; uncommitted)
+- 2026-10-08 — fix: `selectFromReactSelect()` (Products & Services) closes a still-open react-select menu with Escape and fails loudly, naming the field, if it stays open — the Units overlay blocked the Active toggle click (QA run 37733648349; KI-35 part 1; not verified on QA; uncommitted)
 - 2026-10-08 — fix: bound the browser install (3x180 s attempts, 10-min step timeout) in every workflow; incomplete runs (fewer shard reports than expected) now give an INCOMPLETE verdict/subject/banner, and their history record is marked `incomplete` and excluded from deltas, trends, recurring counts and duration estimates (run 37669596623; ADR 0010, KI-37; uncommitted)
 - 2026-10-08 — fix: sandbox selective runs never run formFields tests on one shard: paths split by sharedConfigSuites prefixes (split-formfields-target.sh), per-entity matrix runs all 6 entities, run-tests skipped when only formFields selected, count guard (uncommitted; ADR 0002 amendment, KI-36)
 - 2026-10-07 — docs: document dedicated form-field reset tool, per-account workflow concurrency and email line (ADR 0009; KI-10 moved to sharding-and-locks, new KI-34/KI-35); code/workflow changes of the same branch are uncommitted and unverified against a real run
