@@ -3,7 +3,7 @@
 > **Purpose:** How this repo's CI is built — the four sharded GitHub workflows, the shard planner, the formFields carve-out and its sequencing, the other pipelines, required secrets, and timeouts.
 > **Read when:** Editing any `.github/workflows/*`, `Jenkinsfile*` or `scripts/plan-shards.ts`; judging whether "CI is green" actually covers your change; adding a shared-config test suite.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-08 @ 2576128
 
 All figures in tables below are generated (`npm run docs:refresh`), never hand-typed. If a number looks wrong, refresh; do not edit it.
 
@@ -83,8 +83,8 @@ flowchart LR
 - **`reset-field-config`** (qa, stage, main, sandbox; not `prod.yml`): after both tracks it runs `npm run reset:field-config -- --env <env>` (main adds `--confirm-prod`, `environment: production`) to blank the 18 dedicated form-field limits, uploads artifact `field-config-reset-<env>`. Job- and step-level `continue-on-error`, the step always exits 0; `merge-and-report` downloads the artifact with a `continue-on-error` step. [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Unproven: see "Open" below.
 - **Concurrency groups** (`cancel-in-progress: false`): `kylas-qa` (`qa.yml`), `kylas-staging` (`stage.yml`, `sandbox.yml`), `kylas-prod` (`main.yml`, `prod.yml`). `dev.yml`, Jenkins jobs and `staging-promotion-gate.yml` are not in any group.
 - **Open (not facts, [KI-34](./KNOWN_ISSUES_ACTIVE.md)):** whether job-level `continue-on-error` protects the run conclusion on a job timeout; whether an approval-waiting run holds its group; whether `main.yml` needs a separate approval for the reset job (then `merge-and-report` waits); `always()` after force-cancel; a pending `stage` run can be displaced by a `sandbox` push. Timeouts 25/35 min are guesses; `merge-and-report` now waits up to that long.
-- **Browser install is bounded** (all workflows with the step): `bash .github/scripts/install-playwright-browsers.sh --with-deps` under a step `timeout-minutes: 10`: 3 attempts x 180 s, 5/10 s backoff, apt connection timeouts; all attempts failing fails the job with an error annotation. Values come from measured healthy installs (24-129 s). See the 2026-10-07 entry in [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
-- **Shard completeness** (`merge-and-report` in qa, stage, main, sandbox): `.github/scripts/verify-shard-completeness.sh <env> <core shards> <formFields shards>` counts downloaded blob zips against expected (core + 6 formFields), writes `reports/<env>/shard-completeness.json` and annotates. It always exits 0 so merge/history/notify/reset still run (a failing step would skip the merge and leave only a "report not available" email); the email and history react to the JSON instead ([REPORTING.md](./REPORTING.md)).
+- **Browser install is bounded** (all workflows with the step): `bash .github/scripts/install-playwright-browsers.sh --with-deps` under a step `timeout-minutes: 10`: 3 attempts x 180 s (clamped to a 570 s total budget), 5/10 s backoff, apt connection timeouts, leftover apt-get reaped after a timeout, 60 s dpkg lock wait; all attempts failing fails the job with an error annotation. Values come from measured healthy installs (24-129 s). See the 2026-10-07 entry in [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Shard completeness** (`merge-and-report` in qa, stage, main, sandbox): `.github/scripts/verify-shard-completeness.sh <env> <core shards> <formFields shards>` counts downloaded blob zips against expected (core + the formFields entities that ran; sandbox: the selected count, qa/stage/main: 6), writes `reports/<env>/shard-completeness.json` and annotates. It always exits 0 so merge/history/notify/reset still run (a failing step would skip the merge and leave only a "report not available" email); the email and history react to the JSON instead ([REPORTING.md](./REPORTING.md)).
 - Every shard uploads `blob-report-*`, `misc-errors-*` and `playwright-test-results-*` artifacts; the merged report is `playwright-report-<env>`.
 
 ### 4.1 Shard planner (`scripts/plan-shards.ts`)
@@ -116,13 +116,17 @@ Decision record: [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md); l
 `sandbox.yml`'s `detect` step runs `detect-tests.sh` to choose a target, then:
 
 1. **Escalated** (`TARGET == "--grep @regression"`, triggered by changes under `src/core/`, `src/fixtures/`, `src/auth/`, `playwright.config.ts`, or critical `config/config.ts` edits): calls the planner and enables the formFields track.
-2. **Selective** (any other target): planner-free (the planner would drop explicitly selected paths). `.github/scripts/split-formfields-target.sh` splits `$TARGET` by the `config/sharedConfigSuites.json` path prefixes (`tests/ui/formFields/`, `tests/rbac/formFields/`, not a grep substring): formFields paths go to the per-entity matrix (`run_formfields_track=true`, **all 6 entities**, since the matrix is fixed and the lock is per entity), the rest goes to `run-tests` as one `--shard=1/1` shard. The step fails loudly if formFields count + scoped count != original count (never run twice, never dropped). Since 2026-10-07; before that a formFields selection ran every formFields test as one job (run 37658909999).
+2. **Selective** (any other target): planner-free (the planner would drop explicitly selected paths). `.github/scripts/split-formfields-target.sh` splits `$TARGET` by the `config/sharedConfigSuites.json` path prefixes (`tests/ui/formFields/`, `tests/rbac/formFields/`, not a grep substring): formFields paths go to the per-entity matrix (`run_formfields_track=true`), the rest goes to `run-tests` as one `--shard=1/1` shard. The step fails loudly if formFields count + scoped count != original count (never run twice, never dropped). Since 2026-10-07; before that a formFields selection ran every formFields test as one job (run 37658909999).
 
-| Case | `run_scoped_tests` | `run-tests` | `run-formfields-tests` (6 jobs) | blobs expected by `merge-and-report` |
+   **Sandbox runs only the selected entities (2026-10-08, run 37753304635: a `ProductsAndServicesPage.ts`-only change had moved every formFields test).** `detect-tests.sh` maps `tests/{ui,rbac}/formFields/<entity>FieldLimits(.rbac).spec.ts` and `<entity>FormFieldLock.ts` to that entity; a `src/modules/**` or `src/data/factories/**` file to the entities whose formFields spec files import it (derived from the real import text, so a file imported by several entities selects each); shared files (`FormFieldsConfigPage.ts`, `formFieldLockFactory.ts`, `formFieldsTestLock.ts`, `config/sharedConfigSuites.json`, any unrecognised file in the formFields dirs) and escalated runs select all. It writes `formfields_entities_json` (placeholder `["none"]` when nothing is selected, never `[]`) to `$FORMFIELDS_ENTITIES_OUT`; the workflow cross-checks it against the entities the split paths cover, uses it as the matrix, and counts its length as the expected formFields blobs. `reset-field-config` still resets all 18 fields. qa/stage/main keep the fixed 6-entity matrix.
+
+| Case | `run_scoped_tests` | `run-tests` | `run-formfields-tests` (sandbox: selected entities; qa/stage/main: 6) | blobs expected by `merge-and-report` |
 |---|---|---|---|---|
-| formFields only | false | skipped (not failed) | runs (`!cancelled()`) | 0 + 6 |
-| formFields + other module | true | other module only, 1 shard | runs | 1 + 6 |
+| formFields only | false | skipped (not failed) | runs (`!cancelled()`) | 0 + E |
+| formFields + other module | true | other module only, 1 shard | runs | 1 + E |
 | escalated `@regression` | true | planner shards, formFields excluded | runs | N + 6 |
+
+`E` = selected formFields entities on sandbox (1-6); fixed 6 on qa/stage/main.
 | no formFields (path target or `@smoke`) | true | as before | skipped | 1 |
 
 `--grep @smoke` (fallback) still matches 18 `@smoke` formFields tests inside the single scoped shard; deliberately unchanged (small, read-only).
