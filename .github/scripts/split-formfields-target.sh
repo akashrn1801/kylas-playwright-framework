@@ -7,10 +7,21 @@
 # dropped.
 #
 # Usage: bash .github/scripts/split-formfields-target.sh "<TARGET>"
-# Prints three key=value lines on stdout:
+# Prints four key=value lines on stdout:
 #   formfields_selected=true|false
 #   formfields_target=<formFields paths, space separated>
+#   formfields_entities=<entities those paths cover, comma separated, sorted>
 #   rest_target=<all other paths, space separated>
+#
+# 2026-10-08: sandbox runs only the SELECTED entities. detect-tests.sh emits an
+# entity-specific target as explicit spec files (<entity>FieldLimits.spec.ts /
+# .rbac.spec.ts) and a whole directory only when a shared file changed. The
+# formFields paths are always removed from the scoped target; only the paths
+# that remain in formfields_target count as "moved", so the workflow's
+# "moved + scoped == original" guard compares the selected entities' tests, not
+# all 417. A directory token, or a file in those directories that matches no
+# entity, covers EVERY entity (the safe default). The workflow cross-checks
+# formfields_entities against detect-tests.sh's own list.
 #
 # The prefixes come from config/sharedConfigSuites.json (uiDir/rbacDir), the
 # same explicit path-prefix rule scripts/plan-shards.ts uses to carve formFields
@@ -41,15 +52,27 @@ const prefixes = [cfg.formFields.uiDir, cfg.formFields.rbacDir].map((d) => d.rep
 const tokens = (process.env.TARGET || "").split(/\s+/).filter(Boolean);
 const ff = [];
 const rest = [];
+const entities = new Set();
+const entityOf = (t) => {
+  const m = t.match(/\/([A-Za-z]+)FieldLimits(?:\.rbac)?\.spec\.ts$/);
+  return m && cfg.formFields.entities.includes(m[1]) ? m[1] : null;
+};
 if (tokens.some((t) => t.startsWith("-"))) {
   rest.push(...tokens);
 } else {
   for (const raw of tokens) {
     const t = raw.replace(/^\.\//, "");
-    (prefixes.some((p) => t.startsWith(p) || t + "/" === p) ? ff : rest).push(raw);
+    const inFf = prefixes.some((p) => t.startsWith(p) || t + "/" === p);
+    (inFf ? ff : rest).push(raw);
+    if (inFf) {
+      const e = entityOf(t);
+      if (e) entities.add(e);
+      else cfg.formFields.entities.forEach((x) => entities.add(x));
+    }
   }
 }
 console.log("formfields_selected=" + (ff.length > 0));
 console.log("formfields_target=" + ff.join(" "));
+console.log("formfields_entities=" + [...entities].sort().join(","));
 console.log("rest_target=" + rest.join(" "));
 '

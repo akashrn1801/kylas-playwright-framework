@@ -9,6 +9,8 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-10-08 — ci: sandbox runs only the formFields entities selected by changed files (entity spec/lock files, direct-import page objects/factories; shared files and escalated runs select all); matrix, split guard and expected blob count follow the selection; qa/stage/main unchanged (run 37753304635; KI-38; ADR 0002 amendment; uncommitted)
+- 2026-10-08 — fix: install script terminates a leftover `apt-get` after a timed-out attempt, adds `DPkg::Lock::Timeout 60` and a 570 s total budget so retries cannot collide with the dpkg lock (run 37753304635; cause not confirmed; KI-37; uncommitted)
 - 2026-10-08 — fix: `selectFromReactSelect()` (Products & Services) closes a still-open react-select menu with Escape and fails loudly, naming the field, if it stays open — the Units overlay blocked the Active toggle click (QA run 37733648349; KI-35 part 1; not verified on QA; uncommitted)
 - 2026-10-08 — fix: bound the browser install (3x180 s attempts, 10-min step timeout) in every workflow; incomplete runs (fewer shard reports than expected) now give an INCOMPLETE verdict/subject/banner, and their history record is marked `incomplete` and excluded from deltas, trends, recurring counts and duration estimates (run 37669596623; ADR 0010, KI-37; uncommitted)
 - 2026-10-08 — fix: sandbox selective runs never run formFields tests on one shard: paths split by sharedConfigSuites prefixes (split-formfields-target.sh), per-entity matrix runs all 6 entities, run-tests skipped when only formFields selected, count guard (uncommitted; ADR 0002 amendment, KI-36)
