@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -50,10 +50,20 @@
 
 ## B. Infrastructure and CI
 
-### KI-10 — No `concurrency:` guard on any sharded workflow
-- **Status:** open (verified: `grep concurrency .github/workflows/*.yml` → no matches) · **Since:** 2026-09-29
-- **What:** `qa.yml`, `stage.yml`, `main.yml`, `sandbox.yml` can run simultaneously across branches with no queuing or cancel-in-progress, stacking tens of concurrent jobs and raising concurrent `globalSetup` pressure (the HTTP 429 mechanism, [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md)).
-- **Next check:** confirm the account's concurrent-job allowance (not knowable from the repo); then decide per-branch `group:` + `cancel-in-progress`. Workflow edits need your review. See [CI_PIPELINES.md](./CI_PIPELINES.md).
+### KI-34 — Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed
+- **Status:** unverified (implemented 2026-10-06, uncommitted; only static checks done: `tsc`, `eslint`, actionlint with no new findings, `check:test-counts` unchanged) · **Since:** 2026-10-06
+- **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Open items, none of them confirmed: (1) the tool has never run against a real app and its `FormFieldsConfigPage` selectors were not re-confirmed live; (2) a field absent in an env counts as a failure (exit 1), check on the first dry-run, esp. staging/prod; (3) entity tab labels/URL slugs were copied from the specs' `*_ENTITY` constants; (4) retry/deadline values come from `globalSetup`, a full 18-field pass was never timed, the 25-min step / 35-min job timeouts are guesses; (5) whether job-level `continue-on-error` protects the run conclusion when the job times out; (6) whether a run waiting for environment approval holds its concurrency group; (7) whether one approval covers the new `main.yml` job or it needs its own (if unapproved, `merge-and-report` and the email wait); (8) behaviour of `always()` jobs after a normal cancel vs force-cancel; (9) one pending run per group: a pending `stage` push can be displaced by a `sandbox` push (no `workflow_dispatch` on sandbox); (10) Jenkins jobs and `staging-promotion-gate.yml` are outside the groups; (11) the email section was typechecked, never viewed rendered.
+- **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 (no `concurrency:` guard) is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
+
+### KI-36 — Sandbox formFields split never exercised in a real CI run
+- **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
+- **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
+
+### KI-37 — Install-step bound and incomplete-run handling: unproven; build #189 ledger record still unmarked
+- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Open: (1) cause of the apt stall in run 37669596623 is unknown, and the apt `Acquire::*::Timeout` options plus `timeout -k` are untested on a real runner (the retry/timeout logic was exercised locally with substitute commands only); whether `timeout` also reaps apt's child processes is unconfirmed; (2) the 180 s per-attempt limit is 1.4x the slowest healthy install seen (129 s), so a slow-but-healthy runner could burn an attempt; (3) `syncHistory` was exercised through its pure functions, never end to end against a ledger; (4) a missing/garbled `shard-completeness.json` means "no information" and renders as before (green); (5) qa/stage/main got a new completeness step and `plan` in `merge-and-report`'s `needs`, run only through actionlint; (6) history record for sandbox build #189 (`history/staging.jsonl` on `ci/reporting-history`) still holds 277 tests as a normal run. Handle it by adding `"incomplete":{"expected":6,"reported":4}` to that JSON line (readers then ignore it), deleting the line, or re-running the failed jobs of run 37669596623 before its blob artifacts expire (retention 3 days, so by 2026-10-10): a complete re-run replaces the record because history keeps one record per build.
+- **Next check:** user marks or removes the #189 line; first real sandbox/qa run after merge shows the new steps; first real install failure shows the `Playwright browser install failed` annotation.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -134,6 +144,11 @@
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
+
+### KI-35 — Products & Services fix from `b0c6b38` not ported
+- **Status:** open, not ported; no current failure attributed to it · **Since:** 2026-10-07 (finding from the 2026-10-06 checkpoint)
+- **What:** unported fix in tag `archive/custom-field-char-limit-v2-20260919` (commit `b0c6b38`; tag/commit not re-checked on 2026-10-07). `ProductsAndServicesPage.saveEditedProduct()` clicks Save right after `.fill()` without `blur()` + `waitForLoadState('networkidle')` (re-checked in the current file: it arms the PUT wait, clicks Save, asserts no form errors), which could silently drop `customFieldValues`. `selectFromReactSelect()` leaves the Units multi-select menu open (the claim was not re-checked live).
+- **Next check:** revisit if P&S edit tests flake; reproduce live before porting (rule 10). See [products-and-services.md](./known-issues/products-and-services.md).
 
 ---
 

@@ -34,6 +34,7 @@
     "docs:refresh": "ts-node scripts/update-doc-numbers.ts",
     "check:docs": "ts-node scripts/check-docs.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
+    "reset:field-config": "ts-node scripts/reset-field-config.ts",
     "format": "prettier --write .",
     "clean": "rm -rf test-results reports/ allure-results",
     "notify": "ts-node src/notifications/scripts/notify.ts",
