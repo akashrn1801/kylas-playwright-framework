@@ -3,7 +3,7 @@
 > **Purpose:** How a test run becomes a summary email, a history ledger entry and a background-error report; what each `src/notifications` module owns.
 > **Read when:** Changing anything under `src/notifications/`, `src/reporters/`, `src/error-collector/`, or `scripts/merge-misc-errors.ts`; debugging an odd email or an empty trend section.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 ## 1. Data flow
 
@@ -37,6 +37,7 @@ Local runs trigger `notify` through `posttest` (skipped when `$CI` is set). In C
 | `EmailTemplate.ts` | HTML renderer: an orchestrator plus one `buildXxx()` per section; carries `REPORT_ENGINE_VERSION`, independent of `package.json`. |
 | `src/notifications/config/notificationConfig.ts`, `adapters/EmailAdapter.ts` | SMTP settings (Gmail, Zoho fallback) and recipient lists, per-branch first then per-environment. |
 | `FieldConfigReset.ts` | Shared shape and loader for `reports/<env>/field-config-reset.json`, written by `scripts/reset-field-config.ts`; returns `null` on any problem so the email just omits the line. |
+| `ShardCompleteness.ts` | Shape, parser and loader for `reports/<env>/shard-completeness.json` (expected vs merged shard reports, written by `.github/scripts/verify-shard-completeness.sh`). Missing or garbled file = no information, never "complete" or "incomplete". |
 | `redact.ts` | Secret scrubbing for anything printed. |
 
 ## 3. Email sections
@@ -51,6 +52,7 @@ Stale-report warning (first, above the masthead, only when stale) · masthead wi
 - **Concurrent pushes:** on rejection it fetches, `reset --hard`s, recomputes the delta and appends again (a rebase produced unresolvable conflicts on the text ledger). Push failures are classified from the real captured git stderr into named classes; an unmatched error is `unclassified` and is not retried.
 - **One record per build.** `buildNumber` is `GITHUB_RUN_NUMBER`, which a manual "re-run failed jobs" does not change, and each re-run re-executes `merge-and-report` (another email, another record). Sandbox Build #186 was re-run to attempt 7 and has 7 records (failed counts 66, 63, 49, 34, 18, 0, 0); counting them as 7 runs is what produced "49 recurring failures / 42 recurring flaky" on a 0-failed run. `appendAndPrune()` now replaces an earlier record of the same `runSource|branch|buildNumber`, and every history read goes through `comparableHistory()` (same branch + scope, current build's earlier attempts removed, one record per build). `local` builds are never collapsed. Records written before this change are de-duplicated on read, not rewritten.
 - Each record stores: totals, failed/flaky titles, top slowest durations, per-module stats (with `type`), `workers`, and a normalized `scope`. Old records lack `scope` and simply never match.
+- **Incomplete runs (2026-10-08).** When fewer shard reports were merged than expected, `computeOverallVerdict` returns `blocked` / danger with label "Incomplete Run — N of M shards reported" (subject says `INCOMPLETE RUN`, never green), and the email opens with an "Incomplete run: N of M shards reported" banner. `syncHistory` records the run with `incomplete: {expected, reported}` and writes an empty delta file for it (no delta, trend, recurring counts or drift for the partial run); `comparableHistory`, the pass-rate series and the duration estimate exclude `incomplete` records. A record already written without the field can be marked by hand (add the field to its JSON line) or removed; a complete re-run of the same build replaces it. Health score and test counts are shown unchanged (they cover only the shards that reported).
 - A read-only `estimate-duration` step runs before the tests and prints an average of matching records (same branch and `workers`), or an honest "insufficient history".
 
 ## 5. Suite drift and scope

@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-08 — fix: bound the browser install (3x180 s attempts, 10-min step timeout) in every workflow; incomplete runs (fewer shard reports than expected) now give an INCOMPLETE verdict/subject/banner, and their history record is marked `incomplete` and excluded from deltas, trends, recurring counts and duration estimates (run 37669596623; ADR 0010, KI-37; uncommitted)
 - 2026-10-08 — fix: sandbox selective runs never run formFields tests on one shard: paths split by sharedConfigSuites prefixes (split-formfields-target.sh), per-entity matrix runs all 6 entities, run-tests skipped when only formFields selected, count guard (uncommitted; ADR 0002 amendment, KI-36)
 - 2026-10-07 — docs: document dedicated form-field reset tool, per-account workflow concurrency and email line (ADR 0009; KI-10 moved to sharding-and-locks, new KI-34/KI-35); code/workflow changes of the same branch are uncommitted and unverified against a real run
 - 2026-10-06 — fix: a 0-failed run is never ❌/Critical (verdict from this run only, health shown separately and floored at 50; context penalties capped at 15); recurring/trend history now same-branch+scope and one record per build, fixing 49 phantom recurring failures from re-run duplicates (Build #186)

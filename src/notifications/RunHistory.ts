@@ -222,6 +222,14 @@ export interface RunHistoryRecord {
   // safely to "no comparable prior run found" — never an alarm, never an
   // error — until enough new-schema runs accumulate per branch+scope.
   scope?: string;
+  // WHY (2026-10-08, sandbox build #189): set when fewer shard reports than
+  // expected were merged (jobs cancelled/crashed — run 37669596623 merged 4 of
+  // 6). Such a record understates the run, so it must never be a "previous
+  // run", count toward recurring failures, feed trends/drift or the duration
+  // estimate. Optional: every existing record lacks it (= treated as complete).
+  // An already-written partial record can be marked by hand by adding this
+  // field to its JSON line.
+  incomplete?: { expected: number; reported: number };
 }
 
 export interface RunDelta {
@@ -353,6 +361,9 @@ export function comparableHistory(
   current: RunHistoryRecord
 ): RunHistoryRecord[] {
   const currentKey = buildKey(current);
+  // WHY incomplete records are dropped AFTER dedupe: if the latest attempt of
+  // a build is partial, that build contributes nothing (an older complete
+  // attempt must not resurface in its place).
   return dedupeByBuild(
     historyBeforeAppend.filter(
       (r) =>
@@ -360,7 +371,7 @@ export function comparableHistory(
         r.scope === current.scope &&
         (currentKey === null || buildKey(r) !== currentKey)
     )
-  );
+  ).filter((r) => !r.incomplete);
 }
 
 /**
@@ -797,9 +808,9 @@ export function buildPassRateSeries(
   // comparableHistory()'s WHY comment. Not scope-filtered: this is a
   // deliberately branch-wide pass-rate series.
   const currentKey = buildKey(current);
-  const prior = dedupeByBuild(historyBeforeAppend).filter(
-    (r) => currentKey === null || buildKey(r) !== currentKey
-  );
+  const prior = dedupeByBuild(historyBeforeAppend)
+    .filter((r) => !r.incomplete)
+    .filter((r) => currentKey === null || buildKey(r) !== currentKey);
   return [...prior.slice(-(n - 1)), current].map(toPoint);
 }
 
@@ -846,7 +857,7 @@ export function computeDurationEstimate(
   minSamples: number = DURATION_ESTIMATE_MIN_SAMPLES,
   lookback: number = DURATION_ESTIMATE_LOOKBACK
 ): DurationEstimate {
-  const matching = records.filter((r) => r.branch === branch && r.workers === workers);
+  const matching = records.filter((r) => !r.incomplete && r.branch === branch && r.workers === workers);
   const recent = matching.slice(-lookback);
   if (recent.length < minSamples) {
     return {

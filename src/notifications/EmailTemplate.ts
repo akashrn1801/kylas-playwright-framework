@@ -15,6 +15,7 @@ import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
+import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -81,6 +82,11 @@ export interface EmailContext {
   // reports/<env>/field-config-reset.json. Informational only — it never feeds
   // the verdict, health score or any count.
   fieldConfigReset?: FieldConfigResetReport | null;
+  // WHY optional, same graceful-absence pattern (2026-10-08, sandbox build
+  // #189): expected vs merged shard reports, from reports/<env>/
+  // shard-completeness.json. When reported < expected the verdict is forced
+  // to 'blocked' (computeOverallVerdict) and a banner opens the email.
+  shardCompleteness?: ShardCompleteness | null;
   // WHY: computed once by NotificationService from FailureAnalyzer/
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
@@ -166,7 +172,8 @@ export class EmailTemplate {
     // uses (see below) guarantees the subject and body can never disagree
     // again, by construction — not just less likely to.
     const health = ctx.health ?? this.fallbackHealth(ctx.report);
-    const verdict = ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null);
+    const verdict =
+      ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null, ctx.shardCompleteness);
     const icon =
       verdict.bannerTone === 'success' ? '✅' : verdict.bannerTone === 'danger' ? '❌' : '⚠️';
     const status = verdict.bannerLabel.replace(/^[^\w]+/, '').toUpperCase();
@@ -187,7 +194,8 @@ export class EmailTemplate {
     // fallbackHealth()'s own precedent — EmailTemplate must render something
     // correct even if a caller forgets to pass ctx.verdict, using the same
     // real computeOverallVerdict() logic rather than a second, drifting copy.
-    const verdict = ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null);
+    const verdict =
+      ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null, ctx.shardCompleteness);
     // WHY built once, threaded through: lets the Trend section's "recurring
     // flaky/failing" test names and Action Required's items deep-link to a
     // specific test's own card in Failed/Flaky Tests when that test actually
@@ -195,6 +203,7 @@ export class EmailTemplate {
     const testAnchors = this.buildTestAnchorLookup(clusters, ctx.flakyFailureDetails ?? []);
 
     const body = [
+      this.buildIncompleteRunBanner(ctx.shardCompleteness),
       this.buildFreshnessWarning(ctx.reportFreshness),
       this.buildMasthead(ctx, health),
       this.buildStatusBanner(verdict),
@@ -274,6 +283,19 @@ ${body}
     return `
 <tr><td style="background:${FAIL};padding:12px 28px;text-align:center;">
   <span style="font-size:13px;font-weight:700;color:#ffffff;">⚠ STALE REPORT — this data is ${ageLabel} old (threshold: ${freshness.thresholdHours}h), not from a fresh run. Investigate why fresh results weren't available before treating this as current.</span>
+</td></tr>`;
+  }
+
+  // WHY first in the email, above even the stale-report warning (2026-10-08):
+  // every count below understates the run, so this must be read before them.
+  // Renders nothing unless fewer shard reports than expected were merged.
+  private buildIncompleteRunBanner(completeness: ShardCompleteness | null | undefined): string {
+    if (!isIncompleteRun(completeness)) return '';
+    const missing = completeness.expected - completeness.reported;
+    return `
+<tr><td id="section-incomplete-run" style="background:${FAIL};padding:14px 28px;text-align:center;">
+  <div style="font-size:14px;font-weight:700;color:#ffffff;">Incomplete run: ${completeness.reported} of ${completeness.expected} shards reported</div>
+  <div style="font-size:12px;color:#ffffff;margin-top:4px;">${missing} shard(s) never uploaded a report (job crashed, hung or was cancelled). Totals, pass rate and health below cover only the shards that reported — this is not a pass. Check the run's job list.</div>
 </td></tr>`;
   }
 

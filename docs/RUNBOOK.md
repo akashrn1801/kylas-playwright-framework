@@ -3,7 +3,7 @@
 > **Purpose:** Symptom → likely cause → first check → where it is documented, for failures seen in this repo's CI and local runs.
 > **Read when:** A CI run or local run failed and you need to know whether it is a code bug, an app bug, an environment effect or a pipeline problem.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 Every row comes from a real incident. "Documented" links point at the resolved-history topic file; open items are in [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md). Check that first: your failure may already be a tracked open item.
 
@@ -35,6 +35,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | Jenkins webhook returns 502 on every delivery | Tunnel (ngrok) expired | Redeliver after restoring the tunnel | [ci-pipelines](./known-issues/ci-pipelines.md) |
 | Wrong tests ran for a branch in Jenkins | Branch-to-test-selection chain | Console log's `testFilter` | [ci-pipelines](./known-issues/ci-pipelines.md) |
 | Everything on one shard fails together, other shards green | Shared-state suite split across shards, or a backend blip | Are two files of one shared-config suite on different shards? Static-asset 503 on the app bundle | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
+| A job is silent for hours, then "The operation was canceled" at the job timeout; the cancelled step is `Install Playwright browsers`; 0 tests ran; the email may even say PASSED for the other shards | Runner-side `apt-get update` stall inside `playwright install --with-deps` (run 37669596623: 2 of 6 formFields jobs, last log line 18:48:57Z, cancelled 3h later). Cause of the stall unknown | Open the raw job log: is the last line an apt `Get:`/`Ign:` line? Since 2026-10-08 the step is bounded (3 x 180 s attempts, 10 min step timeout) and fails with `Playwright browser install failed`: re-run the failed jobs. An incomplete run now shows "Incomplete run: N of M shards reported" in the email | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
 
 ### Application page states
 

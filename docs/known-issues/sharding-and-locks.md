@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents behind how CI splits the suite (6h ceiling, file-atomic planner, formFields carve-out/sequencing) and how shared account-wide config is protected.
 > **Read when:** Changing a workflow's shard/`needs:` structure, `scripts/plan-shards.ts`, `config/sharedConfigSuites.json`, `tests/ui/formFields/formFieldLockFactory.ts`, or adding a test that depends on order or on shared config.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the new `concurrency:` groups, KI-34) are in `docs/KNOWN_ISSUES_ACTIVE.md`. The decisions are summarised in `docs/adr/`.
 
@@ -76,3 +76,12 @@ Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the
 - **Fix:** workflow-level `concurrency:` per account, `cancel-in-progress: false`: `kylas-qa` (`qa.yml`), `kylas-staging` (`stage.yml`, `sandbox.yml`), `kylas-prod` (`main.yml`, `prod.yml`); `dev.yml` untouched. Verified only by actionlint (syntax); runtime behaviour (approval-wait holding the group, pending-run displacement, Jenkins not covered) is open in KI-34.
 - **Revert:** delete the `concurrency:` blocks in those five files.
 - **Commit:** not committed yet. [ADR 0009](../adr/0009-field-config-reset-and-account-lock.md).
+
+### Two formFields shards hung 3 h in the browser install, and the run still said PASSED — 2026-10-07
+- **Symptom:** sandbox run 37669596623 (commit 4d0794a): formFields jobs `task` and `productsAndServices` ended at the 180-minute job timeout (started 18:48:30Z, cancelled 21:49Z, conclusion `cancelled`, 0 of 70 tests each, no blob uploaded). `lead`, `contact`, `company`, `deal` finished (43.7-51.2 min). `merge-and-report` printed `Expected shard reports: 6 ... Actually downloaded: 4` and an `::error::` annotation but the step passed; the email was `PASSED | Health: Excellent 92/100`, total 277 (of 417), and history build #189 was recorded as an ordinary run with a delta of "+0 passed".
+- **Root cause (hang):** the only cancelled step was `Install Playwright browsers` (`npx playwright install chromium --with-deps`). Both logs end at the apt `Get:5 ... noble-security InRelease` line (18:48:57Z / 18:48:55Z), then nothing until `The operation was canceled`. A healthy sibling finished the same apt step in about 8 s. Why apt stalled is **unknown** (runner/network side). The step had no timeout of its own.
+- **Root cause (false green):** the shard check only annotated; nothing told notify or history sync, and the verdict had no notion of missing shards.
+- **Run 37658909999 (cancelled the same day) was NOT this:** its install step finished in about 90 s, 62 tests ran, and it was cancelled at 18:10:51Z (45 min, far below the 180-min timeout) while running tests. Who cancelled it is not visible in the logs.
+- **Fix (2026-10-08):** `.github/scripts/install-playwright-browsers.sh` (3 attempts x 180 s with 5/10 s backoff, plus apt `Acquire::http(s)::Timeout 20` and `Acquire::Retries 2` when `--with-deps`; fails loudly with `Playwright browser install failed`) behind a step-level `timeout-minutes: 10` in every workflow with the step. `.github/scripts/verify-shard-completeness.sh` writes `reports/<env>/shard-completeness.json` (also added to qa/stage/main, which had no check); `computeOverallVerdict` returns `blocked` (subject `INCOMPLETE RUN - N OF M SHARDS REPORTED`), the email opens with an "Incomplete run: N of M shards reported" banner; `syncHistory` marks the record `incomplete`, `RunHistory` readers exclude it, and the email gets no delta/trend/recurring/drift for it. The check step still exits 0 so merge, history, notify and reset run.
+- **Revert:** restore `run: npx playwright install chromium --with-deps` in the workflows; remove the `Verify all shards reported` steps (restore the inline one in `sandbox.yml`), the `shardCompleteness` parameter in `computeOverallVerdict`, `ShardCompleteness.ts`, the banner in `EmailTemplate.ts`, the `incomplete` handling in `syncHistory.ts` and the three `!r.incomplete` filters in `RunHistory.ts`.
+- **Commit:** not committed yet. Open items: [KI-37](../KNOWN_ISSUES_ACTIVE.md).

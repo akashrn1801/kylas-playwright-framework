@@ -159,8 +159,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run full validation suite (shard ${{ matrix.shard.shardId }}/${{ needs.plan.outputs.shard_total }})
         env:
@@ -313,8 +316,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
         env:
@@ -414,8 +420,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Reset dedicated form-field limits
         id: reset
@@ -459,7 +468,7 @@ jobs:
   # change).
   merge-and-report:
     name: merge report + notify
-    needs: [run-tests, run-formfields-tests, reset-field-config]
+    needs: [plan, run-tests, run-formfields-tests, reset-field-config]
     if: always()
     environment: production
     runs-on: ubuntu-latest
@@ -485,6 +494,14 @@ jobs:
           pattern: blob-report-main-*
           path: all-blob-reports
           merge-multiple: true
+
+      # WHY (2026-10-08, run 37669596623 on sandbox): a run missing shard
+      # reports used to look complete — the merge and the email only see the
+      # reports that arrived. Expected = planned core shards + the 6 formFields
+      # entities. Writes reports/prod/shard-completeness.json for history:sync
+      # and notify; always exits 0 so merge/notify/reset still run.
+      - name: Verify all shards reported
+        run: bash .github/scripts/verify-shard-completeness.sh prod "${{ needs.plan.outputs.shard_total }}" 6
 
       - name: Merge shard reports into one HTML/JSON report
         run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports

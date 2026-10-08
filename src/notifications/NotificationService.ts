@@ -7,6 +7,7 @@
 import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { loadFieldConfigReset } from './FieldConfigReset';
+import { loadShardCompleteness, isIncompleteRun } from './ShardCompleteness';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
 import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
@@ -301,7 +302,8 @@ export class NotificationService {
       historyDeltaFile.recurringFlaky,
       freshness.isStale
     );
-    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift);
+    const shardCompleteness = loadShardCompleteness(input.env);
+    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness);
 
     const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
     const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
@@ -336,6 +338,7 @@ export class NotificationService {
       allureUrl: input.allureUrl,
       jobStats: input.jobStats,
       fieldConfigReset: loadFieldConfigReset(input.env),
+      shardCompleteness,
       miscErrors,
       historyDelta: historyDeltaFile.delta,
       recurringFlaky: historyDeltaFile.recurringFlaky,
@@ -386,6 +389,10 @@ export class NotificationService {
   private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
     const recipients = getRecipients(input.env, input.branch);
     const reason = err instanceof Error ? err.message : String(err);
+    const completeness = loadShardCompleteness(input.env);
+    const shardNote = isIncompleteRun(completeness)
+      ? `<p><strong>Shards:</strong> ${completeness.reported} of ${completeness.expected} shard reports were available to merge.</p>`
+      : '';
     const subject = `🚫 [${input.env.toUpperCase()}] Kylas Automation — REPORT NOT AVAILABLE | Branch: ${input.branch} | Build #${input.buildNumber}`;
     const html = `
 <div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
@@ -395,6 +402,7 @@ export class NotificationService {
   <div style="padding:20px 24px;color:#1A1A1A;font-size:14px;line-height:1.6;">
     <p>This run's own report file could not be found or parsed, so <strong>no pass/fail status can be reported</strong> — this is not a "passed" run and must not be treated as one.</p>
     <p><strong>Reason:</strong> ${this.escapeHtml(reason)}</p>
+    ${shardNote}
     <p>
       <strong>Environment:</strong> ${this.escapeHtml(input.env)}<br/>
       <strong>Branch:</strong> ${this.escapeHtml(input.branch)}<br/>

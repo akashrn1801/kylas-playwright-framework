@@ -3,7 +3,7 @@
 > **Purpose:** Index of ADRs and the template to write a new one.
 > **Read when:** You made or reversed a design decision (Definition of Done step 4).
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-07 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 One page per decision, max about 3.5k chars. Never edit an accepted ADR's decision silently: add a new ADR and mark the old one Superseded.
 
@@ -18,6 +18,7 @@ One page per decision, max about 3.5k chars. Never edit an accepted ADR's decisi
 | [0007](0007-sequence-formfields-after-core.md) | formFields runs after core shards | Accepted |
 | [0008](0008-error-page-recovery.md) | Error-page recovery at call sites (+ proposed centralization) | Accepted / Proposed |
 | [0009](0009-field-config-reset-and-account-lock.md) | Post-run dedicated-field reset + per-account workflow lock | Accepted (never run) |
+| [0010](0010-incomplete-run-handling-and-bounded-install.md) | Incomplete runs never green; bounded browser install | Accepted (never run) |
 
 ## Template
 ```

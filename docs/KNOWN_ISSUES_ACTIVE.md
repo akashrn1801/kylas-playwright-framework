@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 2fa56be
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -59,6 +59,11 @@
 - **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
 - **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
 - **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
+
+### KI-37 — Install-step bound and incomplete-run handling: unproven; build #189 ledger record still unmarked
+- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Open: (1) cause of the apt stall in run 37669596623 is unknown, and the apt `Acquire::*::Timeout` options plus `timeout -k` are untested on a real runner (the retry/timeout logic was exercised locally with substitute commands only); whether `timeout` also reaps apt's child processes is unconfirmed; (2) the 180 s per-attempt limit is 1.4x the slowest healthy install seen (129 s), so a slow-but-healthy runner could burn an attempt; (3) `syncHistory` was exercised through its pure functions, never end to end against a ledger; (4) a missing/garbled `shard-completeness.json` means "no information" and renders as before (green); (5) qa/stage/main got a new completeness step and `plan` in `merge-and-report`'s `needs`, run only through actionlint; (6) history record for sandbox build #189 (`history/staging.jsonl` on `ci/reporting-history`) still holds 277 tests as a normal run. Handle it by adding `"incomplete":{"expected":6,"reported":4}` to that JSON line (readers then ignore it), deleting the line, or re-running the failed jobs of run 37669596623 before its blob artifacts expire (retention 3 days, so by 2026-10-10): a complete re-run replaces the record because history keeps one record per build.
+- **Next check:** user marks or removes the #189 line; first real sandbox/qa run after merge shows the new steps; first real install failure shows the `Playwright browser install failed` annotation.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29

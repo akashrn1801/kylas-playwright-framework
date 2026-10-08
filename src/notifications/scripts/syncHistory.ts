@@ -20,6 +20,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { loadDotEnv } from './loadDotEnv';
 import { ReportParser } from '../ReportParser';
+import { loadShardCompleteness, isIncompleteRun } from '../ShardCompleteness';
 import {
   appendAndPrune,
   parseHistory,
@@ -708,6 +709,21 @@ async function main() {
     return;
   }
 
+  // WHY marked, not skipped (2026-10-08, sandbox build #189): a run that merged
+  // fewer shard reports than expected still happened and is worth an audit
+  // line in the ledger, but its totals understate it. The record carries
+  // `incomplete`, RunHistory's readers exclude it (comparableHistory,
+  // pass-rate series, duration estimate), and the email gets NO delta/trend/
+  // recurring/drift for it below — otherwise "277 vs 417" reads as a
+  // regression and the partial run counts toward recurring failures.
+  const completeness = loadShardCompleteness(env);
+  if (isIncompleteRun(completeness)) {
+    current.incomplete = { expected: completeness.expected, reported: completeness.reported };
+    warn(
+      `[syncHistory] INCOMPLETE run: only ${completeness.reported} of ${completeness.expected} shard reports were merged — recording it as incomplete and excluding it from deltas, trends and recurring counts`
+    );
+  }
+
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reporting-history-'));
   const historyFileRelPath = `history/${env}.jsonl`;
 
@@ -767,17 +783,18 @@ async function main() {
       const existingJsonl = fs.existsSync(historyFilePath) ? fs.readFileSync(historyFilePath, 'utf-8') : '';
       const historyBeforeAppend = parseHistory(existingJsonl);
 
-      const delta = computeDelta(historyBeforeAppend, current);
-      deltaOutput = {
-        delta,
-        recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
-        recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
-        moduleTrend: computeModuleTrend(historyBeforeAppend, current),
-        moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
-        slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
-        suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
-        passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
-      };
+      deltaOutput = current.incomplete
+        ? EMPTY_DELTA_OUTPUT
+        : {
+            delta: computeDelta(historyBeforeAppend, current),
+            recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
+            recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
+            moduleTrend: computeModuleTrend(historyBeforeAppend, current),
+            moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
+            slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
+            suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
+            passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
+          };
 
       const updatedJsonl = appendAndPrune(existingJsonl, current);
       fs.mkdirSync(path.dirname(historyFilePath), { recursive: true });

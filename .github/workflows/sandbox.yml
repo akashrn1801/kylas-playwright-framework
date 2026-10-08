@@ -362,8 +362,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run selective tests (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
         env:
@@ -539,8 +542,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
         env:
@@ -634,8 +640,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Reset dedicated form-field limits
         id: reset
@@ -716,29 +725,21 @@ jobs:
       # require someone to already suspect a missing shard and go count
       # artifacts by hand.
       - name: Verify all shards reported
+        # WHY a script that writes reports/staging/shard-completeness.json
+        # (2026-10-08, run 37669596623): the old inline check only printed an
+        # ::error:: annotation, so a run with 4 of 6 reports still produced a
+        # green "PASSED 277/277" email and a normal history record. The script
+        # hands the counts to history:sync and notify. It always exits 0 so the
+        # merge, history, notify and reset steps still run — see the script.
+        # Expected = core shards + 6 formFields entities when that track ran
+        # (reset-field-config uploads field-config-reset-*, which this pattern
+        # does not match, so it never counts as a shard).
         run: |
-          SHARD_TOTAL="${{ needs.detect.outputs.shard_total }}"
-          # WHY +6 conditionally here (2026-09-29): run-formfields-tests adds
-          # its own fixed 6-shard, one-per-entity matrix (see that job's own
-          # WHY comment) whenever run_formfields_track is 'true' — its blob
-          # artifacts (blob-report-sandbox-formfields-*) match the SAME
-          # download pattern above (blob-report-sandbox-*) and land in the
-          # same all-blob-reports directory, so the expected total must
-          # include them or this check would false-positive "missing shards"
-          # on every escalated run.
           FORMFIELDS_SHARDS=0
           if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
             FORMFIELDS_SHARDS=6
           fi
-          EXPECTED_TOTAL=$((SHARD_TOTAL + FORMFIELDS_SHARDS))
-          ACTUAL_COUNT=$(find all-blob-reports -maxdepth 1 -name '*.zip' | wc -l)
-          echo "Expected shard reports: $EXPECTED_TOTAL ($SHARD_TOTAL rest-of-suite + $FORMFIELDS_SHARDS formFields) | Actually downloaded: $ACTUAL_COUNT"
-          if [ "$ACTUAL_COUNT" -lt "$EXPECTED_TOTAL" ]; then
-            MISSING=$((EXPECTED_TOTAL - ACTUAL_COUNT))
-            echo "::error::Sharded run incomplete — $MISSING of $EXPECTED_TOTAL shard(s) never uploaded a blob report (the shard's job crashed before completing, or was cancelled/timed out). The merged Total/Passed/Failed counts below come from only $ACTUAL_COUNT/$EXPECTED_TOTAL shards and UNDERSTATE the real run — do NOT treat them as the whole suite. Check this run's per-job status (Actions tab) to see which shard(s) are missing and why."
-          else
-            echo "All $EXPECTED_TOTAL shards reported successfully."
-          fi
+          bash .github/scripts/verify-shard-completeness.sh staging "${{ needs.detect.outputs.shard_total }}" "$FORMFIELDS_SHARDS"
 
       - name: Merge shard reports into one HTML/JSON report
         run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
