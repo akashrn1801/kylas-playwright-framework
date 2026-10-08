@@ -3,7 +3,7 @@
 > **Purpose:** Records why formFields tests run in a fixed per-entity matrix, never through the generic shard split.
 > **Read when:** You are changing shard planning, a sharded workflow, or adding a shared-config feature.
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-08 @ 2fa56be
 
 ## Status
 Accepted — 2026-09-29.
@@ -27,3 +27,6 @@ Empty `config/sharedConfigSuites.json`, delete `run-formfields-tests` from the f
 
 ## Commit(s)
 `6ec6e3f` (carve-out). Config + sync check: `3d58073`.
+
+## Amendment — 2026-10-07 (sandbox selective runs)
+The carve-out originally covered only the escalated run (planner exclusion). A selective sandbox run that selected formFields paths still ran them as one job (run 37658909999: 417 tests, one machine). The carve-out now applies to every way formFields is selected: `split-formfields-target.sh` strips the same path prefixes from the scoped target and the per-entity matrix runs all 6 entities; `run-tests` is skipped if nothing else is selected. Detail: [sharding-and-locks.md](../known-issues/sharding-and-locks.md). Revert: see that entry.

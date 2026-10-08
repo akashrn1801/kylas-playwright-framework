@@ -7,6 +7,22 @@ name: CI — main (full validation)
 on:
   workflow_dispatch:
 
+# WHY one workflow-level concurrency group PER ACCOUNT, never cancelling (ADR 0009):
+# runs of these workflows share one account whose form-field
+# configuration is account-wide, so overlapping runs on it can corrupt each other's
+# limits (the cross-shard race in docs/known-issues/sharding-and-locks.md, one
+# level up). `kylas-prod` is shared by main.yml and prod.yml, which both drive the same prod
+# account. dev.yml is deliberately NOT in any group.
+# `cancel-in-progress: false` makes a
+# newer run WAIT for the running one instead of killing it.
+# GitHub caveat: a group holds ONE running and ONE pending run. A third run
+# arriving while one is pending CANCELS the pending one (it never starts and
+# sends no email). Only workflows in this repository are covered; a Jenkins job
+# on the same account is not.
+concurrency:
+  group: kylas-prod
+  cancel-in-progress: false
+
 # WHY sharded across a DYNAMICALLY-COMPUTED number of parallel jobs
 # (redesigned 2026-09-09, was a fixed 4, added the same day this gap was
 # found while confirming prod.yml/main.yml's status for the qa/stage/sandbox
@@ -143,8 +159,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run full validation suite (shard ${{ matrix.shard.shardId }}/${{ needs.plan.outputs.shard_total }})
         env:
@@ -297,8 +316,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
         env:
@@ -358,6 +380,82 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  # WHY this job exists and how it is isolated from the verdict (ADR 0009): the
+  # formFields tests clean up after themselves, but a killed/cancelled run or a
+  # failed afterAll can leave Min/Max/Regex limits on the 18 dedicated fields
+  # (cfFormFieldLimit{Text,Number,Paragraph} x 6 entities). Core tests never
+  # touch these fields (docs/known-issues/form-fields.md), so leftovers only
+  # poison the NEXT formFields run's starting state — this restores the baseline.
+  # `if: always()` runs it after both tracks in ANY result. GitHub limits: a
+  # normal cancel still schedules `always()` jobs, but a FORCE-cancel skips them,
+  # and a runner crash or the 6h ceiling can kill it too — so this is best-effort
+  # and `npm run reset:field-config` (docs/RUNBOOK.md) is the manual fallback.
+  # It cannot change the test verdict or counts: job- and step-level
+  # continue-on-error, the step always exits 0 (a failed reset becomes a warning
+  # annotation + the email line, not a red run), and it uploads only
+  # field-config-reset-prod, which no test report reads.
+  reset-field-config:
+    name: reset dedicated form-field limits
+    needs: [run-tests, run-formfields-tests]
+    if: ${{ always() }}
+    environment: production
+    # WHY `environment: production` here too: every other job in this workflow
+    # that touches the prod account declares it (run-tests, run-formfields-tests,
+    # merge-and-report), so the approval gate stays in front of this prod write as
+    # well. UNVERIFIED statically: whether one approval covers all jobs of a run or
+    # this job waits for its own (docs/adr/0009-field-config-reset-and-account-lock.md).
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
+      - name: Install Playwright browsers
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      - name: Reset dedicated form-field limits
+        id: reset
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          ENV: prod
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
+          PROD_ADMIN_EMAIL: ${{ secrets.PROD_ADMIN_EMAIL }}
+          PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
+          PROD_RESTRICTED_EMAIL: ${{ secrets.PROD_RESTRICTED_EMAIL }}
+          PROD_RESTRICTED_PASSWORD: ${{ secrets.PROD_RESTRICTED_PASSWORD }}
+        run: |
+          RC=0
+          npm run reset:field-config -- --env prod --confirm-prod || RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning title=Dedicated field reset incomplete (prod)::reset:field-config exited $RC — stale form-field limits may remain. Run: npm run reset:field-config -- --env prod --dry-run (docs/RUNBOOK.md)"
+          fi
+          exit 0
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: field-config-reset-prod
+          path: reports/prod/field-config-reset.json
+          retention-days: 3
+          if-no-files-found: ignore
+
   # WHY a separate job, not a step in run-tests (this IS the point of
   # sharding): this is the ONE place that produces a single consolidated
   # report/notification, regardless of how many shards ran or how they each
@@ -370,7 +468,7 @@ jobs:
   # change).
   merge-and-report:
     name: merge report + notify
-    needs: [run-tests, run-formfields-tests]
+    needs: [plan, run-tests, run-formfields-tests, reset-field-config]
     if: always()
     environment: production
     runs-on: ubuntu-latest
@@ -396,6 +494,14 @@ jobs:
           pattern: blob-report-main-*
           path: all-blob-reports
           merge-multiple: true
+
+      # WHY (2026-10-08, run 37669596623 on sandbox): a run missing shard
+      # reports used to look complete — the merge and the email only see the
+      # reports that arrived. Expected = planned core shards + the 6 formFields
+      # entities. Writes reports/prod/shard-completeness.json for history:sync
+      # and notify; always exits 0 so merge/notify/reset still run.
+      - name: Verify all shards reported
+        run: bash .github/scripts/verify-shard-completeness.sh prod "${{ needs.plan.outputs.shard_total }}" 6
 
       - name: Merge shard reports into one HTML/JSON report
         run: npx playwright merge-reports --config=merge.config.ts ./all-blob-reports
@@ -427,6 +533,18 @@ jobs:
           # ledger" section for the confirmed root cause.
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: npm run history:sync || true
+
+      # WHY (ADR 0009): hands the reset job's result to notify so a failed or
+      # partial reset shows as a line in the email. continue-on-error + the
+      # reader's own graceful absence mean a skipped/missing artifact just omits
+      # the line; it can never fail this job or touch the verdict.
+      - name: Download field-config reset result
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: field-config-reset-prod
+          path: reports/prod
 
       - name: Send notification email
         if: always()

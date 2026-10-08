@@ -3,7 +3,7 @@
 > **Purpose:** How this repo's CI is built — the four sharded GitHub workflows, the shard planner, the formFields carve-out and its sequencing, the other pipelines, required secrets, and timeouts.
 > **Read when:** Editing any `.github/workflows/*`, `Jenkinsfile*` or `scripts/plan-shards.ts`; judging whether "CI is green" actually covers your change; adding a shared-config test suite.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-08 @ 4d0794a
 
 All figures in tables below are generated (`npm run docs:refresh`), never hand-typed. If a number looks wrong, refresh; do not edit it.
 
@@ -73,12 +73,18 @@ flowchart LR
 | Job | Needs | Runs when | `timeout-minutes` |
 |---|---|---|---|
 | `plan` (`detect` in sandbox) | none | always | 15 (`plan`); sandbox `detect`: no explicit value |
-| `run-tests` | `plan` / `detect` | all plan outputs present | 180 |
+| `run-tests` | `plan` / `detect` | all plan outputs present (sandbox: also `run_scoped_tests == 'true'`, i.e. skipped when only formFields was selected) | 180 |
 | `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `run_formfields_track == 'true'` | 180 |
-| `merge-and-report` | all of the above | `always()` | 30 |
+| `reset-field-config` | `run-tests`, `run-formfields-tests` | `always()` (sandbox: also `run_formfields_track == 'true'`) | 35 job / 25 step |
+| `merge-and-report` | all of the above incl. `reset-field-config` | `always()` | 30 |
 
 - **Why formFields runs after core, not beside it:** both tracks starting together put every core and formFields job through `globalSetup` against one backend at once, which produced 429s. `needs` alone would skip formFields on any core failure, so `if: !cancelled()` is required. Cost: wall-clock roughly doubles. Decision record: [ADR 0007](./adr/0007-sequence-formfields-after-core.md).
 - **`merge-and-report`:** downloads every shard's blob report, `npx playwright merge-reports --config=merge.config.ts`, aggregates misc-errors (`scripts/merge-misc-errors.ts`), then `npm run history:sync || true` and `npm run notify || true`. `allure-playwright` is deliberately excluded from the merge config. See [REPORTING.md](./REPORTING.md).
+- **`reset-field-config`** (qa, stage, main, sandbox; not `prod.yml`): after both tracks it runs `npm run reset:field-config -- --env <env>` (main adds `--confirm-prod`, `environment: production`) to blank the 18 dedicated form-field limits, uploads artifact `field-config-reset-<env>`. Job- and step-level `continue-on-error`, the step always exits 0; `merge-and-report` downloads the artifact with a `continue-on-error` step. [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Unproven: see "Open" below.
+- **Concurrency groups** (`cancel-in-progress: false`): `kylas-qa` (`qa.yml`), `kylas-staging` (`stage.yml`, `sandbox.yml`), `kylas-prod` (`main.yml`, `prod.yml`). `dev.yml`, Jenkins jobs and `staging-promotion-gate.yml` are not in any group.
+- **Open (not facts, [KI-34](./KNOWN_ISSUES_ACTIVE.md)):** whether job-level `continue-on-error` protects the run conclusion on a job timeout; whether an approval-waiting run holds its group; whether `main.yml` needs a separate approval for the reset job (then `merge-and-report` waits); `always()` after force-cancel; a pending `stage` run can be displaced by a `sandbox` push. Timeouts 25/35 min are guesses; `merge-and-report` now waits up to that long.
+- **Browser install is bounded** (all workflows with the step): `bash .github/scripts/install-playwright-browsers.sh --with-deps` under a step `timeout-minutes: 10`: 3 attempts x 180 s, 5/10 s backoff, apt connection timeouts; all attempts failing fails the job with an error annotation. Values come from measured healthy installs (24-129 s). See the 2026-10-07 entry in [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Shard completeness** (`merge-and-report` in qa, stage, main, sandbox): `.github/scripts/verify-shard-completeness.sh <env> <core shards> <formFields shards>` counts downloaded blob zips against expected (core + 6 formFields), writes `reports/<env>/shard-completeness.json` and annotates. It always exits 0 so merge/history/notify/reset still run (a failing step would skip the merge and leave only a "report not available" email); the email and history react to the JSON instead ([REPORTING.md](./REPORTING.md)).
 - Every shard uploads `blob-report-*`, `misc-errors-*` and `playwright-test-results-*` artifacts; the merged report is `playwright-report-<env>`.
 
 ### 4.1 Shard planner (`scripts/plan-shards.ts`)
@@ -110,9 +116,18 @@ Decision record: [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md); l
 `sandbox.yml`'s `detect` step runs `detect-tests.sh` to choose a target, then:
 
 1. **Escalated** (`TARGET == "--grep @regression"`, triggered by changes under `src/core/`, `src/fixtures/`, `src/auth/`, `playwright.config.ts`, or critical `config/config.ts` edits): calls the planner and enables the formFields track.
-2. **Selective** (any other target): planner-free; emits one shard with an empty `files` list, and `run-tests` falls back to `$TARGET` with `--shard=1/1`. It must stay planner-free because `detect-tests.sh` can select formFields paths directly, and the planner's exclusion would silently drop them.
+2. **Selective** (any other target): planner-free (the planner would drop explicitly selected paths). `.github/scripts/split-formfields-target.sh` splits `$TARGET` by the `config/sharedConfigSuites.json` path prefixes (`tests/ui/formFields/`, `tests/rbac/formFields/`, not a grep substring): formFields paths go to the per-entity matrix (`run_formfields_track=true`, **all 6 entities**, since the matrix is fixed and the lock is per entity), the rest goes to `run-tests` as one `--shard=1/1` shard. The step fails loudly if formFields count + scoped count != original count (never run twice, never dropped). Since 2026-10-07; before that a formFields selection ran every formFields test as one job (run 37658909999).
 
-Workers: 2 when the rest-of-suite count is above 50, else 1; the formFields track is always 2. `detect-tests.sh` maps changed files to modules (module dir, `tests/ui/<m>/`, `tests/rbac/<m>.rbac.spec.ts` or `tests/rbac/<m>/`, factories via a singular→plural table) and also greps formFields specs for import dependencies.
+| Case | `run_scoped_tests` | `run-tests` | `run-formfields-tests` (6 jobs) | blobs expected by `merge-and-report` |
+|---|---|---|---|---|
+| formFields only | false | skipped (not failed) | runs (`!cancelled()`) | 0 + 6 |
+| formFields + other module | true | other module only, 1 shard | runs | 1 + 6 |
+| escalated `@regression` | true | planner shards, formFields excluded | runs | N + 6 |
+| no formFields (path target or `@smoke`) | true | as before | skipped | 1 |
+
+`--grep @smoke` (fallback) still matches 18 `@smoke` formFields tests inside the single scoped shard; deliberately unchanged (small, read-only).
+
+Workers: 2 when the rest-of-suite count is above 50, else 1; the formFields track is always 2. `detect-tests.sh` maps changed files to modules (module dir, `tests/ui/<m>/`, `tests/rbac/<m>.rbac.spec.ts` or `tests/rbac/<m>/`, factories via a singular→plural table) and also greps formFields specs for import dependencies (a page object/factory they import selects formFields too).
 
 ## 5. Other pipelines
 
@@ -136,7 +151,7 @@ Jenkins binds the same names as credentials (`credentials('QA_ADMIN_EMAIL')`, et
 
 ## 7. Open gaps (details in the active list)
 
-- No `concurrency:` group on any workflow, so overlapping pushes stack jobs; see [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md).
+- `concurrency:` groups now exist per account (section 4) but their runtime behaviour and the new reset job are unproven; see [KI-34](./KNOWN_ISSUES_ACTIVE.md). History: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - The fixed formFields matrix does not scale with test growth; see [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md).
 
 ## 8. Changing CI safely
