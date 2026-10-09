@@ -433,12 +433,7 @@ export class MeetingsPage extends BasePage {
         // (value populated, or the calendar-not-connected warning shown),
         // unlike polling the input's own value which can legitimately stay
         // empty in the warning case.
-        await this.page
-          .locator('.is-invalid__menu-list')
-          .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-          .catch(() => {
-            logger.warn(`Medium menu did not confirm closed after selecting ${medium.label} — proceeding anyway`);
-          });
+        await this.ensureReactSelectMenuClosed(`Medium "${medium.label}"`);
       } catch (error) {
         logger.warn(`${medium.label} — click failed (${String(error)}) — trying next`);
         continue;
@@ -734,12 +729,7 @@ export class MeetingsPage extends BasePage {
       // full test timeout before this fix). Escape closes the menu
       // deterministically rather than guessing a wait duration.
       await this.page.keyboard.press('Escape');
-      await this.page
-        .locator('.is-invalid__menu-list')
-        .waitFor({ state: 'hidden', timeout: 3000 })
-        .catch(() => {
-          logger.warn('Invitees menu did not confirm closed after Escape — proceeding anyway');
-        });
+      await this.ensureReactSelectMenuClosed('Invitees');
     } else {
       logger.info('Skipping invitee — no extra invitee added');
     }

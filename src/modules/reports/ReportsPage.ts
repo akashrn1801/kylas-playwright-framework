@@ -498,8 +498,8 @@ export class ReportsPage extends BasePage {
     const openMenu = this.page.locator('.is-invalid__menu, .select__menu').first();
     if (await openMenu.isVisible().catch(() => false)) {
       await this.page.keyboard.press('Escape');
-      await openMenu.waitFor({ state: 'hidden', timeout: config.timeouts.expect }).catch(() => {
-        /* best effort — the click that follows will surface any real remaining problem loudly */
+      await openMenu.waitFor({ state: 'hidden', timeout: config.timeouts.expect }).catch((error: unknown) => {
+        throw new Error(`Reports: a react-select menu is still open after Escape — it would block the next click: ${String(error)}`);
       });
     }
   }
@@ -677,10 +677,7 @@ export class ReportsPage extends BasePage {
     await options.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
     const texts = (await options.allInnerTexts()).map((t) => t.trim());
     await this.page.keyboard.press('Escape');
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed(`${description} (option list read)`);
     return texts;
   }
 
@@ -2180,6 +2177,18 @@ export class ReportsPage extends BasePage {
     await this.attemptSaveOnceAndClassify();
   }
 
+  // WHY public (2026-10-09, stage run 37778503008 shard 1/5, reports.spec.ts:533): tests that
+  // fill the form themselves (to assert the preview first) and then Save a NEW report used a
+  // bare clickSaveButton(). On stage that test's POST /v3/reports returned HTTP 500 on both
+  // the attempt and the retry (log lines labelled with the test name, 14:12:34 and 14:13:50),
+  // so the details page never rendered. createReport() already guards this known backend bug
+  // (APPLICATION_BUGS.md #4: 500 + code 01403004, the identical retry succeeds); this exposes the
+  // same guard. Still fires only on that exact status+code, so any other failure surfaces at
+  // once. The code of the :533 responses was not logged — HYPOTHESIS that it is 01403004.
+  async saveNewReport(): Promise<void> {
+    await this.clickSaveButtonForCreateWithBackendRetry();
+  }
+
   async createReport(data: ReportData): Promise<{ id: string; name: string }> {
     logger.info(`Creating report: ${data.name}`);
     await this.goToCreateReport();
@@ -2462,6 +2471,16 @@ export class ReportsPage extends BasePage {
         `verifyRunCountForEntity(${entityType}): drill-through undercount on attempt ${attempt}/${retries} ` +
           `(bucket=${reportBucketCount}, destinationList=${destinationListCount}) — re-checking`
       );
+      // WHY reload the report first (2026-10-09, stage run 37734268279,
+      // reports.rbac.spec.ts:148, Deal: "bucket 38, destination list 39" after all
+      // attempts): the old loop re-read the bucket from the SAME rendered Table view, so
+      // the bucket could never change between attempts — only the freshly queried list
+      // could — and a record that reached the index after the report ran could never be
+      // picked up. Mirrors the reportTotal loop above, which re-navigates for the same
+      // reason. HARDENED, root cause not confirmed: this fixes the loop's inability to
+      // observe a changed report, not why the report was 1 behind the list.
+      await this.goToReportDetails(id);
+      await this.switchChartType('Table');
       reportBucketCount = await this.getDimensionValueCount(ownerName);
       popup = await this.clickDrillThroughForDimensionValue(ownerName);
       destinationListCount = await this.getDestinationListTotalCount(popup);
