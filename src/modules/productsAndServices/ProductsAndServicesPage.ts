@@ -273,12 +273,11 @@ export class ProductsAndServicesPage extends BasePage {
     // this was the one option-click left unrouted (flagged by
     // locator-reviewer, 2026-08-10).
     await this.click(exactOption, `${description}: option "${exactTextOrRandom}"`);
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    // WHY the shared primitive (KI-35, ADR 0011): Units is a multi-select whose
+    // menu stays open after a pick on QA, and its full-viewport overlay then
+    // intercepts the next click (the Active toggle). This verifies the menu
+    // is closed, closes it if not, and throws naming the field if it stays open.
+    await this.ensureReactSelectMenuClosed(description, control);
     // WHY confirm the CONTROL's rendered text, not the anchor input's own
     // value, before logging success (flagged by locator-reviewer,
     // 2026-08-10): confirmed live — react-select clears/reuses the filter

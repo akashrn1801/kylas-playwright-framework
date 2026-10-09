@@ -27,6 +27,7 @@ import { logger } from '../src/utils/logger';
 
 const REPO_ROOT = path.join(__dirname, '..');
 const TESTS_ROOT = path.join(REPO_ROOT, 'tests');
+const SRC_ROOT = path.join(REPO_ROOT, 'src');
 const SHARED_CONFIG_SUITES_PATH = path.join(REPO_ROOT, 'config/sharedConfigSuites.json');
 
 // WHY this exact exception list, not a broader pattern (2026-09-30): mirrors
@@ -239,6 +240,77 @@ function checkFile(
   return violations;
 }
 
+// ── Rule: no swallowed "react-select menu hidden" wait outside the shared primitive ──
+// WHY (2026-10-09, KI-35 / ADR 0011): `menu.waitFor({ state: 'hidden' }).catch(() => {})` turns
+// "the menu is still open" into silence, and an open menu's `position: fixed; inset: 0`
+// blocker then swallows the next click (QA: P&S Units, Dashboard DB27, Call Logs). The
+// only allowed way to wait for the menu to close is BasePage.ensureReactSelectMenuClosed().
+// Detected with the AST, not a regex: a `.catch(...)` whose receiver is a `.waitFor({ state:
+// 'hidden', ... })` call on either a locator expression containing `is-invalid__menu`, or an
+// identifier that the same file declares as such a locator.
+const MENU_HIDDEN_PRIMITIVE_NAME = 'ensureReactSelectMenuClosed';
+
+function findSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...findSourceFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith('.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+function checkSourceFileForSwallowedMenuWait(filePath: string): Violation[] {
+  const violations: Violation[] = [];
+  const text = fs.readFileSync(filePath, 'utf-8');
+  if (!text.includes('is-invalid__menu') && !/\.waitFor\(\{\s*state:\s*'hidden'/.test(text)) return violations;
+  const sourceFile = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+  const menuIdentifiers = new Set<string>();
+  forEachDescendant(sourceFile, (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer?.getText().includes('is-invalid__menu')) {
+      menuIdentifiers.add(n.name.text);
+    }
+  });
+
+  const insidePrimitive = (node: ts.Node): boolean => {
+    for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
+      if (ts.isMethodDeclaration(p) && ts.isIdentifier(p.name) && p.name.text === MENU_HIDDEN_PRIMITIVE_NAME) return true;
+    }
+    return false;
+  };
+
+  forEachDescendant(sourceFile, (n) => {
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression) || n.expression.name.text !== 'catch') return;
+    const receiver = n.expression.expression;
+    if (!ts.isCallExpression(receiver) || !ts.isPropertyAccessExpression(receiver.expression)) return;
+    if (receiver.expression.name.text !== 'waitFor') return;
+    const arg = receiver.arguments[0];
+    const waitsHidden =
+      arg !== undefined && ts.isObjectLiteralExpression(arg) && /state:\s*'hidden'/.test(arg.getText());
+    if (!waitsHidden) return;
+    // A handler that rethrows is a conversion of the error, not a swallow.
+    const handler = n.arguments[0];
+    if (handler !== undefined && /\bthrow\b/.test(handler.getText())) return;
+    const target = receiver.expression.expression;
+    const targetText = target.getText();
+    const isMenu =
+      targetText.includes('is-invalid__menu') || (ts.isIdentifier(target) && menuIdentifiers.has(target.text));
+    if (!isMenu || insidePrimitive(n)) return;
+    violations.push({
+      rule: 'no-swallowed-react-select-menu-wait',
+      file: toRepoRelative(filePath),
+      line: lineOf(sourceFile, n),
+      message:
+        "react-select menu `waitFor({ state: 'hidden' }).catch(...)` hides an open menu — call BasePage.ensureReactSelectMenuClosed(description, control) instead (KI-35, ADR 0011)",
+    });
+  });
+  return violations;
+}
+
 function loadSharedConfigDirs(): string[] {
   const raw = JSON.parse(fs.readFileSync(SHARED_CONFIG_SUITES_PATH, 'utf-8')) as Record<
     string,
@@ -257,6 +329,11 @@ function main(): void {
   const allViolations: Violation[] = [];
   for (const file of specFiles) {
     allViolations.push(...checkFile(file, sharedConfigDirs));
+  }
+
+  const sourceFiles = findSourceFiles(SRC_ROOT);
+  for (const file of sourceFiles) {
+    allViolations.push(...checkSourceFileForSwallowedMenuWait(file));
   }
 
   if (allViolations.length === 0) {

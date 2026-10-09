@@ -3,7 +3,7 @@
 > **Purpose:** Records why formFields tests run in a fixed per-entity matrix, never through the generic shard split.
 > **Read when:** You are changing shard planning, a sharded workflow, or adding a shared-config feature.
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-08 @ 2576128
 
 ## Status
 Accepted — 2026-09-29.
@@ -27,3 +27,9 @@ Empty `config/sharedConfigSuites.json`, delete `run-formfields-tests` from the f
 
 ## Commit(s)
 `6ec6e3f` (carve-out). Config + sync check: `3d58073`.
+
+## Amendment — 2026-10-07 (sandbox selective runs)
+The carve-out originally covered only the escalated run (planner exclusion). A selective sandbox run that selected formFields paths still ran them as one job (run 37658909999: 417 tests, one machine). The carve-out now applies to every way formFields is selected: `split-formfields-target.sh` strips the same path prefixes from the scoped target and the per-entity matrix runs all 6 entities; `run-tests` is skipped if nothing else is selected. Detail: [sharding-and-locks.md](../known-issues/sharding-and-locks.md). Revert: see that entry.
+
+## Amendment — 2026-10-08 (sandbox runs only the selected entities)
+Run 37753304635 changed only `ProductsAndServicesPage.ts` yet moved all 417 formFields tests to the 6-entity matrix. Sandbox now selects entities: `detect-tests.sh` maps entity spec/lock files to their entity, and page objects/factories to the entities whose formFields specs import them (derived from the real imports, Option B); shared files and escalated runs select all. The matrix and the expected blob count use the selected list; each shard still runs its entity's UI + RBAC pair together, and the lock is per entity with dedicated fields, so a subset only removes concurrent participants. `qa.yml`, `stage.yml` and `main.yml` keep the fixed 6-entity matrix (their zero-latency hardcoded design is unchanged). The `@smoke` fallback still pulls 18 formFields tests into the scoped shard. Revert: restore the `sharedConfig` step and `formfields_entities_json: ${{ steps.sharedConfig... }}` in `sandbox.yml` and `FORMFIELDS_SHARDS=6`.

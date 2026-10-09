@@ -3,7 +3,7 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ 0c719fe
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
@@ -139,3 +139,13 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 - **Fix:** 1 attempt then typing fallback; warning is expected, self-healing (24/24 verified). Shared by every module with date custom fields.
 - **Revert:** revert `selectDateCustomField()`.
 - **Commit:** `0c5d3bf`.
+
+### Deals clone: modal left open after Escape, then a false failure from an unrelated toast — 2026-10-09
+- **Symptom:** QA run 37733648349 shard 3/5, `deals.spec.ts:362`, 8.5 min (passed on retry): attempt 2's ellipsis click hung until the test timeout. A later local QA run failed after a clone that had worked (deal 435874).
+- **Root cause (hang, CONFIRMED from trace and screenshot):** Escape did not close `#editEntityModal`; the swallowed hidden-wait timed out after 10.04 s, and the next unbounded `click` waited behind the backdrop. Why the Name field never showed "Copy" on attempt 1 is unexplained.
+- **Root cause (false failure, CONFIRMED screenshot):** `assertNoFormErrors('deal clone form')` matches any `.toast`, and a red "Uhoh! Something didn't work as expected" toast was also on screen. The user states it comes from `GET /v1/ai-agent/workflows/subscribed` (HTTP 400, AI agent feature under development on QA); I did not verify that request-to-toast link.
+- **Fix:** `cloneDeal()` closes via Cancel and waits for hidden; `openEllipsisMenu()` calls are bounded; the clone is verified by outcome (POST 200/201 with an ID, then that deal opened by ID shows the submitted name containing "Copy"), not by scanning for toasts. The toast is neither matched nor hidden.
+- **Verified:** 3/3 local QA runs, `--retries=0`, `--workers=2`. The Cancel path ran in none of them (the modal opened first time), so it is still unexercised. Not yet seen in CI.
+- **Not fixed:** the same unbounded calls in `LeadsPage`/`ContactsPage`/`CompaniesPage.openEllipsisMenu()`.
+- **Revert:** revert the `cloneDeal()` and `openEllipsisMenu()` edits in `DealsPage.ts`.
+

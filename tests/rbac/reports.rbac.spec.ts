@@ -713,7 +713,7 @@ test.describe('Reports RBAC', () => {
     await reportsPage.clickGeneratePreview();
     await reportsPage.assertPreviewNoDataMessage();
 
-    await reportsPage.clickSaveButton();
+    await reportsPage.saveNewReport();
     await reportsPage.assertDetailsNoDataMessage();
     logger.success('R61 passed');
   });
