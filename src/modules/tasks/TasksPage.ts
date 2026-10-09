@@ -286,9 +286,10 @@ export class TasksPage extends BasePage {
     // produces zero effect). Waiting for the menu to actually close is a
     // real readiness signal (react-select's own state transition), not a
     // guessed delay — matching the "wait for a real signal" discipline used
-    // for that same DealsPage fix. Non-fatal: if the menu is already gone or
-    // never matches, this must not turn a working selection into a failure.
-    await menu.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+    // for that same DealsPage fix. Now the shared primitive (KI-35, ADR 0011): an
+    // already-closed menu passes at once; a menu still open after the grace period gets
+    // Escape and, if it is still open, fails naming this field instead of being ignored.
+    await this.ensureReactSelectMenuClosed(`${inputId} (${optionText})`, control);
     logger.success(`Selected "${optionText}" for ${inputId}`);
   }
 

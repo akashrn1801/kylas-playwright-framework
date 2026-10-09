@@ -391,12 +391,7 @@ export class CompaniesPage extends BasePage {
     await option.waitFor({ state: 'visible', timeout: 10000 });
     await option.click();
 
-    await this.page
-      .locator('div[class*="is-invalid__menu"]')
-      .waitFor({ state: 'hidden', timeout: 5000 })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    await this.ensureReactSelectMenuClosed('company option pick');
 
     logger.success(`Selected ${description}: ${optionText}`);
   }

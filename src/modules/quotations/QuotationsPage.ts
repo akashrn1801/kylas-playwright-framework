@@ -227,10 +227,7 @@ export class QuotationsPage extends BasePage {
     const randomIndex = Math.floor(Math.random() * count);
     const selectedText = await options.nth(randomIndex).innerText();
     await options.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed('random country');
     logger.debug(`Selected random country: ${selectedText.trim()}`);
     return selectedText.trim();
   }
@@ -330,7 +327,7 @@ export class QuotationsPage extends BasePage {
         const option = menu.locator('.is-invalid__option').filter({ hasText: value }).first();
         await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
         await option.click({ timeout: config.timeouts.expect });
-        await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+        await this.ensureReactSelectMenuClosed(`is-invalid control "${value}"`, control);
         logger.debug(`Selected "${value}" from is-invalid control`);
         return;
       } catch (error) {
@@ -639,10 +636,7 @@ export class QuotationsPage extends BasePage {
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const dealName = (await options.nth(randomIndex).innerText()).trim();
     await options.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed('random deal');
     logger.success(`Selected deal: ${dealName}`);
     return dealName;
   }
@@ -657,10 +651,7 @@ export class QuotationsPage extends BasePage {
       .first()
       .waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('.is-invalid__option').filter({ hasText: dealName }).first().click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed(`deal "${dealName}"`);
     logger.success(`Selected specific deal: ${dealName}`);
     return dealName;
   }
@@ -762,10 +753,7 @@ export class QuotationsPage extends BasePage {
     const productOptions = this.page.locator('.is-invalid__option');
     await productOptions.first().waitFor({ state: 'visible', timeout: 15000 });
     await productOptions.first().click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed('product row (BHK search)');
     const quantityInput = this.page.locator('input[name="products.0.quantity"]').first();
     if (await quantityInput.isVisible().catch(() => false)) {
       const qtyVal = await quantityInput.inputValue().catch(() => '');
@@ -800,10 +788,7 @@ export class QuotationsPage extends BasePage {
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const productName = (await optionsLocator.nth(randomIndex).innerText()).trim();
     await optionsLocator.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    await this.ensureReactSelectMenuClosed('random product');
     await this.productQuantityInput(row).fill('1');
     logger.success(`Added product: ${productName}`);
   }
@@ -1186,10 +1171,7 @@ export class QuotationsPage extends BasePage {
           .first();
         await ownerOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
         await ownerOption.click({ timeout: config.timeouts.expect });
-        await this.page
-          .locator('.is-invalid__menu')
-          .waitFor({ state: 'hidden', timeout: 10000 })
-          .catch(() => {});
+        await this.ensureReactSelectMenuClosed(`owner "${ownerName}"`);
         logger.info(`Set owner to: ${ownerName}`);
         return;
       } catch (error) {
@@ -1207,10 +1189,7 @@ export class QuotationsPage extends BasePage {
         // attempt's click retries — not a guessed 500ms. Waiting for
         // `.is-invalid__menu` to become hidden is the real, checkable signal.
         await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page
-          .locator('.is-invalid__menu')
-          .waitFor({ state: 'hidden', timeout: 5000 })
-          .catch(() => {});
+        await this.ensureReactSelectMenuClosed(`owner "${ownerName}" (retry cleanup)`);
       }
     }
     throw new Error(
@@ -2277,10 +2256,7 @@ export class QuotationsPage extends BasePage {
       if (optionCount > 0) {
         const firstName = await this.page.locator('.is-invalid__option').first().innerText();
         await this.page.locator('.is-invalid__option').first().click();
-        await this.page
-          .locator('.is-invalid__menu')
-          .waitFor({ state: 'hidden', timeout: 10000 })
-          .catch(() => {});
+        await this.ensureReactSelectMenuClosed(`company search "${term}"`);
         logger.info(`Linked company via search "${term}": ${firstName.trim()}`);
         return firstName.trim();
       }
@@ -2294,10 +2270,7 @@ export class QuotationsPage extends BasePage {
     if (fallbackCount > 0) {
       const firstName = await this.page.locator('.is-invalid__option').first().innerText();
       await this.page.locator('.is-invalid__option').first().click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: 10000 })
-        .catch(() => {});
+      await this.ensureReactSelectMenuClosed('company (empty search)');
       logger.info(`Linked company via empty search: ${firstName.trim()}`);
       return firstName.trim();
     }

@@ -405,9 +405,12 @@ export class CallLogsPage extends BasePage {
         await this.page.waitForTimeout(300);
       }
     }
-    // Close menu
-    await this.page.evaluate('document.querySelector("#callLogModal")?.click()');
-    await this.page.waitForTimeout(200);
+    // WHY the shared primitive, not a synthetic click on #callLogModal (KI-35,
+    // ADR 0011): react-select closes on blur/Escape, never on a click event
+    // dispatched at the modal, so on QA the menu stayed open and its fixed
+    // overlay intercepted the Save click (screenshot: Customer Emotion menu open
+    // over the footer; run 37733648349 shard 2/5, 4 of 4 attempts).
+    await this.ensureReactSelectMenuClosed(description, controlLocator);
     logger.success(`Selected random "${description}": ${selected.join(', ')}`);
     return selected;
   }

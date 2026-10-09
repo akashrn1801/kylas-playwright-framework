@@ -544,7 +544,7 @@ test.describe('Reports', () => {
     await reportsPage.clickGeneratePreview();
     await reportsPage.assertPreviewNoDataMessage();
 
-    await reportsPage.clickSaveButton();
+    await reportsPage.saveNewReport();
     await reportsPage.assertDetailsNoDataMessage();
 
     await reportsPage.switchChartType('Table');
