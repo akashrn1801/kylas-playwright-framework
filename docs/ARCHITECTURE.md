@@ -3,7 +3,7 @@
 > **Purpose:** How the framework is built — layers, fixtures, auth, recovery combinators, locking, sharding and CI flow. The single place to learn the shape of the system before changing it.
 > **Read when:** Touching `src/core`, `src/fixtures`, `src/auth`, the error collector, a lock, or a CI workflow; or onboarding to a module you have not worked in.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident history in [known-issues/](./known-issues/session-expiry-and-auth.md); CI detail in [CI_PIPELINES.md](./CI_PIPELINES.md). Terms: [GLOSSARY.md](./GLOSSARY.md).
 
@@ -174,7 +174,7 @@ Lead, Contact, Deal and Company each carry admin-configured custom fields (Text,
 
 `ErrorCollector` is attached by the fixtures to every role page and passively records `pageerror`, console `error`, `requestfailed` and HTTP `>=400`. `errorFilters.ts` classifies each into one of three buckets before it reaches `reports/<env>/misc-errors.json`:
 
-1. **Noise** (`isNoise()`) — dropped: third-party scripts, HTTP 429, `net::ERR_ABORTED` on enumerated background endpoints (`ABORT_ON_NAVIGATE_PATTERNS`).
+1. **Noise** (`isNoise()`) — dropped: third-party scripts, HTTP 429, `net::ERR_ABORTED` on enumerated background endpoints (`ABORT_ON_NAVIGATE_PATTERNS`, including the Settings > Fields list GETs; an HTTP 4xx/5xx on the same URL is still reported).
 2. **Expected RBAC** (`isExpectedRbacError()`) — the CRM correctly denying a restricted user (422/`029003`, and Products' 403/`00902001`); counted, shown, never a regression.
 3. **Known background noise** (`isExpectedBackgroundNoise()`) — a narrow, individually live-confirmed endpoint list. Never extend without the same evidence bar; entity CRUD/search/layout endpoints are deliberately excluded.
 
