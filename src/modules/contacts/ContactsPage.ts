@@ -592,7 +592,7 @@ export class ContactsPage extends BasePage {
         await option.waitFor({ state: 'visible', timeout: 5000 });
         await option.click({ timeout: config.timeouts.expect });
         // WHY: Wait for menu to collapse — confirms React Select registered the selection
-        await menu.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+        await this.ensureReactSelectMenuClosed(`contact dropdown ${inputId} (${optionText})`, control);
         logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
         return;
       } catch (error) {

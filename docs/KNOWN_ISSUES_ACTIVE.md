@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 2576128
+> **Last verified:** 2026-10-09 @ 0c719fe
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -151,13 +151,33 @@
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
 
-### KI-35 — Products & Services Units menu stays open; `b0c6b38` part 2 not ported
-- **Status:** part 1 ported 2026-10-08 (uncommitted), **not verified on QA**; part 2 open, not ported · **Since:** 2026-10-07
-- **Symptom:** `productsAndServices.rbac.spec.ts` :46 and :75 fail on both attempts: `locator.click` timed out on `label[for="0_88_input_isActive"]` (`setIsActive()`), log says `<div class="css-1dsbpcp">` intercepts pointer events (QA run 37733648349 shard 5/5; also run 37508203253). The trace shows that div is the react-select menu's full-viewport overlay (`position: fixed; inset: 0`, first child of `div.is-invalid__menu`); the screenshot shows the Units list open with "Pieces (p)" selected, the Units input focused. `selectFromReactSelect()` swallowed the hidden-wait timeout with `.catch(() => {})`.
-- **Fix (part 1 of `b0c6b38`, ported by hand):** after a pick, if `.is-invalid__menu` is still visible, press Escape once and wait for hidden (`timeouts.expect`); still visible, throw an error naming the field. Single-selects (Country, Category) are already hidden, so the branch is skipped.
-- **Revert:** restore the bare `.waitFor({ state: 'hidden' }).catch(() => {})` in `selectFromReactSelect()` (`ProductsAndServicesPage.ts`).
-- **NOT verified:** that this fixes QA (no live run was made); that Escape alone closes the menu; why QA differs from other environments (only the user's word that they pass).
-- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. The current evidence (the failure above) does not involve it; unported pending a decision. See [products-and-services.md](./known-issues/products-and-services.md).
+### KI-35 — A react-select menu left open blocks the next click (QA only); `b0c6b38` part 2 not ported
+- **Status:** all three sites **pass on QA**: Units (CI run 37778400646), DB27 and both Call Logs tests (local `--retries=0` runs, 2026-10-08, uncommitted code); not yet seen in a CI run · **Since:** 2026-10-07
+- **Symptom:** `click` times out with `<div class="css-1dsbpcp"> … subtree intercepts pointer events` (the open menu's `position: fixed; inset: 0` blocker). Run 37733648349: P&S :46/:75 (Units → Active toggle), Dashboard DB27 (assignees → Save), Call Logs `call-logs.spec.ts:273` and `call-logs.rbac.spec.ts:174` (Customer Emotion → Save).
+- **Evidence:** QA pick-to-"set" gap 10.1–10.4 s every time (the swallowed 10 s hidden-wait) vs ~0.3 s on stage (`st_113170221174`).
+- **Fix:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)). Revert: see the ADR.
+- **Live QA (2026-10-08, local):** DB27 passed (assignee click to "selected" 2.4 s, was ~12.3 s); Call Logs :174/:273 passed (pick to Save: same millisecond, was blocked 15 s). Neither modal was dismissed.
+- **NOT verified:** why QA differs from stage; whether Escape (vs. a natural close inside the 1.5 s grace) is what closed the menu in DB27/Call Logs, because the primitive does not log which path it took.
+- **Follow-up done 2026-10-09:** every other swallowed menu-hidden wait now uses the primitive (BasePage single/multi-select and lookup helpers, Quotations, Tasks, Contacts, Companies, Deals, Meetings, Reports), and `check:conventions` flags a new one (rule `no-swallowed-react-select-menu-wait`; checked against a scratch violation, then deleted). Ripple runs (local QA): see CHANGELOG. A transient QA window failed Tasks ("data is invalid") and Quotations (HTTP 500); the original code failed the same Tasks test, later runs passed.
+- **Open, Call Logs:** `selectRandomFromMultiReactSelect()` re-opens with a synthetic `mousedown` even if the menu is already open (a 2-pick count, 50% of calls) and never checks that the second option was clicked. React-select closes an open menu on that mousedown (library behaviour, not confirmed on this app); no failure seen, so not changed.
+- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
+
+### KI-40 — Reports count flakes (`reports.spec.ts:1003`, `reports.rbac.spec.ts:148`); `:533` fixed
+- **Status:** :1003 unconfirmed, not patched; :148 hardened, cause not confirmed; :533 fixed (3 stage-log facts, no live run) · **Since:** 2026-10-08
+- **:1003 (qa 37733648349 shard 1/5, passed on retry):** `waitForReportTotalBelow` read 4 five times over ~16 s; the report also logged `report total (4) exceeds API total (1)`. The test has no filter on purpose (it proves the narrow time window), so other workers' leads in the ±5 min window can move the total. HYPOTHESIS. Live loop: log report total and `/v1/search` count every 5 s through a delete with `--workers=2`.
+- **:148 (stage 37734268279, Deal, bucket 38 vs list 39 after 3 attempts):** the retry loop re-read the same rendered Table, so it could never see a changed report. It now reloads the report first. Why the report was 1 behind the list is unknown.
+- **:533 (stage 37778503008 shard 1/5):** `POST /v3/reports` returned HTTP 500 on the attempt and the retry (log lines labelled with the test); the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (the existing retry for 500 + `01403004`, APPLICATION_BUGS.md #4). Those 500s' code was not logged (HYPOTHESIS: `01403004`); APPLICATION_BUGS.md #4's "Lead does not show it" has decayed.
+
+### KI-41 — P&S RBAC :161 HTTP 400 "Sum of all payment amounts must equal the deal's actual value" (hardened, cause not confirmed)
+- **Status:** hardened 2026-10-09 · **Since:** 2026-10-08 (qa 37733648349 shard 5/5, code `01001091`, `PUT deals/435611`; passed on retry; no stage occurrence)
+- **Evidence (CONFIRMED, log):** the failing attempt has no "Unallocated amount banner present" line and the next step ran 3.05 s after the product pick (the flat 3 s banner wait); the passing attempt distributed the amount. Local QA 5/5 passed (banner ~25 ms), so late vs absent in CI is unknown.
+- **Change:** `handleDistributeUnallocatedAmountIfPresent()` waits `config.timeouts.expect` when the form has installments, warns if no banner came.
+- **Related, fixed:** stage `productsAndServices.rbac.spec.ts:188` ("Invalid deal" 3 times; random deal "SHR…-Deal" from another test) now creates its own deal (3/3 local QA; stage not run).
+
+### KI-42 — Product-fixture creation is skipped when a spec filter has a `:LINE` suffix
+- **Status:** open, not fixed · **Since:** 2026-10-09
+- **Evidence:** `npx playwright test tests/rbac/productsAndServices.rbac.spec.ts:161` logged "Product fixtures: SKIPPED — file filters [...:161] match none of 16 fixture-needing specs", so the test failed with "no fixture file found"; the same spec with `-g` created the fixtures. CI uses no line filters.
+- **Next:** strip `:LINE` from file filters in `src/auth/productFixtureNeed.ts`.
 
 ---
 
