@@ -3,7 +3,7 @@
 > **Purpose:** Durable facts, deliberate deviations and resolved incidents for the Products & Services (P&S) module.
 > **Read when:** touching `ProductsAndServicesPage.ts`, P&S fixtures, product-row pickers on Deals/Quotations, or the Units / description / date-picker helpers.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Open P&S items (JWT lifetime, `assertQuotationInList()` false-positive, duplicated date pickers) are tracked in [KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-16, KI-23, KI-24). Module-agnostic rules are in [PATTERNS.md](../PATTERNS.md).
 
@@ -84,3 +84,15 @@ Do not "normalize" these back to the standard shape.
 - Two P&S spec comments still cite a progress file that no longer exists; the substance is in this file.
 - `assertForbiddenOnRestrictedEdit()` 403/`00902001` handling, PS10/PS11 Distribute Equally fix and Batch 7's 12/12 regression are all closed.
 - `npm run test:<module> -- <args>` appends args to the last `&&` command — a standing gotcha, documented in [CONTRIBUTING_TESTS.md](../CONTRIBUTING_TESTS.md).
+
+### WATCH — P&S RBAC :161 HTTP 400 "Sum of all payment amounts must equal the deal's actual value" (was KI-41) — 2026-10-08
+- **Status:** low priority; hardened 2026-10-09, cause not confirmed. Not reproduced in qa 37897275025 or stage 37897319452; revisit if it fails again. Not recorded as fixed.
+- **Seen once:** qa 37733648349 shard 5/5, code `01001091`, `PUT deals/435611`; passed on retry; no stage occurrence.
+- **Evidence (CONFIRMED, log):** the failing attempt has no "Unallocated amount banner present" line and the next step ran 3.05 s after the product pick (the flat 3 s banner wait); the passing attempt distributed the amount. Local QA 5/5 passed (banner ~25 ms), so late vs absent in CI is unknown.
+- **Change:** `handleDistributeUnallocatedAmountIfPresent()` waits `config.timeouts.expect` when the form has installments, warns if no banner came.
+- **Related, fixed:** stage `productsAndServices.rbac.spec.ts:188` ("Invalid deal" 3 times; random deal "SHR…-Deal" from another test) now creates its own deal (3/3 local QA; stage not run).
+
+### WATCH — Product-fixture creation skipped when a spec filter has a `:LINE` suffix (was KI-42) — 2026-10-09
+- **Status:** low priority; real but only affects local runs (CI never uses a line filter, so qa 37897275025 / stage 37897319452 could not show it). Not fixed.
+- **Evidence:** `npx playwright test tests/rbac/productsAndServices.rbac.spec.ts:161` logged "Product fixtures: SKIPPED — file filters [...:161] match none of 16 fixture-needing specs", so the test failed with "no fixture file found"; the same spec with `-g` created the fixtures.
+- **If it matters:** strip `:LINE` from file filters in `src/auth/productFixtureNeed.ts`. Workaround: use `-g` or run the whole file.
