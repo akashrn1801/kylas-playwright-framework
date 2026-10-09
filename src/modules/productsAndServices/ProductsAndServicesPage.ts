@@ -273,34 +273,11 @@ export class ProductsAndServicesPage extends BasePage {
     // this was the one option-click left unrouted (flagged by
     // locator-reviewer, 2026-08-10).
     await this.click(exactOption, `${description}: option "${exactTextOrRandom}"`);
-    // WHY an explicit close, then a hard failure if it stays open (KI-35;
-    // QA run 37733648349 shard 5/5 and run 37508203253): Units is a
-    // multi-select whose menu can stay open after a pick, and its full-
-    // viewport overlay (`position: fixed; inset: 0`, first child of
-    // `.is-invalid__menu`) then intercepted the next click (the Active
-    // toggle). The old silent `.catch()` accepted "still open". Escape is
-    // pressed ONLY when the menu is still visible: react-select treats
-    // Escape on an already-closed menu as clear-value, so it is never sent
-    // blind. Whether Escape alone closes it on QA is NOT verified live.
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* checked explicitly just below */
-      });
-    if (await this.page.locator('.is-invalid__menu').isVisible().catch(() => false)) {
-      await this.page.keyboard.press('Escape');
-      const closed = await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-        .then(() => true)
-        .catch(() => false);
-      if (!closed) {
-        throw new Error(
-          `${description}: react-select menu still open after picking "${exactTextOrRandom}" and pressing Escape — its overlay would block later clicks`
-        );
-      }
-    }
+    // WHY the shared primitive (KI-35, ADR 0011): Units is a multi-select whose
+    // menu stays open after a pick on QA, and its full-viewport overlay then
+    // intercepts the next click (the Active toggle). This verifies the menu
+    // is closed, closes it if not, and throws naming the field if it stays open.
+    await this.ensureReactSelectMenuClosed(description, control);
     // WHY confirm the CONTROL's rendered text, not the anchor input's own
     // value, before logging success (flagged by locator-reviewer,
     // 2026-08-10): confirmed live — react-select clears/reuses the filter

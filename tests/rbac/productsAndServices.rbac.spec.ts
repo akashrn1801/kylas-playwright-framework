@@ -180,19 +180,25 @@ test.describe('Products & Services RBAC', () => {
   });
 
   // ─── PS12 ──────────────────────────────────────────────────────────────────
-  // WHY no dealName override on the generated data: config.deals.adminDealName
-  // is confirmed stale this session (see docs/known-issues/products-and-services.md,
-  // Batch 6 piece 2/3 investigation) — omitting it lets fillQuotationForm()
-  // fall through to its own random-deal pick instead, avoiding that known
-  // config risk entirely.
+  // WHY the quotation is attached to a deal this test creates itself (2026-10-09, stage run
+  // 37734268279 shard 4/5, :188): the old random-deal pick chose another test's deal
+  // ("SHR1791441174225-Deal") and the save was rejected "Invalid deal" on all 3 attempts;
+  // removing Contact/Company cannot fix a rejected deal. Rule 5: RBAC tests use their own
+  // record, never a random pre-existing one. (config.deals.adminDealName is still stale, see
+  // docs/known-issues/products-and-services.md, so it is not used either.)
   test('@regression restricted user can select admin-owned active product fixture on a new quotation', async ({
     restrictedPage,
   }) => {
     test.setTimeout(480000);
 
+    const dealsPage = new DealsPage(restrictedPage);
     const qp = new QuotationsPage(restrictedPage);
     const fixture = getProductFixture('adminActive', config.env);
-    const data = generateRestrictedQuotationData();
+    const dealData = generateDealData();
+    await dealsPage.goToDealsList();
+    const dealId = await dealsPage.createDeal(dealData);
+    if (!dealId) throw new Error('Deal ID not captured after create');
+    const data = generateRestrictedQuotationData({ dealName: dealData.name });
 
     const { id } = await qp.createQuotation(data);
     if (!id) throw new Error('Quotation ID not captured after create');

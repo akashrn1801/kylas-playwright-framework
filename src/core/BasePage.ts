@@ -688,12 +688,7 @@ export class BasePage {
     // a real readiness signal (the library's own state transition), bounded and
     // non-fatal so a slow-to-close menu can never turn a working selection into a
     // failure.
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone, or this control doesn't use this menu class */
-      });
+    await this.ensureReactSelectMenuClosed(description);
     logger.success(
       `${description} selected: "${selectedText}" (index ${selectedIndex} of ${total})`
     );
@@ -1489,12 +1484,7 @@ export class BasePage {
     const randomIndex = Math.floor(Math.random() * optionTexts.length);
     const selectedValue = optionTexts[randomIndex];
     await options.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    await this.ensureReactSelectMenuClosed(description, control);
     logger.success(`${description} set to: ${selectedValue}`);
     return selectedValue;
   }
@@ -1768,6 +1758,60 @@ export class BasePage {
     await userItem.click({ timeout: config.timeouts.expect });
   }
 
+  // WHY this exists (KI-35; ADR 0011; QA runs 37733648349 / 37508203253):
+  // Kylas's checkbox-style multi-selects (P&S Units, Assign Dashboard
+  // assignees, Call Log Customer Emotion) keep their menu OPEN after a pick on
+  // QA — the pick-to-"set" gap was 10.1-10.4s in every QA log (the old
+  // `waitFor('hidden', expect).catch()` timing out) versus ~0.3s on stage,
+  // where the menu closes itself. An open `.is-invalid__menu` carries a
+  // full-viewport blocker (`position: fixed; inset: 0`, the `css-1dsbpcp` node
+  // in every "subtree intercepts pointer events" error), so the NEXT click
+  // (Save, the Active toggle, a dashboard gear menu) times out. Escape closing
+  // such a menu is confirmed on QA for Units (run 37778400646, shards 4/5 pass).
+  //
+  // Contract: returns only once NO `.is-invalid__menu` is visible. Gives the
+  // app a short grace period to close it itself (stage), then — only if it is
+  // still open — focuses the control's input (when given) and presses Escape,
+  // never blind: react-select treats Escape on an already-closed menu as
+  // clear-value. Throws, naming the field, if the menu is still open. Nothing
+  // is swallowed. `control` is optional but recommended: a pick made through a
+  // synthetic click (Call Logs) may leave focus off the input, and Escape only
+  // reaches react-select's key handler when its input has focus.
+  protected async ensureReactSelectMenuClosed(
+    description: string,
+    control?: Locator
+  ): Promise<void> {
+    // Stage closes the menu within ~0.3s of the pick (st_113170221174 log);
+    // QA never does within 10s. 1.5s separates the two with margin.
+    const naturalCloseMs = 1500;
+    const menu = this.page.locator('.is-invalid__menu');
+    const waitHidden = (timeout: number): Promise<boolean> =>
+      menu
+        .first()
+        .waitFor({ state: 'hidden', timeout })
+        .then(() => true)
+        .catch(() => false);
+    if (await waitHidden(naturalCloseMs)) return;
+
+    if (control) {
+      await control
+        .locator('input')
+        .first()
+        .focus({ timeout: config.timeouts.expect })
+        .catch((error: unknown) => {
+          throw new Error(
+            `${description}: react-select menu is still open after a pick and its input could not be focused to close it: ${String(error)}`
+          );
+        });
+    }
+    await this.page.keyboard.press('Escape');
+    if (!(await waitHidden(config.timeouts.expect))) {
+      throw new Error(
+        `${description}: react-select menu still open after the pick and Escape — its fixed full-viewport overlay would block the next click`
+      );
+    }
+  }
+
   // WHY: for async-search react-select lookups where options are NOT
   // available immediately on click but only after typing against a live
   // backend search — confirmed live (2026-07-16) Contact's Company field
@@ -1815,12 +1859,7 @@ export class BasePage {
         .first();
       await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
       await exactOption.click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-        .catch(() => {
-          /* menu may already be gone */
-        });
+      await this.ensureReactSelectMenuClosed(description, control);
       logger.success(`${description} selected: "${exactValue}" (exact match)`);
       return exactValue;
     }
@@ -1834,12 +1873,7 @@ export class BasePage {
     const randomIndex = Math.floor(Math.random() * optionTexts.length);
     const selectedValue = optionTexts[randomIndex];
     await options.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    await this.ensureReactSelectMenuClosed(description, control);
     logger.success(`${description} set to: ${selectedValue}`);
     return selectedValue;
   }
@@ -1945,12 +1979,7 @@ export class BasePage {
         .first();
       await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
       await exactOption.click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-        .catch(() => {
-          /* menu may already be gone */
-        });
+      await this.ensureReactSelectMenuClosed(label, control);
       logger.success(`${label} selected: "${exactValue}" (exact match)`);
       return exactValue;
     }
@@ -1964,12 +1993,7 @@ export class BasePage {
     const randomIndex = Math.floor(Math.random() * optionTexts.length);
     const selectedValue = optionTexts[randomIndex];
     await options.nth(randomIndex).click();
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    await this.ensureReactSelectMenuClosed(label, control);
     logger.success(`${label} set to: ${selectedValue}`);
     return selectedValue;
   }
@@ -2039,13 +2063,7 @@ export class BasePage {
     // Contact Lookup). Escape collapses it; the hidden-wait keeps the next
     // interaction from racing the close animation.
     await input.press('Escape');
-    await this.page
-      .locator('.is-invalid__menu')
-      .first()
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* menu may already be gone */
-      });
+    await this.ensureReactSelectMenuClosed(`Lookup "${description}"`);
     logger.success(
       `Lookup "${description}": entity "${entityName}" correctly not selectable (RBAC-scoped)`
     );
@@ -2407,13 +2425,10 @@ export class BasePage {
     // real, observable signal that the menu has genuinely closed — not an
     // arbitrary sleep — gives React's own state update the same natural
     // settling time a human's normal pace would have provided for free.
-    await this.page
-      .locator('.is-invalid__menu')
-      .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-      .catch(() => {
-        /* already hidden, or never opened this specific instance — either
-           way, nothing further to wait for here. */
-      });
+    // WHY the shared primitive, not a swallowed wait (KI-35, ADR 0011): a menu left open keeps
+    // its fixed full-viewport overlay in front of the Save click. It waits for hidden, retries
+    // Escape once with the input focused, and fails naming the field if it is still open.
+    await this.ensureReactSelectMenuClosed(description, control);
 
     // WHY: confirmed live (2026-07-08) — every individual chip can verify as
     // landed at the moment it's clicked (the per-click check above), yet a
@@ -3128,12 +3143,7 @@ export class BasePage {
         .first();
       await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
       await exactOption.click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-        .catch(() => {
-          /* menu may already be gone */
-        });
+      await this.ensureReactSelectMenuClosed(`Product row search: ${name}`, control);
       await expect(
         control,
         `Product row: expected "${name}" to render as the selected value after selection`
@@ -3328,12 +3338,7 @@ export class BasePage {
         .first();
       await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
       await exactOption.click();
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: config.timeouts.expect })
-        .catch(() => {
-          /* menu may already be gone */
-        });
+      await this.ensureReactSelectMenuClosed(`Search and select: ${name}`, control);
       logger.success(`Search and select: selected "${name}"`);
       return;
     }
