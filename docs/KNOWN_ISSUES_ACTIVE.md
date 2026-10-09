@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ 0c719fe
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -50,10 +50,26 @@
 
 ## B. Infrastructure and CI
 
-### KI-10 — No `concurrency:` guard on any sharded workflow
-- **Status:** open (verified: `grep concurrency .github/workflows/*.yml` → no matches) · **Since:** 2026-09-29
-- **What:** `qa.yml`, `stage.yml`, `main.yml`, `sandbox.yml` can run simultaneously across branches with no queuing or cancel-in-progress, stacking tens of concurrent jobs and raising concurrent `globalSetup` pressure (the HTTP 429 mechanism, [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md)).
-- **Next check:** confirm the account's concurrent-job allowance (not knowable from the repo); then decide per-branch `group:` + `cancel-in-progress`. Workflow edits need your review. See [CI_PIPELINES.md](./CI_PIPELINES.md).
+### KI-34 — Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed
+- **Status:** unverified (implemented 2026-10-06, uncommitted; only static checks done: `tsc`, `eslint`, actionlint with no new findings, `check:test-counts` unchanged) · **Since:** 2026-10-06
+- **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Open items, none of them confirmed: (1) the tool has never run against a real app and its `FormFieldsConfigPage` selectors were not re-confirmed live; (2) a field absent in an env counts as a failure (exit 1), check on the first dry-run, esp. staging/prod; (3) entity tab labels/URL slugs were copied from the specs' `*_ENTITY` constants; (4) retry/deadline values come from `globalSetup`, a full 18-field pass was never timed, the 25-min step / 35-min job timeouts are guesses; (5) whether job-level `continue-on-error` protects the run conclusion when the job times out; (6) whether a run waiting for environment approval holds its concurrency group; (7) whether one approval covers the new `main.yml` job or it needs its own (if unapproved, `merge-and-report` and the email wait); (8) behaviour of `always()` jobs after a normal cancel vs force-cancel; (9) one pending run per group: a pending `stage` push can be displaced by a `sandbox` push (no `workflow_dispatch` on sandbox); (10) Jenkins jobs and `staging-promotion-gate.yml` are outside the groups; (11) the email section was typechecked, never viewed rendered.
+- **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 (no `concurrency:` guard) is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
+
+### KI-36 — Sandbox formFields split never exercised in a real CI run
+- **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
+- **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
+
+### KI-38 — Sandbox formFields entity selection: never exercised on GitHub
+- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-08
+- **What:** sandbox runs only the formFields entities `detect-tests.sh` selects (run 37753304635: a `ProductsAndServicesPage.ts`-only change moved all 417 tests). Checked offline only: the real `decide` step on synthetic file lists (1/2/6 entities, escalated, none), actionlint, shellcheck. Open: (1) GitHub behaviour with a one-entity matrix, with `run-tests` skipped, and the blob-count check in a real run are unobserved; (2) the dependency rule is direct-import only: a changed file that an entity's formFields spec reaches only transitively (or imports from outside `src/modules`/`src/data/factories`) selects nothing; (3) `--grep @smoke` fallback still pulls the 18 `@smoke` formFields tests into the scoped shard (unchanged by design); (4) `reset-field-config` still resets all 18 fields (the script has no per-entity flag); (5) the `ShardCompleteness.ts` comment still says "the 6 formFields entities" (behaviour does not depend on it).
+- **Revert:** see the 2026-10-08 amendment in [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md).
+- **Next check:** first sandbox push touching one entity's files: expect one `playwright-formFields (<entity>)` job, `playwright-selective` per the scoped files, and a complete-run email.
+
+### KI-37 — Install-step bound and incomplete-run handling: unproven; build #189 ledger record still unmarked
+- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-07
+- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Open: (1) cause of the apt stall in run 37669596623 is unknown, and the apt `Acquire::*::Timeout` options plus `timeout -k` are untested on a real runner (the retry/timeout logic was exercised locally with substitute commands only); whether `timeout` also reaps apt's child processes is unconfirmed (run 37753304635: attempt 1 stalled at 180 s during apt downloads, attempts 2-3 hit `Could not get lock /var/lib/dpkg/lock-frontend`, held by the same apt-get pid 2708; leftover-apt-get is the likely explanation but unproven, and the stall cause is unknown; 2026-10-08 the script now terminates leftover apt-get after a timed-out attempt, sets `DPkg::Lock::Timeout 60` and enforces a 570 s total budget — tested locally with stub commands and a fake `apt-get`, never on a runner, and `sudo kill` was not exercised); (2) the 180 s per-attempt limit is 1.4x the slowest healthy install seen (129 s), so a slow-but-healthy runner could burn an attempt; (3) `syncHistory` was exercised through its pure functions, never end to end against a ledger; (4) a missing/garbled `shard-completeness.json` means "no information" and renders as before (green); (5) qa/stage/main got a new completeness step and `plan` in `merge-and-report`'s `needs`, run only through actionlint; (6) history record for sandbox build #189 (`history/staging.jsonl` on `ci/reporting-history`) still holds 277 tests as a normal run. Handle it by adding `"incomplete":{"expected":6,"reported":4}` to that JSON line (readers then ignore it), deleting the line, or re-running the failed jobs of run 37669596623 before its blob artifacts expire (retention 3 days, so by 2026-10-10): a complete re-run replaces the record because history keeps one record per build.
+- **Next check:** user marks or removes the #189 line; first real sandbox/qa run after merge shows the new steps; first real install failure shows the `Playwright browser install failed` annotation.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -134,6 +150,34 @@
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
+
+### KI-35 — A react-select menu left open blocks the next click (QA only); `b0c6b38` part 2 not ported
+- **Status:** all three sites **pass on QA**: Units (CI run 37778400646), DB27 and both Call Logs tests (local `--retries=0` runs, 2026-10-08, uncommitted code); not yet seen in a CI run · **Since:** 2026-10-07
+- **Symptom:** `click` times out with `<div class="css-1dsbpcp"> … subtree intercepts pointer events` (the open menu's `position: fixed; inset: 0` blocker). Run 37733648349: P&S :46/:75 (Units → Active toggle), Dashboard DB27 (assignees → Save), Call Logs `call-logs.spec.ts:273` and `call-logs.rbac.spec.ts:174` (Customer Emotion → Save).
+- **Evidence:** QA pick-to-"set" gap 10.1–10.4 s every time (the swallowed 10 s hidden-wait) vs ~0.3 s on stage (`st_113170221174`).
+- **Fix:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)). Revert: see the ADR.
+- **Live QA (2026-10-08, local):** DB27 passed (assignee click to "selected" 2.4 s, was ~12.3 s); Call Logs :174/:273 passed (pick to Save: same millisecond, was blocked 15 s). Neither modal was dismissed.
+- **NOT verified:** why QA differs from stage; whether Escape (vs. a natural close inside the 1.5 s grace) is what closed the menu in DB27/Call Logs, because the primitive does not log which path it took.
+- **Follow-up done 2026-10-09:** every other swallowed menu-hidden wait now uses the primitive (BasePage single/multi-select and lookup helpers, Quotations, Tasks, Contacts, Companies, Deals, Meetings, Reports), and `check:conventions` flags a new one (rule `no-swallowed-react-select-menu-wait`; checked against a scratch violation, then deleted). Ripple runs (local QA): see CHANGELOG. A transient QA window failed Tasks ("data is invalid") and Quotations (HTTP 500); the original code failed the same Tasks test, later runs passed.
+- **Open, Call Logs:** `selectRandomFromMultiReactSelect()` re-opens with a synthetic `mousedown` even if the menu is already open (a 2-pick count, 50% of calls) and never checks that the second option was clicked. React-select closes an open menu on that mousedown (library behaviour, not confirmed on this app); no failure seen, so not changed.
+- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
+
+### KI-40 — Reports count flakes (`reports.spec.ts:1003`, `reports.rbac.spec.ts:148`); `:533` fixed
+- **Status:** :1003 unconfirmed, not patched; :148 hardened, cause not confirmed; :533 fixed (3 stage-log facts, no live run) · **Since:** 2026-10-08
+- **:1003 (qa 37733648349 shard 1/5, passed on retry):** `waitForReportTotalBelow` read 4 five times over ~16 s; the report also logged `report total (4) exceeds API total (1)`. The test has no filter on purpose (it proves the narrow time window), so other workers' leads in the ±5 min window can move the total. HYPOTHESIS. Live loop: log report total and `/v1/search` count every 5 s through a delete with `--workers=2`.
+- **:148 (stage 37734268279, Deal, bucket 38 vs list 39 after 3 attempts):** the retry loop re-read the same rendered Table, so it could never see a changed report. It now reloads the report first. Why the report was 1 behind the list is unknown.
+- **:533 (stage 37778503008 shard 1/5):** `POST /v3/reports` returned HTTP 500 on the attempt and the retry (log lines labelled with the test); the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (the existing retry for 500 + `01403004`, APPLICATION_BUGS.md #4). Those 500s' code was not logged (HYPOTHESIS: `01403004`); APPLICATION_BUGS.md #4's "Lead does not show it" has decayed.
+
+### KI-41 — P&S RBAC :161 HTTP 400 "Sum of all payment amounts must equal the deal's actual value" (hardened, cause not confirmed)
+- **Status:** hardened 2026-10-09 · **Since:** 2026-10-08 (qa 37733648349 shard 5/5, code `01001091`, `PUT deals/435611`; passed on retry; no stage occurrence)
+- **Evidence (CONFIRMED, log):** the failing attempt has no "Unallocated amount banner present" line and the next step ran 3.05 s after the product pick (the flat 3 s banner wait); the passing attempt distributed the amount. Local QA 5/5 passed (banner ~25 ms), so late vs absent in CI is unknown.
+- **Change:** `handleDistributeUnallocatedAmountIfPresent()` waits `config.timeouts.expect` when the form has installments, warns if no banner came.
+- **Related, fixed:** stage `productsAndServices.rbac.spec.ts:188` ("Invalid deal" 3 times; random deal "SHR…-Deal" from another test) now creates its own deal (3/3 local QA; stage not run).
+
+### KI-42 — Product-fixture creation is skipped when a spec filter has a `:LINE` suffix
+- **Status:** open, not fixed · **Since:** 2026-10-09
+- **Evidence:** `npx playwright test tests/rbac/productsAndServices.rbac.spec.ts:161` logged "Product fixtures: SKIPPED — file filters [...:161] match none of 16 fixture-needing specs", so the test failed with "no fixture file found"; the same spec with `-g` created the fixtures. CI uses no line filters.
+- **Next:** strip `:LINE` from file filters in `src/auth/productFixtureNeed.ts`.
 
 ---
 

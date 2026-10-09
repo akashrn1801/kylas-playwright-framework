@@ -10,6 +10,7 @@
  */
 import { ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
+import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 
 // WHY these constants (2026-10-06, sandbox Build #186: 0 failed, 906 passed,
@@ -251,8 +252,24 @@ export function computeHealthScore(
 export function computeOverallVerdict(
   report: ParsedReport,
   health: HealthScore,
-  suiteDrift: SuiteDrift | null
+  suiteDrift: SuiteDrift | null,
+  shardCompleteness?: ShardCompleteness | null
 ): VerdictResult {
+  // WHY checked before everything else (2026-10-08, sandbox build #189, run
+  // 37669596623): 2 of 6 formFields jobs hung in the browser install and were
+  // cancelled, yet the 4 that finished produced "277 passed, 0 failed" and a
+  // green "PASSED / Excellent" email. A run missing shard reports verified
+  // only part of the suite, so it can never be 'clear' or 'caution'; the
+  // verdict is 'blocked' with a danger tone whatever the surviving counts say.
+  if (isIncompleteRun(shardCompleteness)) {
+    const failedNote = report.failed > 0 ? ` (${report.failed} failure(s) in the shards that did report)` : '';
+    return {
+      verdict: 'blocked',
+      bannerLabel: `🚫 Incomplete Run — ${shardCompleteness.reported} of ${shardCompleteness.expected} shards reported`,
+      bannerTone: 'danger',
+      headline: `Deployment not recommended — only ${shardCompleteness.reported} of ${shardCompleteness.expected} shard reports were merged, so totals understate the run${failedNote}`,
+    };
+  }
   // WHY checked first, before anything else (confirmed live, sandbox Build
   // #167, 2026-09-08): a report where 0 tests actually executed (all
   // skipped — see ReportParser.ts's own WHY comment on 'no-tests-executed')

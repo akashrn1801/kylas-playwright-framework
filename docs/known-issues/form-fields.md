@@ -3,7 +3,7 @@
 > **Purpose:** Durable rules and resolved incidents for the Form Field Limit feature (`/setup/fields/<entity>/list`, custom-field length/regex limits) across all six entities.
 > **Read when:** adding an entity to formFields, editing `FormFieldsConfigPage.ts`, or any test that mutates account-wide field configuration.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-07 @ 2fa56be
 
 Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms of run 36573185433 are in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
 
@@ -17,6 +17,7 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 6. **Dedicated custom field per consumer** ([ADR 0001](../adr/0001-dedicated-custom-fields.md), commit `ab06f5e`) ends the shared-field collision class at its root; locks only coordinate processes on one filesystem.
 7. **Entity shape is parameterized:** `FormFieldsConfigPage` takes `{tabLabel, urlSlug}`, confirmed live per entity, never guessed.
 8. **A shared config-mutating helper "working" for one entity is not evidence for another.** Ask what DOM/config state a different file's test could leave the field in, and whether the method handles it defensively.
+9. **Leftover limits on dedicated fields cannot affect core tests** (grep, 2026-10-06): no core test passes the old shared fields (`cfTextField`, `cfNumber`, `cfParagraphText`) to any limit/regex mutator, every mutator call takes a `*_FIELD_INTERNAL_NAME` built from a `*_FORM_FIELD_LIMIT_NAMES` constant, and all 12 importers of those six constants live in `tests/{ui,rbac}/formFields/`. Leftovers only poison the next formFields run. Post-run reset tool: `npm run reset:field-config` ([ADR 0009](../adr/0009-field-config-reset-and-account-lock.md); never run against a real app, [KI-34](../KNOWN_ISSUES_ACTIVE.md)). Re-grep before relying on this if a new consumer of those fields is added.
 
 ## Incidents
 

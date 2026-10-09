@@ -37,8 +37,11 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: npm ci
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        run: npx playwright install chromium
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh
       - name: Run tests against Staging
         env:
           CI: true
