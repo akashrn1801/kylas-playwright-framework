@@ -1314,10 +1314,7 @@ export class DealsPage extends BasePage {
       // touching an unrelated field, rather than guessing how long that
       // takes — best-effort, since the menu is normally already closed by
       // this point (a real option was just selected).
-      await this.page
-        .locator('.is-invalid__menu')
-        .waitFor({ state: 'hidden', timeout: 3000 })
-        .catch(() => {});
+      await this.ensureReactSelectMenuClosed('deal form option pick');
 
       // Update UTM field to verify campaign info section is editable
       await this.fill(this.utmSourceInput(), data.utmSource, 'utm source (edit)');
@@ -1552,11 +1549,29 @@ export class DealsPage extends BasePage {
     // product-row add — the exact class of race this codebase has
     // repeatedly hit elsewhere (rule 2) — so a real wait is required, not
     // an instant check disguised as one.
+    //
+    // WHY the wait is sized by whether installments exist (2026-10-09, QA run
+    // 37733648349 shard 5/5, productsAndServices.rbac.spec.ts:161, passed on retry): with a
+    // flat 3 s window the banner did not appear in time on CI (no "banner present" log line
+    // in the failing attempt, 3.05 s between the product pick and the next step), Save went
+    // out with the old installment split, and PUT /v1/deals/435611 returned HTTP 400 code
+    // 01001091 "Sum of all payment amounts must equal the deal's actual value". A deal that
+    // already has installments (the part-payments summary is on the form) is exactly the
+    // case where the banner is expected, so it gets the normal expect budget; a deal with no
+    // installments keeps the quick 3 s check. Local QA ran 5/5 clean with the banner up in
+    // ~25 ms, so this is HARDENED, root cause (banner late vs never shown) NOT confirmed.
+    const hasInstallments = (await this.page.locator('.part-payments-summary').count()) > 0;
+    const bannerWaitMs = hasInstallments ? config.timeouts.expect : 3000;
     const bannerPresent = await this.distributeUnallocatedButton()
-      .waitFor({ state: 'visible', timeout: 3000 })
+      .waitFor({ state: 'visible', timeout: bannerWaitMs })
       .then(() => true)
       .catch(() => false);
     if (!bannerPresent) {
+      if (hasInstallments) {
+        logger.warn(
+          `No "Distribute Equally" banner within ${bannerWaitMs}ms although the deal has part-payment installments — saving without distributing (expected only if the attached product did not change the total)`
+        );
+      }
       return;
     }
     logger.info('Unallocated amount banner present — distributing equally before save');
@@ -1972,10 +1987,16 @@ export class DealsPage extends BasePage {
     // selector is a confirmed real collision risk on at least one of these
     // 4 modules' pages, standardized here for consistency even though no
     // second dropdown was found on this page today.
-    const alreadyOpen = (await this.ellipsisButton().getAttribute('aria-expanded')) === 'true';
+    // WHY every call here is bounded (QA run 37733648349 shard 3/5, deals.spec.ts:362
+    // trace): with no timeout these default to unlimited, so a click blocked by an
+    // open modal's backdrop waited out the whole 480s test timeout instead of
+    // failing in clickDropdownMenuItemBounded()'s own retry loop.
+    const alreadyOpen =
+      (await this.ellipsisButton().getAttribute('aria-expanded', { timeout: config.timeouts.expect })) ===
+      'true';
     if (!alreadyOpen) {
-      await this.ellipsisButton().scrollIntoViewIfNeeded();
-      await this.ellipsisButton().click();
+      await this.ellipsisButton().scrollIntoViewIfNeeded({ timeout: config.timeouts.expect });
+      await this.ellipsisButton().click({ timeout: config.timeouts.expect });
     }
     await this.page.locator('.dropdown-menu.show').waitFor({ state: 'visible', timeout: 5000 });
     logger.success('Ellipsis menu opened');
@@ -2122,8 +2143,16 @@ export class DealsPage extends BasePage {
       logger.warn(
         `Clone modal Name field did not show "Copy" within 20s on attempt ${attempt}/${maxAttempts} — closing and reopening for a fresh render attempt before falling back to Save-anyway`
       );
-      await this.page.keyboard.press('Escape');
-      await this.editModal().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => null);
+      // WHY Cancel, not Escape, and no swallowed wait (QA run 37733648349 shard 3/5,
+      // deals.spec.ts:362, trace): Escape did NOT close the Clone modal — the
+      // old `waitFor('hidden').catch(() => null)` timed out after 10.04s and
+      // was swallowed, the modal stayed open (failure screenshot), and attempt 2's
+      // ellipsis click then waited behind its backdrop until the 480s test timeout.
+      await this.click(
+        this.editModal().getByRole('button', { name: 'Cancel', exact: true }),
+        'clone modal: Cancel (close before reopening)'
+      );
+      await this.editModal().waitFor({ state: 'hidden', timeout: 10000 });
     }
     if (!namePrefilled) {
       // WHY still proceed rather than throw (this is the one remaining
@@ -2137,21 +2166,38 @@ export class DealsPage extends BasePage {
       );
     }
 
+    // The name the modal is about to submit (normally "<original> Copy"), read before Save.
+    const submittedName = await this.nameInput().inputValue();
     const dealIdPromise = this.captureDealIdFromResponse();
     await this.click(this.saveEditButton(), 'clone save button');
-    await this.assertNoFormErrors('deal clone form');
+    // WHY the outcome is verified, not the page scanned for error toasts (2026-10-09):
+    // assertNoFormErrors matches ANY `.toast`, so on QA — where
+    // GET /v1/ai-agent/workflows/subscribed always fails while the AI agent feature is
+    // under development (user's statement, not verified by me) and raises a red
+    // "Uhoh! Something didn't work as expected" toast — it failed a clone that had
+    // succeeded (deal 435874, QA run 2026-10-08). The toast is neither matched nor hidden.
+    // Success is instead: the clone POST returned 200/201 with an ID (captureDealIdFromResponse
+    // returns null on any other status or a missing response), and that deal, opened by ID,
+    // carries the submitted name including the "Copy" marker.
     const clonedId = await dealIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above.
-    // This is the PRIMARY correctness signal for the clone flow — a discrete,
-    // hard network event, not a UI snapshot.
     if (!clonedId) {
       throw new Error(
-        'Cloned deal ID not captured after save — cannot proceed (save likely failed silently)'
+        'Cloned deal ID not captured after save — the clone POST did not return 200/201 with an ID (save failed)'
       );
     }
-    await this.editModal()
-      .waitFor({ state: 'hidden', timeout: 15000 })
-      .catch(() => null);
+    if (!/Copy/.test(submittedName)) {
+      throw new Error(
+        `Clone modal submitted name "${submittedName}" without the "Copy" marker (deal ${clonedId}) — the pre-fill never rendered`
+      );
+    }
+    await this.goToDealDetailsById(clonedId);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('body'), `Cloned deal ${clonedId} should show its name "${submittedName}"`).toContainText(
+        submittedName,
+        { timeout: 15000 }
+      )
+    );
     logger.success(`Deal cloned — new ID: ${clonedId}`);
     return clonedId;
   }
