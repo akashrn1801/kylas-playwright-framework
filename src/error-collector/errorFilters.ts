@@ -148,6 +148,18 @@ export const ABORT_ON_NAVIGATE_PATTERNS: RegExp[] = [
   // tests), both otherwise cleanly passing with no assertion depending on
   // this endpoint.
   /\/v1\/forex\/currencies-with-and-without-exchange-rates/i,
+  // WHY: confirmed live 2026-10-09 — the Settings > Fields list (paged, sorted:
+  // `.../fields?sort=...&page=...`, plus `entityType=`/`custom-only=` on the
+  // `/v1/entities/<lead|contact|task>/fields` form) is a background list fetch
+  // that the formFields specs abort by navigating away on every field-config
+  // visit. Evidence: sandbox Build #189 (202 such errors, 0 failures), Build #191
+  // (33, 0 failures), an earlier 205 across six formFields shards (all green), and
+  // qa 37897275025 / stage 37897319452 (402 across the 12 formFields shards, all
+  // jobs green; every one `requestfailed` / `net::ERR_ABORTED` / GET). Zero
+  // correlation with any failing test. Deliberately narrow: this list only ever
+  // applies to ERR_ABORTED messages, so an HTTP 4xx/5xx on the same URL is still
+  // reported as unexpected; `sort=` and `page=` are both required in the query.
+  /\/v1\/(?:entities\/[a-z]+|[a-z-]+)\/fields\?(?=[^#]*\bsort=)(?=[^#]*\bpage=)/i,
 ];
 
 export const NOISE_PATTERNS: RegExp[] = [

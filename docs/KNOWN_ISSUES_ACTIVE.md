@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ 0c719fe
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -13,7 +13,7 @@
 
 ### KI-01 — FFPS5: stable across re-testing, root cause unconfirmed
 - **Status:** inconclusive (currently stable; original symptom never reproduced) · **Since:** 2026-09-23 (re-investigated 2026-09-28)
-- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; an operator then watched it in headed mode and saw the field never typed into and the edit page reload repeatedly — a different (fill/locator) symptom. Six independent conditions (single worker, forced 3-way concurrency on QA and staging, real code path with DOM/POST/GET/edit-page evidence layers, alongside the core suite, FFPS1–5 in sequence) reproduced neither shape. Full write-up: [APPLICATION_BUGS.md](../APPLICATION_BUGS.md) entry 6 (reclassified: not a confirmed app bug).
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; a headed-mode watch showed a different (fill/locator) symptom. Six independent conditions reproduced neither shape. Write-up: [APPLICATION_BUGS.md](../APPLICATION_BUGS.md) entry 6 and [form-fields.md](./known-issues/form-fields.md) (conditions list).
 - **Next check:** if it fails again, capture the failing run's `trace.zip` or a screen recording *at that moment* — the one evidence type never obtained; do not re-argue from theory. Existing bounded retries in `productsAndServicesFieldLimits.spec.ts` and `ProductsAndServicesPage.assertCustomFieldValueOnEditPage()` stay as labeled hardening (rule 10).
 
 ### KI-02 — FFRPS8 is a load-dependent flake with no prior record
@@ -28,8 +28,7 @@
 
 ### KI-04 — Inconclusive one-off flakes (do not re-close without new evidence)
 - **Status:** inconclusive · **Since:** 2026-07-06 … 2026-08-03
-- **What:** (a) Deals "log a Call on a shared deal" permission failure; (b) `quotations.rbac.spec.ts` ~8-minute timeout in `openCreateForm()`; (c) `call-logs.spec.ts` company live-search "no options"; (d) `meetings.spec.ts` reschedule failure (3× HTTP 500 on invitee lookup); (e) `tasks.rbac.spec.ts` edit-modal hang (hardened, 0/5 reproductions); (f) HTTP 500 on meeting creation and Deals RBAC Task-permission timeout (pass in isolation, fail in suite).
-- **Evidence:** each was one occurrence or unreproducible locally; rule 21 forbids dismissing load-dependent flakes. Line numbers drift — search by test title. Detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** six one-off flakes (Deals shared-deal Call-log permission; Quotations RBAC ~8-min `openCreateForm()` timeout; call-logs company live-search "no options"; meetings reschedule 3× HTTP 500; tasks RBAC edit-modal hang; meeting-creation 500 / Deals RBAC Task-permission timeout). Each was one occurrence or unreproducible locally; rule 21 forbids dismissing load-dependent flakes. Full list and detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md). Search by test title, not line number.
 
 ### KI-05 — Dashboard render race (DB33 / DB36) and the stuck-dashlet symptom
 - **Status:** open · **Since:** 2026-09-02
@@ -51,25 +50,24 @@
 ## B. Infrastructure and CI
 
 ### KI-34 — Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed
-- **Status:** unverified (implemented 2026-10-06, uncommitted; only static checks done: `tsc`, `eslint`, actionlint with no new findings, `check:test-counts` unchanged) · **Since:** 2026-10-06
-- **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). Open items, none of them confirmed: (1) the tool has never run against a real app and its `FormFieldsConfigPage` selectors were not re-confirmed live; (2) a field absent in an env counts as a failure (exit 1), check on the first dry-run, esp. staging/prod; (3) entity tab labels/URL slugs were copied from the specs' `*_ENTITY` constants; (4) retry/deadline values come from `globalSetup`, a full 18-field pass was never timed, the 25-min step / 35-min job timeouts are guesses; (5) whether job-level `continue-on-error` protects the run conclusion when the job times out; (6) whether a run waiting for environment approval holds its concurrency group; (7) whether one approval covers the new `main.yml` job or it needs its own (if unapproved, `merge-and-report` and the email wait); (8) behaviour of `always()` jobs after a normal cancel vs force-cancel; (9) one pending run per group: a pending `stage` push can be displaced by a `sandbox` push (no `workflow_dispatch` on sandbox); (10) Jenkins jobs and `staging-promotion-gate.yml` are outside the groups; (11) the email section was typechecked, never viewed rendered.
-- **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 (no `concurrency:` guard) is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
+- **Status:** unverified (implemented 2026-10-06; only static checks done) · **Since:** 2026-10-06
+- **What:** [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md). 11 unconfirmed items (full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md)): the tool never ran against a real app; timeouts are guesses; GitHub behaviour of `continue-on-error`, approval-waiting runs, `always()` after cancel and a displaced pending `stage` push is unobserved.
+- **Next check:** user dry-runs `npm run reset:field-config -- --env qa|staging|prod --dry-run` while no CI run is active on that account; first real CI run of each workflow after merge. Former KI-10 is closed in [sharding-and-locks.md](./known-issues/sharding-and-locks.md) only as "guard added", not as proven.
 
 ### KI-36 — Sandbox formFields split never exercised in a real CI run
-- **Status:** unverified (implemented 2026-10-07, uncommitted) · **Since:** 2026-10-07
-- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Checked offline only (real `decide` script on synthetic file lists, actionlint, `--list` counts). Open: (1) a skipped `run-tests` (`if` false) with `needs: detect` should not expand its matrix, and `run-formfields-tests` (`!cancelled()`) / `merge-and-report` (`always()`) should still run; not observed on GitHub; (2) `--grep @smoke` still includes 18 `@smoke` formFields tests in one scoped shard (accepted, unchanged); (3) the 180-min scoped timeout is unmeasured; (4) 3 new shellcheck info/style findings in the `decide` script (SC2086 on the intentionally word-split path lists, SC2129), same classes as the pre-existing ones.
-- **Next check:** first sandbox push that touches only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
+- **Status:** unverified (implemented 2026-10-07) · **Since:** 2026-10-07
+- **What:** checked offline only (real `decide` script on synthetic file lists, actionlint, `--list`). Unobserved on GitHub: skipped-`run-tests` matrix behaviour; the 180-min scoped timeout is unmeasured. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Next check:** first sandbox push touching only formFields files; confirm 6 matrix jobs run, `playwright-selective` shows skipped, and the email lists 417 tests.
 
 ### KI-38 — Sandbox formFields entity selection: never exercised on GitHub
-- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-08
-- **What:** sandbox runs only the formFields entities `detect-tests.sh` selects (run 37753304635: a `ProductsAndServicesPage.ts`-only change moved all 417 tests). Checked offline only: the real `decide` step on synthetic file lists (1/2/6 entities, escalated, none), actionlint, shellcheck. Open: (1) GitHub behaviour with a one-entity matrix, with `run-tests` skipped, and the blob-count check in a real run are unobserved; (2) the dependency rule is direct-import only: a changed file that an entity's formFields spec reaches only transitively (or imports from outside `src/modules`/`src/data/factories`) selects nothing; (3) `--grep @smoke` fallback still pulls the 18 `@smoke` formFields tests into the scoped shard (unchanged by design); (4) `reset-field-config` still resets all 18 fields (the script has no per-entity flag); (5) the `ShardCompleteness.ts` comment still says "the 6 formFields entities" (behaviour does not depend on it).
-- **Revert:** see the 2026-10-08 amendment in [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md).
+- **Status:** unverified (implemented 2026-10-08) · **Since:** 2026-10-08
+- **What:** sandbox runs only the formFields entities `detect-tests.sh` selects (run 37753304635: a `ProductsAndServicesPage.ts`-only change moved all 417 tests). Offline only. Notable: the dependency rule is direct-import only (a transitively reached file selects nothing). Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md). Revert: 2026-10-08 amendment in [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md).
 - **Next check:** first sandbox push touching one entity's files: expect one `playwright-formFields (<entity>)` job, `playwright-selective` per the scoped files, and a complete-run email.
 
 ### KI-37 — Install-step bound and incomplete-run handling: unproven; build #189 ledger record still unmarked
-- **Status:** unverified (implemented 2026-10-08, uncommitted) · **Since:** 2026-10-07
-- **What:** [sharding-and-locks.md](./known-issues/sharding-and-locks.md) 2026-10-07 entry. Open: (1) cause of the apt stall in run 37669596623 is unknown, and the apt `Acquire::*::Timeout` options plus `timeout -k` are untested on a real runner (the retry/timeout logic was exercised locally with substitute commands only); whether `timeout` also reaps apt's child processes is unconfirmed (run 37753304635: attempt 1 stalled at 180 s during apt downloads, attempts 2-3 hit `Could not get lock /var/lib/dpkg/lock-frontend`, held by the same apt-get pid 2708; leftover-apt-get is the likely explanation but unproven, and the stall cause is unknown; 2026-10-08 the script now terminates leftover apt-get after a timed-out attempt, sets `DPkg::Lock::Timeout 60` and enforces a 570 s total budget — tested locally with stub commands and a fake `apt-get`, never on a runner, and `sudo kill` was not exercised); (2) the 180 s per-attempt limit is 1.4x the slowest healthy install seen (129 s), so a slow-but-healthy runner could burn an attempt; (3) `syncHistory` was exercised through its pure functions, never end to end against a ledger; (4) a missing/garbled `shard-completeness.json` means "no information" and renders as before (green); (5) qa/stage/main got a new completeness step and `plan` in `merge-and-report`'s `needs`, run only through actionlint; (6) history record for sandbox build #189 (`history/staging.jsonl` on `ci/reporting-history`) still holds 277 tests as a normal run. Handle it by adding `"incomplete":{"expected":6,"reported":4}` to that JSON line (readers then ignore it), deleting the line, or re-running the failed jobs of run 37669596623 before its blob artifacts expire (retention 3 days, so by 2026-10-10): a complete re-run replaces the record because history keeps one record per build.
-- **Next check:** user marks or removes the #189 line; first real sandbox/qa run after merge shows the new steps; first real install failure shows the `Playwright browser install failed` annotation.
+- **Status:** unverified (implemented 2026-10-08) · **Since:** 2026-10-07
+- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Install bound, leftover-`apt-get` kill and 570 s budget were tested only with stubs (apt-stall cause in run 37669596623 unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md). **Pending, user action:** the `history/staging.jsonl` record for sandbox build #189 (on `ci/reporting-history`) holds 277 tests as a normal run — add `"incomplete":{"expected":6,"reported":4}`, delete the line, or re-run failed jobs of run 37669596623 (blobs expire by 2026-10-10).
+- **Next check:** user marks or removes the #189 line; first real sandbox/qa run shows the new steps; first real install failure shows the `Playwright browser install failed` annotation.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -108,7 +106,7 @@
 
 ### KI-18 — Unmeasured reporting pipeline gaps
 - **Status:** open · **Since:** 2026-09-30 / 2026-10-06
-- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) `ErrorCollector` events captured inside `globalSetup` are written to a pid-named worker file that `MiscErrorReporter.onBegin()` deletes (pre-existing); (c) five background `ERR_ABORTED` URL families on `.../fields?entityType=...` are not yet in `errorFilters.ts`'s navigation-abort list — needs the usual zero-correlation evidence bar first.
+- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) `ErrorCollector` events captured inside `globalSetup` are written to a pid-named worker file that `MiscErrorReporter.onBegin()` deletes (pre-existing); (c) the `/fields` list `ERR_ABORTED` noise is allowlisted (2026-10-09, see CHANGELOG); any other `ERR_ABORTED` family still needs the zero-correlation evidence bar first.
 - **History:** [reporting-and-notifications.md](./known-issues/reporting-and-notifications.md).
 
 ---
@@ -117,8 +115,7 @@
 
 ### KI-19 — The escalated sandbox run's formFields track ignores `--grep @regression`
 - **Status:** open · **Since:** 2026-10-06
-- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count. The core shards (499 tests) apply `--grep @regression`; each formFields shard runs both of its spec files with no grep (70+70+70+67+70+70 = 417 vs 399 tagged), so 18 untagged formFields tests also run. 932 = 515 (core) + 417; 916 = 499 + 417; the missing 16 are untagged core tests. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Not a lost or double-counted test: merged total = sum of the 11 shards' own "Running N tests".
-- **Also seen:** a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails). The "Verify all shards reported" check counts zips, so a stale blob from an earlier attempt still satisfies it (`download-artifact` takes the latest artifact per name).
+- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged, so 18 untagged tests run). 932 = 515 + 417; 916 = 499 + 417. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Not a lost or double-counted test. Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Per-shard arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** decide whether formFields should honor the tag filter; the one skipped test is the known `call-logs.spec.ts:568` `test.skip`.
 
 ### KI-20 — `waitForTimeout(500)` left in `openUserShareTypeSearch()` catch backoff
@@ -146,38 +143,18 @@
 - **What:** the comments justify plain `test.describe()` (not `.serial`) by single-worker, declaration-order execution; sharding makes both false. The blocks are still safe because the assertion is `toBeGreaterThanOrEqual`. Correct the comment when either file is next edited.
 
 ### KI-26 — Repo hygiene
-- **Status:** open · **What:** `.env.example` is gitignored and never committed, so a fresh clone has no credential template (the README lists the real required variables; the local file only holds dead `*_DEAL_NAME` entries); `.eslintrc.json` is a legacy config never read by `npm run lint` (`eslint.config.js` is active); pre-existing prettier drift in `QuotationsPage.ts`, `LeadsPage.ts`, `BasePage.ts`; `.claude/settings.json` carries an inert `agent_delegation` / `investigation_log` block whose `INVESTIGATION_LOG.md` does not exist. <!-- ref-ok -->
+- **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `QuotationsPage.ts`, `LeadsPage.ts`, `BasePage.ts`; inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
 
-### KI-35 — A react-select menu left open blocks the next click (QA only); `b0c6b38` part 2 not ported
-- **Status:** all three sites **pass on QA**: Units (CI run 37778400646), DB27 and both Call Logs tests (local `--retries=0` runs, 2026-10-08, uncommitted code); not yet seen in a CI run · **Since:** 2026-10-07
-- **Symptom:** `click` times out with `<div class="css-1dsbpcp"> … subtree intercepts pointer events` (the open menu's `position: fixed; inset: 0` blocker). Run 37733648349: P&S :46/:75 (Units → Active toggle), Dashboard DB27 (assignees → Save), Call Logs `call-logs.spec.ts:273` and `call-logs.rbac.spec.ts:174` (Customer Emotion → Save).
-- **Evidence:** QA pick-to-"set" gap 10.1–10.4 s every time (the swallowed 10 s hidden-wait) vs ~0.3 s on stage (`st_113170221174`).
-- **Fix:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)). Revert: see the ADR.
-- **Live QA (2026-10-08, local):** DB27 passed (assignee click to "selected" 2.4 s, was ~12.3 s); Call Logs :174/:273 passed (pick to Save: same millisecond, was blocked 15 s). Neither modal was dismissed.
-- **NOT verified:** why QA differs from stage; whether Escape (vs. a natural close inside the 1.5 s grace) is what closed the menu in DB27/Call Logs, because the primitive does not log which path it took.
-- **Follow-up done 2026-10-09:** every other swallowed menu-hidden wait now uses the primitive (BasePage single/multi-select and lookup helpers, Quotations, Tasks, Contacts, Companies, Deals, Meetings, Reports), and `check:conventions` flags a new one (rule `no-swallowed-react-select-menu-wait`; checked against a scratch violation, then deleted). Ripple runs (local QA): see CHANGELOG. A transient QA window failed Tasks ("data is invalid") and Quotations (HTTP 500); the original code failed the same Tasks test, later runs passed.
-- **Open, Call Logs:** `selectRandomFromMultiReactSelect()` re-opens with a synthetic `mousedown` even if the menu is already open (a 2-pick count, 50% of calls) and never checks that the second option was clicked. React-select closes an open menu on that mousedown (library behaviour, not confirmed on this app); no failure seen, so not changed.
+### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
+- **Status:** open for CI confirmation · **Since:** 2026-10-07
+- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by every site; Units passed in CI run 37778400646, DB27 and both Call Logs tests passed locally on QA (2026-10-08). Symptom, evidence and live results: [locators-and-timing.md](./known-issues/locators-and-timing.md). NOT verified: why QA differs from stage; which path (natural close vs Escape) closed the menu in DB27/Call Logs.
 - **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
 
-### KI-40 — Reports count flakes (`reports.spec.ts:1003`, `reports.rbac.spec.ts:148`); `:533` fixed
-- **Status:** :1003 unconfirmed, not patched; :148 hardened, cause not confirmed; :533 fixed (3 stage-log facts, no live run) · **Since:** 2026-10-08
-- **:1003 (qa 37733648349 shard 1/5, passed on retry):** `waitForReportTotalBelow` read 4 five times over ~16 s; the report also logged `report total (4) exceeds API total (1)`. The test has no filter on purpose (it proves the narrow time window), so other workers' leads in the ±5 min window can move the total. HYPOTHESIS. Live loop: log report total and `/v1/search` count every 5 s through a delete with `--workers=2`.
-- **:148 (stage 37734268279, Deal, bucket 38 vs list 39 after 3 attempts):** the retry loop re-read the same rendered Table, so it could never see a changed report. It now reloads the report first. Why the report was 1 behind the list is unknown.
-- **:533 (stage 37778503008 shard 1/5):** `POST /v3/reports` returned HTTP 500 on the attempt and the retry (log lines labelled with the test); the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (the existing retry for 500 + `01403004`, APPLICATION_BUGS.md #4). Those 500s' code was not logged (HYPOTHESIS: `01403004`); APPLICATION_BUGS.md #4's "Lead does not show it" has decayed.
-
-### KI-41 — P&S RBAC :161 HTTP 400 "Sum of all payment amounts must equal the deal's actual value" (hardened, cause not confirmed)
-- **Status:** hardened 2026-10-09 · **Since:** 2026-10-08 (qa 37733648349 shard 5/5, code `01001091`, `PUT deals/435611`; passed on retry; no stage occurrence)
-- **Evidence (CONFIRMED, log):** the failing attempt has no "Unallocated amount banner present" line and the next step ran 3.05 s after the product pick (the flat 3 s banner wait); the passing attempt distributed the amount. Local QA 5/5 passed (banner ~25 ms), so late vs absent in CI is unknown.
-- **Change:** `handleDistributeUnallocatedAmountIfPresent()` waits `config.timeouts.expect` when the form has installments, warns if no banner came.
-- **Related, fixed:** stage `productsAndServices.rbac.spec.ts:188` ("Invalid deal" 3 times; random deal "SHR…-Deal" from another test) now creates its own deal (3/3 local QA; stage not run).
-
-### KI-42 — Product-fixture creation is skipped when a spec filter has a `:LINE` suffix
-- **Status:** open, not fixed · **Since:** 2026-10-09
-- **Evidence:** `npx playwright test tests/rbac/productsAndServices.rbac.spec.ts:161` logged "Product fixtures: SKIPPED — file filters [...:161] match none of 16 fixture-needing specs", so the test failed with "no fixture file found"; the same spec with `-g` created the fixtures. CI uses no line filters.
-- **Next:** strip `:LINE` from file filters in `src/auth/productFixtureNeed.ts`.
+### KI-40 / KI-41 / KI-42 and the Call Logs re-open note — moved to watch items
+Low priority (qa 37897275025 and stage 37897319452 showed no failure; main 37919166296 had not finished). Entries: KI-40 → [reports-module.md](./known-issues/reports-module.md); KI-41, KI-42 → [products-and-services.md](./known-issues/products-and-services.md); Call Logs `mousedown` → [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ---
 
