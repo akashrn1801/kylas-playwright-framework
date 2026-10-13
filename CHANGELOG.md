@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ 0c719fe
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-09 — chore: `errorFilters.ts` allowlists `net::ERR_ABORTED` on Settings > Fields list GETs (`.../fields?sort=...&page=...`; 402 in qa 37897275025 / stage 37897319452 plus sandbox builds #189/#191, zero failures); HTTP 4xx/5xx on the same URL stays unexpected (synthetic classifier check). docs: `KNOWN_ISSUES_ACTIVE.md` pruned 29,988 → ~22k chars, KI-40/41/42 and the Call Logs re-open note moved to topic files as watch items (not reproduced, not claimed fixed); KI-34/36/37/38 checklists moved to `sharding-and-locks.md`.
 - 2026-10-09 — fix: reports — `saveNewReport()` (existing 500/`01403004` retry) used for the Save in `reports.spec.ts:533` and `reports.rbac.spec.ts` R61 (stage 37778503008: `POST /v3/reports` 500 on attempt and retry); the drill-through retry now reloads the report (hardening, `reports.rbac.spec.ts:148`, cause not confirmed); `:1003` left unchanged
 - 2026-10-09 — fix: P&S RBAC :161 waits the expect budget for the "Distribute Equally" banner when the deal has installments (hardening; qa 37733648349 PUT 400 `01001091`, cause not confirmed); :188 creates its own deal instead of a random one (stage "Invalid deal"); 3/3 local QA
 - 2026-10-09 — fix: every remaining swallowed react-select menu-hidden wait uses `ensureReactSelectMenuClosed()`, and `check:conventions` flags new ones (`no-swallowed-react-select-menu-wait`); local QA ripple over Leads/Contacts/Deals/Tasks/Quotations/Companies/Meetings/Reports create+edit
