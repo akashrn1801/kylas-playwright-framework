@@ -3,7 +3,7 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ 0c719fe
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
@@ -149,3 +149,14 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 - **Not fixed:** the same unbounded calls in `LeadsPage`/`ContactsPage`/`CompaniesPage.openEllipsisMenu()`.
 - **Revert:** revert the `cloneDeal()` and `openEllipsisMenu()` edits in `DealsPage.ts`.
 
+
+### React-select menu left open blocks the next click, QA only (was KI-35 detail) — 2026-10-07
+- **Symptom:** `click` times out with `<div class="css-1dsbpcp"> … subtree intercepts pointer events` (the open menu's `position: fixed; inset: 0` blocker). Run 37733648349: P&S :46/:75 (Units → Active toggle), Dashboard DB27 (assignees → Save), Call Logs `call-logs.spec.ts:273` and `call-logs.rbac.spec.ts:174` (Customer Emotion → Save).
+- **Evidence:** QA pick-to-"set" gap 10.1–10.4 s every time (the swallowed 10 s hidden-wait) vs ~0.3 s on stage (`st_113170221174`).
+- **Fix:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](../adr/0011-react-select-menu-closed-contract.md)); revert per the ADR. Follow-up 2026-10-09: every other swallowed menu-hidden wait uses it, and `check:conventions` rule `no-swallowed-react-select-menu-wait` flags new ones. Local QA ripple runs: see CHANGELOG; a transient QA window failed Tasks ("data is invalid") and Quotations (HTTP 500), the original code failed the same Tasks test, later runs passed.
+- **Verified live QA (2026-10-08, local, `--retries=0`):** Units (CI run 37778400646); DB27 (assignee click to "selected" 2.4 s, was ~12.3 s); Call Logs :174/:273 (pick to Save same millisecond, was blocked 15 s). Neither modal was dismissed.
+- **NOT verified:** why QA differs from stage; whether Escape (vs. a natural close inside the 1.5 s grace) closed the menu in DB27/Call Logs, because the primitive does not log which path it took.
+
+### WATCH — Call Logs `selectRandomFromMultiReactSelect()` re-opens with a synthetic `mousedown` — 2026-10-09
+- **Status:** low priority; no failure seen in qa 37897275025 or stage 37897319452; cause of any failure unconfirmed, revisit if it fails again. Not changed.
+- **What:** it re-opens even if the menu is already open (a 2-pick count, 50% of calls) and never checks that the second option was clicked. React-select closes an open menu on that mousedown (library behaviour, not confirmed on this app).

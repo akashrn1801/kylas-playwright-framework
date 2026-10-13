@@ -3,7 +3,7 @@
 > **Purpose:** Resolved RBAC test-isolation bugs, retracted app-bug claims, Lead lookup-field fixes, and durable per-module Hide-Empty-Fields behavior.
 > **Read when:** writing an RBAC test, suspecting an "app bug" in permissions/sharing, or touching Hide Empty Fields tests.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22). Real product bugs: [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md). Rules: [../PATTERNS.md](../PATTERNS.md).
 
@@ -90,3 +90,8 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22
 - **Fix:** bounded `openCreateForm()` click; no fix for the (unconfirmed) collision.
 - **Revert:** revert the bounded click.
 - **Commit:** unknown — see `git log -S'openCreateForm' -- src/modules/quotations`.
+
+### Inconclusive one-off flakes, full list (moved from KNOWN_ISSUES_ACTIVE.md, KI-04) — 2026-07-06 … 2026-08-03
+(a) Deals "log a Call on a shared deal" permission failure; (b) `quotations.rbac.spec.ts` ~8-minute timeout in `openCreateForm()`; (c) `call-logs.spec.ts` company live-search "no options"; (d) `meetings.spec.ts` reschedule failure (3× HTTP 500 on invitee lookup); (e) `tasks.rbac.spec.ts` edit-modal hang (hardened, 0/5 reproductions); (f) HTTP 500 on meeting creation and Deals RBAC Task-permission timeout (pass in isolation, fail in suite).
+- **Evidence:** each was one occurrence or unreproducible locally; rule 21 forbids dismissing load-dependent flakes. Line numbers drift — search by test title. Detail: [rbac-and-test-isolation.md](./rbac-and-test-isolation.md), [locators-and-timing.md](./locators-and-timing.md).
+- Original list: (a) Deals "log a Call on a shared deal" permission failure; (b) `quotations.rbac.spec.ts` ~8-minute timeout in `openCreateForm()`; (c) `call-logs.spec.ts` company live-search "no options"; (d) `meetings.spec.ts` reschedule failure (3× HTTP 500 on invitee lookup); (e) `tasks.rbac.spec.ts` edit-modal hang (hardened, 0/5 reproductions); (f) HTTP 500 on meeting creation and Deals RBAC Task-permission timeout (pass in isolation, fail in suite).

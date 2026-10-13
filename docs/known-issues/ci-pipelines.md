@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents about Jenkins/GitHub Actions pipeline behaviour: timeouts, test selection, duration estimates, fixture-setup navigation, deadline-aware waits, load signals.
 > **Read when:** Editing a `Jenkinsfile*`/workflow, `src/fixtures/index.ts` fixture setup, `BasePage.waitForEntityListPage()` timing, or `src/notifications/scripts/estimateDuration.ts`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real Jenkins/GitHub execution of several items below could not be performed from the authoring environment; the ones marked **unverified** need a real run.
 
@@ -76,3 +76,6 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 - **Fix:** None. Pull the raw log before concluding a CI run hung.
 - **Revert:** n/a.
 - **Commit:** n/a — no change.
+
+### Repo hygiene detail (moved from KNOWN_ISSUES_ACTIVE.md, KI-26) — 2026-10-09
+- **Status:** open · **What:** `.env.example` is gitignored and never committed, so a fresh clone has no credential template (the README lists the real required variables; the local file only holds dead `*_DEAL_NAME` entries); `.eslintrc.json` is a legacy config never read by `npm run lint` (`eslint.config.js` is active); pre-existing prettier drift in `QuotationsPage.ts`, `LeadsPage.ts`, `BasePage.ts`; `.claude/settings.json` carries an inert `agent_delegation` / `investigation_log` block whose `INVESTIGATION_LOG.md` does not exist. <!-- ref-ok -->

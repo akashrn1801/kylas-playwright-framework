@@ -3,7 +3,7 @@
 > **Purpose:** Confirmed findings and resolved incidents for the Reports module and its run-count verification.
 > **Read when:** touching `ReportsPage.ts`, `reports*.spec.ts`, report-count verification, or considering Playwright project `dependencies`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-09 @ cbfdbd1
 
 Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Report Name" sort, Meeting-report first-save HTTP 500) live in [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md). The Quotation report-entity-type gap is in [ci-pipelines.md](./ci-pipelines.md). UI-shape patterns (draggable rows, dual react-select families, three-route pages, carousel error banner) are in [../PATTERNS.md](../PATTERNS.md).
 
@@ -66,3 +66,9 @@ Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Repor
 - **Fix:** see [ci-pipelines.md](./ci-pipelines.md) — `ReportsPage.skipIfQuotationEntityTypeUnavailable()` live presence check.
 - **Revert:** see that entry.
 - **Commit:** `6184a11`
+
+### WATCH — Reports count flakes `reports.spec.ts:1003`, `reports.rbac.spec.ts:148` (was KI-40) — 2026-10-08
+- **Status:** low priority; not reproduced in qa 37897275025 or stage 37897319452 (main 37919166296 was still running when this was written). Cause unconfirmed; revisit if either fails again. Not recorded as fixed.
+- **:1003 (qa 37733648349 shard 1/5, passed on retry):** `waitForReportTotalBelow` read 4 five times over ~16 s; the report also logged `report total (4) exceeds API total (1)`. The test has no filter on purpose (it proves the narrow time window), so other workers' leads in the ±5 min window can move the total (HYPOTHESIS). Live loop to try: log report total and `/v1/search` count every 5 s through a delete with `--workers=2`. Not patched.
+- **:148 (stage 37734268279, Deal, bucket 38 vs list 39 after 3 attempts):** the retry loop re-read the same rendered Table, so it could never see a changed report; it now reloads the report first (hardening). Why the report was 1 behind the list is unknown.
+- **:533 (stage 37778503008 shard 1/5), fixed:** `POST /v3/reports` returned HTTP 500 on the attempt and the retry; the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (retry for 500 + `01403004`, APPLICATION_BUGS.md #4). The 500s' code was not logged (HYPOTHESIS: `01403004`); APPLICATION_BUGS.md #4's "Lead does not show it" has decayed.
