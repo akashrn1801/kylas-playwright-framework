@@ -25,3 +25,6 @@ npm-debug.log*
 *.temp
 .env.example
 .playwright-mcp/
+
+# Confirmed product bugs - kept outside the repo
+APPLICATION_BUGS.md

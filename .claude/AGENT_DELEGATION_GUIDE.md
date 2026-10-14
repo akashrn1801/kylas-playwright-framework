@@ -3,7 +3,7 @@
 > **Purpose:** Which of the 13 subagents in `.claude/agents/` to use for which task, and which guardrails are real hooks versus conventions you follow.
 > **Read when:** delegating work to a subagent, or wondering what actually runs automatically.
 > **Size budget:** 12k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Not auto-imported by `CLAUDE.md` — read on demand. Standing rules: [CLAUDE.md](../CLAUDE.md). Subagent definitions: `.claude/agents/*.md` (protected; never delete).
 
@@ -23,7 +23,7 @@ Not auto-imported by `CLAUDE.md` — read on demand. Standing rules: [CLAUDE.md]
 
 1. **Edited a Page Object or spec** → `locator-reviewer` on that file (static pass; live pass needs Playwright MCP approval).
 2. **Before asking the user to push** → `flaky-test-auditor` + `enterprise-code-reviewer` on changed files (`git diff` read-only); any blocking finding stops the hand-off.
-3. **A test failed** → `failure-triage-investigator` first, always: classify application bug vs code bug with evidence *before* any fix. App bug → [APPLICATION_BUGS.md](../APPLICATION_BUGS.md), test stays red. Locator → `self-healing-locator-scout`. Timing → `resilience-architect`. Coverage gap → `test-coverage-strategist`. Unsure/flaky → record confidence and what would raise it ([KNOWN_ISSUES_ACTIVE.md](../docs/KNOWN_ISSUES_ACTIVE.md)).
+3. **A test failed** → `failure-triage-investigator` first, always: classify application bug vs code bug with evidence *before* any fix. App bug → record it in the product-bug list kept outside the repo, test stays red. Locator → `self-healing-locator-scout`. Timing → `resilience-architect`. Coverage gap → `test-coverage-strategist`. Unsure/flaky → record confidence and what would raise it ([KNOWN_ISSUES_ACTIVE.md](../docs/KNOWN_ISSUES_ACTIVE.md)).
 4. **An investigation found an uncovered flow** → `test-coverage-strategist` drafts the tests; a human reviews, never auto-merged.
 
 ## Manual delegation

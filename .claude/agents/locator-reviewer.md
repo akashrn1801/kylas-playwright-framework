@@ -102,7 +102,7 @@ If Playwright MCP is approved and the file contains newly added or substantially
 
 Using Playwright MCP, navigate to the actual app page where the locator is used:
 ```
-browser_navigate to app-qa.sling-dev.com/sales/leads
+browser_navigate to <QA_APP_URL>/sales/leads
 ```
 
 Load the correct storage state for the environment (qa, staging, etc.) so you're in an authenticated session with real data.
@@ -146,7 +146,7 @@ Store all screenshots/snapshots in `.claude/evidence/locator-reviewer/{YYYY-MM-D
 
 Report format following standard MCP template:
 ```
-**Environment tested:** app-qa.sling-dev.com
+**Environment tested:** <QA_APP_URL>
 **Module:** SomeModule.ts
 **Locators reviewed:** 5 (saveButton, nameInput, modalTitle, productTable, ellipsisMenu)
 

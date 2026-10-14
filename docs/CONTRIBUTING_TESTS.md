@@ -3,7 +3,7 @@
 > **Purpose:** Task-shaped checklists for changing this suite — existing module, new module, shared account-wide config feature — plus the touch / don't-touch list, pre-commit checklist, Definition of Done and the docs size policy.
 > **Read when:** before adding or changing anything under `tests/` or `src/modules/`, before closing out any task, and before adding or growing a doc.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Rule numbers (R1–R25) refer to the 25 standing rules in [CLAUDE.md](../CLAUDE.md); mechanics for each pattern are in [PATTERNS.md](./PATTERNS.md). Every citation below names a real file — if it looks wrong the file moved; trust the file (rule 12).
 
@@ -79,12 +79,21 @@ Run in this order; all must be clean before you ask for a commit.
 
 ```diff
 +# Docs guard: budgets, headers, dead links, generated figures (offline tier, ~seconds)
-+if git diff --cached --name-only | grep -qE '^(docs/|CLAUDE\.md|README\.md|CHANGELOG\.md|APPLICATION_BUGS\.md|\.claude/AGENT_DELEGATION_GUIDE\.md|config/expected-test-counts\.json|\.github/workflows/)'; then
++if git diff --cached --name-only | grep -qE '^(docs/|CLAUDE\.md|README\.md|CHANGELOG\.md|\.claude/AGENT_DELEGATION_GUIDE\.md|config/expected-test-counts\.json|\.github/workflows/)'; then
 +    echo "📚 Checking docs..."
 +    npm run check:docs --silent || { echo "❌ COMMIT BLOCKED: check:docs failed (run: npm run docs:refresh, then npm run check:docs)"; exit 1; }
 +fi
 +
  echo "🔍 Checking for waitForTimeout() anti-pattern..."
+```
+
+**Proposed second hook change — public-safe scan (not applied, not wired anywhere — your decision).** `npm run check:public-safe` (`scripts/check-public-safe.ts`) scans tracked text files for email addresses, the non-production app domain, private IPv4 / `*.svc.cluster.local` hosts, including names wrapped across comment lines; its allowlist and reasons are documented in the script header. Note it reads `git ls-files`, so it checks the index plus working tree contents of tracked files, not unstaged new files. Proposed insertion, also *before* the `STAGED_FILES=...` line (it must run even for docs-only commits):
+
+```diff
++# Public-repo safety: no real emails, non-production hosts or private IPs in tracked files (~1s)
++echo "🔒 Checking for non-public data..."
++npm run check:public-safe --silent || { echo "❌ COMMIT BLOCKED: check:public-safe failed (see file:line above; allowlist lives in scripts/check-public-safe.ts)"; exit 1; }
++
 ```
 
 Trade-offs: adds a few seconds on doc-touching commits only; the `--live` tier (extra `--list` runs) is deliberately left to PR time. A CI step running `npm run check:docs -- --live` is the other option.

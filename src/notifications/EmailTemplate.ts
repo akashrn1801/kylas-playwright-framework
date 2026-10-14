@@ -1725,7 +1725,7 @@ ${body}
     const generatedAt = new Date().toISOString();
     return `
 <tr><td style="padding:16px 28px;text-align:center;border-top:1px solid ${CANVAS_TINT};">
-  <div style="font-size:11px;color:${MUTED};">Sent by Kylas ${this.esc(ctx.env.toUpperCase())} Automation System &nbsp;·&nbsp; akash.rn1908@gmail.com</div>
+  <div style="font-size:11px;color:${MUTED};">Sent by Kylas ${this.esc(ctx.env.toUpperCase())} Automation System</div>
   <div style="font-size:10px;color:${MUTED};margin-top:4px;">Generated ${generatedAt} · Report engine v${REPORT_ENGINE_VERSION}</div>
 </td></tr>`;
   }

@@ -270,7 +270,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
   // WHY this retries the WHOLE create (not just the value verification)
   // up to 3 times: a confirmed, real Kylas application bug (2026-09-23,
-  // see APPLICATION_BUGS.md #6) — under genuine concurrent load, a custom
+  // see docs/known-issues/form-fields.md) — under genuine concurrent load, a custom
   // field's value can be silently dropped server-side during create even
   // though the create POST itself returns success. Direct raw API
   // evidence confirmed the value is GENUINELY ABSENT from the persisted
@@ -280,7 +280,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
   // Mirrors this codebase's own established "bounded whole-operation
   // retry on a confirmed app-side race" mitigation pattern
   // (CallLogsPage.openLogACallForm()'s 5-attempt reload-and-retry for the
-  // analogous Call Logs concurrency bug, APPLICATION_BUGS.md #1).
+  // analogous Call Logs concurrency race, see docs/known-issues/locators-and-timing.md).
   async function createProductExpectingAccept(
     psPage: ProductsAndServicesPage,
     field: ProductFieldUnderTest
@@ -307,7 +307,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
         lastError = error;
         logger.warn(
           `createProductExpectingAccept: value not persisted after create (attempt ${attempt}/${maxAttempts}, ` +
-            `suspected real backend concurrency bug — APPLICATION_BUGS.md #6) — retrying with a fresh product`
+            `suspected backend concurrency issue, see docs/known-issues/form-fields.md) — retrying with a fresh product`
         );
       }
     }
@@ -324,7 +324,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
 
   // WHY this retries the WHOLE edit — same confirmed real Kylas
   // application bug and reasoning as createProductExpectingAccept()'s own
-  // identical fix above (APPLICATION_BUGS.md #6).
+  // identical fix above (see docs/known-issues/form-fields.md).
   async function updateProductExpectingAccept(
     psPage: ProductsAndServicesPage,
     id: string,
@@ -344,7 +344,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
         lastError = error;
         logger.warn(
           `updateProductExpectingAccept: value not persisted after edit (attempt ${attempt}/${maxAttempts}, ` +
-            `suspected real backend concurrency bug — APPLICATION_BUGS.md #6) — retrying the edit`
+            `suspected backend concurrency issue, see docs/known-issues/form-fields.md) — retrying the edit`
         );
       }
     }

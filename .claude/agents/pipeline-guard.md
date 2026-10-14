@@ -40,7 +40,7 @@ tools:
 ### CI/Environment Configuration (BLOCKING)
 - [ ] Env-specific credentials in `.env` or GitHub secrets, not in code
 - [ ] `config.ts` reflects correct environment per branch (qa secrets for qa, etc.)
-- [ ] No hardcoded URLs or API keys in committed code (grep for `@sling-dev.com`, `api.`, `http://`, `https://` in source)
+- [ ] No hardcoded URLs or API keys in committed code (grep for `@<company-email-domain>`, `api.`, `http://`, `https://` in source)
 
 ### Branch Protection (ADVISORY)
 - [ ] Confirm target branch (dev/qa/stage/prod/main) has protection enabled
