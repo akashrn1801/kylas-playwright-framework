@@ -1,5 +1,5 @@
 import * as nodemailer from 'nodemailer';
-import { notificationConfig } from '../config/notificationConfig';
+import { notificationConfig, getSenderDisplayName } from '../config/notificationConfig';
 
 export interface EmailPayload {
   to: string[];
@@ -37,7 +37,7 @@ export class EmailAdapter {
   async send(payload: EmailPayload): Promise<void> {
     // smtp config accessed via notificationConfig.smtp directly
     const info = await this.transporter.sendMail({
-      from: `"Kylas ${payload.env.toUpperCase()} Automation" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
+      from: `"${getSenderDisplayName(`Kylas ${payload.env.toUpperCase()} Automation`)}" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
       to: payload.to.join(', '),
       cc: payload.cc?.join(', '),
       subject: payload.subject,

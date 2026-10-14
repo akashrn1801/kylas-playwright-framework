@@ -3,12 +3,16 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-14 — chore: `npm run check:public-safe` (`scripts/check-public-safe.ts`) scans tracked text files for emails, the non-production app domain, private IPs and `*.svc.cluster.local`, including names split across comment lines; explicit per-reason allowlist; proposed pre-commit hook documented in `docs/CONTRIBUTING_TESTS.md`, not wired in. Currently fails only on the still-tracked `APPLICATION_BUGS.md` (clean once untracked).
+- 2026-10-14 — chore: non-production hostnames removed from tracked docs/comments — `.claude/agents/*.md` use `<QA_APP_URL>` / `@<company-email-domain>`, `config/config.ts` comment uses `<QA_API_BASE_URL>`. `src/fixtures/index.ts` comment reworded. Left unchanged (behavioral): the non-production host match in `ErrorCollector.ts` and the pre-push hook's URL warning pattern.
+- 2026-10-14 — chore: notification recipients/cc/sender name now come from `NOTIFY_TO`/`NOTIFY_CC`/`NOTIFY_FROM_NAME` (GitHub secrets in all 7 notify workflows; Jenkins credentials in `Jenkinsfile`, `Jenkinsfile.sandbox`); unset `NOTIFY_TO` warns and sends to `GMAIL_USER` only; footer address dropped; history-bot git identity env-overridable with a noreply default. No address remains in source.
+- 2026-10-14 — chore: public-repo hygiene — `APPLICATION_BUGS.md` added to `.gitignore` (kept outside the repo); all references removed or reworded (docs, code comments, P&S spec/ReportsPage/CallLogsPage/FailureDetailBuilder strings); `check-docs`/`update-doc-numbers` no longer name the file and skip it when absent.
 - 2026-10-09 — chore: `errorFilters.ts` allowlists `net::ERR_ABORTED` on Settings > Fields list GETs (`.../fields?sort=...&page=...`; 402 in qa 37897275025 / stage 37897319452 plus sandbox builds #189/#191, zero failures); HTTP 4xx/5xx on the same URL stays unexpected (synthetic classifier check). docs: `KNOWN_ISSUES_ACTIVE.md` pruned 29,988 → ~22k chars, KI-40/41/42 and the Call Logs re-open note moved to topic files as watch items (not reproduced, not claimed fixed); KI-34/36/37/38 checklists moved to `sharding-and-locks.md`.
 - 2026-10-09 — fix: reports — `saveNewReport()` (existing 500/`01403004` retry) used for the Save in `reports.spec.ts:533` and `reports.rbac.spec.ts` R61 (stage 37778503008: `POST /v3/reports` 500 on attempt and retry); the drill-through retry now reloads the report (hardening, `reports.rbac.spec.ts:148`, cause not confirmed); `:1003` left unchanged
 - 2026-10-09 — fix: P&S RBAC :161 waits the expect budget for the "Distribute Equally" banner when the deal has installments (hardening; qa 37733648349 PUT 400 `01001091`, cause not confirmed); :188 creates its own deal instead of a random one (stage "Invalid deal"); 3/3 local QA

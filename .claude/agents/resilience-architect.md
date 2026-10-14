@@ -45,7 +45,7 @@ tools:
 
 1. **Navigate to the flow on the live app:**
    ```
-   browser_navigate to app-qa.sling-dev.com/sales/deals (or the exact starting URL)
+   browser_navigate to <QA_APP_URL>/sales/deals (or the exact starting URL)
    ```
 
 2. **Capture network activity:**
@@ -186,7 +186,7 @@ Combine: wait for (entity GET response AND form fields enabled)
 Report format (standard MCP template):
 
 ```
-**Environment tested:** app-qa.sling-dev.com
+**Environment tested:** <QA_APP_URL>
 **Flow:** Create a Deal and verify detail page loads
 
 **Measured timings:**

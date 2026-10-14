@@ -3,7 +3,7 @@
 > **Purpose:** Durable rules and resolved incidents for the Form Field Limit feature (`/setup/fields/<entity>/list`, custom-field length/regex limits) across all six entities.
 > **Read when:** adding an entity to formFields, editing `FormFieldsConfigPage.ts`, or any test that mutates account-wide field configuration.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms of run 36573185433 are in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
 
@@ -64,4 +64,4 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 - **Commit:** `9e35fc1`
 
 ### FFPS5 investigation detail (moved from KNOWN_ISSUES_ACTIVE.md, KI-01) — 2026-09-28
-- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; an operator then watched it in headed mode and saw the field never typed into and the edit page reload repeatedly — a different (fill/locator) symptom. Six independent conditions (single worker, forced 3-way concurrency on QA and staging, real code path with DOM/POST/GET/edit-page evidence layers, alongside the core suite, FFPS1–5 in sequence) reproduced neither shape. Full write-up: [APPLICATION_BUGS.md](../../APPLICATION_BUGS.md) entry 6 (reclassified: not a confirmed app bug).
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; an operator then watched it in headed mode and saw the field never typed into and the edit page reload repeatedly — a different (fill/locator) symptom. Six independent conditions (single worker, forced 3-way concurrency on QA and staging, real code path with DOM/POST/GET/edit-page evidence layers, alongside the core suite, FFPS1–5 in sequence) reproduced neither shape. Not a confirmed app bug (reclassified); the conditions above are the evidence.

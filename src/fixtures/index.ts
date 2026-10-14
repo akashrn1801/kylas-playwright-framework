@@ -215,8 +215,8 @@ async function navigateAndConfirmLoggedIn(
   // confirmed live bug, 2026-09-21 — found while investigating a
   // consistently-reproducing Form Fields test failure): the 'wrongPage'
   // retry below used to always re-navigate to this exact same bare
-  // config.appUrl (the generic app origin, e.g. "https://app-qa.sling-
-  // dev.com") — a reasonable remedy IF landing away from /sales/ were a
+  // config.appUrl (the generic app origin, i.e.
+  // QA_APP_URL) — a reasonable remedy IF landing away from /sales/ were a
   // one-off timing race, but proven wrong for a genuinely STABLE cause:
   // the Kylas app's own "resume last visited section" behavior can
   // deterministically keep sending a generic-entry-URL navigation to

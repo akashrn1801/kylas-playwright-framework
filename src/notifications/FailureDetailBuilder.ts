@@ -106,7 +106,7 @@ const DIAGNOSTIC_HINTS: Record<FailureCategory, string> = {
   environment: 'A missing/invalid environment variable or configuration value — check this environment\'s .env / CI secrets before assuming the code itself is wrong.',
   infra: 'A 5xx from a dependency — often transient; check if it recurred on retry before treating this as a real regression (see errorFilters.ts\'s background-noise allowlist for known-transient dependencies).',
   console: 'A captured browser console error — check whether it correlates with this specific test\'s own assertions or is unrelated background noise.',
-  js: 'A client-side JS crash ("is not a function"/"Cannot read properties of undefined") — could be a genuine Kylas application bug (see APPLICATION_BUGS.md) rather than a test-code defect; classify before fixing (CLAUDE.md rule 10).',
+  js: 'A client-side JS crash ("is not a function"/"Cannot read properties of undefined") — could be a genuine Kylas application bug (see docs/known-issues/locators-and-timing.md) rather than a test-code defect; classify before fixing (CLAUDE.md rule 10).',
   unknown: 'No specific signal matched any known category — read the message/stack directly; this is an honest "not enough signal to classify," not a guess.',
 };
 

@@ -3,7 +3,7 @@
 > **Purpose:** Symptom → likely cause → first check → where it is documented, for failures seen in this repo's CI and local runs.
 > **Read when:** A CI run or local run failed and you need to know whether it is a code bug, an app bug, an environment effect or a pipeline problem.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Every row comes from a real incident. "Documented" links point at the resolved-history topic file; open items are in [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md). Check that first: your failure may already be a tracked open item.
 
@@ -48,7 +48,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | Redirected to `/signIn`, or a "Forbidden" page with unchanged URL | Session expiry, two distinct symptoms | `authManager.isSessionExpiryPage()`; a new raw assertion not wrapped in `withSessionExpiryRecovery()`? | [session-expiry-and-auth](./known-issues/session-expiry-and-auth.md) |
 | Repeated re-login "succeeds" then redirects to `/signIn` within seconds | Suspected cross-worker shared-credential-file collision; unconfirmed | Count `Creating authenticated browser context` lines per minute in the log | [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md) |
 | `Target page, context or browser has been closed` | Playwright's outer test timeout fired mid-recovery (a missing `test.setTimeout`), or fixture teardown | The test's own timeout vs `NAVIGATION_TIMEOUT` (CI default test timeout is shorter than local) | [locators-and-timing](./known-issues/locators-and-timing.md) |
-| Client-side `TypeError ... reading 'content'` in `openCallLogForm` | Real Kylas app bug under concurrent access | `APPLICATION_BUGS.md` #1; the page object already reload-retries | [APPLICATION_BUGS.md](../APPLICATION_BUGS.md) |
+| Client-side `TypeError ... reading 'content'` in `openCallLogForm` | Real Kylas app bug under concurrent access | Tracked outside the repo; the page object already reload-retries | [locators-and-timing.md](./known-issues/locators-and-timing.md) |
 | Report creation fails once with HTTP 500 `01403004` for Meeting reports | Real backend defect; immediate retry succeeds | `createReport()` retries that signature once | [reports-module](./known-issues/reports-module.md) |
 
 ### Test-level symptoms
@@ -82,4 +82,4 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 
 ## When it is an app bug
 
-Confirmed real Kylas bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md), not in the engineering docs. A test stays red for a real app bug; do not mask it. Add a new confirmed one there with live evidence.
+Confirmed real Kylas bugs are kept in a file outside this repo (not tracked), not in the engineering docs. A test stays red for a real app bug; do not mask it. Add a new confirmed one there with live evidence.
