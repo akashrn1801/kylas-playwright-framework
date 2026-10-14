@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-15 @ 8184eae
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-15 — fix: notification logs print recipient/cc counts and source (never addresses — a re-joined secret list is not masked in public logs); the empty-`NOTIFY_TO` warning now explains that a missing and an empty GitHub secret both expand to ''. Sandbox 38582148420: notify ran and sent to the `GMAIL_USER` fallback only because `NOTIFY_TO`/`NOTIFY_CC`/`NOTIFY_FROM_NAME` expanded empty (workflow mapping correct; secret value to check outside the repo); its 64 test failures are KI-43 (staging search index), not caused by the change.
 - 2026-10-14 — chore: `npm run check:public-safe` (`scripts/check-public-safe.ts`) scans tracked text files for emails, the non-production app domain, private IPs and `*.svc.cluster.local`, including names split across comment lines; explicit per-reason allowlist; proposed pre-commit hook documented in `docs/CONTRIBUTING_TESTS.md`, not wired in. Currently fails only on the still-tracked `APPLICATION_BUGS.md` (clean once untracked).
 - 2026-10-14 — chore: non-production hostnames removed from tracked docs/comments — `.claude/agents/*.md` use `<QA_APP_URL>` / `@<company-email-domain>`, `config/config.ts` comment uses `<QA_API_BASE_URL>`. `src/fixtures/index.ts` comment reworded. Left unchanged (behavioral): the non-production host match in `ErrorCollector.ts` and the pre-push hook's URL warning pattern.
 - 2026-10-14 — chore: notification recipients/cc/sender name now come from `NOTIFY_TO`/`NOTIFY_CC`/`NOTIFY_FROM_NAME` (GitHub secrets in all 7 notify workflows; Jenkins credentials in `Jenkinsfile`, `Jenkinsfile.sandbox`); unset `NOTIFY_TO` warns and sends to `GMAIL_USER` only; footer address dropped; history-bot git identity env-overridable with a noreply default. No address remains in source.
