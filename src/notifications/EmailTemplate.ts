@@ -16,6 +16,7 @@ import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
+import { CauseSummary, SuspectedCause } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -103,6 +104,9 @@ export interface EmailContext {
   // sequence, snippet, stack, classification), rendered inside the existing
   // Flaky Tests section, not a new section.
   flakyFailureDetails?: FailureDetail[];
+  // WHY optional: suspected-cause hints (FailureClassifier.ts). Rendered only; nothing here feeds the verdict, health
+  // score, counts, dedup key, subject or history.
+  causeSummary?: CauseSummary;
   // WHY: distinguishes "the history mechanism has never had a chance to
   // compare" (no prior run recorded at all) from "compared, and this
   // specific module/test had no prior entry" — see the Module Analytics
@@ -207,8 +211,10 @@ export class EmailTemplate {
       this.buildFreshnessWarning(ctx.reportFreshness),
       this.buildMasthead(ctx, health),
       this.buildStatusBanner(verdict),
+      this.buildCauseBanner(ctx.causeSummary),
       this.buildStatusBadgeRow(ctx),
       this.buildExecutiveSummary(ctx, health, clusters, verdict),
+      this.buildCauseSummaryLine(ctx.causeSummary),
       this.buildHealthScoreBlock(health),
       this.buildRunMetadata(ctx),
       this.buildKpiDashboard(ctx),
@@ -328,6 +334,58 @@ ${body}
     return `
 <tr><td style="background:${bg};padding:12px 28px;text-align:center;">
   <span style="font-size:14px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${this.esc(verdict.bannerLabel)}</span>
+</td></tr>`;
+  }
+
+  // ===================== Suspected-cause hints =====================
+
+  private static readonly CAUSE_LABEL_TEXT: Record<SuspectedCause, string> = {
+    'environment-suspected': 'environment',
+    'application-bug-suspected': 'application',
+    'test-or-code-suspected': 'test/code',
+    flaky: 'flaky',
+    unclassified: 'unclassified',
+  };
+
+  // WHY a blue/slate informational style, never the FAIL/WARN/SUCCESS tokens: these are hints about WHERE to look, not
+  // a second verdict — the status banner above stays the only red/amber/green element about the run's outcome.
+  private causeBadge(cause: FailureDetail['cause']): string {
+    if (!cause) return '';
+    const suspected = cause.label !== 'unclassified' && cause.label !== 'flaky';
+    const text = `${suspected ? 'suspected: ' : ''}${EmailTemplate.CAUSE_LABEL_TEXT[cause.label]}`;
+    const color = suspected ? ACCENT : SLATE;
+    return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;background:#ffffff;color:${color};border:1px solid ${suspected ? '#C9D2F5' : BORDER};border-radius:3px;padding:1px 6px;margin-left:4px;">${this.esc(text)}</span>`;
+  }
+
+  private causeEvidence(cause: FailureDetail['cause']): string {
+    if (!cause) return '';
+    const lines = cause.evidence.map((e) => `<br>&bull; ${this.esc(this.truncate(e, 300))}`).join('');
+    return `<div style="margin-top:6px;font-size:10.5px;color:${SLATE};"><strong style="color:${INK};">Suspected cause — a hint, not a verdict:</strong> ${this.esc(EmailTemplate.CAUSE_LABEL_TEXT[cause.label])}${lines}</div>`;
+  }
+
+  // Returns '' when there is nothing to show (same convention as buildIncompleteRunBanner()). Sits directly under the
+  // status banner and does not touch it: the verdict above is unchanged by anything here.
+  private buildCauseBanner(summary: CauseSummary | undefined): string {
+    const d = summary?.dominant;
+    if (!d) return '';
+    const ask = d.askKylasTeam
+      ? `<div style="font-size:12px;color:${INK};margin-top:6px;"><strong>To ask the Kylas dev team:</strong> ${this.esc(d.askKylasTeam)}</div>`
+      : '';
+    return `
+<tr><td id="section-suspected-environment" style="background:#EEF1FF;padding:12px 28px;border-bottom:1px solid #C9D2F5;">
+  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failures share the signature “${this.esc(d.title)}” (see ${this.esc(d.kiRef)})</div>
+  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Failures that match are counted here whether they failed outright or passed on retry.</div>
+  ${ask}
+</td></tr>`;
+  }
+
+  private buildCauseSummaryLine(summary: CauseSummary | undefined): string {
+    if (!summary || summary.total === 0) return '';
+    const c = summary.counts;
+    const note = summary.incompleteRun ? ' Run incomplete: counts cover only the shards that reported.' : '';
+    return `
+<tr><td id="section-failure-causes" style="padding:4px 28px 8px;">
+  <div style="font-size:12px;color:${SLATE};">Failures by suspected cause (hints, not verdicts): ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.flaky} flaky, ${c.unclassified} unclassified.${this.esc(note)}</div>
 </td></tr>`;
   }
 
@@ -1290,13 +1348,14 @@ ${body}
     return `
         <div id="${this.escAttr(d.anchorId)}" style="border-left:3px solid ${accentColor};background:#ffffff;padding:10px 12px;margin-bottom:10px;border-radius:0 4px 4px 0;border-top:1px solid ${CANVAS_TINT};border-right:1px solid ${CANVAS_TINT};border-bottom:1px solid ${CANVAS_TINT};">
           <div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(d.test.title)}</div>
-          <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}</div>
+          <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}${this.causeBadge(d.cause)}</div>
           <div style="font-size:10.5px;color:${SLATE};margin-bottom:4px;">${this.esc(d.test.file.split('/').pop() || '')}</div>
           <div style="font-size:11.5px;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(d.primaryError)}</div>
           ${earlierErrorsHtml}
           ${snippetHtml}
           ${stackHtml}
           <div style="margin-top:6px;font-size:10.5px;color:${SLATE};font-style:italic;">${this.esc(d.diagnosticHint)}</div>
+          ${this.causeEvidence(d.cause)}
           ${knownIssueHtml}
           <div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${artifactLines.join('<br>')}</div>
         </div>`;
