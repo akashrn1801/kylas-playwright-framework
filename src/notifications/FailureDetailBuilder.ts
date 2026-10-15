@@ -17,6 +17,7 @@ import { MiscError } from '../error-collector/ErrorCollector';
 import { RecurringIssue } from './RunHistory';
 import { KnownIssueCandidate, KnownIssueMatch, matchKnownIssue, extractStackMethodName } from './KnownIssuesIndex';
 import { redactSensitiveText } from './redact';
+import { CauseAssessment } from './FailureClassifier';
 
 // WHY 8: a fixed, documented constant rather than a buried magic number —
 // same convention as RunHistory.ts's SLOW_TEST_REGRESSION_THRESHOLD/
@@ -71,6 +72,9 @@ export interface FailureDetail {
   // coherent question for a test that already passed on retry this run.
   regressionStatus?: RegressionStatus;
   chronicRatio?: ChronicRatio;
+  // WHY optional and set AFTER enrichment (NotificationService): a hint for the reader (FailureClassifier.ts), never
+  // an input to anything that feeds the verdict, health score, counts or history.
+  cause?: CauseAssessment;
 }
 
 export interface EnrichedCluster extends FailureCluster {

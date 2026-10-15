@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "_about": "Tracked registry for FailureClassifier.ts. A failure is labelled ONLY when it matches an entry here AND the entry's breadth rule holds. Everything else stays 'unclassified'. Add an entry only with live evidence and a KI reference; npm run check:failure-labels validates this file. A label is a hint, never a verdict.",
+  "ambiguousCodes": [
+    {
+      "code": "01503001",
+      "note": "Invalid ... summary response: seen both as a genuine RBAC denial (contacts.rbac.spec.ts, contact shared without its company) and with staging search-index lag (KI-43). Never used as evidence of a cause."
+    },
+    {
+      "code": "029003",
+      "note": "Invalid contact/company id: Kylas RBAC enforcement, also seen when a just-created record is not yet visible. Never used as evidence of a cause."
+    }
+  ],
+  "signatures": [
+    {
+      "id": "connection-refused",
+      "title": "connection refused (ECONNREFUSED)",
+      "label": "environment-suspected",
+      "errorPatterns": ["ECONNREFUSED", "ERR_CONNECTION_REFUSED"],
+      "minTests": 1,
+      "minModules": 1,
+      "kiRef": "KI-43",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-10-15",
+      "confirmed": false,
+      "why": "The error text itself says the TCP connection was refused, so no application or test logic is involved. One test is enough because the text is explicit. KI-43 is the closest environment entry; there is no dedicated one."
+    },
+    {
+      "id": "gateway-5xx",
+      "title": "HTTP 502/503/504 from the API",
+      "label": "environment-suspected",
+      "errorPatterns": ["\\bHTTP (502|503|504)\\b"],
+      "misc": { "statusCodes": [502, 503, 504] },
+      "minTests": 2,
+      "minModules": 1,
+      "kiRef": "KI-43",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-10-15",
+      "confirmed": false,
+      "why": "Gateway errors mean the upstream service was unreachable or overloaded. Two tests are required because a captured 5xx is not proven to be the request that failed the test; one stray 502 should not label a failure."
+    },
+    {
+      "id": "search-lookup-miss",
+      "title": "search lookup returned no match for a record",
+      "label": "environment-suspected",
+      "errorPatterns": [
+        "is-invalid__option.*to be visible",
+        "No [A-Za-z/ ]+ options found",
+        "live search.*returned no options",
+        "options did not appear after",
+        "retryFind[A-Za-z]*\\("
+      ],
+      "minTests": 8,
+      "minModules": 2,
+      "kiRef": "KI-43",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-10-15",
+      "confirmed": true,
+      "askKylasTeam": "Is the staging search indexer / event consumer for deals, contacts, leads and companies stalled or backlogged? A deal created through the API stayed absent from GET /v1/search/deal/lookup for 188 s (probe 2026-10-15). Was there a staging deploy or reindex around 10-14 Oct?",
+      "why": "Sandbox 38690038228 had about 75 failed or flaky tests that were a react-select or list search missing a record. The classifier cannot see that the record was just created, so the breadth rule carries the weight: 8 is above the 3 flaky tests seen in a whole healthy run (stage 37953246450, main 38396600241) and well below the 37+ lookup-miss tests in the bad run; 2 modules rules out one broken page."
+    },
+    {
+      "id": "reports-500-01403004",
+      "title": "HTTP 500 01403004 on POST /v3/reports",
+      "label": "application-bug-suspected",
+      "misc": { "statusCodes": [500], "apiErrorCode": "01403004", "urlPattern": "/v3/reports", "method": "POST" },
+      "minTests": 1,
+      "minModules": 1,
+      "kiRef": "Meeting report fails first Save with HTTP 500 (2026-08-25)",
+      "kiFile": "docs/known-issues/reports-module.md",
+      "added": "2026-10-15",
+      "confirmed": true,
+      "why": "A specific status, error code and endpoint documented as a backend defect (first Save 500, immediate retry succeeds). The code is specific enough that one test is enough."
+    },
+    {
+      "id": "client-js-crash",
+      "title": "client-side JavaScript crash",
+      "label": "application-bug-suspected",
+      "errorPatterns": ["is not a function", "is not iterable", "Cannot read propert(y|ies) of (undefined|null)"],
+      "minTests": 2,
+      "minModules": 1,
+      "orKnownIssue": true,
+      "kiRef": "locators-and-timing.md",
+      "kiFile": "docs/known-issues/locators-and-timing.md",
+      "added": "2026-10-15",
+      "confirmed": false,
+      "why": "The same text can come from test code, so a label needs either a known-issue match for the failing code or the same crash in at least 2 tests."
+    }
+  ]
+}

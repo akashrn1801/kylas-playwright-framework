@@ -17,6 +17,9 @@ import { JobStats } from './JobStats';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { loadKnownIssuesIndex } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
+import { assessCauses, summarizeCauses, CauseSummary } from './FailureClassifier';
+import { loadSignatureRegistry } from './FailureSignatureLoader';
+import { normalizeTestTitle } from './FailureAnalyzer';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -326,6 +329,33 @@ export class NotificationService {
     const enrichedClusters = enrichClusters(clusters, enrichmentCtx, usedAnchorIds);
     const flakyFailureDetails = buildFlakyFailureDetails(report.flakyTests, enrichmentCtx, usedAnchorIds);
 
+    // WHY a try/catch that only logs: suspected-cause labels are a reader hint (FailureClassifier.ts) and must never
+    // be able to stop or alter the email — no label, summary or banner is rendered if this fails.
+    let causeSummary: CauseSummary | undefined;
+    try {
+      const { registry, error } = loadSignatureRegistry();
+      if (error) logger.warn(`[Notification] Failure signature registry unusable (${error}) — causes stay unclassified`);
+      const allDetails = [...enrichedClusters.flatMap((c) => c.details), ...flakyFailureDetails];
+      const miscList = miscErrors?.errors ?? [];
+      const assessed = assessCauses(
+        allDetails.map((d) => ({
+          test: d.test,
+          related: miscList.filter((e) => e.testTitle !== undefined && normalizeTestTitle(e.testTitle) === normalizeTestTitle(d.test.title)),
+          knownIssue: d.knownIssue,
+        })),
+        registry,
+        {
+          previousRunFailedTitles: enrichmentCtx.previousRunFailedTitles,
+          recurringFailures: enrichmentCtx.recurringFailures,
+          shardCompleteness,
+        }
+      );
+      for (const d of allDetails) d.cause = assessed.get(d.test);
+      causeSummary = summarizeCauses(assessed.values(), registry, shardCompleteness);
+    } catch (err) {
+      logger.warn(`[Notification] Could not compute suspected causes — omitting them: ${String(err)}`);
+    }
+
     const ctx: EmailContext = {
       report,
       env: input.env,
@@ -352,6 +382,7 @@ export class NotificationService {
       verdict,
       clusters: enrichedClusters,
       flakyFailureDetails,
+      causeSummary,
       hasHistoryEverExisted: historyDeltaFile.delta?.previousRun != null,
       knownIssuesUrl,
       reportFreshness: freshness,
