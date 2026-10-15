@@ -26,6 +26,22 @@ export type FailureCategory =
   | 'unknown';
 
 /**
+ * Canonical form of a test title for joining misc errors to failed tests.
+ *
+ * WHY (confirmed with a synthetic run through the real parser, 2026-10-15):
+ * ErrorCollector stores `testInfo.title` verbatim, tags included
+ * ("@smoke @prodSafe foo"), while ReportParser keeps `spec.title` with only the
+ * FIRST leading tag removed ("@prodSafe foo"). Neither side equals the other for
+ * any tagged title, so the strict-equality join always came back empty and the
+ * status-code branches of classifyFailure()/the endpoint cluster never fired.
+ * Both sides of the join now go through this one function. ReportParser's own
+ * `title` is deliberately left alone: run history keys on it.
+ */
+export function normalizeTestTitle(title: string): string {
+  return title.replace(/^(?:\s*@\w+)+\s*/, '').trim();
+}
+
+/**
  * Classifies a single failure into one category. Order matters — checked most
  * specific/highest-confidence signal first. Where a stronger signal exists
  * (a real HTTP status code from misc-errors.json, cross-referenced by test
@@ -33,7 +49,8 @@ export type FailureCategory =
  */
 export function classifyFailure(test: TestResult, miscErrors: MiscError[] | null = null): FailureCategory {
   const text = `${test.error || ''}\n${test.errorStack || ''}`;
-  const related = (miscErrors ?? []).filter((e) => e.testTitle === test.title);
+  const testKey = normalizeTestTitle(test.title);
+  const related = (miscErrors ?? []).filter((e) => e.testTitle !== undefined && normalizeTestTitle(e.testTitle) === testKey);
 
   if (/strict mode violation/i.test(text) || /locator\(.*\)\s*resolved to/i.test(text)) return 'locator';
   // WHY the second alternative added 2026-08-24: confirmed live via this
@@ -109,8 +126,9 @@ export function clusterFailures(
   const miscByTitle = new Map<string, MiscError[]>();
   for (const e of miscErrors ?? []) {
     if (!e.testTitle) continue;
-    if (!miscByTitle.has(e.testTitle)) miscByTitle.set(e.testTitle, []);
-    miscByTitle.get(e.testTitle)!.push(e);
+    const key = normalizeTestTitle(e.testTitle);
+    if (!miscByTitle.has(key)) miscByTitle.set(key, []);
+    miscByTitle.get(key)!.push(e);
   }
 
   const byExactMessage = new Map<string, TestResult[]>();
@@ -127,7 +145,7 @@ export function clusterFailures(
       if (!byStackLocation.has(key)) byStackLocation.set(key, []);
       byStackLocation.get(key)!.push(t);
     }
-    const err = (miscByTitle.get(t.title) ?? []).find((e) => typeof e.statusCode === 'number');
+    const err = (miscByTitle.get(normalizeTestTitle(t.title)) ?? []).find((e) => typeof e.statusCode === 'number');
     if (err) {
       const key = `${err.method ?? 'GET'} ${err.url ?? ''} ${err.statusCode}`;
       if (!byEndpoint.has(key)) byEndpoint.set(key, []);
