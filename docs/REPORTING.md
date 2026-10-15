@@ -3,7 +3,7 @@
 > **Purpose:** How a test run becomes a summary email, a history ledger entry and a background-error report; what each `src/notifications` module owns.
 > **Read when:** Changing anything under `src/notifications/`, `src/reporters/`, `src/error-collector/`, or `scripts/merge-misc-errors.ts`; debugging an odd email or an empty trend section.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-15 @ 8184eae
 
 ## 1. Data flow
 
@@ -35,7 +35,7 @@ Local runs trigger `notify` through `posttest` (skipped when `$CI` is set). In C
 | `AutomationHealth.ts` | Weighted 0-100 score (Excellent / Good / Needs Attention / Critical) and the overall verdict, including `no-tests-executed` (checked first) and suite drift. Weights are documented starting heuristics, not tuned constants. |
 | `JobStats.ts` | GitHub Actions only: Jobs API → per-job durations, total job-minutes (completed jobs only), time-overlap detection between jobs, per-shard recovery-event rows. Degrades to `null` on any failure. |
 | `EmailTemplate.ts` | HTML renderer: an orchestrator plus one `buildXxx()` per section; carries `REPORT_ENGINE_VERSION`, independent of `package.json`. |
-| `src/notifications/config/notificationConfig.ts`, `adapters/EmailAdapter.ts` | SMTP settings (Gmail, Zoho fallback); recipients, cc and sender name come from `NOTIFY_TO` / `NOTIFY_CC` / `NOTIFY_FROM_NAME` (CI secrets, comma-separated; no address lives in source). `NOTIFY_TO` unset → a loud warning and send to `GMAIL_USER` only. History-commit identity: `BOT_GIT_NAME` / `BOT_GIT_EMAIL` (noreply default). |
+| `src/notifications/config/notificationConfig.ts`, `adapters/EmailAdapter.ts` | SMTP settings (Gmail, Zoho fallback); recipients, cc and sender name come from `NOTIFY_TO` / `NOTIFY_CC` / `NOTIFY_FROM_NAME` (CI secrets, comma-separated; no address lives in source). `NOTIFY_TO` unset → a loud warning and send to `GMAIL_USER` only. Logs print recipient counts only (a re-joined list is not masked by GitHub). History-commit identity: `BOT_GIT_NAME` / `BOT_GIT_EMAIL` (noreply default). |
 | `FieldConfigReset.ts` | Shared shape and loader for `reports/<env>/field-config-reset.json`, written by `scripts/reset-field-config.ts`; returns `null` on any problem so the email just omits the line. |
 | `ShardCompleteness.ts` | Shape, parser and loader for `reports/<env>/shard-completeness.json` (expected vs merged shard reports, written by `.github/scripts/verify-shard-completeness.sh`). Missing or garbled file = no information, never "complete" or "incomplete". |
 | `redact.ts` | Secret scrubbing for anything printed. |

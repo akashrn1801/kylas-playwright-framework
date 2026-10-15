@@ -44,7 +44,9 @@ export class EmailAdapter {
       html: payload.html,
     });
     console.log(
-      `[Notification] Email sent to: ${payload.to.join(', ')} — MessageID: ${info.messageId}`
+      // WHY a count, not the addresses: recipients are CI secrets, and GitHub masks only the exact secret
+      // string, so a re-joined list would print unmasked in a public log.
+      `[Notification] Email sent to ${payload.to.length} recipient(s), cc ${payload.cc?.length ?? 0} — MessageID: ${info.messageId}`
     );
   }
 

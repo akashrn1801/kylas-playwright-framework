@@ -419,7 +419,7 @@ export class NotificationService {
 </div>`;
     try {
       await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
-      logger.info(`[Notification] Report-unavailable alert sent to: ${recipients.to.join(', ')}`);
+      logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} recipient(s)`);
     } catch (sendErr) {
       logger.error('[Notification] Failed to send even the report-unavailable alert:', sendErr);
     }

@@ -54,15 +54,20 @@ let warnedMissingRecipients = false;
 export function getRecipients(_env: string, _branch: string): RecipientConfig {
   const to = parseAddressList(process.env.NOTIFY_TO);
   const cc = parseAddressList(process.env.NOTIFY_CC);
-  if (to.length > 0) return { to, cc: cc.length > 0 ? cc : undefined };
+  if (to.length > 0) {
+    logger.info(`[Notification] Recipients from NOTIFY_TO: to=${to.length} cc=${cc.length}`);
+    return { to, cc: cc.length > 0 ? cc : undefined };
+  }
 
   const sender = process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user;
   if (!warnedMissingRecipients) {
     warnedMissingRecipients = true;
     logger.warn(
-      '[Notification] NOTIFY_TO is not set — falling back to the sender account (GMAIL_USER) only. ' +
-        'Set the NOTIFY_TO secret (comma-separated) to reach the team.'
+      '[Notification] NOTIFY_TO is empty or not set — falling back to the sender account (GMAIL_USER) only. ' +
+        'In GitHub Actions a missing secret and a secret with an empty value both expand to an empty string: ' +
+        'check that the NOTIFY_TO secret exists in the scope this job reads and has a non-empty, comma-separated value.'
     );
   }
+  logger.info(`[Notification] Recipients from fallback (sender account only): to=${sender ? 1 : 0} cc=${cc.length}`);
   return { to: sender ? [sender] : [], cc: cc.length > 0 ? cc : undefined };
 }
