@@ -9,6 +9,7 @@ import {
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
   isRateLimitedPage,
+  RATE_LIMIT_PAGE_PATTERN,
   tryRecoverFromRateLimit,
   isAppErrorBoundaryPage,
   tryRecoverFromAppErrorBoundary,
@@ -1071,10 +1072,43 @@ export class BasePage {
       Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
 
     await this.page.waitForLoadState('domcontentloaded');
-    await Promise.race([
-      this.page.waitForResponse(responsePredicate, { timeout: boundedTimeout() }).catch(() => null),
-      tableLocator.waitFor({ state: 'visible', timeout: boundedTimeout() }).catch(() => null),
+    // WHY a third racer for the app's own 429 page (2026-10-16, sandbox run
+    // 38855451748 shard 3/5, companies.rbac.spec.ts:22 attempt 1 — the failure
+    // screenshot and page snapshot show "Whoa! Too many requests at once!"
+    // replacing the list): on that page neither the list response nor the table
+    // ever arrives, so this race burned the full navigation timeout (60s), the
+    // assertion below burned most of the next one, and the 120s test budget
+    // (this test has no test.setTimeout) ran out while the assertion was still
+    // pending — BEFORE withRateLimitRecovery() below could run, because it only
+    // acts after its wrapped call fails. Detecting the page here lets the same
+    // existing recovery (click the app's own Refresh) run in seconds instead.
+    // Defensive hardening: the app throttling under CI load is confirmed by
+    // the screenshot; why it throttled at that moment is not established.
+    // Purely additive: any non-429 load behaves exactly as before (the first
+    // racer to settle wins; a false match only costs one harmless Refresh).
+    // Read-only, so safe for the @prodSafe callers of this shared method.
+    const firstSignal = await Promise.race([
+      this.page
+        .waitForResponse(responsePredicate, { timeout: boundedTimeout() })
+        .then(() => 'settled' as const)
+        .catch(() => 'settled' as const),
+      tableLocator
+        .waitFor({ state: 'visible', timeout: boundedTimeout() })
+        .then(() => 'settled' as const)
+        .catch(() => 'settled' as const),
+      this.page
+        .getByText(RATE_LIMIT_PAGE_PATTERN)
+        .first()
+        .waitFor({ state: 'visible', timeout: boundedTimeout() })
+        .then(() => 'rate-limited' as const)
+        .catch(() => 'settled' as const),
     ]);
+    if (firstSignal === 'rate-limited') {
+      logger.warn(
+        `${description} list showed the app's rate-limit page ("Too many requests at once") — recovering now instead of waiting out the navigation timeout`
+      );
+      await tryRecoverFromRateLimit(this.page);
+    }
 
     // WHY also wrapped in withRateLimitRecovery() (2026-09-29 — real CI
     // evidence, sandbox run 36573185433: FFRPS5's own "Products & Services
@@ -1124,6 +1158,37 @@ export class BasePage {
       await this.page.reload({ waitUntil: 'domcontentloaded' });
       await assertTableVisible();
     }
+  }
+
+  // ─── Notes Panel Helpers (generic — the Notes card is a shared component) ──
+
+  // WHY this exists (2026-10-16, sandbox run 38855451748 shard 3/5,
+  // companies.rbac.spec.ts COR17): the generic `div.row.pt-2.pl-2.pr-2` combo
+  // also matches the react-loading-skeleton placeholder rows the Notes card
+  // renders during its initial fetch and after every add/delete. COR17 read
+  // that selector's count once, 500ms after opening the panel, and got the 3
+  // transient skeleton rows as its "baseline" — the final page snapshot of the
+  // failed attempt shows exactly 2 real notes ("Note to delete", "Note to
+  // keep"), so `expected 5 (3+2), received 2` was the baseline being wrong,
+  // not the notes. Deals (D25) and Leads had already found and fixed this
+  // exact race inline ("Confirmed live ... 3 skeleton placeholder rows");
+  // this is the same fix kept in one place for the entities still on the old
+  // selector. Scoped to the Notes card and the stable `.note.card` wrapper.
+  // Purely additive — no existing caller changes.
+  notesPanel(): { card: Locator; rows: Locator; waitForSettled: () => Promise<void> } {
+    const card = this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Notes' }) })
+      .first();
+    const rows = card.locator('.note.card');
+    const waitForSettled = (): Promise<void> =>
+      this.withSessionExpiryRecovery(() =>
+        expect(
+          card.locator('.react-loading-skeleton'),
+          'Notes panel should finish loading (no skeleton placeholder rows) before its note count is read'
+        ).toHaveCount(0, { timeout: 15000 })
+      );
+    return { card, rows, waitForSettled };
   }
 
   // ─── Assertion Helpers ────────────────────────────────────

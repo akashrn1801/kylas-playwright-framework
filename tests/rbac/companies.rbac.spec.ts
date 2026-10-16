@@ -506,50 +506,59 @@ test.describe('Companies RBAC', () => {
     // WHY: COR17 has no restrictedCompaniesPage instance — create one for navigation
     const restrictedCompaniesPage = new CompaniesPage(restrictedPage);
     await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
-    // WHY: Click Notes icon to open notes panel
-    await restrictedPage
-      .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')
-      .first()
-      .click();
-    await restrictedPage.waitForTimeout(500);
+    // WHY the page object's own bounded icon wait + click (not a raw locator
+    // click): same helpers COR8 uses on this exact panel.
+    await restrictedCompaniesPage.assertRightPanelIconVisible('Notes');
+    await restrictedCompaniesPage.clickRightPanelIcon('Notes');
+    // WHY the Notes card is scoped and its skeleton rows awaited before ANY count
+    // is read (2026-10-16, run 38855451748 shard 3/5: baseline read 3, final
+    // snapshot showed exactly 2 real notes — see BasePage.notesPanel()): the
+    // old page-wide `div.row.pt-2.pl-2.pr-2` count also matched the 3
+    // loading-skeleton rows shown during the initial fetch. Counts are asserted
+    // with the retrying toHaveCount(), never a one-shot count() + toBe().
+    const { rows: noteRows, waitForSettled } = restrictedCompaniesPage.notesPanel();
+    await waitForSettled();
     // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
-    const baselineCount = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
+    const baselineCount = await noteRows.count();
+    const richTextEditor = restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' });
     // WHY: Add first note — this note will be kept
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill('Note to keep');
-    await restrictedPage.waitForTimeout(500);
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill('Note to keep');
     await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
+    await waitForSettled();
+    await expect(noteRows, 'Note count should be baseline + 1 after the first add').toHaveCount(
+      baselineCount + 1,
+      { timeout: 10000 }
+    );
     // WHY: Add second note — this note will be deleted
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill('Note to delete');
-    await restrictedPage.waitForTimeout(500);
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill('Note to delete');
     await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
+    await waitForSettled();
     // WHY: Verify both new notes were added on top of baseline
-    const notesBeforeDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesBeforeDelete).toBe(baselineCount + 2);
+    await expect(noteRows, 'Note count should be baseline + 2 after the second add').toHaveCount(
+      baselineCount + 2,
+      { timeout: 10000 }
+    );
     // WHY: Delete the first note (newest first display) — "Note to delete" was added last so appears first
-    const lastNoteEllipsis = restrictedPage
-      .locator('div.row.pt-2.pl-2.pr-2')
-      .first()
-      .locator('button[data-toggle="dropdown"]');
-    await lastNoteEllipsis.click();
-    await restrictedPage.waitForTimeout(300);
-    await restrictedPage
+    await noteRows.first().locator('button[data-toggle="dropdown"]').click();
+    const deleteMenuItem = restrictedPage
       .locator('.dropdown-menu.show .dropdown-item')
-      .filter({ hasText: 'Delete' })
-      .click();
-    await restrictedPage.waitForTimeout(500);
+      .filter({ hasText: 'Delete' });
+    await deleteMenuItem.waitFor({ state: 'visible', timeout: 5000 });
+    await deleteMenuItem.click();
     // WHY: Confirm delete in modal
-    await restrictedPage.locator('button#confirm.btn-danger').waitFor({ state: 'visible', timeout: 5000 });
-    await restrictedPage.locator('button#confirm.btn-danger').click();
-    await restrictedPage.waitForTimeout(1500);
+    const confirmDeleteButton = restrictedPage.locator('button#confirm.btn-danger');
+    await confirmDeleteButton.waitFor({ state: 'visible', timeout: 5000 });
+    await confirmDeleteButton.click();
+    await waitForSettled();
     // WHY: Verify count dropped by 1 relative to baseline
-    const notesAfterDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesAfterDelete).toBe(baselineCount + 1);
+    await expect(noteRows, 'Note count should be baseline + 1 after deleting one note').toHaveCount(
+      baselineCount + 1,
+      { timeout: 10000 }
+    );
     // WHY: Note text lives in CKEditor iframes — skip the active editor iframe
     // and use innerText to check only saved-note display iframes
     const checkNoteText = async (text: string): Promise<boolean> =>

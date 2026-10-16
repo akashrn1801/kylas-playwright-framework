@@ -823,7 +823,7 @@ export async function isSessionExpiryPage(page: Page): Promise<boolean> {
 // that hit it mid-action just rode its own full test timeout waiting for a
 // DOM element (e.g. the search input) that had already been silently
 // replaced and would never come back on its own.
-const RATE_LIMIT_PAGE_PATTERN = /Too many requests at once/i;
+export const RATE_LIMIT_PAGE_PATTERN = /Too many requests at once/i;
 
 export async function isRateLimitedPage(page: Page): Promise<boolean> {
   const bodyText = await page.locator('body').innerText().catch(() => '');
