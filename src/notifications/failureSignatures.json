@@ -17,6 +17,7 @@
       "title": "connection refused (ECONNREFUSED)",
       "label": "environment-suspected",
       "errorPatterns": ["ECONNREFUSED", "ERR_CONNECTION_REFUSED"],
+      "errorPatternNotes": ["a refused TCP connection (ECONNREFUSED)", "a refused connection reported by the browser"],
       "minTests": 1,
       "minModules": 1,
       "kiRef": "KI-43",
@@ -30,6 +31,7 @@
       "title": "HTTP 502/503/504 from the API",
       "label": "environment-suspected",
       "errorPatterns": ["\\bHTTP (502|503|504)\\b"],
+      "errorPatternNotes": ["a gateway error (HTTP 502, 503 or 504) reported by the API"],
       "misc": { "statusCodes": [502, 503, 504] },
       "minTests": 2,
       "minModules": 1,
@@ -50,13 +52,24 @@
         "options did not appear after",
         "retryFind[A-Za-z]*\\("
       ],
+      "errorPatternNotes": [
+        "a dropdown option that never became visible after a search",
+        "a dropdown that showed no options after a search",
+        "a live search that returned no options",
+        "dropdown options that did not appear after a search",
+        "a list search that found nothing after a create (the failing step is a retried list search)"
+      ],
       "minTests": 8,
       "minModules": 2,
       "kiRef": "KI-43",
       "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
       "added": "2026-10-15",
       "confirmed": true,
-      "askKylasTeam": "Is the staging search indexer / event consumer for deals, contacts, leads and companies stalled or backlogged? A deal created through the API stayed absent from GET /v1/search/deal/lookup for 188 s (probe 2026-10-15). Was there a staging deploy or reindex around 10-14 Oct?",
+      "askKylasTeam": {
+        "question": "Is the staging search indexer / event consumer for deals, contacts, leads and companies stalled or backlogged? Was there a staging deploy or reindex between 10 and 14 Oct 2026?",
+        "observation": "A deal created through the API stayed absent from GET /v1/search/deal/lookup for 188 s in a manual probe. That probe is not repeated by this run.",
+        "observed": "2026-10-15"
+      },
       "why": "Sandbox 38690038228 had about 75 failed or flaky tests that were a react-select or list search missing a record. The classifier cannot see that the record was just created, so the breadth rule carries the weight: 8 is above the 3 flaky tests seen in a whole healthy run (stage 37953246450, main 38396600241) and well below the 37+ lookup-miss tests in the bad run; 2 modules rules out one broken page."
     },
     {
@@ -77,6 +90,7 @@
       "title": "client-side JavaScript crash",
       "label": "application-bug-suspected",
       "errorPatterns": ["is not a function", "is not iterable", "Cannot read propert(y|ies) of (undefined|null)"],
+      "errorPatternNotes": ["a JavaScript \"is not a function\" error", "a JavaScript \"is not iterable\" error", "a JavaScript read of a property of undefined or null"],
       "minTests": 2,
       "minModules": 1,
       "orKnownIssue": true,
