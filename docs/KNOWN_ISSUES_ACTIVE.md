@@ -1,9 +1,9 @@
 # Known Issues — Active
 
-> **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md).
+> **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-15 @ 8184eae
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -13,7 +13,7 @@
 
 ### KI-01 — FFPS5: stable across re-testing, root cause unconfirmed
 - **Status:** inconclusive (currently stable; original symptom never reproduced) · **Since:** 2026-09-23 (re-investigated 2026-09-28)
-- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; a headed-mode watch showed a different (fill/locator) symptom. Six independent conditions reproduced neither shape. Write-up: [APPLICATION_BUGS.md](../APPLICATION_BUGS.md) entry 6 and [form-fields.md](./known-issues/form-fields.md) (conditions list).
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; a headed-mode watch showed a different (fill/locator) symptom. Six independent conditions reproduced neither shape. Write-up: [form-fields.md](./known-issues/form-fields.md) (conditions list).
 - **Next check:** if it fails again, capture the failing run's `trace.zip` or a screen recording *at that moment* — the one evidence type never obtained; do not re-argue from theory. Existing bounded retries in `productsAndServicesFieldLimits.spec.ts` and `ProductsAndServicesPage.assertCustomFieldValueOnEditPage()` stay as labeled hardening (rule 10).
 
 ### KI-02 — FFRPS8 is a load-dependent flake with no prior record
@@ -147,6 +147,13 @@
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
 - **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
+
+### KI-43 — Staging search index not reflecting new records: 64 failures, sandbox 38582148420
+- **Status:** staging environment problem, confirmed on one shard's traces; not a code defect · **Since:** 2026-10-14
+- **What:** all 5 selective shards failed (64 failed, 17 flaky) on `ea8925f`, whose diff vs the last green stage run (`79859d6`) changes only comments/log strings in test and page-object code. Signatures: empty react-select menus (`.is-invalid__option` never visible; `No Deal/Lead/Contact options found`; `live search ... returned no options after 3 attempt(s)`), `Invalid contact summary response` / HTTP 422 on `POST /meetings` (39, vs 1–2 expected RBAC 422s in stage 37953246450 / main 38396600241), HTTP 403 on `POST /call-logs/` (9), deal/contact counts not updating.
+- **Evidence:** shard 5 trace (`productsAndServices.rbac.spec.ts:189`, both attempts): `POST /v1/deals/` 201, then `POST /v1/search/deal` still `totalElements` 5824 and `GET /v1/search/deal/lookup?q=id:<new name>` → 200, `content: []`, 9–11 s later. Worst in the first hours (422s per UTC hour 14/15/16: 17/16/6; the run started 14:37Z).
+- **Next check:** cause on the Kylas side (search indexing or the contact-summary service) is NOT known — HYPOTHESIS: indexing backlog on staging. Re-run sandbox once staging is quiet; if the signatures return, ask the product team about staging indexing. Do not add retries or longer waits to hide it.
+- **History link:** [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (share-propagation lag, 2026-08) is the closest earlier pattern.
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
 - **Status:** open for CI confirmation · **Since:** 2026-10-07

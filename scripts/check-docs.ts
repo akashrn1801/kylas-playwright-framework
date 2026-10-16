@@ -35,7 +35,7 @@ const REQUIRED_HEADER_FIELDS = ['Purpose', 'Read when', 'Size budget', 'Last ver
 
 // Docs whose numbers are history/evidence by nature — exempt from the
 // hand-typed-figure scan and (for CHANGELOG) the stale-reference scan.
-const HISTORY_DOC_PATTERNS = [/^docs\/known-issues\//, /^docs\/adr\//, /^CHANGELOG\.md$/, /^APPLICATION_BUGS\.md$/, /^docs\/KNOWN_ISSUES_ACTIVE\.md$/];
+const HISTORY_DOC_PATTERNS = [/^docs\/known-issues\//, /^docs\/adr\//, /^CHANGELOG\.md$/, /^docs\/KNOWN_ISSUES_ACTIVE\.md$/];
 const HEADERLESS_DOCS = new Set(['.github/pull_request_template.md']);
 
 interface Finding {
@@ -65,7 +65,7 @@ function listDocs(): string[] {
     }
   };
   walk(path.join(root, 'docs'));
-  for (const f of ['CLAUDE.md', 'README.md', 'APPLICATION_BUGS.md', 'CHANGELOG.md', '.claude/AGENT_DELEGATION_GUIDE.md', '.github/pull_request_template.md']) {
+  for (const f of ['CLAUDE.md', 'README.md', 'CHANGELOG.md', '.claude/AGENT_DELEGATION_GUIDE.md', '.github/pull_request_template.md']) {
     const full = path.join(root, f);
     if (fs.existsSync(full)) out.push(full);
   }
@@ -147,7 +147,7 @@ function checkHeader(file: string, text: string): void {
   }
 }
 
-const PATH_TOKEN = /^(?:(?:src|tests|scripts|docs|config|\.claude|\.github)\/[^\s]*|CLAUDE\.md|README\.md|CHANGELOG\.md|APPLICATION_BUGS\.md|package\.json|playwright\.config\.ts|Jenkinsfile[\w.]*)$/;
+const PATH_TOKEN = /^(?:(?:src|tests|scripts|docs|config|\.claude|\.github)\/[^\s]*|CLAUDE\.md|README\.md|CHANGELOG\.md|package\.json|playwright\.config\.ts|Jenkinsfile[\w.]*)$/;
 const BARE_FILE = /^[\w.-]+\.(?:md|ts|yml|sh)$/;
 
 function checkReferences(file: string, text: string, tracked: string[], trackedBase: Set<string>, scripts: Set<string>): void {
