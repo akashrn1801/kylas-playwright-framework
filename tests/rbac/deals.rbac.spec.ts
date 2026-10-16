@@ -628,7 +628,7 @@ test.describe('Deals RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminDealsPage = new DealsPage(adminPage);
-    const { contactName, companyName } = await createFreshContactAndCompany(adminPage);
+    const { contactName, companyName, companyId } = await createFreshContactAndCompany(adminPage);
     const dealData = generateSharedDealData({
       associatedContactName: contactName,
       associatedCompanyName: companyName,
@@ -638,6 +638,29 @@ test.describe('Deals RBAC', () => {
     if (!dealId) throw new Error('Deal ID not captured — cannot share');
     await adminDealsPage.goToDealDetailsById(dealId);
     const restrictedUserName = await adminDealsPage.getLoggedInUserName('restricted');
+
+    // WHY the associated company is shared too (2026-10-16, sandbox run
+    // 38855451748 shard 1/5, both attempts, each with its own fresh deal and
+    // company): sharing only the DEAL leaves the restricted user without
+    // access to the deal's company. Network evidence from that run, in order:
+    // the restricted user's GET /companies/<id> returned 404 errorCode
+    // 02801002 ("the record doesn't seem to exist, or you don't have enough
+    // permissions"), then POST /v1/meetings returned 422 errorCode 01503001
+    // ("Invalid company summary response") on all 3 saveMeetingRetryOnEntity
+    // SummaryLag attempts of BOTH test attempts — a persistent denial, not a
+    // share-propagation lag. It is the same genuine RBAC behaviour
+    // contacts.rbac.spec.ts CR9 documents (meeting creation needs the
+    // associated company's data) and that the "Update Note Task Meeting" test
+    // below already accounts for by sharing the company with `meeting`
+    // (2026-08-11 comment there). This test's purpose is "the Meeting
+    // permission on a deal lets the restricted user create a meeting", so its
+    // fixture must include the dependency; the denial itself is covered by CR9.
+    // Only the company is shared, not the contact: the company's own meeting
+    // access is what the 01503001 check validates (see the combined test).
+    const adminCompaniesPage = new CompaniesPage(adminPage);
+    await adminCompaniesPage.goToCompanyDetailsById(companyId);
+    await adminCompaniesPage.shareCompany(restrictedUserName, ['meeting']);
+    await adminDealsPage.goToDealDetailsById(dealId);
     await adminDealsPage.shareDeal(restrictedUserName, ['meeting']);
 
     const restrictedDealsPage = new DealsPage(restrictedPage);
