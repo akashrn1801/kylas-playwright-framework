@@ -53,6 +53,9 @@ export interface FailureSignature {
   title: string;
   label: Exclude<SuspectedCause, 'flaky' | 'unclassified' | 'test-or-code-suspected'>;
   errorPatterns?: string[];
+  // Plain-language description of what each errorPatterns entry detects, same order and length. This is what the
+  // evidence line shows, so the email never quotes raw code, stack text or record names.
+  errorPatternNotes?: string[];
   misc?: MiscMatch;
   minTests: number;
   minModules: number;
@@ -61,8 +64,16 @@ export interface FailureSignature {
   kiFile: string;
   added: string;
   confirmed: boolean;
-  askKylasTeam?: string;
+  askKylasTeam?: AskKylasTeam;
   why: string;
+}
+
+// WHY structured: the observation is a one-off, dated manual probe, not something this run measured. Keeping it apart
+// from the question lets the email say so and print the date.
+export interface AskKylasTeam {
+  question: string;
+  observation: string;
+  observed: string; // ISO date of the probe
 }
 
 export interface AmbiguousCode {
@@ -105,12 +116,21 @@ export interface DominantSignature {
   kiRef: string;
   count: number;
   total: number;
+  // count = failedCount + retryCount; total = failedTotal + retryTotal. Computed from the assessments, never typed.
+  failedCount: number;
+  retryCount: number;
+  failedTotal: number;
+  retryTotal: number;
   confirmed: boolean;
-  askKylasTeam?: string;
+  added: string;
+  askKylasTeam?: AskKylasTeam;
 }
 
 export interface CauseSummary {
   total: number;
+  // total = failedTotal + retryTotal (retryTotal = the flaky count); shown by the summary line and banner.
+  failedTotal: number;
+  retryTotal: number;
   counts: Record<SuspectedCause, number>;
   dominant?: DominantSignature;
   incompleteRun: boolean;
@@ -132,6 +152,12 @@ export function parseSignatureRegistry(raw: unknown): SignatureRegistry {
     if (!labels.has(s.label)) throw new Error(`${where}: label must be environment-suspected or application-bug-suspected`);
     if (!(s.errorPatterns?.length || s.misc)) throw new Error(`${where}: needs errorPatterns or misc`);
     for (const p of s.errorPatterns ?? []) new RegExp(p, 'i'); // throws on a bad pattern
+    if (s.errorPatterns?.length) {
+      const notes = s.errorPatternNotes;
+      if (!Array.isArray(notes) || notes.length !== s.errorPatterns.length || notes.some((n) => typeof n !== 'string' || !n.trim())) {
+        throw new Error(`${where}: errorPatternNotes must have one non-empty description per errorPatterns entry`);
+      }
+    }
     if (s.misc?.urlPattern) new RegExp(s.misc.urlPattern, 'i');
     if (!(s.minTests >= 1) || !(s.minModules >= 1)) throw new Error(`${where}: minTests/minModules must be >= 1`);
     for (const f of ['title', 'kiRef', 'kiFile', 'added', 'why'] as const) {
@@ -141,6 +167,12 @@ export function parseSignatureRegistry(raw: unknown): SignatureRegistry {
     if (s.confirmed && s.label === 'environment-suspected' && !s.askKylasTeam) {
       throw new Error(`${where}: a confirmed environment signature needs askKylasTeam`);
     }
+    if (s.askKylasTeam !== undefined) {
+      const a = s.askKylasTeam as Partial<AskKylasTeam> | null;
+      if (!a || typeof a !== 'object' || !a.question || !a.observation || typeof a.observed !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.observed)) {
+        throw new Error(`${where}: askKylasTeam must be { question, observation, observed: YYYY-MM-DD }`);
+      }
+    }
   }
   return o as SignatureRegistry;
 }
@@ -149,22 +181,16 @@ function failureText(t: TestResult): string {
   return [t.error ?? '', ...(t.allErrors ?? []), t.errorStack ?? '', t.errorSnippet ?? ''].join('\n');
 }
 
-function excerpt(text: string, re: RegExp): string {
-  const m = re.exec(text);
-  if (!m) return '';
-  const start = Math.max(0, m.index - 20);
-  return redactSensitiveText(text.slice(start, m.index + Math.min(m[0].length, 80) + 20).replace(/\s+/g, ' ').trim());
-}
-
 interface SignatureHit {
   how: string;
 }
 
 function matchSignature(sig: FailureSignature, input: FailureCauseInput): SignatureHit | null {
   const text = failureText(input.test);
-  for (const p of sig.errorPatterns ?? []) {
-    const re = new RegExp(p, 'i');
-    if (re.test(text)) return { how: `error text matches "${excerpt(text, re)}"` };
+  const patterns = sig.errorPatterns ?? [];
+  for (let i = 0; i < patterns.length; i++) {
+    // WHY the registry note, not the matched text: the matched text is code or a record name from the stack.
+    if (new RegExp(patterns[i], 'i').test(text)) return { how: `the error text shows ${sig.errorPatternNotes?.[i] ?? 'a registered pattern'}` };
   }
   const m = sig.misc;
   if (m) {
@@ -186,10 +212,33 @@ function matchSignature(sig: FailureSignature, input: FailureCauseInput): Signat
         /* not an absolute URL: keep as is */
       }
       const where = `${hit.method ?? 'GET'} ${redactSensitiveText(pathOnly)}`;
-      return { how: `captured HTTP ${hit.statusCode}${hit.apiErrorCode ? ` ${hit.apiErrorCode}` : ''} on ${where}` };
+      return { how: `a captured response of HTTP ${hit.statusCode}${hit.apiErrorCode ? ` ${hit.apiErrorCode}` : ''} on ${where}` };
     }
   }
   return null;
+}
+
+// Breadth of one signature in this run. tests = failedTests + retryTests; the breadth rule uses tests and modules only.
+interface Spread {
+  tests: number;
+  failedTests: number;
+  retryTests: number;
+  modules: Set<string>;
+}
+const newSpread = (): Spread => ({ tests: 0, failedTests: 0, retryTests: 0, modules: new Set<string>() });
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** "N failed outright, M passed on retry" (a zero side is left out) — the one wording the cards, banner and summary share. */
+export function splitText(failed: number, retry: number): string {
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed outright`);
+  if (retry > 0) parts.push(`${retry} passed on retry`);
+  return parts.join(', ');
+}
+
+function breadthText(s: Spread): string {
+  return `${plural(s.tests, 'test')} across ${plural(s.modules.size, 'module')} ${s.tests === 1 ? 'shares' : 'share'} it (${splitText(s.failedTests, s.retryTests)})`;
 }
 
 function hasNetworkError(related: MiscError[]): boolean {
@@ -207,15 +256,17 @@ export function assessCauses(
 ): Map<TestResult, CauseAssessment> {
   // Pass 1: which signatures does each failure match textually, and how widely (tests / modules) in this run?
   const hits = new Map<TestResult, Map<string, SignatureHit>>();
-  const spread = new Map<string, { tests: number; modules: Set<string> }>();
+  const spread = new Map<string, Spread>();
   for (const f of failures) {
     const m = new Map<string, SignatureHit>();
     for (const sig of registry.signatures) {
       const hit = matchSignature(sig, f);
       if (!hit) continue;
       m.set(sig.id, hit);
-      const s = spread.get(sig.id) ?? { tests: 0, modules: new Set<string>() };
+      const s = spread.get(sig.id) ?? newSpread();
       s.tests += 1;
+      if (f.test.status === 'flaky') s.retryTests += 1;
+      else s.failedTests += 1;
       s.modules.add(deriveModuleFromFile(f.test.file).name);
       spread.set(sig.id, s);
     }
@@ -241,7 +292,7 @@ export function assessCauses(
     for (const sig of registry.signatures) {
       const hit = myHits.get(sig.id);
       if (!hit) continue;
-      const s = spread.get(sig.id) ?? { tests: 0, modules: new Set<string>() };
+      const s = spread.get(sig.id) ?? newSpread();
       const breadthOk = s.tests >= sig.minTests && s.modules.size >= sig.minModules;
       const knownOk = sig.orKnownIssue === true && f.knownIssue !== undefined;
       if (breadthOk || knownOk) {
@@ -261,17 +312,13 @@ export function assessCauses(
       const lines = [`passed on retry (${t.retries} retry${t.retries === 1 ? '' : 's'}) — flaky this run`, ...evidence];
       if (chosen) {
         const s = spread.get(chosen.sig.id)!;
-        lines.push(`failing attempt: ${chosen.hit.how}; same signature "${chosen.sig.title}" in ${s.tests} test(s), ${s.modules.size} module(s) (${chosen.sig.kiRef})`);
+        lines.push(`failing attempt matched ${chosen.sig.id} — ${chosen.sig.title}: ${chosen.hit.how}; ${breadthText(s)}; see ${chosen.sig.kiRef}`);
       }
       lines.push(...unmet);
       assessment = { label: 'flaky', evidence: lines, signatureId: chosen?.sig.id, kiRef: chosen?.sig.kiRef };
     } else if (chosen) {
       const s = spread.get(chosen.sig.id)!;
-      const lines = [
-        `${chosen.hit.how}`,
-        `same signature "${chosen.sig.title}" in ${s.tests} test(s) across ${s.modules.size} module(s) this run (${chosen.sig.kiRef})`,
-        ...evidence,
-      ];
+      const lines = [`${chosen.sig.id} — ${chosen.sig.title}: ${chosen.hit.how}; ${breadthText(s)}; see ${chosen.sig.kiRef}`, ...evidence];
       assessment = { label: chosen.sig.label, evidence: lines, signatureId: chosen.sig.id, kiRef: chosen.sig.kiRef };
     } else if (unmet.length > 0) {
       assessment = { label: 'unclassified', evidence: [...unmet, ...evidence] };
@@ -318,7 +365,7 @@ export function assessCauses(
       if (a.label !== 'test-or-code-suspected') continue;
       a.label = 'unclassified';
       a.evidence.unshift(
-        `not labelled test/code: ${dominant.count} of ${dominant.total} failures this run share the environment signature "${dominant.title}", so a locator/assertion miss is not attributed to the test code without more evidence`
+        `not labelled test/code: ${dominant.count} of ${dominant.total} failures this run share the environment signature "${dominant.title}" (${splitText(dominant.failedCount, dominant.retryCount)}), so a locator/assertion miss is not attributed to the test code without more evidence`
       );
     }
   }
@@ -326,18 +373,42 @@ export function assessCauses(
 }
 
 function dominantEnvironmentSignature(assessments: Iterable<CauseAssessment>, registry: SignatureRegistry): DominantSignature | undefined {
-  const bySignature = new Map<string, number>();
-  let total = 0;
+  // WHY failed and retry are split: a flaky test passed on retry, but its failing attempt still counts toward the
+  // signature's breadth. The banner must show both so it agrees with the summary line (which lists flaky separately).
+  const bySignature = new Map<string, { failed: number; retry: number }>();
+  let failedTotal = 0;
+  let retryTotal = 0;
   for (const a of assessments) {
-    total += 1;
-    if (a.signatureId) bySignature.set(a.signatureId, (bySignature.get(a.signatureId) ?? 0) + 1);
+    if (a.label === 'flaky') retryTotal += 1;
+    else failedTotal += 1;
+    if (a.signatureId) {
+      const c = bySignature.get(a.signatureId) ?? { failed: 0, retry: 0 };
+      if (a.label === 'flaky') c.retry += 1;
+      else c.failed += 1;
+      bySignature.set(a.signatureId, c);
+    }
   }
+  const total = failedTotal + retryTotal;
   let dominant: DominantSignature | undefined;
   for (const sig of registry.signatures) {
     if (sig.label !== 'environment-suspected') continue;
-    const count = bySignature.get(sig.id) ?? 0;
+    const split = bySignature.get(sig.id) ?? { failed: 0, retry: 0 };
+    const count = split.failed + split.retry;
     if (total > 0 && count >= sig.minTests && count / total >= DOMINANT_SHARE && (!dominant || count > dominant.count)) {
-      dominant = { signatureId: sig.id, title: sig.title, kiRef: sig.kiRef, count, total, confirmed: sig.confirmed, askKylasTeam: sig.confirmed ? sig.askKylasTeam : undefined };
+      dominant = {
+        signatureId: sig.id,
+        title: sig.title,
+        kiRef: sig.kiRef,
+        count,
+        total,
+        failedCount: split.failed,
+        retryCount: split.retry,
+        failedTotal,
+        retryTotal,
+        confirmed: sig.confirmed,
+        added: sig.added,
+        askKylasTeam: sig.confirmed ? sig.askKylasTeam : undefined,
+      };
     }
   }
   return dominant;
@@ -358,5 +429,5 @@ export function summarizeCauses(
     unclassified: 0,
   };
   for (const a of list) counts[a.label] += 1;
-  return { total: list.length, counts, dominant: dominantEnvironmentSignature(list, registry), incompleteRun: isIncompleteRun(shardCompleteness) };
+  return { total: list.length, failedTotal: list.length - counts.flaky, retryTotal: counts.flaky, counts, dominant: dominantEnvironmentSignature(list, registry), incompleteRun: isIncompleteRun(shardCompleteness) };
 }

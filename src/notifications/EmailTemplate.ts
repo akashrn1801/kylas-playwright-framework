@@ -16,7 +16,7 @@ import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
-import { CauseSummary, SuspectedCause } from './FailureClassifier';
+import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -368,13 +368,18 @@ ${body}
   private buildCauseBanner(summary: CauseSummary | undefined): string {
     const d = summary?.dominant;
     if (!d) return '';
+    // WHY dated and labelled: the observation is a one-off manual probe stored in the registry, not something this
+    // run measured, so a reader must not take it for a fresh result.
     const ask = d.askKylasTeam
-      ? `<div style="font-size:12px;color:${INK};margin-top:6px;"><strong>To ask the Kylas dev team:</strong> ${this.esc(d.askKylasTeam)}</div>`
+      ? `<div style="font-size:12px;color:${INK};margin-top:6px;"><strong>To ask the Kylas dev team:</strong> ${this.esc(d.askKylasTeam.question)}</div>
+  <div style="font-size:12px;color:${SLATE};margin-top:2px;">Observed on ${this.esc(d.askKylasTeam.observed)} (a one-off manual check, not measured by this run): ${this.esc(d.askKylasTeam.observation)}</div>`
       : '';
+    const split = splitText(d.failedCount, d.retryCount);
+
     return `
 <tr><td id="section-suspected-environment" style="background:#EEF1FF;padding:12px 28px;border-bottom:1px solid #C9D2F5;">
-  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failures share the signature “${this.esc(d.title)}” (see ${this.esc(d.kiRef)})</div>
-  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Failures that match are counted here whether they failed outright or passed on retry.</div>
+  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failures share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.esc(d.kiRef)}</div>
+  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal))}. A test that passed on retry (flaky) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.</div>
   ${ask}
 </td></tr>`;
   }
@@ -383,9 +388,14 @@ ${body}
     if (!summary || summary.total === 0) return '';
     const c = summary.counts;
     const note = summary.incompleteRun ? ' Run incomplete: counts cover only the shards that reported.' : '';
+    const failedPart =
+      summary.failedTotal > 0
+        ? `of the ${summary.failedTotal} that failed outright, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
+        : 'none failed outright';
+    const retryPart = summary.retryTotal > 0 ? `; ${summary.retryTotal} passed on retry (flaky)` : '';
     return `
 <tr><td id="section-failure-causes" style="padding:4px 28px 8px;">
-  <div style="font-size:12px;color:${SLATE};">Failures by suspected cause (hints, not verdicts): ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.flaky} flaky, ${c.unclassified} unclassified.${this.esc(note)}</div>
+  <div style="font-size:12px;color:${SLATE};">Suspected cause of the ${summary.total} failures (hints, not verdicts): ${failedPart}${retryPart}.${this.esc(note)}</div>
 </td></tr>`;
   }
 
