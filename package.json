@@ -33,6 +33,8 @@
     "update:doc-numbers": "ts-node scripts/update-doc-numbers.ts",
     "docs:refresh": "ts-node scripts/update-doc-numbers.ts",
     "check:docs": "ts-node scripts/check-docs.ts",
+    "check:public-safe": "ts-node scripts/check-public-safe.ts",
+    "check:failure-labels": "ts-node scripts/check-failure-labels.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
     "reset:field-config": "ts-node scripts/reset-field-config.ts",
     "format": "prettier --write .",

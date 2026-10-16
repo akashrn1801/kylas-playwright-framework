@@ -34,7 +34,7 @@ Contact the user to approve Task 1 access before re-invoking.
 
 1. **Navigate to the page** where the locator should work:
    ```
-   browser_navigate to app-qa.sling-dev.com/sales/leads (or the exact URL for this flow)
+   browser_navigate to <QA_APP_URL>/sales/leads (or the exact URL for this flow)
    ```
 
 2. **Load the correct storage state** for the environment (qa/staging/prod).
@@ -147,7 +147,7 @@ The new locator:
 - Follows the pattern established in similar modals (see ShareModal, ConfirmDialog)
 
 **Live verification:**
-- Page: app-qa.sling-dev.com/sales/deals/details/12345
+- Page: <QA_APP_URL>/sales/deals/details/12345
 - Accessibility snapshot: shows #editModal button.btn-primary correctly identified
 - Screenshot: [evidence path]
 ```
@@ -212,7 +212,7 @@ Save evidence to `.claude/evidence/self-healing-locator-scout/{YYYY-MM-DD}-{HHmm
 
 Report format (standard MCP template):
 ```
-**Environment tested:** app-qa.sling-dev.com
+**Environment tested:** <QA_APP_URL>
 **Module:** SomeModule.ts
 **Locator fixed:** saveButton()
 

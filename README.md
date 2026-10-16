@@ -3,7 +3,7 @@
 > **Purpose:** Human onboarding for the Kylas Sales CRM end-to-end test framework: what it is, how to set it up, run it and where everything else is documented.
 > **Read when:** You are new to the repo, setting up a machine, or looking for the right deeper document.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (strict). Tests are split into functional UI specs and RBAC specs (role-based access: a full-access admin user and a limited "restricted" user exercise the same feature). CI runs on GitHub Actions and Jenkins across a branch ladder, with a custom email summary and run-history ledger.
 
@@ -160,7 +160,7 @@ Then merge your feature branch into `sandbox` and push once (`bash scripts/sandb
 | [docs/known-issues/README.md](./docs/known-issues/README.md) | Resolved history by topic |
 | [docs/adr/](./docs/adr/) | Architecture decision records |
 | [docs/GLOSSARY.md](./docs/GLOSSARY.md) | Terms used across the docs |
-| [APPLICATION_BUGS.md](./APPLICATION_BUGS.md) | Confirmed Kylas product bugs (for the product team) |
+| Product-bug list | Confirmed Kylas product bugs are kept outside the repo (not tracked) |
 | [CHANGELOG.md](./CHANGELOG.md) | One line per significant change |
 | [.claude/AGENT_DELEGATION_GUIDE.md](./.claude/AGENT_DELEGATION_GUIDE.md) | Subagent routing and hooks |
 

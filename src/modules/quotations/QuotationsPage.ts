@@ -1244,7 +1244,7 @@ export class QuotationsPage extends BasePage {
   // intermittent condition" on that live evidence, matching the same
   // already-established precedent this codebase uses for Reports' Meeting-
   // report-creation 500 (`ReportsPage.attemptSaveOnceAndClassify()` /
-  // APPLICATION_BUGS.md #4: first-attempt 500, immediate retry succeeds
+  // docs/known-issues/reports-module.md: first-attempt 500, immediate retry succeeds
   // cleanly, no orphaned record left behind). This mirrors that exact
   // structure — a single-attempt classify helper, called once for the
   // primary attempt and, only on the confirmed narrow signature, once more

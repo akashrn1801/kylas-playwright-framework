@@ -3,7 +3,7 @@
 > **Purpose:** How this repo's CI is built — the four sharded GitHub workflows, the shard planner, the formFields carve-out and its sequencing, the other pipelines, required secrets, and timeouts.
 > **Read when:** Editing any `.github/workflows/*`, `Jenkinsfile*` or `scripts/plan-shards.ts`; judging whether "CI is green" actually covers your change; adding a shared-config test suite.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 2576128
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 All figures in tables below are generated (`npm run docs:refresh`), never hand-typed. If a number looks wrong, refresh; do not edit it.
 
@@ -148,7 +148,7 @@ GitHub Actions secrets (all via `secrets.*`; no `vars.*` are used):
 | Group | Names |
 |---|---|
 | Per environment `QA_`, `STAGING_`, `PROD_` | `<PREFIX>_APP_URL`, `<PREFIX>_API_BASE_URL`, `<PREFIX>_ADMIN_EMAIL`, `<PREFIX>_ADMIN_PASSWORD`, `<PREFIX>_RESTRICTED_EMAIL`, `<PREFIX>_RESTRICTED_PASSWORD` |
-| Notification | `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
+| Notification | `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`, `NOTIFY_CC`, `NOTIFY_FROM_NAME` (Jenkins: credential IDs of the same names, `Jenkinsfile` and `Jenkinsfile.sandbox` only) |
 | History ledger / checkout | `PIPELINE_TOKEN` (needs push access to `ci/reporting-history`; every workflow running `history:sync` also needs `permissions: contents: write`) |
 
 Jenkins binds the same names as credentials (`credentials('QA_ADMIN_EMAIL')`, etc.), plus `github-credentials` (username/password) for history sync. Only the active `ENV`'s variables are required at runtime (`config/config.ts` throws for missing ones of the active environment only). Optional runtime knobs: `ENV`, `WORKERS`, `RETRY_COUNT`, `NAVIGATION_TIMEOUT`, `EXPECT_TIMEOUT`, `DEFAULT_TIMEOUT`, `STALE_REPORT_THRESHOLD_HOURS`, `HISTORY_BRANCH_NAME`, `HISTORY_GIT_REMOTE`.

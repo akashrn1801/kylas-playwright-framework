@@ -83,7 +83,7 @@ For manual request:
 ### Blocking Issues (gates merge)
 - Line 42: No type annotation on `user` parameter; add `: User`
 - Line 58: Bare `throw` with no message; include context
-- Line 73: Hardcoded URL `app-qa.sling-dev.com`; use `requireEnv('QA_APP_URL')`
+- Line 73: Hardcoded URL `<QA_APP_URL>`; use `requireEnv('QA_APP_URL')`
 
 ### Advisory Issues
 - Line 15: Unused import `faker`; remove or add to setup
