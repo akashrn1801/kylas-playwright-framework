@@ -107,7 +107,7 @@ export type Config = typeof config;
 // codebase's own precedent for exactly this problem shape (see
 // src/utils/navigation.ts's safeWaitForURL() consolidation history).
 // WHY rewritten 2026-07-30 (a real CI run, 2026-07-29T11:45:35Z "CI — qa
-// (regression)", hit `https://api-qa.sling-dev.com/v/v1/users/login` — a
+// (regression)", hit `<QA_API_BASE_URL>/v/v1/users/login` — a
 // malformed, doubled path): the previous version only checked for the exact
 // suffix `/v1` via `endsWith('/v1')`. A configured `apiBaseUrl` ending in the
 // PARTIAL segment `/v` (not the full `/v1`) fails that check — `/v` !==

@@ -3,7 +3,7 @@
 > **Purpose:** One-line map of every document in this folder and when to open it.
 > **Read when:** You do not know which doc answers your question.
 > **Size budget:** 6k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 | Doc | Purpose | Read when |
 |---|---|---|
@@ -18,4 +18,4 @@
 | [adr/README.md](./adr/README.md) | Architecture decision records | Asking why something is built this way |
 | [GLOSSARY.md](./GLOSSARY.md) | Terms and abbreviations | A term is unfamiliar |
 
-Outside this folder: [../README.md](../README.md) (onboarding), [../CLAUDE.md](../CLAUDE.md) (router and rules), [../APPLICATION_BUGS.md](../APPLICATION_BUGS.md) (product bugs), [../CHANGELOG.md](../CHANGELOG.md), [../.claude/AGENT_DELEGATION_GUIDE.md](../.claude/AGENT_DELEGATION_GUIDE.md).
+Outside this folder: [../README.md](../README.md) (onboarding), [../CLAUDE.md](../CLAUDE.md) (router and rules), [../CHANGELOG.md](../CHANGELOG.md), [../.claude/AGENT_DELEGATION_GUIDE.md](../.claude/AGENT_DELEGATION_GUIDE.md).

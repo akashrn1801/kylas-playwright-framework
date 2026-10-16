@@ -50,7 +50,7 @@ tools:
 ## Report Format
 
 ```
-**Environment:** app-qa.sling-dev.com
+**Environment:** <QA_APP_URL>
 **Flow:** Create Lead form
 
 **Level A Violations (required fix):**

@@ -342,9 +342,24 @@ export class DashboardPage extends BasePage {
     logger.success('On Dashboard page');
   }
 
+  // WHY wrapped in withRateLimitRecovery() (2026-10-16, sandbox run
+  // 38855451748 shard 1/5, dashboard.rbac.spec.ts:25 DB17 attempt 1): the
+  // failure screenshot and page snapshot show the app's own "Whoa! Too many
+  // requests at once!" page where the dashboard should be, and the wait on
+  // `.dashboard-header h2` rode out the 120s test timeout ("Target page,
+  // context or browser has been closed") — the 429 recovery that 10 other call
+  // sites already use (click the app's own Refresh, then retry once) was never
+  // applied to the dashboard's first load. The wrapped waits fail after their
+  // own 60s bound, the recovery runs, and the retry still fits the 120s budget
+  // when the first wait passed (as it did here); it does NOT shorten the wait
+  // when the 429 page appears before the container does. Defensive hardening:
+  // the throttling is confirmed by the screenshot, why the app throttled then
+  // is not established. Only acts when the 429 / error-boundary page is up.
   async assertDashboardLoaded(): Promise<void> {
-    await this.waitForVisible(this.dashlitContainer(), config.timeouts.navigation);
-    await this.waitForVisible(this.dashboardHeaderTitle(), config.timeouts.navigation);
+    await this.withRateLimitRecovery(async () => {
+      await this.waitForVisible(this.dashlitContainer(), config.timeouts.navigation);
+      await this.waitForVisible(this.dashboardHeaderTitle(), config.timeouts.navigation);
+    });
   }
 
   // ──────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 > **Purpose:** The only file loaded into every session: standing rules, key commands, a "task → read this" table, and the Definition of Done. Everything else is read on demand.
 > **Read when:** always (it is auto-loaded). Keep it a router — detail belongs in `docs/`.
 > **Size budget:** 10k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Never push/merge — the user does all git.
 
@@ -20,7 +20,7 @@ Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). B
 | asking "has this broken before?" | [docs/known-issues/README.md](docs/known-issues/README.md) (topic index) |
 | asking "why was it built this way?" | [docs/adr/README.md](docs/adr/README.md) |
 | unsure what a term means | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
-| suspecting a real Kylas product bug | [APPLICATION_BUGS.md](APPLICATION_BUGS.md) |
+| suspecting a real Kylas product bug | kept outside the repo (not tracked; no link) |
 | delegating to a subagent (13 in `.claude/agents/`) | [.claude/AGENT_DELEGATION_GUIDE.md](.claude/AGENT_DELEGATION_GUIDE.md) |
 | onboarding a human / setup / git workflow | [README.md](README.md) |
 

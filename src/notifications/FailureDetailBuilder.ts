@@ -17,6 +17,7 @@ import { MiscError } from '../error-collector/ErrorCollector';
 import { RecurringIssue } from './RunHistory';
 import { KnownIssueCandidate, KnownIssueMatch, matchKnownIssue, extractStackMethodName } from './KnownIssuesIndex';
 import { redactSensitiveText } from './redact';
+import { CauseAssessment } from './FailureClassifier';
 
 // WHY 8: a fixed, documented constant rather than a buried magic number —
 // same convention as RunHistory.ts's SLOW_TEST_REGRESSION_THRESHOLD/
@@ -71,6 +72,9 @@ export interface FailureDetail {
   // coherent question for a test that already passed on retry this run.
   regressionStatus?: RegressionStatus;
   chronicRatio?: ChronicRatio;
+  // WHY optional and set AFTER enrichment (NotificationService): a hint for the reader (FailureClassifier.ts), never
+  // an input to anything that feeds the verdict, health score, counts or history.
+  cause?: CauseAssessment;
 }
 
 export interface EnrichedCluster extends FailureCluster {
@@ -106,7 +110,7 @@ const DIAGNOSTIC_HINTS: Record<FailureCategory, string> = {
   environment: 'A missing/invalid environment variable or configuration value — check this environment\'s .env / CI secrets before assuming the code itself is wrong.',
   infra: 'A 5xx from a dependency — often transient; check if it recurred on retry before treating this as a real regression (see errorFilters.ts\'s background-noise allowlist for known-transient dependencies).',
   console: 'A captured browser console error — check whether it correlates with this specific test\'s own assertions or is unrelated background noise.',
-  js: 'A client-side JS crash ("is not a function"/"Cannot read properties of undefined") — could be a genuine Kylas application bug (see APPLICATION_BUGS.md) rather than a test-code defect; classify before fixing (CLAUDE.md rule 10).',
+  js: 'A client-side JS crash ("is not a function"/"Cannot read properties of undefined") — could be a genuine Kylas application bug (see docs/known-issues/locators-and-timing.md) rather than a test-code defect; classify before fixing (CLAUDE.md rule 10).',
   unknown: 'No specific signal matched any known category — read the message/stack directly; this is an honest "not enough signal to classify," not a guess.',
 };
 

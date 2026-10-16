@@ -854,7 +854,7 @@ export class CallLogsPage extends BasePage {
       throw new Error(
         `Log a Call form did not open after 5 attempts — last error: ${String(lastError)}. ` +
           'If ErrorCollector recorded a concurrent PAGEERROR in openCallLogForm around this time, ' +
-          'this is likely a Kylas app-side race under concurrent multi-session access, not a test-code bug — see APPLICATION_BUGS.md.'
+          'this is likely a Kylas app-side race under concurrent multi-session access, not a test-code bug — see docs/known-issues/locators-and-timing.md.'
       );
     }
     logger.success('Log a Call form opened');

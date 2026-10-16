@@ -3,7 +3,7 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-14 @ cfd86f7
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
@@ -72,7 +72,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 
 ### Sandbox batch: CL39/CL32/CL33/D28/Quotations detail — 2026-08-09
 - **Symptom:** Five failures in a `--workers=2` run.
-- **Root cause:** CL39 two `generateCallLogData()` calls without pinned `entityType` could yield a nonexistent `callType` and the option click had no timeout; D28 `DealsPage.cloneDeal()` never verified it saw the Clone modal (`#editEntityModal` is shared); `QuotationsPage.waitForListReady()` never checked readiness and `openCreateForm()`'s click was unbounded; CL32/CL33 are the app-side JS race in `openCallLogForm` — `CallLogsPage.openLogACallForm()` exhausts its 5 attempts when the app throws `Cannot read properties of undefined (reading 'content')` under concurrent sessions (see [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md) entry 1); CL18 general load.
+- **Root cause:** CL39 two `generateCallLogData()` calls without pinned `entityType` could yield a nonexistent `callType` and the option click had no timeout; D28 `DealsPage.cloneDeal()` never verified it saw the Clone modal (`#editEntityModal` is shared); `QuotationsPage.waitForListReady()` never checked readiness and `openCreateForm()`'s click was unbounded; CL32/CL33 are the app-side JS race in `openCallLogForm` — `CallLogsPage.openLogACallForm()` exhausts its 5 attempts when the app throws `Cannot read properties of undefined (reading 'content')` under concurrent sessions (real Kylas bug, tracked outside this repo); CL18 general load.
 - **Fix:** pin `entityType`, bound option clicks; check `.modal-title`, widen Name pre-fill wait 10s→20s (also `TasksPage.cloneTaskViaEllipsis()`); race list container vs create button, route click through bounded `this.click()`, bound `fillOwner()` (3 attempts); log the real caught error and URL on every `CallLogsPage.openLogACallForm()` retry; reload-and-retry on `CallLogsPage.clickEditButton()`.
 - **Revert:** revert per-method.
 - **Commit:** unknown — see `git log --grep=CL39`.
@@ -100,7 +100,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 
 ### Sandbox Build #147 fixes — 2026-08-25
 - **Symptom:** R36/R64 report-count tests and COR7 flaked; Meeting reports failed first Save.
-- **Root cause:** `LeadsPage.deleteLead()` lacked network confirmation; coarse ±1-day report window not scoped to the entity; `CompaniesPage.saveEditedCompany()` lacked network confirmation; backend `HTTP 500`/`code: "01403004"` on the first Meeting-report Save (see [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md)).
+- **Root cause:** `LeadsPage.deleteLead()` lacked network confirmation; coarse ±1-day report window not scoped to the entity; `CompaniesPage.saveEditedCompany()` lacked network confirmation; backend `HTTP 500`/`code: "01403004"` on the first Meeting-report Save (real Kylas bug, tracked outside this repo).
 - **Fix:** mirror `deleteDeal()` confirmation; `verifyRunCountForEntity()` optional `filters?` with a unique tag; no-data header race in `getReportTotalFromHeader()`; bounded 2-attempt retry on that exact 500; `saveEditedCompany()` confirmation (verified 22/22 under `--workers=2`).
 - **Revert:** revert per-method.
 - **Commit:** `73fe067`.

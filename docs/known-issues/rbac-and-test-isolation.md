@@ -3,9 +3,9 @@
 > **Purpose:** Resolved RBAC test-isolation bugs, retracted app-bug claims, Lead lookup-field fixes, and durable per-module Hide-Empty-Fields behavior.
 > **Read when:** writing an RBAC test, suspecting an "app bug" in permissions/sharing, or touching Hide Empty Fields tests.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-14 @ cfd86f7
 
-Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22). Real product bugs: [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md). Rules: [../PATTERNS.md](../PATTERNS.md).
+Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22). Real product bugs are tracked outside this repo. Rules: [../PATTERNS.md](../PATTERNS.md).
 
 ### CR9 false conclusion from a reused record — 2026-07
 - **Symptom:** An RBAC test concluded a permission leak.
