@@ -43,10 +43,14 @@ test.describe('Leads', () => {
     const leadsPage = new LeadsPage(adminPage);
     const leadData = generateLeadData();
     await leadsPage.goToLeadsList();
-    await leadsPage.createLead(leadData);
+    const leadId = await leadsPage.createLead(leadData);
+    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
     const updatedData = generateLeadData();
-    await leadsPage.updateLead(updatedData, leadData.firstName);
-    await leadsPage.assertLeadUpdated(updatedData);
+    // WHY: ID-first — open and verify the lead by its captured ID, not by a first-name list
+    // search + row click. On QA (run 38936405639, both attempts) the by-name path found the
+    // row but the row click never reached /leads/details/ within 20s.
+    await leadsPage.updateLead(updatedData, leadData.firstName, leadId ?? undefined);
+    await leadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('L3 passed');
   });
 
