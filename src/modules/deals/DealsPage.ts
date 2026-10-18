@@ -213,6 +213,17 @@ export class DealsPage extends BasePage {
   private readonly modalCancelButton = (): Locator =>
     this.page.locator('button[data-dismiss="modal"]').first();
 
+  // WHY the header close (X) button, not the footer "Cancel" (live DOM dump, staging
+  // 2026-10-18, restricted AND admin identical): the Clone Deal footer Cancel is
+  // `<span class="btn btn-outline-primary cursor-pointer">Cancel</span>` inside
+  // `div.form-buttons` — not a <button>, so getByRole('button', {name: 'Cancel'}) can never
+  // match it (stage run 39051544788 and 3 earlier runs timed out on exactly that). The
+  // header X is `<button type="button" data-dismiss="modal" aria-label="Close" class="close">`,
+  // the same attribute Leads/Companies close on. Scoped to #editEntityModal, unlike
+  // modalCancelButton above, so it cannot hit another modal's X.
+  private readonly cloneModalCloseButton = (): Locator =>
+    this.editModal().locator('button[data-dismiss="modal"]').first();
+
   // ── Deal details page locators ────────────────────────────
 
   private readonly dealActualValueEl = (): Locator =>
@@ -2097,6 +2108,34 @@ export class DealsPage extends BasePage {
   // `captureDealIdFromResponse()` (a discrete network event), the caller's
   // ID-difference check, and `assertClonedDealName()` reading the persisted
   // name off the clone's own separately-loaded detail page.
+  // Closes a Clone Deal modal that opened but never pre-filled, so the next attempt can
+  // reopen it. Every wait is bounded and every failure names the step (never swallowed).
+  // History: Escape did not close it (QA run 37733648349, trace + screenshot), and a role
+  // locator for the footer Cancel never matched (stage run 39051544788) — see
+  // cloneModalCloseButton.
+  private async closeStaleCloneModal(): Promise<void> {
+    const modal = this.editModal();
+    if (!(await modal.isVisible())) {
+      logger.warn('Clone modal was already closed before the close step — nothing to close, reopening');
+      return;
+    }
+    logger.info('Closing the stale Clone Deal modal via its header close (X) button');
+    try {
+      await this.cloneModalCloseButton().click({ timeout: 5000 });
+    } catch (error) {
+      throw new Error(
+        `cloneDeal: could not click the Clone Deal modal's close (X) button within 5s — ${(error as Error).message}`
+      );
+    }
+    try {
+      await modal.waitFor({ state: 'hidden', timeout: 10000 });
+    } catch (error) {
+      throw new Error(
+        `cloneDeal: Clone Deal modal did not close within 10s after clicking its close (X) button — ${(error as Error).message}`
+      );
+    }
+  }
+
   async cloneDeal(): Promise<number | null> {
     logger.info('Cloning deal via ellipsis menu');
     const cloneT0 = Date.now();
@@ -2143,16 +2182,7 @@ export class DealsPage extends BasePage {
       logger.warn(
         `Clone modal Name field did not show "Copy" within 20s on attempt ${attempt}/${maxAttempts} — closing and reopening for a fresh render attempt before falling back to Save-anyway`
       );
-      // WHY Cancel, not Escape, and no swallowed wait (QA run 37733648349 shard 3/5,
-      // deals.spec.ts:362, trace): Escape did NOT close the Clone modal — the
-      // old `waitFor('hidden').catch(() => null)` timed out after 10.04s and
-      // was swallowed, the modal stayed open (failure screenshot), and attempt 2's
-      // ellipsis click then waited behind its backdrop until the 480s test timeout.
-      await this.click(
-        this.editModal().getByRole('button', { name: 'Cancel', exact: true }),
-        'clone modal: Cancel (close before reopening)'
-      );
-      await this.editModal().waitFor({ state: 'hidden', timeout: 10000 });
+      await this.closeStaleCloneModal();
     }
     if (!namePrefilled) {
       // WHY still proceed rather than throw (this is the one remaining
