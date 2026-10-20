@@ -3,7 +3,7 @@
 > **Purpose:** How the framework is built — layers, fixtures, auth, recovery combinators, locking, sharding and CI flow. The single place to learn the shape of the system before changing it.
 > **Read when:** Touching `src/core`, `src/fixtures`, `src/auth`, the error collector, a lock, or a CI workflow; or onboarding to a module you have not worked in.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-20 @ 813e1b9
 
 Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident history in [known-issues/](./known-issues/session-expiry-and-auth.md); CI detail in [CI_PIPELINES.md](./CI_PIPELINES.md). Terms: [GLOSSARY.md](./GLOSSARY.md).
 
@@ -235,6 +235,7 @@ Per-pipeline triggers, scopes and worker counts (generated, never hand-typed):
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |
 | `staging-promotion-gate.yml` | manual | full suite / selective | — | no |
