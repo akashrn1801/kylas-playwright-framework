@@ -1,0 +1,80 @@
+name: Runner image canary
+
+# Weekly check of which (Playwright version, runner image) pairs can install the
+# browsers. A locked Playwright never gains OS support, so the 26.04 and latest
+# rows also try the newest @playwright/test (npm install --no-save: the repo's
+# package.json and lockfile are never changed). It never changes what the
+# pipelines run on: that is the repository variable RUNNER_IMAGE (default
+# ubuntu-24.04), see docs/CI_PIPELINES.md.
+# No secrets, no tests, no writes, no QA/staging/prod access. Only the
+# ubuntu-24.04 + locked job failing is an alarm; the others are information.
+# Scheduled and dispatched workflows run from the default branch (dev).
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monday 05:17 UTC: off the top of the hour (GitHub delays on-the-hour cron
+    # runs under load) and before the working day, so a red 24.04 is seen first thing.
+    - cron: '17 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: canary (${{ matrix.os }}, Playwright ${{ matrix.playwright }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, playwright: locked, alarm: true }
+          - { os: ubuntu-26.04, playwright: locked, alarm: false }
+          - { os: ubuntu-26.04, playwright: latest, alarm: false }
+          - { os: ubuntu-latest, playwright: latest, alarm: false }
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Use the newest Playwright (not saved)
+        if: matrix.playwright == 'latest'
+        run: npm install --no-save @playwright/test@latest
+
+      - name: Runner image
+        run: |
+          echo "requested label: ${{ matrix.os }}"
+          grep PRETTY_NAME /etc/os-release
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+
+      - name: Install Playwright browsers
+        id: install
+        timeout-minutes: 10
+        continue-on-error: true
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      - name: Verdict
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          IS_ALARM: ${{ matrix.alarm }}
+        run: |
+          pw=$(npx --no-install playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          os=$(. /etc/os-release && echo "$PRETTY_NAME")
+          where="${{ matrix.os }} ($os, image ${ImageVersion:-unknown}, ${{ matrix.playwright }} version)"
+          if [ "$INSTALL_OUTCOME" = "success" ]; then
+            echo "VERDICT Playwright $pw supported on $where"
+          else
+            echo "VERDICT Playwright $pw NOT supported on $where"
+            if [ "$IS_ALARM" = "true" ]; then
+              echo "::error title=ubuntu-24.04 canary failed::the pinned image no longer installs the locked Playwright $pw - every pipeline is at risk"
+              exit 1
+            fi
+            echo "::warning title=Informational::Playwright $pw does not install on ${{ matrix.os }} (not an alarm; job stays green)"
+          fi
