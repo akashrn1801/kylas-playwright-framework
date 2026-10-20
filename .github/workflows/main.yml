@@ -77,7 +77,8 @@ concurrency:
 jobs:
   plan:
     name: compute shard plan
-    runs-on: ubuntu-latest
+    # pinned via repo variable RUNNER_IMAGE (default ubuntu-24.04): Playwright 1.60 does not support ubuntu 26.04; ubuntu-latest moves to 26.04 between 2026-10-19 and 2026-11-19; see docs/CI_PIPELINES.md
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 15
     outputs:
       shard_total: ${{ steps.compute.outputs.shard_total }}
@@ -132,7 +133,7 @@ jobs:
     name: playwright-ci (shard ${{ matrix.shard.shardId }}/${{ needs.plan.outputs.shard_total }})
     needs: plan
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-09): each shard now runs ~125 tests (~90 min
     # targeted), so 180 gives real margin while still failing a genuinely
     # stuck/hung shard in 3h instead of silently consuming the full 6h
@@ -290,7 +291,7 @@ jobs:
     needs: [run-tests]
     if: ${{ !cancelled() }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -404,7 +405,7 @@ jobs:
     # merge-and-report), so the approval gate stays in front of this prod write as
     # well. UNVERIFIED statically: whether one approval covers all jobs of a run or
     # this job waits for its own (docs/adr/0009-field-config-reset-and-account-lock.md).
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 35
     continue-on-error: true
     steps:
@@ -471,7 +472,7 @@ jobs:
     needs: [plan, run-tests, run-formfields-tests, reset-field-config]
     if: always()
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: write
