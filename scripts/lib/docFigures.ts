@@ -139,6 +139,7 @@ function workflowTrigger(text: string): string {
   const push = onBlock.match(/push:\s*\n\s*branches:\s*\[([^\]]+)\]/);
   if (push) parts.push(`push → ${push[1].trim()}`);
   if (/workflow_dispatch:/.test(onBlock)) parts.push('manual');
+  if (/^\s+schedule:/m.test(onBlock)) parts.push('schedule');
   return parts.join(' + ') || 'n/a';
 }
 
@@ -149,7 +150,7 @@ function workflowMatrix(): string {
     const text = fs.readFileSync(path.join(wfDir, f), 'utf-8');
     const inv = playwrightInvocations(text);
     rows.push(
-      `| \`${f}\` | ${workflowTrigger(text)} | ${inv.grep.join(', ') || 'full suite / selective'} | ${inv.workers.join(', ') || '—'} | ${/plan-shards\.ts/.test(text) ? 'yes' : 'no'} |`
+      `| \`${f}\` | ${workflowTrigger(text)} | ${inv.grep.join(', ') || (/playwright test/.test(text) ? 'full suite / selective' : 'no tests')} | ${inv.workers.join(', ') || '—'} | ${/plan-shards\.ts/.test(text) ? 'yes' : 'no'} |`
     );
   }
   for (const f of fs.readdirSync(REPO_ROOT).filter((n) => /^Jenkinsfile/.test(n)).sort()) {
