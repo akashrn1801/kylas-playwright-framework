@@ -85,7 +85,8 @@ concurrency:
 jobs:
   detect:
     name: detect target + shard plan
-    runs-on: ubuntu-latest
+    # pinned via repo variable RUNNER_IMAGE (default ubuntu-24.04): Playwright 1.60 does not support ubuntu 26.04; ubuntu-latest moves to 26.04 between 2026-10-19 and 2026-11-19; see docs/CI_PIPELINES.md
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     outputs:
       target: ${{ steps.decide.outputs.target }}
       shard_total: ${{ steps.decide.outputs.shard_total }}
@@ -345,7 +346,7 @@ jobs:
     # found" failure cannot happen. Skipped (not failed) lets
     # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
     if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
     # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
@@ -527,7 +528,7 @@ jobs:
     # formFields run.
     needs: [detect, run-tests]
     if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -640,7 +641,7 @@ jobs:
     name: reset dedicated form-field limits
     needs: [detect, run-tests, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 35
     continue-on-error: true
     steps:
@@ -702,7 +703,7 @@ jobs:
     name: merge report + notify
     needs: [detect, run-tests, run-formfields-tests, reset-field-config]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: write

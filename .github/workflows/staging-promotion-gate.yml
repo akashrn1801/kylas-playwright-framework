@@ -24,7 +24,8 @@ on:
 jobs:
   test-staging:
     name: Run Staging Tests
-    runs-on: ubuntu-latest
+    # pinned via repo variable RUNNER_IMAGE (default ubuntu-24.04): Playwright 1.60 does not support ubuntu 26.04; ubuntu-latest moves to 26.04 between 2026-10-19 and 2026-11-19; see docs/CI_PIPELINES.md
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     permissions:
       contents: write
     steps:
@@ -107,7 +108,7 @@ jobs:
   approve-prod:
     name: Approval Gate — Prod
     needs: test-staging
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     environment: production-approval
     steps:
       - name: Approved for Prod
@@ -116,7 +117,7 @@ jobs:
   promote-to-prod:
     name: Promote to Prod
     needs: approve-prod
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     permissions:
       contents: write
     steps:
