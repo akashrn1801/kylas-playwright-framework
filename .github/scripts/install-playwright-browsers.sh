@@ -38,6 +38,14 @@
 # old "~9.25 min" figure ignored that grace; 3 x (180 + 15) + backoff would
 # have touched 10 min.
 #
+# Unsupported runner OS (2026-10-20, main run 39456246717): on ubuntu 26.04
+# Playwright 1.60.0 prints "Cannot install dependencies for ubuntu26.04-x64 ...
+# Error: Playwright does not support chromium on ubuntu26.04-x64" and exits
+# non-zero within seconds. That is deterministic, so the script stops after the
+# first such failure instead of burning all attempts. Only a FAILED attempt is
+# inspected: "BEWARE: your OS is not officially supported" alone is a warning
+# that also prints on installs that go on to succeed, so it is not a trigger.
+#
 # apt-level timeouts: with --with-deps, a 20 s per-connection stall timeout and
 # 2 retries are written to /etc/apt/apt.conf.d/99-ci-timeouts. That catches a
 # stalled mirror connection but NOT every kind of hang (the cause of the
@@ -53,6 +61,9 @@ BACKOFF_BASE_SECONDS="${BACKOFF_BASE_SECONDS:-5}"
 TOTAL_BUDGET_SECONDS="${TOTAL_BUDGET_SECONDS:-570}"
 KILL_GRACE_SECONDS=15
 MIN_ATTEMPT_SECONDS="${MIN_ATTEMPT_SECONDS:-30}"
+VERSION_CMD="${VERSION_CMD:-npx --no-install playwright --version}"
+ATTEMPT_LOG=$(mktemp)
+trap 'rm -f "$ATTEMPT_LOG"' EXIT
 REAP_APT="${REAP_APT:-auto}"
 
 # Terminate any apt-get still running after a timed-out attempt. Logs what it
@@ -77,6 +88,24 @@ reap_leftover_apt() {
   fi
 }
 
+# True when the attempt log shows Playwright refusing this OS (deterministic).
+unsupported_os_in_log() {
+  grep -qE 'does not support [a-z-]+ on |Cannot install dependencies for [^ ]+ with Playwright' "$ATTEMPT_LOG"
+}
+
+# Print the final "unsupported OS" error and exit non-zero.
+fail_unsupported_os() {
+  local os pw
+  os=$(grep -oE 'does not support [a-z-]+ on [^ ]+' "$ATTEMPT_LOG" | head -1 | sed 's/.* on //')
+  [ -n "$os" ] || os=$(grep -oE 'dependencies for [^ ]+' "$ATTEMPT_LOG" | head -1 | sed 's/.* for //')
+  # shellcheck disable=SC1091
+  [ -n "$os" ] || os=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")
+  # shellcheck disable=SC2086 # VERSION_CMD is intentionally word-split
+  pw=$($VERSION_CMD 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  echo "::error title=Playwright does not support this runner OS::Playwright ${pw:-<unknown version>} does not support this runner OS (${os}): a re-run will not help. Pin runs-on to a supported image (see docs/RUNBOOK.md) or upgrade Playwright."
+  exit 1
+}
+
 FLAGS="$*"
 if [[ " $FLAGS " == *" --with-deps "* ]]; then
   if printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\nDPkg::Lock::Timeout "60";\n' \
@@ -99,12 +128,21 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     break
   fi
   echo "Playwright browser install: attempt $attempt/$MAX_ATTEMPTS (limit ${limit}s)"
+  : >"$ATTEMPT_LOG"
+  # Process substitution (not a pipe): a leftover child holding the pipe open
+  # after a timeout must not stall the script behind `tee`.
   # shellcheck disable=SC2086 # INSTALL_CMD and FLAGS are intentionally word-split
-  timeout -k "$KILL_GRACE_SECONDS" "$limit" $INSTALL_CMD $FLAGS
+  timeout -k "$KILL_GRACE_SECONDS" "$limit" $INSTALL_CMD $FLAGS > >(tee "$ATTEMPT_LOG") 2>&1
   rc=$?
   if [ "$rc" -eq 0 ]; then
     echo "Playwright browser install succeeded on attempt $attempt"
     exit 0
+  fi
+  if [ "$rc" -ne 124 ] && [ "$rc" -ne 137 ]; then
+    sleep 1 # let the tee in the process substitution flush the attempt's last lines
+    if unsupported_os_in_log; then
+      fail_unsupported_os
+    fi
   fi
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
     echo "::warning::Playwright browser install attempt $attempt/$MAX_ATTEMPTS timed out after ${limit}s (exit $rc)"

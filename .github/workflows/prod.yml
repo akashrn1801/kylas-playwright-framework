@@ -30,7 +30,8 @@ jobs:
   run-tests:
     name: playwright-ci
     environment: production
-    runs-on: ubuntu-latest
+    # pinned via repo variable RUNNER_IMAGE (default ubuntu-24.04): Playwright 1.60 does not support ubuntu 26.04; ubuntu-latest moves to 26.04 between 2026-10-19 and 2026-11-19; see docs/CI_PIPELINES.md
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     permissions:
       contents: write
     steps:

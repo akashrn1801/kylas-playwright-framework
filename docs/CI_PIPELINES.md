@@ -3,7 +3,7 @@
 > **Purpose:** How this repo's CI is built — the four sharded GitHub workflows, the shard planner, the formFields carve-out and its sequencing, the other pipelines, required secrets, and timeouts.
 > **Read when:** Editing any `.github/workflows/*`, `Jenkinsfile*` or `scripts/plan-shards.ts`; judging whether "CI is green" actually covers your change; adding a shared-config test suite.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-20 @ 813e1b9
 
 All figures in tables below are generated (`npm run docs:refresh`), never hand-typed. If a number looks wrong, refresh; do not edit it.
 
@@ -26,6 +26,7 @@ All figures in tables below are generated (`npm run docs:refresh`), never hand-t
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |
 | `staging-promotion-gate.yml` | manual | full suite / selective | — | no |
@@ -84,6 +85,8 @@ flowchart LR
 - **Concurrency groups** (`cancel-in-progress: false`): `kylas-qa` (`qa.yml`), `kylas-staging` (`stage.yml`, `sandbox.yml`), `kylas-prod` (`main.yml`, `prod.yml`). `dev.yml`, Jenkins jobs and `staging-promotion-gate.yml` are not in any group.
 - **Open (not facts, [KI-34](./KNOWN_ISSUES_ACTIVE.md)):** whether job-level `continue-on-error` protects the run conclusion on a job timeout; whether an approval-waiting run holds its group; whether `main.yml` needs a separate approval for the reset job (then `merge-and-report` waits); `always()` after force-cancel; a pending `stage` run can be displaced by a `sandbox` push. Timeouts 25/35 min are guesses; `merge-and-report` now waits up to that long.
 - **Browser install is bounded** (all workflows with the step): `bash .github/scripts/install-playwright-browsers.sh --with-deps` under a step `timeout-minutes: 10`: 3 attempts x 180 s (clamped to a 570 s total budget), 5/10 s backoff, apt connection timeouts, leftover apt-get reaped after a timeout, 60 s dpkg lock wait; all attempts failing fails the job with an error annotation. Values come from measured healthy installs (24-129 s). See the 2026-10-07 entry in [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Runner image is a repository variable** (all 25 jobs in the 7 workflows): `runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}`. The fallback keeps the 24.04 pin if the variable is missing or empty; nothing moves to a newer image by itself. **Changing `RUNNER_IMAGE` moves every pipeline at once, `prod.yml` and `main.yml` included.** Why: `ubuntu-latest` migrates to Ubuntu 26.04 between 2026-10-19 and 2026-11-19 (GitHub changelog 2026-09-17) and Playwright 1.60 fails there (`does not support chromium on ubuntu26.04-x64`, main run 39456246717). Set it with `gh variable set RUNNER_IMAGE --body ubuntu-24.04`; roll back by setting it back, no commit. **Removal / move condition:** Playwright supports 26.04 and the pipeline has passed one sandbox run on `ubuntu-26.04`.
+- **Runner image canary** (`runner-image-canary.yml`): `workflow_dispatch` plus Mondays 05:17 UTC; installs the browsers for four (Playwright, image) pairs: `ubuntu-24.04` + locked, `ubuntu-26.04` + locked, `ubuntu-26.04` + newest, `ubuntu-latest` + newest (newest via `npm install --no-save`, repo files unchanged; no secrets, no tests, no writes) and prints a `VERDICT Playwright <version> supported/NOT supported on <os>` line per pair. Only 24.04 + locked red is an alarm; the other pairs end green with a warning annotation and the VERDICT line. Scheduled workflows run from the default branch (`dev`). The install script stops after the first unsupported-OS failure (a re-run cannot help).
 - **Shard completeness** (`merge-and-report` in qa, stage, main, sandbox): `.github/scripts/verify-shard-completeness.sh <env> <core shards> <formFields shards>` counts downloaded blob zips against expected (core + the formFields entities that ran; sandbox: the selected count, qa/stage/main: 6), writes `reports/<env>/shard-completeness.json` and annotates. It always exits 0 so merge/history/notify/reset still run (a failing step would skip the merge and leave only a "report not available" email); the email and history react to the JSON instead ([REPORTING.md](./REPORTING.md)).
 - Every shard uploads `blob-report-*`, `misc-errors-*` and `playwright-test-results-*` artifacts; the merged report is `playwright-report-<env>`.
 
