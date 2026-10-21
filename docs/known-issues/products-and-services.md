@@ -3,7 +3,7 @@
 > **Purpose:** Durable facts, deliberate deviations and resolved incidents for the Products & Services (P&S) module.
 > **Read when:** touching `ProductsAndServicesPage.ts`, P&S fixtures, product-row pickers on Deals/Quotations, or the Units / description / date-picker helpers.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-21 @ 3959d7f
 
 Open P&S items (JWT lifetime, `assertQuotationInList()` false-positive, duplicated date pickers) are tracked in [KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-16, KI-23, KI-24). Module-agnostic rules are in [PATTERNS.md](../PATTERNS.md).
 
@@ -96,3 +96,8 @@ Do not "normalize" these back to the standard shape.
 - **Status:** low priority; real but only affects local runs (CI never uses a line filter, so qa 37897275025 / stage 37897319452 could not show it). Not fixed.
 - **Evidence:** `npx playwright test tests/rbac/productsAndServices.rbac.spec.ts:161` logged "Product fixtures: SKIPPED — file filters [...:161] match none of 16 fixture-needing specs", so the test failed with "no fixture file found"; the same spec with `-g` created the fixtures.
 - **If it matters:** strip `:LINE` from file filters in `src/auth/productFixtureNeed.ts`. Workaround: use `-g` or run the whole file.
+
+### WATCH — PUT /products/{id} returns HTTP 500 `00903002` on prod — 2026-10-21
+- **Status:** backend response, test must keep failing; classifier entry `products-put-500-00903002` (label only, KI number pending).
+- **Evidence:** main run 39534804354 (kylas-prod): `PUT /products/{id}` -> 500 `00903002` "Something went wrong" for 512133, 512136, 512140, 512141 and 512152 to 512170 (shards 2, 4 and the P&S formFields job); `GET /products/has-duplicates?fieldName=hsnSacCode&id=512133` also 500. The same edits passed on staging. Run 123 (7 Oct) product failures were a different cause (`cfTextField` 3 - 6 limit), not this code.
+- **Message:** a failed save now reads `Backend rejected the save: PUT /v1/products/{id} -> 500 00903002` before the form text (`BasePage.assertNoFormErrors`, `src/utils/failedWriteTracker.ts`).

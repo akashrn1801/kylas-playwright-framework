@@ -1533,7 +1533,21 @@ export class CallLogsPage extends BasePage {
   async saveEditedCallLog(): Promise<void> {
     logger.info('Saving edited call log');
     await this.saveButton().scrollIntoViewIfNeeded();
+    // WHY wait for the save response (main run 39534804354, call-logs.rbac:174,
+    // flaky on staging/qa too): "Call log updated" was logged ~2 s after the
+    // click with no wait for the save to finish, and the detail panel's
+    // #outcomeLabel was then read still showing the pre-save "Connected".
+    // assertNoFormErrors() only polls the DOM; the heading below is already
+    // visible under the edit form. Waiting on the write itself is the signal.
+    const saveResponse = this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        /\/v1\/call-logs\/\d+(?:\?.*)?$/.test(res.url()) &&
+        ['PUT', 'PATCH'].includes(res.request().method()),
+      'saveEditedCallLog: call log save',
+      20000
+    );
     await this.click(this.saveButton(), 'Save button');
+    await saveResponse;
     await this.assertNoFormErrors('call log edit form');
     await this.detailEntityHeading().waitFor({ state: 'visible', timeout: 15000 });
     logger.success('Call log updated');

@@ -317,6 +317,26 @@ function main(): void {
   check(labelOf(build([rep500('01403004')]), 'report 01403004').label === 'application-bug-suspected', 'HTTP 500 01403004 on POST /v3/reports: application-bug-suspected');
   check(labelOf(build([rep500('09999999')]), 'report 09999999').label === 'unclassified', 'HTTP 500 with an unknown code: unclassified');
 
+  // PUT /products/{id} 500 00903002 (main run 39534804354): breadth 2 tests / 1 module, exact method + path + code.
+  const prod500 = (n: number, over: Partial<MiscError> = {}): Spec[] =>
+    Array.from({ length: n }, (_, i) => ({ file: 'tests/rbac/productsAndServices.rbac.spec.ts', title: `product edit ${i}`, status: 'failed' as const, error: 'Error: Backend rejected the save: PUT /v1/products/{id} -> 500 00903002', misc: [{ statusCode: 500, apiErrorCode: '00903002', method: 'PUT', url: `https://api.example.invalid/v1/products/51213${i}`, ...over }] }));
+  check(labelOf(build(prod500(2)), 'product edit 0').signatureId === 'products-put-500-00903002', 'PUT /products/{id} 500 00903002 in 2 tests: labelled products-put-500-00903002');
+  check(labelOf(build(prod500(2)), 'product edit 0').label === 'application-bug-suspected', 'PUT /products/{id} 500 00903002: application-bug-suspected');
+  check(labelOf(build(prod500(1)), 'product edit 0').label === 'unclassified', 'one test with PUT /products/{id} 500 00903002: unclassified (needs 2)');
+  check(labelOf(build(prod500(2, { apiErrorCode: '00903003' })), 'product edit 0').label === 'unclassified', 'PUT /products/{id} 500 with another code: unclassified');
+  check(labelOf(build(prod500(2, { method: 'POST', url: 'https://api.example.invalid/v1/products/' })), 'product edit 0').label === 'unclassified', 'POST /products/ 500 00903002 (wrong method and path): unclassified');
+  check(labelOf(build(prod500(2, { statusCode: 403 })), 'product edit 0').label === 'unclassified', 'PUT /products/{id} 403 00903002 (RBAC denial): unclassified');
+
+  // POST /contacts/ 400 000000 with empty errorDetails (main run 39470566009): 000000 is generic, so body shape + breadth 5 tests / 2 modules.
+  const contact400 = (n: number, over: Partial<MiscError> = {}, modules: string[] = ['contacts', 'companies']): Spec[] =>
+    Array.from({ length: n }, (_, i) => ({ file: `tests/ui/${modules[i % modules.length]}/x.spec.ts`, title: `contact create ${i}`, status: 'failed' as const, error: 'Error: Backend rejected the save: POST /v1/contacts/ -> 400 000000', misc: [{ statusCode: 400, apiErrorCode: '000000', method: 'POST', url: 'https://api.example.invalid/v1/contacts/', responseBody: '{"code":"000000","message":"Something did not work as expected","errorDetails":null}', ...over }] }));
+  check(labelOf(build(contact400(5)), 'contact create 0').signatureId === 'contacts-post-400-000000-empty', 'POST /contacts/ 400 000000, empty errorDetails, 5 tests in 2 modules: labelled');
+  check(labelOf(build(contact400(4)), 'contact create 0').label === 'unclassified', 'POST /contacts/ 400 000000 in 4 tests: unclassified (needs 5)');
+  check(labelOf(build(contact400(6, {}, ['contacts'])), 'contact create 0').label === 'unclassified', 'POST /contacts/ 400 000000 in ONE module: unclassified (needs 2)');
+  check(labelOf(build(contact400(5, { responseBody: '{"code":"000000","errorDetails":[{"field":"email"}]}' })), 'contact create 0').label === 'unclassified', 'POST /contacts/ 400 000000 WITH errorDetails (a real validation error): unclassified');
+  check(labelOf(build(contact400(5, { url: 'https://api.example.invalid/v1/leads/' })), 'contact create 0').label === 'unclassified', 'POST /leads/ 400 000000 (other module): unclassified');
+  check(labelOf(build(contact400(5, { apiErrorCode: '029003' })), 'contact create 0').label === 'unclassified', 'POST /contacts/ 400 with another code: unclassified');
+
   const gw = (n: number): Spec[] => Array.from({ length: n }, (_, i) => ({ file: `tests/ui/${['deals', 'leads', 'tasks'][i % 3]}/x.spec.ts`, title: `gw ${i}`, status: 'failed' as const, error: 'Error: Request failed', misc: [{ statusCode: 502, url: 'https://api.example.invalid/v1/leads' }] }));
   check(build(gw(4)).summary.counts['environment-suspected'] === 4, '502s across modules: environment-suspected');
   check(build(gw(1)).summary.counts['environment-suspected'] === 0, 'one stray 502: unclassified');
