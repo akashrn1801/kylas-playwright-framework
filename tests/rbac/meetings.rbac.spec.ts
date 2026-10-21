@@ -1,5 +1,11 @@
 import { test, expect } from '../../src/fixtures/index';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
+import { DealsPage } from '../../src/modules/deals/DealsPage';
+import { ContactsPage } from '../../src/modules/contacts/ContactsPage';
+import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
+import { generateCompanyData } from '../../src/data/factories/companyFactory';
+import { generateContactData } from '../../src/data/factories/contactFactory';
+import { generateSharedDealData } from '../../src/data/factories/dealFactory';
 import { logger } from '../../src/utils/logger';
 import {
   generateAdminMeetingData,
@@ -16,6 +22,48 @@ import {
 //  - Restricted user CAN see admin meetings they ARE invited to (as invitee)
 //  - Restricted user CANNOT edit a meeting owned by admin (even as invitee)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// WHY (sandbox run 39561566335, meetings.rbac:139): the admin meeting related
+// RANDOM shared records; POST /v1/meetings returned 422 / 01503001 "Invalid deal
+// summary response" three times with the same body. This builds the records the
+// test relates itself and shares them with the restricted invitee, the same fixture
+// rule as deals.rbac.spec.ts D20 (company created first so the contact's own
+// Company is the returned one). Local to this file on purpose: deals.rbac's
+// copy is left untouched.
+async function createSharedMeetingRecords(
+  adminPage: ConstructorParameters<typeof ContactsPage>[0]
+): Promise<{ contactName: string; companyName: string; dealName: string }> {
+  const companiesPage = new CompaniesPage(adminPage);
+  const companyData = generateCompanyData();
+  await companiesPage.goToCompaniesList();
+  const companyId = await companiesPage.createCompany(companyData);
+  if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
+
+  const contactsPage = new ContactsPage(adminPage);
+  const contactData = generateContactData({ company: companyData.name });
+  await contactsPage.goToContactsList();
+  const contactId = await contactsPage.createContact(contactData);
+  if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
+  const contactName = `${contactData.firstName} ${contactData.lastName}`;
+
+  const dealsPage = new DealsPage(adminPage);
+  const dealData = generateSharedDealData({
+    associatedContactName: contactName,
+    associatedCompanyName: companyData.name,
+  });
+  await dealsPage.goToDealsList();
+  const dealId = await dealsPage.createDeal(dealData);
+  if (!dealId) throw new Error('Fresh deal ID not captured — cannot share');
+
+  const restrictedUserName = await dealsPage.getLoggedInUserName('restricted');
+  await companiesPage.goToCompanyDetailsById(companyId);
+  await companiesPage.shareCompany(restrictedUserName, ['meeting']);
+  await contactsPage.goToContactDetailsById(contactId);
+  await contactsPage.shareContact(restrictedUserName, ['meeting']);
+  await dealsPage.goToDealDetailsById(dealId);
+  await dealsPage.shareDeal(restrictedUserName, ['meeting']);
+  return { contactName, companyName: companyData.name, dealName: dealData.name };
+}
 
 test.describe('Meetings RBAC', () => {
   // ── Test 1: Restricted user navigates ─────────────────────────────────────
@@ -147,8 +195,13 @@ test.describe('Meetings RBAC', () => {
 
     // Admin creates meeting — invitee search 'restricted' adds restricted user
     const adminData = generateAdminMeetingData();
+    const { contactName, companyName, dealName } = await createSharedMeetingRecords(adminPage);
     await _adminMeetings.goToMeetingsList();
-    const adminMeetingId1 = await _adminMeetings.createMeeting(adminData, 'Admin');
+    const adminMeetingId1 = await _adminMeetings.createMeetingWithRelatedRecords(adminData, 'Admin', {
+      contact: contactName,
+      deal: dealName,
+      company: companyName,
+    });
     await _adminMeetings.assertMeetingInList(adminData.title, adminMeetingId1);
 
     // Capture meeting ID from admin detail view

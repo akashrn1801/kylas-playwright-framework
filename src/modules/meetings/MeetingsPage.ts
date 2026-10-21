@@ -13,6 +13,15 @@ import {
 
 export type SelectedMedium = 'GOOGLE_MEET' | 'OUTLOOK' | 'OFFLINE';
 
+// Records a test created itself, related to a meeting by name (see
+// createMeetingWithRelatedRecords). Omitted types are left unselected.
+export interface MeetingRelatedRecords {
+  lead?: string;
+  contact?: string;
+  deal?: string;
+  company?: string;
+}
+
 export class MeetingsPage extends BasePage {
   // WHY: Meetings uses higher retries/wait — calendar data loads slower
   private get retryConfig() {
@@ -1325,6 +1334,89 @@ export class MeetingsPage extends BasePage {
       logger.success(`Meeting "${data.title}" created`);
       return meetingId;
     }, 'createMeeting');
+  }
+
+  // WHY this exists (sandbox run 39561566335, meetings.rbac:139): createMeeting()
+  // relates a RANDOM Lead/Contact/Deal/Company from the shared account. The
+  // trace of the failed attempt shows POST /v1/meetings returning 422 / 01503001
+  // "Invalid deal summary response" three times with the identical body (the
+  // random Deal 104648, one of 11 offered for the random Contact); the test's own
+  // retry, with other random picks, passed. A caller that needs a meeting to
+  // succeed for an invited restricted user must relate records it created and
+  // shared itself (same fixture rule as deals.rbac.spec.ts D20). A NEW method, so
+  // createMeeting()/fillRelatedTo()/fillMeetingForm() and their 18 callers are
+  // unchanged. Skips the random Related To step and relates only the named records.
+  async createMeetingWithRelatedRecords(
+    data: MeetingData,
+    createdBy: string,
+    records: MeetingRelatedRecords
+  ): Promise<number | null> {
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating meeting: "${data.title}" as ${createdBy} with its own related records`);
+      await this.openAddForm();
+      await this.fillMeetingForm(data, createdBy, true, true);
+      const ordered: Array<[string, string | undefined]> = [
+        ['Lead', records.lead],
+        ['Contact', records.contact],
+        ['Deal', records.deal],
+        ['Company', records.company],
+      ];
+      for (const [entityType, name] of ordered) {
+        if (name) await this.selectRelatedRecord(entityType, name);
+      }
+      // WHY: same title re-check createMeeting() does — selecting related records
+      // re-renders the form and can reset the controlled title input.
+      const titleBeforeSave = await this.titleInput().inputValue();
+      if (titleBeforeSave.trim() !== data.title.trim()) {
+        logger.warn(
+          `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
+        );
+        await this.fill(this.titleInput(), data.title, 'Meeting title');
+      }
+      const meetingId = await this.saveMeetingRetryOnEntitySummaryLag();
+      logger.success(`Meeting "${data.title}" created with related records`);
+      return meetingId;
+    }, 'createMeetingWithRelatedRecords');
+  }
+
+  // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", type into
+  // the related-to input), then picks the named record instead of a random one.
+  // Bounded: a just-created record can lag in the search index, so it re-types the
+  // name up to 4 times, then fails with a named error.
+  private async selectRelatedRecord(entityType: string, name: string): Promise<void> {
+    logger.info(`Relating ${entityType} "${name}"`);
+    await this.entitiesDropdown().click();
+    await this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: entityType })
+      .first()
+      .click();
+    const searchPlaceholder = this.page.getByText('Search ...').last();
+    await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
+    await searchPlaceholder.click();
+    const option = this.relationOptions().filter({ hasText: name }).first();
+    const maxAttempts = 4;
+    let found = false;
+    for (let attempt = 1; attempt <= maxAttempts && !found; attempt++) {
+      await this.relatedToInput().fill(name);
+      found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+        () => true,
+        () => false
+      );
+      if (!found) {
+        logger.warn(`${entityType} "${name}" not in the search results yet (attempt ${attempt}/${maxAttempts})`);
+      }
+    }
+    if (!found) {
+      throw new Error(
+        `Related To ${entityType}: "${name}" never appeared in the search after ${maxAttempts} attempts ` +
+          `(search-index lag, or the record is not visible to this user)`
+      );
+    }
+    await option.click();
+    await this.relatedToInput().press('Enter');
+    await this.ensureReactSelectMenuClosed(`Related To ${entityType}`);
+    logger.success(`Related ${entityType}: "${name}"`);
   }
 
   async updateMeeting(
