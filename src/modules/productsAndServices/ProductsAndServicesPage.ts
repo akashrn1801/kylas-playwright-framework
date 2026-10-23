@@ -8,6 +8,11 @@ import {
 } from '../../data/factories/productsAndServicesFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import {
+  trackProductWrites,
+  wasWrittenFlat,
+  flatOnAllAttemptsMessage,
+} from '../../utils/productWriteShape';
 
 // WHY this page object doesn't follow the standard Sales-page/detail-page
 // shape every other module uses: this is a deliberate, documented deviation
@@ -108,6 +113,7 @@ export class ProductsAndServicesPage extends BasePage {
   // ─── 3. Constructor ─────────────────────────────────────────────────────────
   constructor(page: Page) {
     super(page);
+    trackProductWrites(page);
   }
 
   // ─── 4. Private helpers ─────────────────────────────────────────────────────
@@ -1138,6 +1144,18 @@ export class ProductsAndServicesPage extends BasePage {
         return;
       }
 
+      // WHY no reload when this product's own write sent the field FLAT (sandbox
+      // run 39903711894): the payload had `customFieldValues: {}` and the product
+      // reads back empty, so the value was never stored and re-reading the same
+      // record cannot recover it. A write that was NOT flat still gets the
+      // bounded reloads below (the suspected read-after-write lag).
+      if (reloadRetryId && wasWrittenFlat(this.page, reloadRetryId, `cf${fieldName}`)) {
+        throw new Error(
+          `Expected ${description} to hold "${expectedValue}" on the edit form, but the app posted ` +
+            `cf${fieldName} FLAT (top-level) for product ${reloadRetryId}, so the value was not stored`
+        );
+      }
+
       if (attempt === maxAttempts) {
         await this.withSessionExpiryRecovery(() =>
           expect(
@@ -1169,6 +1187,17 @@ export class ProductsAndServicesPage extends BasePage {
       logger.success(`Product created: ${attemptData.name} (id: ${result.id})`);
       return result;
     }, 'createProduct');
+  }
+
+  // The error a whole-create (or whole-edit) retry loop should throw once its
+  // attempts are used up: when every one of the last `attempts` writes of this
+  // field was sent FLAT, say so (the app bug, not a read lag); otherwise return
+  // the caller's own last error unchanged.
+  explainPersistFailure(fieldName: string, attempts: number, original: unknown): Error {
+    const flat = flatOnAllAttemptsMessage(this.page, `cf${fieldName}`, attempts);
+    const detail = original instanceof Error ? original.message.split('\n')[0] : String(original);
+    if (flat) return new Error(`${flat}. Last check: ${detail}`);
+    return original instanceof Error ? original : new Error(detail);
   }
 
   async updateProduct(
