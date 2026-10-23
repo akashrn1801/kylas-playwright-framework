@@ -1379,10 +1379,15 @@ export class MeetingsPage extends BasePage {
     }, 'createMeetingWithRelatedRecords');
   }
 
-  // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", type into
-  // the related-to input), then picks the named record instead of a random one.
-  // Bounded: a just-created record can lag in the search index, so it re-types the
-  // name up to 4 times, then fails with a named error.
+  // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", related-to
+  // input), then picks the named record: the option whose text equals the full name.
+  // Where to look, in order (sandbox run 39601551444, meetings.rbac:187): (1) the list
+  // the dropdown shows on opening, which held the just-created contact; (2) a
+  // first-word search; (3) a last-word search. Typing the full two-word name returned
+  // 0 results from POST /v1/search/contact/associated-with-entity, so it is not
+  // tried. Related To is search-only (results carry id and name, there is no way to
+  // enter an id), so the option is matched by its text. No other fallback: when
+  // nothing matches it throws with every term tried and its result count.
   private async selectRelatedRecord(entityType: string, name: string): Promise<void> {
     logger.info(`Relating ${entityType} "${name}"`);
     await this.entitiesDropdown().click();
@@ -1394,29 +1399,38 @@ export class MeetingsPage extends BasePage {
     const searchPlaceholder = this.page.getByText('Search ...').last();
     await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
     await searchPlaceholder.click();
-    const option = this.relationOptions().filter({ hasText: name }).first();
-    const maxAttempts = 4;
-    let found = false;
-    for (let attempt = 1; attempt <= maxAttempts && !found; attempt++) {
-      await this.relatedToInput().fill(name);
-      found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+
+    const exactName = new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`);
+    const option = this.relationOptions().filter({ hasText: exactName }).first();
+    const words = name.trim().split(/\s+/);
+    const firstWord = words[0];
+    const lastWord = words[words.length - 1];
+    const tried: string[] = [];
+
+    const lookup = async (path: string, term: string | null): Promise<boolean> => {
+      if (term !== null) await this.relatedToInput().fill(term);
+      const found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
         () => true,
         () => false
       );
-      if (!found) {
-        logger.warn(`${entityType} "${name}" not in the search results yet (attempt ${attempt}/${maxAttempts})`);
-      }
-    }
+      const results = await this.relationOptions().count();
+      tried.push(`${path}${term !== null ? ` "${term}"` : ''}: ${results} result(s)`);
+      if (found) logger.info(`Related ${entityType} "${name}" found via ${path}`);
+      return found;
+    };
+
+    let found = await lookup('opening list', null);
+    if (!found) found = await lookup('first-word search', firstWord);
+    if (!found && lastWord !== firstWord) found = await lookup('last-word search', lastWord);
     if (!found) {
       throw new Error(
-        `Related To ${entityType}: "${name}" never appeared in the search after ${maxAttempts} attempts ` +
-          `(search-index lag, or the record is not visible to this user)`
+        `Related To ${entityType}: no option with the exact text "${name}". Tried: ${tried.join('; ')}`
       );
     }
     await option.click();
     await this.relatedToInput().press('Enter');
     await this.ensureReactSelectMenuClosed(`Related To ${entityType}`);
-    logger.success(`Related ${entityType}: "${name}"`);
+    logger.success(`Related ${entityType}: "${name}" (${tried[tried.length - 1]})`);
   }
 
   async updateMeeting(
