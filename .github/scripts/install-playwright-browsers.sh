@@ -51,6 +51,22 @@
 # (about 245 s). Each attempt now logs its elapsed time so a slow mirror is
 # visible even when the install succeeds.
 #
+# Apt mirror override (default on; APT_MIRROR_OVERRIDE=off disables it, or change
+# the default below). On ubuntu-24.04 runners apt reads
+# "URIs: mirror+file:///etc/apt/apt-mirrors.txt", and every download in our logs
+# (799 Get: lines, security pocket included) came from azure.archive.ubuntu.com.
+# That mirror regularly degrades to a trickle that apt's timeouts cannot catch
+# because the connection stays alive: 5 of 21 installs were slow in sandbox run
+# 39934344278 (159 kB/s, 216 kB/s, three jobs stalled). Before the install,
+# with --with-deps, every file under /etc/apt that names azure.archive.ubuntu.com
+# is rewritten to http://archive.ubuntu.com/ubuntu/ (the security pocket moves
+# with it: same archive, apt signature checks unchanged), each changed file is
+# logged with its matching lines before and after, and if an azure reference
+# survives a rewrite that changed at least one file the script fails with an
+# ::error::. If nothing references azure, it logs that and carries on. A rewrite
+# that could not be written (no permission) only warns: the bounded attempts
+# below stay the backstop. APT_DIR and APT_SUDO exist for the smoke tests only.
+#
 # Unsupported runner OS (2026-10-20, main run 39456246717): on ubuntu 26.04
 # Playwright 1.60.0 prints "Cannot install dependencies for ubuntu26.04-x64 ...
 # Error: Playwright does not support chromium on ubuntu26.04-x64" and exits
@@ -78,6 +94,9 @@ VERSION_CMD="${VERSION_CMD:-npx --no-install playwright --version}"
 ATTEMPT_LOG=$(mktemp)
 trap 'rm -f "$ATTEMPT_LOG"' EXIT
 REAP_APT="${REAP_APT:-auto}"
+APT_MIRROR_OVERRIDE="${APT_MIRROR_OVERRIDE:-on}"
+APT_DIR="${APT_DIR:-/etc/apt}"
+APT_SUDO="${APT_SUDO-sudo}"
 
 # Terminate any apt-get still running after a timed-out attempt. Logs what it
 # found. dpkg is deliberately left alone.
@@ -119,6 +138,57 @@ fail_unsupported_os() {
   exit 1
 }
 
+# Rewrite azure.archive.ubuntu.com to archive.ubuntu.com under $APT_DIR and
+# verify. Logs every changed file. Exits 1 only when a rewrite changed at least
+# one file and an azure reference still survives.
+rewrite_apt_mirror() {
+  if [ "$APT_MIRROR_OVERRIDE" = "off" ]; then
+    echo "apt mirror override is off (APT_MIRROR_OVERRIDE=off): leaving $APT_DIR as configured"
+    return 0
+  fi
+  local host_re='azure\.archive\.ubuntu\.com' files f changed=0 left sum_before sum_after
+  # shellcheck disable=SC2086 # APT_SUDO is empty or "sudo" (word-split on purpose)
+  files=$($APT_SUDO grep -rIl -e "$host_re" "$APT_DIR" 2>/dev/null)
+  if [ -z "$files" ]; then
+    echo "apt mirror: nothing to rewrite (no azure.archive.ubuntu.com reference under $APT_DIR)"
+    return 0
+  fi
+  while IFS= read -r f; do
+    echo "apt mirror: rewriting $f to http://archive.ubuntu.com/ubuntu/ (before):"
+    # shellcheck disable=SC2086
+    $APT_SUDO grep -n -e "$host_re" "$f" | sed 's/^/    /'
+    # shellcheck disable=SC2086
+    sum_before=$($APT_SUDO cksum "$f" 2>/dev/null)
+    # shellcheck disable=SC2086
+    if $APT_SUDO sed -i -E "s#https?://${host_re}/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g" "$f"; then
+      # shellcheck disable=SC2086
+      sum_after=$($APT_SUDO cksum "$f" 2>/dev/null)
+      if [ "$sum_before" != "$sum_after" ]; then
+        changed=$((changed + 1))
+        echo "apt mirror: $f (after):"
+        # shellcheck disable=SC2086
+        $APT_SUDO grep -n -e 'archive\.ubuntu\.com' "$f" | sed 's/^/    /'
+      else
+        echo "apt mirror: $f unchanged (no URL of the expected form)"
+      fi
+    else
+      echo "::warning::apt mirror: could not rewrite $f"
+    fi
+  done <<<"$files"
+  # shellcheck disable=SC2086
+  left=$($APT_SUDO grep -rIn -e "$host_re" "$APT_DIR" 2>/dev/null)
+  if [ -z "$left" ]; then
+    echo "apt mirror: rewrote $changed file(s); no azure.archive.ubuntu.com reference left under $APT_DIR"
+    return 0
+  fi
+  if [ "$changed" -ge 1 ]; then
+    echo "::error title=apt mirror rewrite incomplete::azure.archive.ubuntu.com is still referenced under $APT_DIR after rewriting $changed file(s): ${left//$'\n'/ | }"
+    exit 1
+  fi
+  echo "::warning::apt mirror: could not rewrite any file, azure.archive.ubuntu.com stays in use (relying on the bounded attempts)"
+  return 0
+}
+
 FLAGS="$*"
 if [[ " $FLAGS " == *" --with-deps "* ]]; then
   if printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\nDPkg::Lock::Timeout "60";\n' \
@@ -127,6 +197,7 @@ if [[ " $FLAGS " == *" --with-deps "* ]]; then
   else
     echo "::warning::could not write /etc/apt/apt.conf.d/99-ci-timeouts — relying on the per-attempt timeout only"
   fi
+  rewrite_apt_mirror
 fi
 
 attempt=1
