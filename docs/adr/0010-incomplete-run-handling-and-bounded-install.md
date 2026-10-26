@@ -3,7 +3,7 @@
 > **Purpose:** Records how a run that merged fewer shard reports than expected is surfaced, and why the browser-install step is bounded.
 > **Read when:** Changing `verify-shard-completeness.sh`, `ShardCompleteness.ts`, the verdict for missing shards, history exclusion of partial runs, or `install-playwright-browsers.sh`.
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-26 @ f1858b0
 
 ## Status
 Accepted — 2026-10-08. Implemented, not yet exercised on a real CI run ([KI-37](../KNOWN_ISSUES_ACTIVE.md)).
@@ -16,12 +16,12 @@ Run 37669596623: two of six formFields jobs hung 3 h in `playwright install --wi
 - Verdict: `reported < expected` forces `blocked`/danger "Incomplete Run — N of M shards reported" (checked before every other verdict), a top-of-email banner, and `INCOMPLETE RUN` in the subject.
 - History: the record is written but marked `incomplete`; readers exclude it and the email gets an empty delta file. Chosen over skipping the write so the ledger keeps an audit line.
 - Absent/garbled JSON = no information, not "complete".
-- Install: `install-playwright-browsers.sh` (3 x 180 s attempts, backoff, apt connection timeouts) under a 10-minute step timeout, in every workflow with the step. `timeout-minutes` of the jobs is unchanged. Added 2026-10-08 (run 37753304635, retries hit the dpkg lock): after a timed-out attempt with `--with-deps`, leftover `apt-get` is terminated (TERM then KILL, never dpkg); `DPkg::Lock::Timeout "60"` joins the apt conf; a 570 s total budget clamps each attempt so the script cannot reach the 600 s step limit (the old 3 x 180 s figure ignored the 15 s kill grace). Chosen over `setsid`/process-group kill alone because the leftover is probably outside `timeout`'s group, and over lock-wait alone because a stalled leftover would hold the lock past any short wait.
+- Install: `install-playwright-browsers.sh` (2 attempts x 300 s, the last clamped to the remaining budget, total 570 s with a worst case of about 576 s; backoff, apt connection timeouts) under a 10-minute step timeout; changed from 3 x 180 s on 2026-10-26 because of a slow apt mirror, observed in sandbox run 39934344278, in every workflow with the step. `timeout-minutes` of the jobs is unchanged. Added 2026-10-08 (run 37753304635, retries hit the dpkg lock): after a timed-out attempt with `--with-deps`, leftover `apt-get` is terminated (TERM then KILL, never dpkg); `DPkg::Lock::Timeout "60"` joins the apt conf; a 570 s total budget clamps each attempt so the script cannot reach the 600 s step limit (the old 3 x 180 s figure ignored the 15 s kill grace). Chosen over `setsid`/process-group kill alone because the leftover is probably outside `timeout`'s group, and over lock-wait alone because a stalled leftover would hold the lock past any short wait.
 
 ## Consequences
 - A partial run is loud in three places and cannot pollute trends or recurring counts.
 - Health score and counts are still displayed for the shards that reported.
-- A slow-but-healthy install over 180 s costs an attempt; three such attempts fail the job (measured healthy maximum: 129 s).
+- A slow-but-healthy install over the attempt limit costs an attempt; with 300 s then about 245 s, two such attempts fail the job (measured healthy maximum: 139 s, run 39934344278, slow apt mirror).
 - qa/stage/main gained a `plan` dependency in `merge-and-report`.
 
 ## How to revert
