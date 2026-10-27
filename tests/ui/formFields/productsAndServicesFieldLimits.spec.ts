@@ -221,7 +221,7 @@ async function createProductExpectingAccept(
       );
     }
   }
-  throw lastError;
+  throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
 }
 
 async function createBareProduct(psPage: ProductsAndServicesPage): Promise<string> {
@@ -260,7 +260,7 @@ async function updateProductExpectingAccept(
       );
     }
   }
-  throw lastError;
+  throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
 }
 
 // ── PATH 2: REJECT ──────────────────────────────────────────────────────────

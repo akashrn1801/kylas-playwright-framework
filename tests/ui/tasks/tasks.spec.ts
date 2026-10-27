@@ -205,7 +205,12 @@ test.describe('Tasks', () => {
     const taskData = generateTaskData();
 
     await tasksPage.goToTasksList();
-    const taskId = await tasksPage.createDetailedTask(taskData);
+    // WHY skipRelation (sandbox run 38901208613, flaky here and failed in prod
+    // build 120): the Relation step picks a RANDOM Lead/Deal/Contact/Company
+    // from the shared account, where parallel tests delete records; POST /tasks/
+    // then returned 400 "We could not find any Lead". This test checks the
+    // clone and never reads the relation back, so it takes no shared record.
+    const taskId = await tasksPage.createDetailedTask(taskData, undefined, true);
     await tasksPage.assertTaskCreated(taskData, taskId);
 
     // Clone via ellipsis — cloned task name = original + " Copy"

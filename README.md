@@ -3,7 +3,7 @@
 > **Purpose:** Human onboarding for the Kylas Sales CRM end-to-end test framework: what it is, how to set it up, run it and where everything else is documented.
 > **Read when:** You are new to the repo, setting up a machine, or looking for the right deeper document.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-27 @ a9f5372
 
 End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (strict). Tests are split into functional UI specs and RBAC specs (role-based access: a full-access admin user and a limited "restricted" user exercise the same feature). CI runs on GitHub Actions and Jenkins across a branch ladder, with a custom email summary and run-history ledger.
 
@@ -64,7 +64,7 @@ Create `.env` in the repo root. `.env.example` exists locally but is **gitignore
 | `<PREFIX>_RESTRICTED_EMAIL`, `<PREFIX>_RESTRICTED_PASSWORD` | yes | limited-access "User 1", used by every RBAC test |
 | `<PREFIX>_API_BASE_URL` | effectively yes | not enforced at startup, but login and API calls need it |
 
-Optional: `WORKERS`, `RETRY_COUNT`, `HEADLESS`, `NAVIGATION_TIMEOUT`, `EXPECT_TIMEOUT`, `DEFAULT_TIMEOUT`, SMTP settings for `notify`. Never commit `.env`; never paste credentials into logs or docs.
+Optional: `WORKERS`, `RETRY_COUNT`, `HEADLESS`, `BROWSER`, `NAVIGATION_TIMEOUT`, `EXPECT_TIMEOUT`, `DEFAULT_TIMEOUT`, SMTP settings for `notify`, `NOTIFY_ENABLED=false` to disable `notify`. Never commit `.env`; never paste credentials into logs or docs.
 
 First run to confirm setup: `ENV=qa npm run test:meetings` (writes `src/auth/storageStates/<env>/`, gitignored). Sessions expire; if auth looks stale, `rm -rf src/auth/storageStates/qa/`.
 
@@ -132,7 +132,7 @@ docs/              all engineering documentation (index below)
 feature/* → dev → qa → stage → prod → main        sandbox: pre-PR check, reset to dev
 ```
 
-Rules: cut feature branches from `dev`; each promote branch is cut from the previous promote branch; never push straight to `dev`/`qa`/`stage`/`prod`/`main`; never skip an environment; wait for CI before merging each PR. Commit format: `feat:` / `fix:` / `chore:` / `ci:` / `refactor:`.
+Rules: cut feature branches from `dev`; each promote branch is cut from the previous promote branch; never push straight to `dev`/`qa`/`stage`/`prod`/`main`; never skip an environment; wait for CI before merging each PR. Commit format: `feat:` / `fix:` / `chore:` / `ci:` / `refactor:` / `docs:`. The commands below are for the human operator: Claude Code and every agent never run any `git` or `gh` command, read-only ones included, and ask you for any git output they need.
 
 ```bash
 npm run sandbox:reset                              # before every new task
@@ -142,7 +142,7 @@ npx tsc --noEmit && npx playwright test tests/ui/<module>/ --project=chromium --
 git add . && git commit -m "feat: ..." && git push origin feature/<description>-YYYYMMDD
 ```
 
-Then merge your feature branch into `sandbox` and push once (`bash scripts/sandbox-deploy.sh <feature-branch>` does the reset, merge and push); wait for `sandbox.yml`; open a PR into `dev`. Promote one hop at a time with new `feature/promote-<feature>-to-<env>-YYYYMMDD` branches, each cut from the previous one, each PR into the next environment branch (`https://github.com/akashrn1801/kylas-playwright-framework/compare/<target>...<promote-branch>`). Push rejected with non-fast-forward: `git pull origin <branch> --rebase`, then push. AI agents never run git write operations here; the human operator commits and pushes.
+Then merge your feature branch into `sandbox` and push once (`bash scripts/sandbox-deploy.sh <feature-branch>` does the reset, merge and push; `npm run sandbox:reset` and the deploy script force-push `origin sandbox`); wait for `sandbox.yml`; open a PR into `dev`. Promote one hop at a time with new `feature/promote-<feature>-to-<env>-YYYYMMDD` branches, each cut from the previous one, each PR into the next environment branch (`https://github.com/akashrn1801/kylas-playwright-framework/compare/<target>...<promote-branch>`). Push rejected with non-fast-forward: `git pull origin <branch> --rebase`, then push. AI agents never run any git or gh command here (read-only ones included); the human operator does all git and pastes any output an agent asks for.
 
 ## Documentation index
 
@@ -173,7 +173,7 @@ No cross-browser coverage in CI, no scheduled or nightly runs, and QA/staging da
 - **`Missing required environment variable: X`**: the active `ENV`'s variables are incomplete in `.env`; see Quick start.
 - **Redirected to sign-in mid-run**: clear the cached session (`rm -rf src/auth/storageStates/<env>/`); fixtures already retry one automatic re-login.
 - **`ts-node` script fails with `TS2591` but `tsc --noEmit` passes**: check `tsconfig.json` still has `"types": ["node"]`; `--transpile-only` hides this.
-- **`git clone <remote-name> .` fails**: clone needs a URL; use `git remote get-url origin`.
+- **`git clone <remote-name> .` fails**: clone needs a URL; run `git remote get-url origin` yourself (the human operator) to get it.
 - **Clone lead/contact form rejects save**: change the pre-filled email or phone.
 - **`saveQuickTask()` hangs from an entity detail panel**: use `saveQuickTaskFromEntityDetail()`.
 - Anything CI-related: [docs/RUNBOOK.md](./docs/RUNBOOK.md).

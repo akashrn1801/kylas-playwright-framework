@@ -8,7 +8,15 @@
       "Bash(git pull origin dev)",
       "Bash(git pull origin qa)",
       "Bash(git pull origin stage)",
-      "Bash(git pull origin prod)"
+      "Bash(git pull origin prod)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(/usr/bin/git *)",
+      "Bash(/bin/git *)",
+      "Bash(/usr/bin/gh *)",
+      "Bash(/bin/gh *)",
+      "Bash(env git *)",
+      "Bash(env gh *)"
     ]
   },
   "hooks": {

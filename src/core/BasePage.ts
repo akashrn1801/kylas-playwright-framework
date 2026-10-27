@@ -17,6 +17,7 @@ import {
 import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
+import { trackFailedWrites, recentFailedWrite } from '../utils/failedWriteTracker';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
@@ -27,6 +28,7 @@ export class BasePage {
 
   constructor(page: Page) {
     this.page = page;
+    trackFailedWrites(page);
   }
 
   // WHY a public getter, not just leaving `page` protected (added
@@ -1289,8 +1291,13 @@ export class BasePage {
       .filter((e) => e.length > 0);
 
     if (allErrors.length > 0 || fieldErrors.length > 0) {
+      // WHY the backend line first: a rejected write (e.g. PUT /v1/products/{id}
+      // -> 500 00903002) otherwise reads as a form problem. Same failure, same
+      // text after it — see failedWriteTracker.ts.
+      const backendWrite = recentFailedWrite(this.page);
       throw new Error(
-        `Validation errors found in ${context}:\n` +
+        (backendWrite ? `Backend rejected the save: ${backendWrite}\n` : '') +
+          `Validation errors found in ${context}:\n` +
           `Fields with errors: ${fieldErrors.join(', ')}\n` +
           `Error messages: ${allErrors.join(' | ')}`
       );
