@@ -3,14 +3,14 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-27 @ a9f5372
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
 ### Navigation drift across 6 modules — 2026-07-27
 - **Symptom:** Generic element-not-found timeouts long after a list/detail page "loaded".
 - **Root cause:** Every `waitForXDetailsPage()`/`waitForListReady()` (e.g. `TasksPage.waitForListReady()`) resolved on the first URL match with no guarantee it stayed, and the entity-GET wait had a silent `.catch(() => null)`; the client router could bounce away under load. Also `DealsPage.getAssociatedContactId()`/`getAssociatedContactName()` had no timeout (this repo sets no `actionTimeout`, default 0), and a zombie session-expiry listener outlived `Promise.race`.
-- **Fix:** shared `BasePage.waitForEntityDetailPage()`/`waitForEntityListPage()`; explicit 10s bound on the Deals getters; listener-free `page.waitForResponse()` in the race.
+- **Fix:** shared `BasePage.waitForEntityDetailPage()`/`waitForEntityListPage()` (list: Leads, Contacts, Companies, Deals, P&S; detail: those plus Tasks and Quotations; `TasksPage`, `CallLogsPage` and `QuotationsPage` still have their own private `waitForListReady()`); an explicit 10s bound on the Deals getters at the time (since replaced: both now read `getAssociatedContacts()` -> `fetchCurrentDealApiData()`, an in-page `fetch` of `GET /deals/<id>` that logs a warning and returns null on failure, with no 10s bound); listener-free `page.waitForResponse()` in the race.
 - **Revert:** restore the per-module copies (not advised).
 - **Commit:** `f395b14`.
 
@@ -31,7 +31,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 ### ID-capture predicates matched unrelated background requests — 2026-07
 - **Symptom:** False "save failed silently" despite a success toast; ID captured as `null`.
 - **Root cause:** `captureXxxIdFromResponse()` used `.includes('/deals')`/`'companies'`, matching an analytics POST (`/v4/reports/deals`) in 3 places.
-- **Fix:** require the versioned `/v1/<module>/` path and exclude `/reports/`. Two further `armResponseWaitWithRecovery` races fixed: a synchronous `hasFired()` signal, and a bounded retry for the app's own redirect aborting recovery navigation (`net::ERR_ABORTED`).
+- **Fix:** require the versioned `/v1/<module>/` path and exclude `/reports/` (Deals, Leads, Contacts, Tasks, Meetings). Deliberate leftover: `CompaniesPage.captureCompanyIdFromResponse()` still matches a bare `includes('companies')` and only excludes `/reports/` (its code comment says it is the same shape of bug, not observed failing there; contrary to standing rule 15), and the sibling `captureCompanyCreateOutcome()` already uses a `/v1/companies/` regex. Recorded as latent in [KI-44](../KNOWN_ISSUES_ACTIVE.md). Two further `armResponseWaitWithRecovery` races fixed: a synchronous `hasFired()` signal, and a bounded retry for the app's own redirect aborting recovery navigation (`net::ERR_ABORTED`).
 - **Revert:** n/a — keep.
 - **Commit:** `a1d8291`.
 
@@ -45,7 +45,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 ### Company Phones field collision — 2026-07
 - **Symptom:** A Lead phone locator also matched Company Phones' first entry.
 - **Root cause:** Loose `input[id*="input_phone_0"]` substring match.
-- **Fix:** exact `name="phoneNumbers[0]"` in Leads/Contacts/Companies. Also: GPS "Get GPS Address" trigger is section-scoped (`BasePage.getFormSectionContainer()`/`getGpsAddressTrigger()` throw on ambiguity); `escapeRegExp()` consolidated into `BasePage`.
+- **Fix:** exact `name="phoneNumbers[0]"` in Leads/Contacts/Companies. Also: GPS "Get GPS Address" trigger is section-scoped (`BasePage.getFormSectionContainer()`/`getGpsAddressTrigger()` return section-scoped locators; `fillAddressViaGpsOrManual()` throws when more than one trigger matches); `escapeRegExp()` consolidated into `BasePage`.
 - **Revert:** revert the locators.
 - **Commit:** `c9a4537` (`escapeRegExp`).
 
@@ -73,7 +73,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 ### Sandbox batch: CL39/CL32/CL33/D28/Quotations detail — 2026-08-09
 - **Symptom:** Five failures in a `--workers=2` run.
 - **Root cause:** CL39 two `generateCallLogData()` calls without pinned `entityType` could yield a nonexistent `callType` and the option click had no timeout; D28 `DealsPage.cloneDeal()` never verified it saw the Clone modal (`#editEntityModal` is shared); `QuotationsPage.waitForListReady()` never checked readiness and `openCreateForm()`'s click was unbounded; CL32/CL33 are the app-side JS race in `openCallLogForm` — `CallLogsPage.openLogACallForm()` exhausts its 5 attempts when the app throws `Cannot read properties of undefined (reading 'content')` under concurrent sessions (real Kylas bug, tracked outside this repo); CL18 general load.
-- **Fix:** pin `entityType`, bound option clicks; check `.modal-title`, widen Name pre-fill wait 10s→20s (also `TasksPage.cloneTaskViaEllipsis()`); race list container vs create button, route click through bounded `this.click()`, bound `fillOwner()` (3 attempts); log the real caught error and URL on every `CallLogsPage.openLogACallForm()` retry; reload-and-retry on `CallLogsPage.clickEditButton()`.
+- **Fix:** pin `entityType`, bound option clicks; check `.modal-title`, widen the Name pre-fill wait 10s→20s (`DealsPage.cloneDeal()`; `TasksPage.cloneTaskViaEllipsis()` still waits 10s for its modal title and Name field); race list container vs create button, route click through bounded `this.click()`, bound `fillOwner()` (3 attempts); log the real caught error and URL on every `CallLogsPage.openLogACallForm()` retry; reload-and-retry on `CallLogsPage.clickEditButton()`.
 - **Revert:** revert per-method.
 - **Commit:** unknown — see `git log --grep=CL39`.
 
@@ -87,15 +87,15 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 ### Deals clone saved a stale name — 2026-08-23
 - **Symptom:** `DealsPage.cloneDeal()` pre-save readiness wait timed out under load; a first non-fatal fix saved a clone with its pre-"Copy" name.
 - **Root cause:** Save clicked while async pre-fill still committed; a modal snapshot is not an end state.
-- **Fix:** bounded 2-attempt modal-open-and-settle retry; verify via captured new ID ≠ original ID and the name on the clone's own detail page (`assertClonedDealName()`). Rule: verify a mutation by its stable end state.
+- **Fix:** bounded 2-attempt modal-open-and-settle retry; verify via captured new ID ≠ original ID and the name on the clone's own detail page (`assertClonedDealName()`, called from `deals.spec.ts`; `cloneDeal()` itself now also fails without a captured POST ID and re-opens the clone by ID to check the submitted name). Rule: verify a mutation by its stable end state.
 - **Revert:** revert `cloneDeal()`/`assertClonedDealName()`.
 - **Commit:** `c9a4537`.
 
 ### Products chip clearing and product-search truncation — 2026-08-23
 - **Symptom:** `clearAllProducts()` threw "chips still present after the clear loop reported done"; product search for fixtures returned 50 alphabetical rows without the target.
 - **Root cause:** Async hydration of the Requirement section; `BasePage.searchAndSelectByName()` searched the first word only and every fixture starts with `[QA-Auto]`.
-- **Fix:** bounded 4-round settle loop (stability window); search with the full name; removed a stray `waitForTimeout(150)`.
-- **Revert:** revert the two methods.
+- **Fix:** bounded 4-round settle loop (stability window) and search with the full name; no `waitForTimeout(150)` remains in `src/`. Current code: `LeadsPage.clearAllProducts()` wraps `BasePage.clearAllChipsFromMultiSelect()` (the loop; its error reads "N chip(s) still present after 4 settle rounds — clearing is unreliable") and `BasePage.searchAndSelectByName()`.
+- **Revert:** revert `BasePage.clearAllChipsFromMultiSelect()` and `BasePage.searchAndSelectByName()` (and the `LeadsPage.clearAllProducts()` wrapper).
 - **Commit:** `0c5d3bf`.
 
 ### Sandbox Build #147 fixes — 2026-08-25
@@ -144,10 +144,11 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 - **Symptom:** QA run 37733648349 shard 3/5, `deals.spec.ts:362`, 8.5 min (passed on retry): attempt 2's ellipsis click hung until the test timeout. A later local QA run failed after a clone that had worked (deal 435874).
 - **Root cause (hang, CONFIRMED from trace and screenshot):** Escape did not close `#editEntityModal`; the swallowed hidden-wait timed out after 10.04 s, and the next unbounded `click` waited behind the backdrop. Why the Name field never showed "Copy" on attempt 1 is unexplained.
 - **Root cause (false failure, CONFIRMED screenshot):** `assertNoFormErrors('deal clone form')` matches any `.toast`, and a red "Uhoh! Something didn't work as expected" toast was also on screen. The user states it comes from `GET /v1/ai-agent/workflows/subscribed` (HTTP 400, AI agent feature under development on QA); I did not verify that request-to-toast link.
-- **Fix:** `cloneDeal()` closes via Cancel and waits for hidden; `openEllipsisMenu()` calls are bounded; the clone is verified by outcome (POST 200/201 with an ID, then that deal opened by ID shows the submitted name containing "Copy"), not by scanning for toasts. The toast is neither matched nor hidden.
-- **Verified:** 3/3 local QA runs, `--retries=0`, `--workers=2`. The Cancel path ran in none of them (the modal opened first time), so it is still unexercised. Not yet seen in CI.
+- **Fix (2026-10-09):** `cloneDeal()` closed the modal via the footer Cancel and waited for hidden; `openEllipsisMenu()` calls are bounded; the clone is verified by outcome (POST 200/201 with an ID, then that deal opened by ID shows the submitted name containing "Copy"), not by scanning for toasts. The toast is neither matched nor hidden.
+- **Follow-up (2026-10-18):** the Cancel close could never have matched. The footer Cancel is `<span class="btn btn-outline-primary cursor-pointer">Cancel</span>` inside `div.form-buttons`, not a `<button>`, so the role locator `getByRole('button', {name: 'Cancel'})` can never match it (live DOM dump on staging, admin and restricted identical; stage run 39051544788 and 3 earlier runs timed out on it, per the code comment). Current code: `DealsPage.closeStaleCloneModal()` (`src/modules/deals/DealsPage.ts`) clicks the header X, `cloneModalCloseButton()` = `#editEntityModal button[data-dismiss="modal"]` (first match), with a 5 s click bound and a 10 s wait for the modal to hide; each failure throws an error naming the step. It runs only between attempt 1 and attempt 2 of `cloneDeal()`, when the Name field did not show "Copy" within 20 s. Fixed by commit `c07c7d0`.
+- **Verified:** 3/3 local QA runs of the 2026-10-09 change, `--retries=0`, `--workers=2`; the close path ran in none of them (the modal opened first time). Not confirmed that the header-X path has run in a CI run since 2026-10-18.
 - **Not fixed:** the same unbounded calls in `LeadsPage`/`ContactsPage`/`CompaniesPage.openEllipsisMenu()`.
-- **Revert:** revert the `cloneDeal()` and `openEllipsisMenu()` edits in `DealsPage.ts`.
+- **Revert:** revert the `cloneDeal()`, `closeStaleCloneModal()` and `openEllipsisMenu()` edits in `DealsPage.ts`.
 
 
 ### React-select menu left open blocks the next click, QA only (was KI-35 detail) — 2026-10-07

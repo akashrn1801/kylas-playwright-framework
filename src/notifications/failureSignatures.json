@@ -16,8 +16,14 @@
       "id": "connection-refused",
       "title": "connection refused (ECONNREFUSED)",
       "label": "environment-suspected",
-      "errorPatterns": ["ECONNREFUSED", "ERR_CONNECTION_REFUSED"],
-      "errorPatternNotes": ["a refused TCP connection (ECONNREFUSED)", "a refused connection reported by the browser"],
+      "errorPatterns": [
+        "ECONNREFUSED",
+        "ERR_CONNECTION_REFUSED"
+      ],
+      "errorPatternNotes": [
+        "a refused TCP connection (ECONNREFUSED)",
+        "a refused connection reported by the browser"
+      ],
       "minTests": 1,
       "minModules": 1,
       "kiRef": "KI-43",
@@ -30,9 +36,19 @@
       "id": "gateway-5xx",
       "title": "HTTP 502/503/504 from the API",
       "label": "environment-suspected",
-      "errorPatterns": ["\\bHTTP (502|503|504)\\b"],
-      "errorPatternNotes": ["a gateway error (HTTP 502, 503 or 504) reported by the API"],
-      "misc": { "statusCodes": [502, 503, 504] },
+      "errorPatterns": [
+        "\\bHTTP (502|503|504)\\b"
+      ],
+      "errorPatternNotes": [
+        "a gateway error (HTTP 502, 503 or 504) reported by the API"
+      ],
+      "misc": {
+        "statusCodes": [
+          502,
+          503,
+          504
+        ]
+      },
       "minTests": 2,
       "minModules": 1,
       "kiRef": "KI-43",
@@ -76,7 +92,14 @@
       "id": "reports-500-01403004",
       "title": "HTTP 500 01403004 on POST /v3/reports",
       "label": "application-bug-suspected",
-      "misc": { "statusCodes": [500], "apiErrorCode": "01403004", "urlPattern": "/v3/reports", "method": "POST" },
+      "misc": {
+        "statusCodes": [
+          500
+        ],
+        "apiErrorCode": "01403004",
+        "urlPattern": "/v3/reports",
+        "method": "POST"
+      },
       "minTests": 1,
       "minModules": 1,
       "kiRef": "Meeting report fails first Save with HTTP 500 (2026-08-25)",
@@ -89,8 +112,16 @@
       "id": "client-js-crash",
       "title": "client-side JavaScript crash",
       "label": "application-bug-suspected",
-      "errorPatterns": ["is not a function", "is not iterable", "Cannot read propert(y|ies) of (undefined|null)"],
-      "errorPatternNotes": ["a JavaScript \"is not a function\" error", "a JavaScript \"is not iterable\" error", "a JavaScript read of a property of undefined or null"],
+      "errorPatterns": [
+        "is not a function",
+        "is not iterable",
+        "Cannot read propert(y|ies) of (undefined|null)"
+      ],
+      "errorPatternNotes": [
+        "a JavaScript \"is not a function\" error",
+        "a JavaScript \"is not iterable\" error",
+        "a JavaScript read of a property of undefined or null"
+      ],
       "minTests": 2,
       "minModules": 1,
       "orKnownIssue": true,
@@ -99,6 +130,47 @@
       "added": "2026-10-15",
       "confirmed": false,
       "why": "The same text can come from test code, so a label needs either a known-issue match for the failing code or the same crash in at least 2 tests."
+    },
+    {
+      "id": "products-put-500-00903002",
+      "title": "HTTP 500 00903002 on PUT /products/{id}",
+      "label": "application-bug-suspected",
+      "misc": {
+        "statusCodes": [
+          500
+        ],
+        "apiErrorCode": "00903002",
+        "urlPattern": "/products/\\d+",
+        "method": "PUT"
+      },
+      "minTests": 2,
+      "minModules": 1,
+      "kiRef": "KI-TBD (placeholder, product edit PUT 500)",
+      "kiFile": "docs/known-issues/products-and-services.md",
+      "added": "2026-10-21",
+      "confirmed": false,
+      "why": "Main run 39534804354 (kylas-prod, observed 2026-10-21): PUT /products/{id} returned HTTP 500 code 00903002 \"Something went wrong\" for products 512133, 512136, 512140, 512141 and 512152 to 512170 in shards 2 and 4 and the P&S formFields job; the same edits passed on staging. Two tests are required because one captured 500 is not proven to be the request that failed the test; one module is enough because the endpoint is specific."
+    },
+    {
+      "id": "contacts-post-400-000000-empty",
+      "title": "HTTP 400 000000 with empty errorDetails on POST /contacts/",
+      "label": "application-bug-suspected",
+      "misc": {
+        "statusCodes": [
+          400
+        ],
+        "apiErrorCode": "000000",
+        "urlPattern": "/contacts/?$",
+        "method": "POST",
+        "bodyPattern": "\"errorDetails\"\\s*:\\s*(null|\\[\\s*\\]|\"\")"
+      },
+      "minTests": 5,
+      "minModules": 2,
+      "kiRef": "KI-TBD (placeholder, POST /contacts/ 400 000000)",
+      "kiFile": "docs/known-issues/rate-limits-and-error-pages.md",
+      "added": "2026-10-21",
+      "confirmed": false,
+      "why": "Main run 39470566009 (kylas-prod, observed 2026-10-20): POST /contacts/ returned HTTP 400 code 000000 \"Something didn't work as expected\" with empty errorDetails 112 times between 17:57 and 21:02 UTC; 19 contacts, 2 companies and 2 meetings tests were affected. Code 000000 is generic, so the body shape and a breadth of 5 tests across 2 modules are required before it labels anything."
     }
   ]
 }
