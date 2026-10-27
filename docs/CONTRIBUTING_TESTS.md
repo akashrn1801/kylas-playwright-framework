@@ -3,7 +3,7 @@
 > **Purpose:** Task-shaped checklists for changing this suite — existing module, new module, shared account-wide config feature — plus the touch / don't-touch list, pre-commit checklist, Definition of Done and the docs size policy.
 > **Read when:** before adding or changing anything under `tests/` or `src/modules/`, before closing out any task, and before adding or growing a doc.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-27 @ a9f5372
 
 Rule numbers (R1–R25) refer to the 25 standing rules in [CLAUDE.md](../CLAUDE.md); mechanics for each pattern are in [PATTERNS.md](./PATTERNS.md). Every citation below names a real file — if it looks wrong the file moved; trust the file (rule 12).
 
@@ -13,13 +13,13 @@ Rule numbers (R1–R25) refer to the 25 standing rules in [CLAUDE.md](../CLAUDE.
 
 1. **Tag every test**: `@smoke` (navigation/happy path), `@regression` (full functional + RBAC), `@prodSafe` (read-only). A test that creates, edits or deletes data is never `@prodSafe` — `prod.yml`/`Jenkinsfile.prod` run against real production (see [CI_PIPELINES.md](./CI_PIPELINES.md)). `npm run check:conventions` enforces the tag.
 2. **Import `test`/`expect` from `src/fixtures/index.ts`**, never `@playwright/test` — sole exception `tests/ui/dashboard/login.spec.ts`. Shared-config-suite files import the entity's lock-wrapped `test` instead (§C.2).
-3. **Factories, not literals**: `generateXxxData()` (restricted user's own), `generateAdminXxxData()` (`ADM<ts>`), `generateSharedXxxData()` (`SHR<ts>`) in `src/data/factories/`. The prefix exists because QA/staging data is never cleaned, so only a distinguishing prefix makes an RBAC negative assertion trustworthy (R5).
+3. **Factories, not literals**: `generateXxxData()` (restricted user's own), `generateAdminXxxData()` (`ADM<ts>`), `generateSharedXxxData()` (`SHR<ts>`) in `src/data/factories/` (the scaffold from `npm run new:module` creates all three; existing factories are not uniform: Leads, Contacts, Companies and Deals have `generateShared*`, Tasks has no Shared generator, and Quotations and Reports use `generateRestricted*` for the restricted user). The prefix exists because QA/staging data is never cleaned, so only a distinguishing prefix makes an RBAC negative assertion trustworthy (R5).
 4. **No `waitForTimeout()`** — blocked by `scripts/hooks/pre-commit` (new lines only) and `pre-push`. Wait on a condition (R2).
 5. **Pick the right recovery combinator** (all in `src/core/BasePage.ts`):
    - `withSessionExpiryRecovery()` — any raw `expect(...).toBeVisible/toHaveText/toHaveURL` you write in a module file (R3).
-   - `withRateLimitRecovery()` — the app's "Whoa! Too many requests at once!" page and the generic "Something is broken here" error-boundary page can replace any screen under CI load; see [ADR 0008](./adr/0008-error-page-recovery.md) and `clickDetailPageTab()` / `waitForEntityListPage()` for shipped examples.
+   - `withRateLimitRecovery()` — the app's "Whoa! Too many requests at once!" page and the generic "Something is broken here" error-boundary page can replace any screen under CI load; see [ADR 0008](./adr/0008-error-page-recovery.md) and `BasePage.clickDetailPageTab()` / `BasePage.waitForEntityListPage()` for shipped examples (both wrap their waits in `withRateLimitRecovery()`; checked against `src/core/BasePage.ts` 2026-10-27).
    - `armResponseWaitWithRecovery()` — arm a `waitForResponse()` *before* the triggering click (R16); example `DealsPage.clickAddDeal()`.
-   - When two apply, nest rate-limit OUTER: `withRateLimitRecovery(() => withSessionExpiryRecovery(...))` (`FormFieldsConfigPage.open()`).
+   - When two apply, nest rate-limit OUTER: `withRateLimitRecovery(() => withSessionExpiryRecovery(...))` (`FormFieldsConfigPage.open()` in `src/modules/formFields/FormFieldsConfigPage.ts`: the tab-active assertion at the end of `open()`).
 6. **Before/after `--list` diff.** Any change that could add/remove/duplicate a test: `npx playwright test --project=chromium --list` before and after. `npm run check:test-counts` compares against `config/expected-test-counts.json`; after a deliberate change run `npm run generate:test-counts` and commit the baseline.
 7. **Locators only in page objects** (`src/modules/<module>/<Module>Page.ts`), keyed to internal names (R6). Run `locator-reviewer` on new locators — the `PostToolUse` hook (`scripts/hooks/post-file-edit-locator-reminder.sh`) reminds you.
 8. **Test labels**: per-module prefix + next free number — grep the file *and its UI/RBAC sibling* before choosing ([PATTERNS.md](./PATTERNS.md) test-label rule).
@@ -47,7 +47,7 @@ Start with `npm run new:module` (`scripts/new-module.ts` scaffolds factory + pag
 (Like Form Field Limits — one global setting that every test touching that field sees.) Highest blast radius in this repo; read [known-issues/sharding-and-locks.md](./known-issues/sharding-and-locks.md) first.
 
 1. **A dedicated field per consumer** ([ADR 0001](./adr/0001-dedicated-custom-fields.md)) — removing the shared resource beats any locking scheme layered over it.
-2. **Cross-process lock, mutating tests only.** `src/` lock factory `tests/ui/formFields/formFieldLockFactory.ts` (heartbeat staleness + FIFO fairness — [ADR 0005](./adr/0005-heartbeat-based-lock.md)). Classify **per test**: anything calling `configureFieldLimit()` / `configureFieldRegex()` / `clearFieldConfiguration()` or otherwise writing the config uses the entity's lock-wrapped `test`; read-only tests use plain `baseTest` from `src/fixtures/index.ts`. Wrong either way = needless serialization or the original race.
+2. **Cross-process lock, mutating tests only.** Lock factory `tests/ui/formFields/formFieldLockFactory.ts` (heartbeat staleness + FIFO fairness — [ADR 0005](./adr/0005-heartbeat-based-lock.md)). Classify **per test**: anything calling `configureFieldLimit()` / `configureFieldRegex()` / `clearFieldConfiguration()` or otherwise writing the config uses the entity's lock-wrapped `test`; read-only tests use plain `baseTest` from `src/fixtures/index.ts`. Wrong either way = needless serialization or the original race.
 3. **A file lock protects only one filesystem.** Sharded CI runs shards on separate VMs, so the lock alone is not enough → **UI+RBAC co-located** by a fixed matrix job, never by Playwright's count-based `--shard` ([ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md)). Register the suite in `config/sharedConfigSuites.json` (read by `scripts/plan-shards.ts`) and keep the workflows' `run-formfields-tests` matrix in step — `npm run check:formfields-matrix-sync` verifies.
 4. **`globalSetup` HTTP calls** you add need a bounded transient retry (429/5xx only, never masking a real 4xx) — `withTransientRetry()` in `src/auth/globalSetup.ts`.
 5. **`.serial` scope** — smallest block needing atomicity (per field-type / category), never a whole file: serial mode re-runs the entire block when any test fails ([ADR 0006](./adr/0006-serial-sub-blocks.md)).
@@ -75,7 +75,7 @@ Run in this order; all must be clean before you ask for a commit.
 3. The specific tests you touched, isolated, 3× (R8); `--list` before/after for structural changes
 4. Definition of Done below, ending with `npm run check:docs`
 
-**Proposed hook change (not applied — your decision).** `scripts/hooks/pre-commit` exits early when no `.ts` file is staged, so a docs-only commit never reaches any check. To run the (offline, fast) docs guard whenever docs or the scripts that generate them are staged, insert this *before* the existing `STAGED_FILES=...` line, then re-install the hook into `.git/hooks/`:
+**Proposed hook change (not applied — your decision).** `scripts/hooks/pre-commit` exits early when no `.ts`/`.tsx`/`.js`/`.jsx` file outside `scripts/hooks/` and `.claude/` is staged, so a docs-only commit never reaches any check. To run the (offline, fast) docs guard whenever docs or the scripts that generate them are staged, insert this *before* the `echo "🔍 Checking for waitForTimeout() anti-pattern..."` line (which sits above the `STAGED_FILES=...` line; both precede the early exit), then re-install the hook into `.git/hooks/`:
 
 ```diff
 +# Docs guard: budgets, headers, dead links, generated figures (offline tier, ~seconds)
@@ -142,4 +142,4 @@ Why: Claude Code warns when instruction files are large and a fresh session othe
 - Edit a git hook to bypass a block it enforces — fix the hook, with human review.
 - Change workflows, Jenkinsfiles or `playwright.config.ts` without flagging it for review (every such change here was prepared as a diff for a human).
 - Raise a timeout to make a flaky test pass (R10).
-- Run any git write operation as an automated agent (R13).
+- Run any `git` or `gh` command as Claude Code or an agent, read-only ones included (R13): `.claude/settings.json` denies `Bash(git *)` and `Bash(gh *)`; ask the user to run it and paste the output.

@@ -13,9 +13,10 @@
 #
 # Values (measured, not guessed): healthy install steps took 24-33 s on run
 # 37466967016 (11 jobs) and 47 s / 85 s / 129 s on run 37669596623. So:
-#   - per attempt: 180 s (1.4x the slowest healthy install seen, 129 s)
-#   - 3 attempts, 5 s then 10 s backoff => at most ~9.25 minutes, inside the
-#     workflows' step-level `timeout-minutes: 10`, which stays as the backstop.
+#   - per attempt: 300 s (was 180 s, see "Slow mirror" below)
+#   - 2 attempts, 5 s backoff, last attempt clamped to the remaining budget
+#     => at most TOTAL_BUDGET_SECONDS (570 s), inside the workflows' step-level
+#     `timeout-minutes: 10`, which stays as the backstop.
 # Both are overridable for testing only (INSTALL_CMD, ATTEMPT_TIMEOUT_SECONDS,
 # MAX_ATTEMPTS, BACKOFF_BASE_SECONDS, TOTAL_BUDGET_SECONDS, REAP_APT).
 #
@@ -38,6 +39,34 @@
 # old "~9.25 min" figure ignored that grace; 3 x (180 + 15) + backoff would
 # have touched 10 min.
 #
+# Slow mirror (sandbox run 39934344278, jobs shard 2 attempt 1, formFields deal
+# and company attempt 2): all 3 attempts timed out at 180 s, every time inside
+# the `apt-get install` package download from azure.archive.ubuntu.com (the
+# 25.9 MB set of fonts/glib/nss/xvfb), never in the browser download. The
+# mirror was slow, not dead (the 20 s stall timeout never fired): a healthy job
+# on the same run needed "Fetched 25.9 MB in 2min 0s (216 kB/s)", 139 s for the
+# whole step. apt keeps the debs it already fetched, so a retry resumes (20.5 MB
+# then 11.8 MB left on attempts 2 and 3). Fewer, longer attempts therefore let a
+# slow download finish: attempt 1 gets 300 s, attempt 2 the rest of the budget
+# (about 245 s). Each attempt now logs its elapsed time so a slow mirror is
+# visible even when the install succeeds.
+#
+# Apt mirror override (default on; APT_MIRROR_OVERRIDE=off disables it, or change
+# the default below). On ubuntu-24.04 runners apt reads
+# "URIs: mirror+file:///etc/apt/apt-mirrors.txt", and every download in our logs
+# (799 Get: lines, security pocket included) came from azure.archive.ubuntu.com.
+# That mirror regularly degrades to a trickle that apt's timeouts cannot catch
+# because the connection stays alive: 5 of 21 installs were slow in sandbox run
+# 39934344278 (159 kB/s, 216 kB/s, three jobs stalled). Before the install,
+# with --with-deps, every file under /etc/apt that names azure.archive.ubuntu.com
+# is rewritten to http://archive.ubuntu.com/ubuntu/ (the security pocket moves
+# with it: same archive, apt signature checks unchanged), each changed file is
+# logged with its matching lines before and after, and if an azure reference
+# survives a rewrite that changed at least one file the script fails with an
+# ::error::. If nothing references azure, it logs that and carries on. A rewrite
+# that could not be written (no permission) only warns: the bounded attempts
+# below stay the backstop. APT_DIR and APT_SUDO exist for the smoke tests only.
+#
 # Unsupported runner OS (2026-10-20, main run 39456246717): on ubuntu 26.04
 # Playwright 1.60.0 prints "Cannot install dependencies for ubuntu26.04-x64 ...
 # Error: Playwright does not support chromium on ubuntu26.04-x64" and exits
@@ -55,8 +84,8 @@
 set -u
 
 INSTALL_CMD="${INSTALL_CMD:-npx playwright install chromium}"
-ATTEMPT_TIMEOUT_SECONDS="${ATTEMPT_TIMEOUT_SECONDS:-180}"
-MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+ATTEMPT_TIMEOUT_SECONDS="${ATTEMPT_TIMEOUT_SECONDS:-300}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-2}"
 BACKOFF_BASE_SECONDS="${BACKOFF_BASE_SECONDS:-5}"
 TOTAL_BUDGET_SECONDS="${TOTAL_BUDGET_SECONDS:-570}"
 KILL_GRACE_SECONDS=15
@@ -65,6 +94,9 @@ VERSION_CMD="${VERSION_CMD:-npx --no-install playwright --version}"
 ATTEMPT_LOG=$(mktemp)
 trap 'rm -f "$ATTEMPT_LOG"' EXIT
 REAP_APT="${REAP_APT:-auto}"
+APT_MIRROR_OVERRIDE="${APT_MIRROR_OVERRIDE:-on}"
+APT_DIR="${APT_DIR:-/etc/apt}"
+APT_SUDO="${APT_SUDO-sudo}"
 
 # Terminate any apt-get still running after a timed-out attempt. Logs what it
 # found. dpkg is deliberately left alone.
@@ -106,6 +138,57 @@ fail_unsupported_os() {
   exit 1
 }
 
+# Rewrite azure.archive.ubuntu.com to archive.ubuntu.com under $APT_DIR and
+# verify. Logs every changed file. Exits 1 only when a rewrite changed at least
+# one file and an azure reference still survives.
+rewrite_apt_mirror() {
+  if [ "$APT_MIRROR_OVERRIDE" = "off" ]; then
+    echo "apt mirror override is off (APT_MIRROR_OVERRIDE=off): leaving $APT_DIR as configured"
+    return 0
+  fi
+  local host_re='azure\.archive\.ubuntu\.com' files f changed=0 left sum_before sum_after
+  # shellcheck disable=SC2086 # APT_SUDO is empty or "sudo" (word-split on purpose)
+  files=$($APT_SUDO grep -rIl -e "$host_re" "$APT_DIR" 2>/dev/null)
+  if [ -z "$files" ]; then
+    echo "apt mirror: nothing to rewrite (no azure.archive.ubuntu.com reference under $APT_DIR)"
+    return 0
+  fi
+  while IFS= read -r f; do
+    echo "apt mirror: rewriting $f to http://archive.ubuntu.com/ubuntu/ (before):"
+    # shellcheck disable=SC2086
+    $APT_SUDO grep -n -e "$host_re" "$f" | sed 's/^/    /'
+    # shellcheck disable=SC2086
+    sum_before=$($APT_SUDO cksum "$f" 2>/dev/null)
+    # shellcheck disable=SC2086
+    if $APT_SUDO sed -i -E "s#https?://${host_re}/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g" "$f"; then
+      # shellcheck disable=SC2086
+      sum_after=$($APT_SUDO cksum "$f" 2>/dev/null)
+      if [ "$sum_before" != "$sum_after" ]; then
+        changed=$((changed + 1))
+        echo "apt mirror: $f (after):"
+        # shellcheck disable=SC2086
+        $APT_SUDO grep -n -e 'archive\.ubuntu\.com' "$f" | sed 's/^/    /'
+      else
+        echo "apt mirror: $f unchanged (no URL of the expected form)"
+      fi
+    else
+      echo "::warning::apt mirror: could not rewrite $f"
+    fi
+  done <<<"$files"
+  # shellcheck disable=SC2086
+  left=$($APT_SUDO grep -rIn -e "$host_re" "$APT_DIR" 2>/dev/null)
+  if [ -z "$left" ]; then
+    echo "apt mirror: rewrote $changed file(s); no azure.archive.ubuntu.com reference left under $APT_DIR"
+    return 0
+  fi
+  if [ "$changed" -ge 1 ]; then
+    echo "::error title=apt mirror rewrite incomplete::azure.archive.ubuntu.com is still referenced under $APT_DIR after rewriting $changed file(s): ${left//$'\n'/ | }"
+    exit 1
+  fi
+  echo "::warning::apt mirror: could not rewrite any file, azure.archive.ubuntu.com stays in use (relying on the bounded attempts)"
+  return 0
+}
+
 FLAGS="$*"
 if [[ " $FLAGS " == *" --with-deps "* ]]; then
   if printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\nDPkg::Lock::Timeout "60";\n' \
@@ -114,6 +197,7 @@ if [[ " $FLAGS " == *" --with-deps "* ]]; then
   else
     echo "::warning::could not write /etc/apt/apt.conf.d/99-ci-timeouts — relying on the per-attempt timeout only"
   fi
+  rewrite_apt_mirror
 fi
 
 attempt=1
@@ -131,9 +215,11 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   : >"$ATTEMPT_LOG"
   # Process substitution (not a pipe): a leftover child holding the pipe open
   # after a timeout must not stall the script behind `tee`.
+  attempt_started=$SECONDS
   # shellcheck disable=SC2086 # INSTALL_CMD and FLAGS are intentionally word-split
   timeout -k "$KILL_GRACE_SECONDS" "$limit" $INSTALL_CMD $FLAGS > >(tee "$ATTEMPT_LOG") 2>&1
   rc=$?
+  echo "Playwright browser install: attempt $attempt/$MAX_ATTEMPTS took $((SECONDS - attempt_started))s (exit $rc)"
   if [ "$rc" -eq 0 ]; then
     echo "Playwright browser install succeeded on attempt $attempt"
     exit 0

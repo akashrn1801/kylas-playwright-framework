@@ -3,7 +3,7 @@
 > **Purpose:** Confirmed findings and resolved incidents for the Reports module and its run-count verification.
 > **Read when:** touching `ReportsPage.ts`, `reports*.spec.ts`, report-count verification, or considering Playwright project `dependencies`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-14 @ cfd86f7
+> **Last verified:** 2026-10-27 @ a9f5372
 
 Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Report Name" sort, Meeting-report first-save HTTP 500) are tracked outside this repo. The Quotation report-entity-type gap is in [ci-pipelines.md](./ci-pipelines.md). UI-shape patterns (draggable rows, dual react-select families, three-route pages, carousel error banner) are in [../PATTERNS.md](../PATTERNS.md).
 
@@ -62,7 +62,7 @@ Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Repor
 
 ### Run-count test missing a Quotation entity type on stage/prod — 2026-09-09
 - **Symptom:** the quotation report-count tests failed with `locator.waitFor: Timeout 10000ms exceeded` on the Entity Type option.
-- **Root cause:** the Quotation report entity type was deployed to QA only (environment gap, not a flake).
+- **Root cause:** the Quotation report entity type was deployed to QA only (environment gap, not a flake). **UNVERIFIED (re-check per rule 20):** the code contradicts itself: the comment above the endpoint map in `ReportsPage.ts` (~line 103) says Quotation reports were "confirmed deployed to stage/prod 2026-09-03", while `skipIfQuotationEntityTypeUnavailable()` (~line 929) still says "confirmed QA-only as of 2026-09-09". The 09-09 wording cites a qa run that passed and a prod run that failed, but nothing in the repo shows which statement is true today; only the live presence check settles it per environment.
 - **Fix:** see [ci-pipelines.md](./ci-pipelines.md) — `ReportsPage.skipIfQuotationEntityTypeUnavailable()` live presence check.
 - **Revert:** see that entry.
 - **Commit:** `6184a11`

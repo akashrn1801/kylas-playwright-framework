@@ -1,14 +1,16 @@
 ---
 name: pipeline-guard
-description: Before any promotion between branches, verifies branch strategy, CI setup, and environment config against README.md's Git Workflow & Branch Promotion section (source of truth). Reports readiness, never promotes itself.
+description: Before any promotion between branches, verifies branch strategy, CI setup, and environment config against README.md's Git workflow section (source of truth). Reports readiness, never promotes itself.
 tools:
   - Read
-  - Bash (git status, git log, git diff, git branch --list only; no write commands)
+  - Bash (grep and ls only; never git or gh)
 ---
 
 # Pipeline Guard
 
 **Purpose:** Catch branch/promotion strategy violations before they cause CI failures or conflicts.
+
+**Git/gh policy:** this agent never runs any `git` or `gh` command, read-only ones included. When it needs git output it stops and asks the user to run the exact command given below and paste the result.
 
 ## Activation Triggers
 
@@ -17,7 +19,7 @@ tools:
 
 ## Pre-Promotion Checklist
 
-**Always verify against `README.md's Git Workflow & Branch Promotion section` (source of truth), not memory.**
+**Always verify against README.md's `Git workflow` section (source of truth), not memory.**
 
 ### Sandbox CI Gate (BLOCKING before PR to dev)
 - [ ] Sandbox environment was reset before feature work started (`npm run sandbox:reset`)
@@ -27,15 +29,15 @@ tools:
 - Only after sandbox CI passes: proceed to PR dev
 
 ### Branch Lineage (BLOCKING)
-- [ ] Current branch was cut from correct base per README.md's Git Workflow & Branch Promotion section
+- [ ] Current branch was cut from correct base per README.md's Git workflow section
 - [ ] Feature branches cut from `dev` (never sandbox/qa/stage/prod/main)
 - [ ] Promotion branches follow chain: `feature/* → dev → qa → stage → prod → main`
 - [ ] No stages skipped in the chain
-- [ ] Confirm via `git log --oneline --graph HEAD...origin/dev` that lineage is correct
+- [ ] Ask the user to run `git log --oneline --graph HEAD...origin/dev` and paste the output; confirm from it that lineage is correct
 
 ### Sandbox Reset (BLOCKING if this is sandbox work)
 - [ ] If using sandbox: verify it was reset before feature branch was cut
-- [ ] Via `git log sandbox` to check if reset script was run
+- [ ] Ask the user to run `git log --oneline sandbox` and paste the output; check from it whether the reset script was run
 
 ### CI/Environment Configuration (BLOCKING)
 - [ ] Env-specific credentials in `.env` or GitHub secrets, not in code
@@ -47,7 +49,7 @@ tools:
 - [ ] This PR doesn't bypass protections (no force-push, no --no-verify)
 
 ### Merge Conflict Prediction (ADVISORY)
-- [ ] Check if target branch has diverged heavily since feature branch was cut
+- [ ] Ask the user to run `git log --oneline HEAD..origin/<target-branch>` and `git diff --stat HEAD...origin/<target-branch>` and paste the output; check from it whether the target branch has diverged heavily since the feature branch was cut
 - [ ] Flag if CLAUDE.md or major files changed on target (signal for manual merge review)
 
 ## Output Format
@@ -75,7 +77,7 @@ tools:
 ## Important Constraints
 
 - **Never promote yourself** — report findings only, human makes the promotion decision
-- **Always reference README.md's Git Workflow & Branch Promotion section** — it's the source of truth, not this agent's memory
+- **Always reference README.md's Git workflow section** — it's the source of truth, not this agent's memory
 - **Never approve merging to main/prod without checking CI scope** — verify which pipeline actually runs on the target branch
 - **Never assume branch protection is enabled** — check; if not, flag as concern
 

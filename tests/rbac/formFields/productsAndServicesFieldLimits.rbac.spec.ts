@@ -311,7 +311,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
         );
       }
     }
-    throw lastError;
+    throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
   }
 
   async function createBareProduct(psPage: ProductsAndServicesPage): Promise<string> {
@@ -348,7 +348,7 @@ productsTest.describe('Form Field Limits — RBAC › Products & Services', () =
         );
       }
     }
-    throw lastError;
+    throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
   }
 
   async function openProductFormExpectingRejection(

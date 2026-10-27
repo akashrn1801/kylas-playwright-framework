@@ -46,6 +46,8 @@ export interface MiscMatch {
   apiErrorCode?: string;
   urlPattern?: string;
   method?: string;
+  // Regex tested against the captured response body, for codes (e.g. 000000) that are too generic on their own.
+  bodyPattern?: string;
 }
 
 export interface FailureSignature {
@@ -159,6 +161,7 @@ export function parseSignatureRegistry(raw: unknown): SignatureRegistry {
       }
     }
     if (s.misc?.urlPattern) new RegExp(s.misc.urlPattern, 'i');
+    if (s.misc?.bodyPattern) new RegExp(s.misc.bodyPattern, 'i');
     if (!(s.minTests >= 1) || !(s.minModules >= 1)) throw new Error(`${where}: minTests/minModules must be >= 1`);
     for (const f of ['title', 'kiRef', 'kiFile', 'added', 'why'] as const) {
       if (typeof s[f] !== 'string' || !s[f]) throw new Error(`${where}: missing ${f}`);
@@ -195,12 +198,14 @@ function matchSignature(sig: FailureSignature, input: FailureCauseInput): Signat
   const m = sig.misc;
   if (m) {
     const urlRe = m.urlPattern ? new RegExp(m.urlPattern, 'i') : null;
+    const bodyRe = m.bodyPattern ? new RegExp(m.bodyPattern, 'i') : null;
     const hit = input.related.find(
       (e) =>
         typeof e.statusCode === 'number' &&
         (!m.statusCodes || m.statusCodes.includes(e.statusCode)) &&
         (m.apiErrorCode === undefined || e.apiErrorCode === m.apiErrorCode) &&
         (!urlRe || (e.url !== undefined && urlRe.test(e.url))) &&
+        (!bodyRe || (e.responseBody !== undefined && bodyRe.test(e.responseBody))) &&
         (m.method === undefined || (e.method ?? '').toUpperCase() === m.method.toUpperCase())
     );
     if (hit) {

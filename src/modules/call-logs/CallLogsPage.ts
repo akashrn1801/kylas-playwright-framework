@@ -1533,7 +1533,28 @@ export class CallLogsPage extends BasePage {
   async saveEditedCallLog(): Promise<void> {
     logger.info('Saving edited call log');
     await this.saveButton().scrollIntoViewIfNeeded();
+    // WHY wait for the save response (main run 39534804354, call-logs.rbac:174):
+    // the trace of the failed attempt shows the save request carried
+    // outcome=busy but had no response yet when the test failed ~2 s later —
+    // assertNoFormErrors() only waits a fixed 1.5 s and the heading below is
+    // already visible under the edit modal, so this method returned while the
+    // PUT was still in flight. The real request, from the sandbox trace
+    // (run 39561566335), is `PUT /v1/call-logs/<id>/` WITH a trailing slash;
+    // an earlier pattern that ended at the digits never matched it.
+    const saveResponse = this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        /\/v1\/call-logs\/\d+\/?(?:\?.*)?$/.test(res.url()) && res.request().method() === 'PUT',
+      'saveEditedCallLog: call log save (PUT /v1/call-logs/{id}/)',
+      20000
+    );
     await this.click(this.saveButton(), 'Save button');
+    const response = await saveResponse;
+    if (!response.ok()) {
+      const body = (await response.json().catch(() => null)) as { code?: unknown } | null;
+      throw new Error(
+        `Backend rejected the save: PUT /v1/call-logs/{id}/ -> ${response.status()} ${String(body?.code ?? 'no-code')}`
+      );
+    }
     await this.assertNoFormErrors('call log edit form');
     await this.detailEntityHeading().waitFor({ state: 'visible', timeout: 15000 });
     logger.success('Call log updated');
@@ -1717,12 +1738,18 @@ export class CallLogsPage extends BasePage {
 
   async assertOutcomeOnDetail(expectedOutcome: string): Promise<void> {
     logger.info(`Asserting outcome on detail: ${expectedOutcome}`);
-    await this.detailOutcomeLabel().waitFor({ state: 'visible', timeout: 10000 });
-    const text = await this.detailOutcomeLabel().textContent();
-    if (!text?.includes(expectedOutcome)) {
-      throw new Error(`Outcome "${text}" does not contain "${expectedOutcome}"`);
-    }
-    logger.success(`Outcome confirmed: ${text}`);
+    // WHY a retrying assertion, not a one-shot textContent() read (main run
+    // 39534804354, call-logs.rbac:174): after an edit the app refetches the
+    // detail (GET /v1/call-logs/{id}?relatedToType=…) about 1 s after the save
+    // starts, so the label can still show the pre-save value for a moment. A
+    // value that never arrives still fails, with the text the label showed.
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.detailOutcomeLabel(),
+        `Expected the call log detail outcome to contain "${expectedOutcome}"`
+      ).toContainText(expectedOutcome, { timeout: 10000 })
+    );
+    logger.success(`Outcome confirmed: ${expectedOutcome}`);
   }
 
   async assertOwnerVisible(): Promise<void> {
