@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 0f87be3
+> **Last verified:** 2026-10-28 @ 44a20dd
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-28 — fix: create failures explain themselves. Contacts/Companies/Leads/Deals create flows put the matched request, HTTP status, code and message (or no response / session expiry) in the thrown error instead of "save likely failed silently"; Quotations list/create fail at once with the status and message when `layout/list` or `layout/create` returns 4xx/5xx; `BasePage.fill()`'s `waitFor` is bounded by `config.timeouts.navigation`; registry signature `backend-service-discovery-failure`; KI-49 (QA run 40477938102 was a backend DNS outage, not the KI-48 crash). a thrown form error (Contacts/Companies/Leads, Deals when the response was already captured) keeps its text and gets the request detail appended. No new retries; verified on staging with a mocked 400 and the create/clone/Quotations regression runs, not on QA (pending)
 - 2026-10-28 — fix: the CO9 (`companies.spec.ts`) and CR17 (`contacts.rbac.spec.ts`) note tests counted `div.row.pt-2.pl-2.pr-2` once, which also matches the Notes card's loading placeholder rows, so a new company's baseline read 3 instead of 0 (GitHub main run 40637702829, PROD, shard 4: `GET /v1/notes/relation` returned `totalElements: 0`, count read 3, expected 4, received 1); both now use the existing `BasePage.notesPanel()` pattern (settle, count the real `.note.card` rows, retrying `toHaveCount`). QA: 5/5 passes each (`--repeat-each=5`). The PROD flake is not reproduced, so this is hardening with the root cause inferred from the trace, not proven (353da8f)
 - 2026-10-28 — docs: Jenkins sharding documented: ADR 0012, CI_PIPELINES 5.1 (environment map, triggers, locks, engine), RUNBOOK setup steps, KI-45/46/47 (KI-14 updated), REPORTING `lanes` and scoped-run marker, sharding-and-locks and ci-pipelines entries; the generated Jenkins matrix row no longer says "Sharded by planner: no" (0f87be3)
 - 2026-10-28 — ci: the Jenkins collision guard also checks the `pending` and `requested` run statuses (0f87be3)

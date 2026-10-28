@@ -37,6 +37,16 @@ interface QuotationSaveErrorBody {
   validationErrors?: Array<{ message?: string }>;
 }
 
+// WHY a dedicated class (2026-10-28, qa run 40477938102): lets the layout
+// fail-fast check tell its own rejection apart from the swallowed "layout was
+// never requested" timeout.
+class QuotationLayoutLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuotationLayoutLoadError';
+  }
+}
+
 export class QuotationsPage extends BasePage {
   // ─── 1. Retry config ────────────────────────────────────────────────────────
   // WHY: Centralised in config.searchRetry — single place to tune retry behaviour
@@ -232,7 +242,63 @@ export class QuotationsPage extends BasePage {
     return selectedText.trim();
   }
 
-  private async waitForListReady(): Promise<void> {
+  // WHY this exists (2026-10-28, qa run 40477938102, quotations.spec.ts:620
+  // and :640): QA's backend answered GET /v1/quotations/layout/list and
+  // /layout/create with HTTP 400 (cluster DNS failure, "Connection prematurely
+  // closed"). The page then never rendered, and the tests waited 120 s
+  // (Add Quotation button) or 480 s (unbounded fill of the first field) with
+  // no hint of the real cause. Armed BEFORE the navigation/click that triggers
+  // the request. Only a 4xx/5xx layout response is reported; a layout that is
+  // never requested (cached) or times out resolves quietly and the render
+  // wait below decides, exactly as before. A session expiry rethrows, like
+  // every other armResponseWaitWithRecovery() caller.
+  private armLayoutLoadCheck(kind: 'list' | 'create'): Promise<void> {
+    const layoutUrl = new RegExp(`/v1/quotations/layout/${kind}(?:\\?|$)`);
+    const check = this.armResponseWaitWithRecovery(
+      (res) => layoutUrl.test(res.url()) && res.request().method() === 'GET',
+      `quotation ${kind} layout`,
+      config.timeouts.navigation
+    )
+      .then(async (res) => {
+        if (res.status() >= 400) {
+          throw new QuotationLayoutLoadError(
+            `Quotation ${kind} layout failed to load, the page cannot render: ${await this.describeMatchedResponse(res)}`
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof QuotationLayoutLoadError ||
+          /session expired while waiting for a response/i.test(String(error))
+        ) {
+          throw error;
+        }
+      });
+    // Handled here so a rejection that lands after the caller has moved on
+    // (or never reached its race) is not an unhandled rejection.
+    check.catch(() => undefined);
+    return check;
+  }
+
+  // Resolves when any `ready` locator is visible or config.timeouts.navigation
+  // passes (never throws for that, as before); rejects at once if the layout
+  // check reports a failure.
+  private async waitForRenderOrLayoutFailure(
+    layoutCheck: Promise<void>,
+    ready: Locator[]
+  ): Promise<void> {
+    const layoutFailure = new Promise<never>((_, reject) => {
+      layoutCheck.catch(reject);
+    });
+    await Promise.race([
+      layoutFailure,
+      ...ready.map((locator) =>
+        locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation }).catch(() => null)
+      ),
+    ]);
+  }
+
+  private async waitForListReady(layoutCheck: Promise<void>): Promise<void> {
     await this.page.waitForLoadState('domcontentloaded');
     // WHY a real condition-based check (2026-08-09, root-caused via live
     // staging repro of the quotations.rbac.spec.ts:304 sandbox failure): this
@@ -248,13 +314,9 @@ export class QuotationsPage extends BasePage {
     // the list container (populated case) and the create button (always
     // present in the header, regardless of list content, including the
     // legitimately-empty case).
-    await Promise.race([
-      this.listContainer()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
-      this.createButton()
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .catch(() => null),
+    await this.waitForRenderOrLayoutFailure(layoutCheck, [
+      this.listContainer(),
+      this.createButton(),
     ]);
   }
 
@@ -796,8 +858,9 @@ export class QuotationsPage extends BasePage {
   // ─── 5. Navigation ───────────────────────────────────────────────────────────
 
   async goToQuotationsList(): Promise<void> {
+    const layoutCheck = this.armLayoutLoadCheck('list');
     await this.navigateTo(`${config.appUrl}/sales/quotations/list`);
-    await this.waitForListReady();
+    await this.waitForListReady(layoutCheck);
     logger.info('Navigated to quotations list');
   }
 
@@ -892,8 +955,13 @@ export class QuotationsPage extends BasePage {
     // rendered, this click would hang until the outer test timeout instead of
     // failing loud. this.click() bounds the wait to config.timeouts.navigation
     // and carries session-expiry recovery.
+    const layoutCheck = this.armLayoutLoadCheck('create');
     await this.click(this.createButton(), 'Add Quotation button');
     await this.modal().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY (2026-10-28): the drawer opens at once but its fields render only
+    // after GET /v1/quotations/layout/create; fail here with the layout's
+    // status/message instead of in the first fill() much later.
+    await this.waitForRenderOrLayoutFailure(layoutCheck, [this.quotationNumberInput()]);
     logger.info('Opened quotation create form');
   }
 

@@ -772,7 +772,11 @@ export class ContactsPage extends BasePage {
   // at ANY status, classifies 2xx->id, non-2xx generic message/5xx->transient,
   // populated fieldErrors->genuine. Same /reports/ exclusion as the existing
   // captureContactIdFromResponse hardening.
-  private async captureContactCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+  private async captureContactCreateOutcome(): Promise<{
+    id: number | null;
+    transient: boolean;
+    detail: string;
+  }> {
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -794,7 +798,11 @@ export class ContactsPage extends BasePage {
           | number
           | null;
         logger.success(`Captured contact ID: ${id} from ${response.url()}`);
-        return { id, transient: false };
+        return {
+          id,
+          transient: false,
+          detail: id ? '' : `${await this.describeMatchedResponse(response)} (2xx but no id in the body)`,
+        };
       }
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
@@ -808,10 +816,13 @@ export class ContactsPage extends BasePage {
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
           `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
       );
-      return { id: null, transient };
+      return { id: null, transient, detail: await this.describeMatchedResponse(response) };
     } catch (error) {
+      // WHY the cause is now carried in `detail` (2026-10-28): it was only
+      // logged at debug level, so the thrown error could not say whether the
+      // wait timed out or the session expired. Still classified non-transient.
       logger.debug(`Contact create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false };
+      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000) };
     }
   }
 
@@ -835,17 +846,20 @@ export class ContactsPage extends BasePage {
     }
     if (outcome.transient) {
       throw new TransientContactSaveError(
-        'Contact create hit a transient backend error (no field-level validation) — retryable'
+        `Contact create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`
       );
     }
     if (formError) {
-      throw formError;
+      throw this.appendCreateDetail(formError, outcome.detail);
     }
     // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
     // logged "Contact saved successfully" and returned null, letting callers proceed on a
     // contact that doesn't exist. Fail fast instead, matching the "Fresh company ID not
     // captured" convention already used elsewhere in this codebase.
-    throw new Error('Contact ID not captured after save — cannot proceed (save likely failed silently)');
+    // WHY the cause is in the message (2026-10-28, qa run 40477938102): the
+    // old text said "save likely failed silently" for a POST that came back
+    // HTTP 400 with the backend's DNS-resolution message.
+    throw new Error(`Contact ID not captured after save — cannot proceed (${outcome.detail})`);
   }
 
   // ──────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 0f87be3
+> **Last verified:** 2026-10-28 @ 44a20dd
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -47,8 +47,12 @@
 
 ### KI-48 — Quotation form app crash (`getCurrencyId`) blanks the page
 - **Status:** open · **Since:** 2026-10-28 (PROD main run 40637702829, Q27)
-- **What:** uncaught `TypeError` in `getCurrencyId` blanks the page after the layout GET (200). Unchecked: QA run 40477938102 `quotations.spec.ts:640`/`:620`. `BasePage.fill()` has no timeout.
+- **What:** uncaught `TypeError` in `getCurrencyId` blanks the page after the layout GET (200). QA `quotations.spec.ts:620`/`:640` were not this crash (KI-49).
 - **Detail:** [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
+
+### KI-49 — QA backend DNS failures: HTTP 400 "Failed to resolve 'sd-…'" (2026-10-27)
+- **Status:** open, environment · **Since:** 2026-10-27 (QA run 40477938102)
+- **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/` and `GET /v1/quotations/layout/{list,create}`. Create flows and the Quotations layout wait now report status, code, message. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ---
 
@@ -71,7 +75,7 @@
 
 ### KI-37 — Install-step bound and incomplete-run handling: unproven by a real run's logs
 - **Status:** partly confirmed (implemented 2026-10-08; mirror rewrite and a healthy install read in real CI 2026-10-28) · **Since:** 2026-10-07
-- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1, job 122026090281): the azure apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only, because they did not trigger: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause in run 37669596623 unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1, job 122026090281): the azure apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only, because they did not trigger: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause, run 37669596623, unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** the first real install failure or retry: it shows the `Playwright browser install failed` annotation and exercises the retry/kill/budget paths.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
@@ -126,7 +130,7 @@
 
 ### KI-18 — Unmeasured reporting pipeline gaps
 - **Status:** open · **Since:** 2026-09-30 / 2026-10-06
-- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` are written to a pid-named worker file (`WORKER_ID` falls back to `process.pid`) that `MiscErrorReporter.onBegin()` deletes (pre-existing); recovery events are not affected, they go to `recovery-events-main.json` (`MAIN_PROCESS_EVENTS_PATH`), which `MiscErrorReporter` merges; (c) the `/fields` list `ERR_ABORTED` noise is allowlisted (2026-10-09, see CHANGELOG); any other `ERR_ABORTED` family still needs the zero-correlation evidence bar first.
+- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` are written to a pid-named worker file (`WORKER_ID` falls back to `process.pid`) that `MiscErrorReporter.onBegin()` deletes (pre-existing); recovery events are not affected, they go to `recovery-events-main.json` (`MAIN_PROCESS_EVENTS_PATH`), which `MiscErrorReporter` merges; (c) the `/fields` list `ERR_ABORTED` noise is allowlisted; any other `ERR_ABORTED` family still needs the zero-correlation evidence bar first.
 - **History:** [reporting-and-notifications.md](./known-issues/reporting-and-notifications.md).
 
 ---
@@ -135,7 +139,7 @@
 
 ### KI-19 — The escalated sandbox run's formFields track ignores `--grep @regression`
 - **Status:** open · **Since:** 2026-10-06
-- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged, so 18 untagged tests run). 932 = 515 + 417; 916 = 499 + 417. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Not a lost or double-counted test. Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Per-shard arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged, so 18 untagged tests run). 932 = 515 + 417; 916 = 499 + 417. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Per-shard arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** decide whether formFields should honor the tag filter; the one skipped test is the known `call-logs.spec.ts:568` `test.skip`.
 
 ### KI-20 — `waitForTimeout(500)` left in `openUserShareTypeSearch()` catch backoff
@@ -166,7 +170,7 @@
 - **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
 
 ### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
-- **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Local remote-tracking refs (last fetched 2026-09-10) show **no** diff on those files between `origin/dev` and any of the four, and the files have since changed substantially. Re-check after a `git fetch` (rule 25); delete this entry if still clean.
+- **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Remote-tracking refs (last fetched 2026-09-10) showed **no** diff on those files between `origin/dev` and the four; files changed since. Re-check after a `git fetch` (rule 25); delete if clean.
 
 ### KI-43 — Staging search index not reflecting new records: sandbox 38582148420 (64 failed) and 38690038228 (55 failed)
 - **Status:** open (staging environment problem, CONFIRMED by a live probe 2026-10-15; no test-code fix is possible; later run passed, recovery unconfirmed) · **Since:** 2026-10-14
@@ -182,9 +186,9 @@
 
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
 - **Status:** latent, NOT reproduced (no failing run or trace is attributed to it) · **Since:** code comment dated 2026-07-16; recorded here 2026-10-27
-- **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says it was deliberate: "This method's bare `.includes('companies')` is even less specific (no version-prefix requirement at all) and is the same shape of bug, just not yet observed failing here — excluding `/reports/` only, not adding a `/v1/` requirement, since (unlike Deals) the exact real company create/clone endpoint hasn't been directly confirmed in this run's own logs; narrower and lower-risk than guessing the full path."
+- **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says this was deliberate: the exact company create/clone endpoint had not been confirmed in that run's logs, so only `/reports/` was excluded rather than guessing a full path.
 - **Risk:** the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1164`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.
-- **Next check:** fix on a separate branch (not changed here): reuse that `/v1/companies/` regex; confirm the real clone POST path from a trace first (rule 10), and re-run Companies clone 3-5x (rule 8).
+- **Next check:** separate branch: reuse that `/v1/companies/` regex after confirming the clone POST path from a trace (rule 10); re-run clone 3-5x (rule 8).
 
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
@@ -195,4 +199,4 @@
 - **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
 - **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
 - **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
-- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` (~line 103) says Quotation reports were confirmed deployed to stage/prod 2026-09-03, its skip message (~line 929) says QA-only as of 2026-09-09, and nothing in the repo settles which holds today); the two tests that need it self-skip via a live presence check, so nothing to fix — re-verify the claim per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).
+- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` ~L103 says deployed to stage/prod 2026-09-03, its skip message ~L929 says QA-only as of 2026-09-09; nothing in the repo settles it); the two tests that need it self-skip via a live presence check, so nothing to fix — re-verify the claim per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).
