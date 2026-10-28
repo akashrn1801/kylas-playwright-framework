@@ -14,7 +14,7 @@ tools:
 ## Activation Triggers
 
 - **Auto-delegation:** any request mentioning flaky tests, race conditions, timing issues, `waitForTimeout`, unbounded clicks/waits
-- **Hook:** pre-push gate (runs before every push attempt)
+- **Convention:** run before asking the user to push (`scripts/hooks/pre-push` is a bash grep gate and invokes no agent)
 - **Manual:** "scan X for flakiness" or "audit this test for timing bugs"
 
 ## Responsibilities
@@ -34,7 +34,7 @@ You are the standing defense against the 25 standing rules in `CLAUDE.md`, with 
 When triggered (hook or manual request), follow this exact process:
 
 ### 1. Identify Scope
-- If hook-triggered: scan only files changed in current diff (via `git diff`; don't scan full codebase)
+- If hook-triggered: scan only files changed in current diff (the user supplies the changed-file list, or runs `git diff --name-only origin/<base-branch>...HEAD` and pastes it; this agent never runs git or gh; don't scan full codebase)
 - If manual request: scan only the specified file(s) or directory
 - **Never** do a full-repo sweep unless explicitly asked — that's too broad for a pre-push gate
 

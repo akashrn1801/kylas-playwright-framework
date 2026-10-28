@@ -134,6 +134,10 @@ function warn(message: string, err?: unknown): void {
 // a branch where a rebase-retry is the ONLY thing that can conflict, never a
 // real code change.
 const HISTORY_BRANCH_NAME = process.env.HISTORY_BRANCH_NAME || 'ci/reporting-history';
+// WHY env-overridable, non-personal default: this identity is only the git author of the
+// history-branch bookkeeping commits. Characters that could break the quoted shell string are stripped.
+const BOT_GIT_NAME = (process.env.BOT_GIT_NAME || 'kylas-qa-bot').replace(/[^\w .@+-]/g, '');
+const BOT_GIT_EMAIL = (process.env.BOT_GIT_EMAIL || 'qa-bot@users.noreply.github.com').replace(/[^\w.@+-]/g, '');
 // WHY: Confirmed live (2026-07-07) — `git clone` needs an actual URL/path, it
 // cannot resolve a remote NAME the way `git pull origin main` can, since a
 // fresh clone target has no `.git/config` yet to look "origin" up in. The
@@ -747,13 +751,13 @@ async function main() {
       sh(`git checkout --orphan ${HISTORY_BRANCH_NAME}`, repoDir);
       sh(`git rm -rf . --quiet || true`, repoDir);
       fs.writeFileSync(path.join(repoDir, '.gitkeep'), '');
-      sh(`git config user.name "kylas-qa-bot"`, repoDir);
-      sh(`git config user.email "qa-bot@kylas.io"`, repoDir);
+      sh(`git config user.name "${BOT_GIT_NAME}"`, repoDir);
+      sh(`git config user.email "${BOT_GIT_EMAIL}"`, repoDir);
       sh(`git add .gitkeep`, repoDir);
       sh(`git commit -m "chore: initialize reporting-history branch [skip ci]"`, repoDir);
     } else {
-      sh(`git config user.name "kylas-qa-bot"`, repoDir);
-      sh(`git config user.email "qa-bot@kylas.io"`, repoDir);
+      sh(`git config user.name "${BOT_GIT_NAME}"`, repoDir);
+      sh(`git config user.email "${BOT_GIT_EMAIL}"`, repoDir);
     }
 
     // WHY: Confirmed live during verification (2026-07-07) — an earlier version

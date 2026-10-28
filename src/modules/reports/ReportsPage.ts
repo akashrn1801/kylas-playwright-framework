@@ -2076,7 +2076,7 @@ export class ReportsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
 
   // WHY this exists, and why it retries ONLY this one exact signature:
-  // confirmed live 2026-08-25 (see APPLICATION_BUGS.md's dedicated entry and
+  // confirmed live 2026-08-25 (see
   // docs/known-issues/reports-module.md for full evidence)
   // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
   // `POST /v3/reports` for a newly-created Meeting report deterministically
@@ -2138,7 +2138,7 @@ export class ReportsPage extends BasePage {
   }
 
   // WHY this exists, and why the retry below is a FALLBACK, never the
-  // default path: confirmed live 2026-08-25 (see APPLICATION_BUGS.md #4 and
+  // default path: confirmed live 2026-08-25 (see
   // docs/known-issues/reports-module.md for full evidence)
   // — a genuine Kylas backend defect in the report-CREATE handler: the FIRST
   // `POST /v3/reports` for a newly-created Meeting report deterministically
@@ -2164,14 +2164,14 @@ export class ReportsPage extends BasePage {
     }
 
     // FALLBACK — workaround for a confirmed Kylas backend bug (HTTP 500,
-    // code 01403004), see APPLICATION_BUGS.md #4. Reached ONLY because the
+    // code 01403004), see docs/known-issues/reports-module.md. Reached ONLY because the
     // primary attempt above matched this exact confirmed signature. Retried
     // exactly once — whatever happens on this attempt is final; no further
     // retries, and any different failure here still propagates normally via
     // the caller's own checks.
     logger.warn(
       `createReport: POST /v3/reports returned 500/${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} ` +
-        '(confirmed Kylas backend bug — see APPLICATION_BUGS.md) on the primary attempt — ' +
+        '(confirmed Kylas backend bug — see docs/known-issues/reports-module.md) on the primary attempt — ' +
         'retrying Save once as a fallback'
     );
     await this.attemptSaveOnceAndClassify();
@@ -2182,7 +2182,7 @@ export class ReportsPage extends BasePage {
   // bare clickSaveButton(). On stage that test's POST /v3/reports returned HTTP 500 on both
   // the attempt and the retry (log lines labelled with the test name, 14:12:34 and 14:13:50),
   // so the details page never rendered. createReport() already guards this known backend bug
-  // (APPLICATION_BUGS.md #4: 500 + code 01403004, the identical retry succeeds); this exposes the
+  // (docs/known-issues/reports-module.md: 500 + code 01403004, the identical retry succeeds); this exposes the
   // same guard. Still fires only on that exact status+code, so any other failure surfaces at
   // once. The code of the :533 responses was not logged — HYPOTHESIS that it is 01403004.
   async saveNewReport(): Promise<void> {

@@ -184,7 +184,7 @@ async function createProductExpectingAccept(
 ): Promise<string> {
   // WHY this retries the WHOLE create (not just the value verification)
   // up to 3 times: a confirmed, real Kylas application bug (2026-09-23,
-  // see APPLICATION_BUGS.md #6) — under genuine concurrent load, a
+  // see docs/known-issues/form-fields.md) — under genuine concurrent load, a
   // custom field's value can be silently dropped server-side during
   // create even though the create POST itself returns success. Direct raw
   // API evidence confirmed the value is GENUINELY ABSENT from the
@@ -194,7 +194,7 @@ async function createProductExpectingAccept(
   // race window. Mirrors this codebase's own established "bounded
   // whole-operation retry on a confirmed app-side race" mitigation
   // pattern (CallLogsPage.openLogACallForm()'s 5-attempt reload-and-retry
-  // for the analogous Call Logs concurrency bug, APPLICATION_BUGS.md #1).
+  // for the analogous Call Logs concurrency race, see docs/known-issues/locators-and-timing.md).
   const maxAttempts = 3;
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -217,11 +217,11 @@ async function createProductExpectingAccept(
       lastError = error;
       logger.warn(
         `createProductExpectingAccept: value not persisted after create (attempt ${attempt}/${maxAttempts}, ` +
-          `suspected real backend concurrency bug — APPLICATION_BUGS.md #6) — retrying with a fresh product`
+          `suspected backend concurrency issue, see docs/known-issues/form-fields.md) — retrying with a fresh product`
       );
     }
   }
-  throw lastError;
+  throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
 }
 
 async function createBareProduct(psPage: ProductsAndServicesPage): Promise<string> {
@@ -256,11 +256,11 @@ async function updateProductExpectingAccept(
       lastError = error;
       logger.warn(
         `updateProductExpectingAccept: value not persisted after edit (attempt ${attempt}/${maxAttempts}, ` +
-          `suspected real backend concurrency bug — APPLICATION_BUGS.md #6) — retrying the edit`
+          `suspected backend concurrency issue, see docs/known-issues/form-fields.md) — retrying the edit`
       );
     }
   }
-  throw lastError;
+  throw psPage.explainPersistFailure(field.fieldName, maxAttempts, lastError);
 }
 
 // ── PATH 2: REJECT ──────────────────────────────────────────────────────────

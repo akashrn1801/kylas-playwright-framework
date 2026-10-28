@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents about Jenkins/GitHub Actions pipeline behaviour: timeouts, test selection, duration estimates, fixture-setup navigation, deadline-aware waits, load signals.
 > **Read when:** Editing a `Jenkinsfile*`/workflow, `src/fixtures/index.ts` fixture setup, `BasePage.waitForEntityListPage()` timing, or `src/notifications/scripts/estimateDuration.ts`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-27 @ a9f5372
 
 Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real Jenkins/GitHub execution of several items below could not be performed from the authoring environment; the ones marked **unverified** need a real run.
 
@@ -31,7 +31,7 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 ### Fixture-setup navigation had no bucket for a third landing — 2026-09-09
 - **Symptom:** `leads.rbac.spec.ts` ellipsis tests failed with `admin page failed to reach the app's /sales/ area … current URL: ***/setup` (same signature 8× across 3 of 4 shards, 6 self-recovered via retry).
 - **Root cause:** `navigateAndConfirmLoggedIn()` raced only `/sales/` vs `/signIn`; anything else became `'timeout'` and triggered an expensive full re-login that does not address the cause (the app resumes the shared account's last-visited section, e.g. a Products & Services test navigating `/setup/...` on another shard).
-- **Fix:** `NavOutcome` is `'sales' | 'signIn' | 'wrongPage' | 'timeout'`; classification order: URL race, `isSessionExpiryPage()` (catches the Forbidden bootstrap page), then any other same-origin landing → `'wrongPage'` → cheap in-place re-navigation (no re-login). Generic, not enumerated to `/setup`.
+- **Fix:** `NavOutcome` is `'sales' | 'signIn' | 'wrongPage' | 'timeout'`; classification order: URL race, `isSessionExpiryPage()` (catches the Forbidden bootstrap page), then any other same-origin landing → `'wrongPage'` → cheap in-place re-navigation with no re-login. Since the 2026-09-21 follow-up the retry forces a specific target, `${config.appUrl}/sales/home` (`src/fixtures/index.ts` ~458-474), because a bare re-navigation was proven insufficient for a stable "resume last visited section" state. Generic, not enumerated to `/setup`.
 - **Revert:** Revert the `wrongPage` branch in `src/fixtures/index.ts`.
 - **Commit:** `e8529d6`.
 
@@ -44,7 +44,7 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 
 ### Quotation report entity type not deployed to stage/prod — 2026-09-09
 - **Symptom:** Two Reports tests (`reports.spec.ts` and `reports.rbac.spec.ts`, "quotation report count matches") timed out (`locator.waitFor: Timeout 10000ms exceeded`; the retry showed `Timeout 15000ms exceeded waiting for locator('#editEntityModal')`) waiting for a `Quotation` option in the Entity Type dropdown on prod; identical retries failed identically while the same tests passed on QA.
-- **Root cause:** The feature existed on QA only — an environment gap, not a flake and not a Quotations-module issue.
+- **Root cause:** The feature existed on QA only — an environment gap, not a flake and not a Quotations-module issue. **UNVERIFIED (re-check per rule 20):** `ReportsPage.ts` contradicts itself. The comment above its endpoint map (~line 103) says Quotation reports were "confirmed deployed to stage/prod 2026-09-03", while `skipIfQuotationEntityTypeUnavailable()` (~line 929) still says "confirmed QA-only as of 2026-09-09". The prod failure in the symptom is the evidence for the 09-09 wording; nothing in the repo shows which statement holds today. Same note in [reports-module.md](./reports-module.md) and KI-33.
 - **Fix:** `ReportsPage.skipIfQuotationEntityTypeUnavailable()` reads the live Entity Type option list and `test.skip()`s with a reason when absent — self-healing the moment the feature ships (no static env-name check; same convention as `BasePage.skipDedicatedCustomFieldTestIfAbsent()` and the per-module `skipIfCustomFieldsAbsent()` wrappers). Only those two tests use the entity type (grep-confirmed).
 - **Revert:** Remove the first-statement call in both tests.
 - **Commit:** `6184a11`.
@@ -59,7 +59,7 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 ### `waitForEntityListPage()` could outlive the test timeout (`PS6`) — 2026-09-30
 - **Symptom:** `productsAndServices.rbac.spec.ts` `PS6` failed identically twice with `page.reload: Target page, context or browser has been closed` after "list table not visible within 120000ms … reloading and retrying once".
 - **Root cause:** `PS6` alone lacked `test.setTimeout(480000)`, so CI's 120000ms default governed while `NAVIGATION_TIMEOUT: 120000` made the method's own waits sum to more; Playwright's outer timeout fired mid-recovery. Not caused by more concurrent jobs (each runs on its own VM).
-- **Fix:** Added the missing `test.setTimeout(480000)`; `BasePage.waitForEntityListPage()` is now deadline-aware (0.85 × `test.info().timeout`, each wait floored at 5000ms because `timeout: 0` means wait forever, fail fast under 15000ms remaining).
+- **Fix:** Added the missing `test.setTimeout(480000)`; `BasePage.waitForEntityListPage()` is now deadline-aware (0.85 × `test.info().timeout`, each wait floored at 5000ms because `timeout: 0` means wait forever, fail fast under 15000ms remaining). The race has since gained a third signal, the app's 429 "Too many requests" page (`RATE_LIMIT_PAGE_PATTERN`, 2026-10-16); the deadline arithmetic is unchanged.
 - **Revert:** Revert the deadline arithmetic in `waitForEntityListPage()`.
 - **Commit:** `3d58073`.
 
@@ -77,5 +77,5 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 - **Revert:** n/a.
 - **Commit:** n/a — no change.
 
-### Repo hygiene detail (moved from KNOWN_ISSUES_ACTIVE.md, KI-26) — 2026-10-09
-- **Status:** open · **What:** `.env.example` is gitignored and never committed, so a fresh clone has no credential template (the README lists the real required variables; the local file only holds dead `*_DEAL_NAME` entries); `.eslintrc.json` is a legacy config never read by `npm run lint` (`eslint.config.js` is active); pre-existing prettier drift in `QuotationsPage.ts`, `LeadsPage.ts`, `BasePage.ts`; `.claude/settings.json` carries an inert `agent_delegation` / `investigation_log` block whose `INVESTIGATION_LOG.md` does not exist. <!-- ref-ok -->
+### Repo hygiene detail (detail for KNOWN_ISSUES_ACTIVE.md KI-26, which stays open there) — 2026-10-09
+- **Status:** open · **What:** `.env.example` is gitignored and never committed, so a fresh clone has no credential template (the README lists the real required variables; the local file only holds dead `*_DEAL_NAME` entries); `.eslintrc.json` is a legacy config never read by `npm run lint` (`eslint.config.js` is active); pre-existing prettier drift in `LeadsPage.ts` and `BasePage.ts` (`npx prettier --check` 2026-10-27; `QuotationsPage.ts` is clean); `.claude/settings.json` carries an inert `agent_delegation` / `investigation_log` block whose `INVESTIGATION_LOG.md` does not exist. <!-- ref-ok -->

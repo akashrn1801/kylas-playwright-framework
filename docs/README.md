@@ -3,7 +3,7 @@
 > **Purpose:** One-line map of every document in this folder and when to open it.
 > **Read when:** You do not know which doc answers your question.
 > **Size budget:** 6k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-27 @ a9f5372
 
 | Doc | Purpose | Read when |
 |---|---|---|
@@ -16,6 +16,9 @@
 | [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md) | Open issues only | Before investigating a flake or failure |
 | [known-issues/README.md](./known-issues/README.md) | Resolved history by topic | Looking for how a past bug was fixed |
 | [adr/README.md](./adr/README.md) | Architecture decision records | Asking why something is built this way |
+| [BRANCH_STATUS.md](./BRANCH_STATUS.md) | Dated snapshot of the current branch: PR, CI result, follow-ups | Starting a session on a feature branch |
 | [GLOSSARY.md](./GLOSSARY.md) | Terms and abbreviations | A term is unfamiliar |
 
-Outside this folder: [../README.md](../README.md) (onboarding), [../CLAUDE.md](../CLAUDE.md) (router and rules), [../APPLICATION_BUGS.md](../APPLICATION_BUGS.md) (product bugs), [../CHANGELOG.md](../CHANGELOG.md), [../.claude/AGENT_DELEGATION_GUIDE.md](../.claude/AGENT_DELEGATION_GUIDE.md).
+**Git and gh commands quoted in any doc** (RUNBOOK's `gh run view` and `git fetch`, PATTERNS P50's `git reflog`/`git stash list`/`git fetch`, the `Commit: unknown — see git log -S...` lines in `known-issues/`, README's workflow commands) are for the human operator. Claude Code and every agent never run a `git` or `gh` command, read-only ones included: they ask the user to run it and paste the output.
+
+Outside this folder: [../README.md](../README.md) (onboarding), [../CLAUDE.md](../CLAUDE.md) (router and rules), [../CHANGELOG.md](../CHANGELOG.md), [../.claude/AGENT_DELEGATION_GUIDE.md](../.claude/AGENT_DELEGATION_GUIDE.md).

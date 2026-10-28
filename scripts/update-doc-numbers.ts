@@ -28,7 +28,7 @@ function listDocFiles(): string[] {
     }
   };
   walk(path.join(REPO_ROOT, 'docs'));
-  for (const f of ['CLAUDE.md', 'README.md', 'APPLICATION_BUGS.md', 'CHANGELOG.md']) {
+  for (const f of ['CLAUDE.md', 'README.md', 'CHANGELOG.md']) {
     const full = path.join(REPO_ROOT, f);
     if (fs.existsSync(full)) out.push(full);
   }

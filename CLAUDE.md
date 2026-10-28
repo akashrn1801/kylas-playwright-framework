@@ -3,9 +3,17 @@
 > **Purpose:** The only file loaded into every session: standing rules, key commands, a "task → read this" table, and the Definition of Done. Everything else is read on demand.
 > **Read when:** always (it is auto-loaded). Keep it a router — detail belongs in `docs/`.
 > **Size budget:** 10k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-27 @ a9f5372
 
-Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Never push/merge — the user does all git.
+Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Claude Code and every agent never run any `git` or `gh` command, read-only ones included (`status`, `log`, `diff`, `gh pr list`); this is enforced by `Bash(git *)` / `Bash(gh *)` deny rules in `.claude/settings.json`. Ask the user for any git information needed. Project scripts that call git internally (e.g. `npm run check:docs`) still run.
+
+## Orientation (from files and git, 2026-10-27; re-verify)
+
+- **What:** regression suite for Kylas Sales CRM per env (`ENV=qa|staging|prod`). Each module has a UI spec (admin) and an RBAC spec (restricted user). Output: Playwright/Allure reports, a failure-labelled email, run history on `ci/reporting-history`.
+- **Stack:** Node >=20, strict TypeScript, `@playwright/test` ^1.60 (chromium only in CI). Setup: `npm install`, `npx playwright install chromium`, `.env` with `<QA|STAGING|PROD>_APP_URL/_API_BASE_URL/_ADMIN_*/_RESTRICTED_*` (`.env.example` is obsolete; never print `.env`).
+- **Layout:** `src/core/BasePage.ts` helpers · `src/modules/<m>/` page objects · `src/data/factories/` · `src/auth/` · `src/notifications/` email + classifier · `tests/ui/`, `tests/rbac/` · `scripts/` · `.github/workflows/`.
+- **Flow:** globalSetup logs in and caches sessions, tests create fresh data and capture IDs, sharded CI, merge-and-report, field-config reset, email + history.
+- **Current branch status:** [docs/BRANCH_STATUS.md](docs/BRANCH_STATUS.md) (read at session start; dated snapshot).
 
 ## Task → read this (do not read more than the row says)
 
@@ -20,7 +28,7 @@ Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). B
 | asking "has this broken before?" | [docs/known-issues/README.md](docs/known-issues/README.md) (topic index) |
 | asking "why was it built this way?" | [docs/adr/README.md](docs/adr/README.md) |
 | unsure what a term means | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
-| suspecting a real Kylas product bug | [APPLICATION_BUGS.md](APPLICATION_BUGS.md) |
+| suspecting a real Kylas product bug | kept outside the repo (not tracked; no link) |
 | delegating to a subagent (13 in `.claude/agents/`) | [.claude/AGENT_DELEGATION_GUIDE.md](.claude/AGENT_DELEGATION_GUIDE.md) |
 | onboarding a human / setup / git workflow | [README.md](README.md) |
 
@@ -46,7 +54,7 @@ Import `test`/`expect` from `src/fixtures/index.ts` (never `@playwright/test`; s
 10. **No symptom patch without confirmed root cause**; if unreproducible, label it "hardened, root cause not confirmed".
 11. **Unrelated bug found → stop and report**; neither fix nor ignore silently.
 12. **Live evidence over assumption**; old conclusions decay.
-13. **No commits/pushes/merges without explicit permission.**
+13. **No `git`/`gh` commands (read-only included, denied in `.claude/settings.json`; ask the user for output); no commits/pushes/merges.**
 14. **Docs carry real evidence** (error text, IDs, counts) — and follow the Definition of Done below.
 15. **ID capture uses a versioned `/v1/<module>/` path**, excludes `/reports/`, never a bare substring.
 16. **Session expiry has several symptoms** (`/signIn`, "Forbidden" page, silent `waitForResponse` timeout) — use `isSessionExpiryPage()` and `armResponseWaitWithRecovery()`; extend the combinators, don't add a 6th mechanism.
@@ -68,7 +76,7 @@ Full mechanics for each rule are in [docs/PATTERNS.md](docs/PATTERNS.md); ripple
 2. One line added to [CHANGELOG.md](CHANGELOG.md) (newest first).
 3. Issue found → entry in [docs/KNOWN_ISSUES_ACTIVE.md](docs/KNOWN_ISSUES_ACTIVE.md). Issue closed → ≤15-line summary moved to its `docs/known-issues/<topic>.md` and the active entry deleted.
 4. Design decision made or reversed → ADR added or updated in `docs/adr/`.
-5. `Last verified` updated on every doc you touched (date + `git rev-parse --short HEAD`).
+5. `Last verified` updated on every doc you touched (date + the short HEAD hash; ask the user to run `git rev-parse --short HEAD` and paste it).
 6. `npm run check:docs` passes (add `-- --live` before a PR).
 
 Size policy (why this file stays small): every doc has a size budget; the full policy and the incident template are in [docs/CONTRIBUTING_TESTS.md](docs/CONTRIBUTING_TESTS.md#size-policy). Never `@`-import a large file here — imports load into every session.

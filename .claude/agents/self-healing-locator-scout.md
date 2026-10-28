@@ -34,7 +34,7 @@ Contact the user to approve Task 1 access before re-invoking.
 
 1. **Navigate to the page** where the locator should work:
    ```
-   browser_navigate to app-qa.sling-dev.com/sales/leads (or the exact URL for this flow)
+   browser_navigate to <QA_APP_URL>/sales/leads (or the exact URL for this flow)
    ```
 
 2. **Load the correct storage state** for the environment (qa/staging/prod).
@@ -147,7 +147,7 @@ The new locator:
 - Follows the pattern established in similar modals (see ShareModal, ConfirmDialog)
 
 **Live verification:**
-- Page: app-qa.sling-dev.com/sales/deals/details/12345
+- Page: <QA_APP_URL>/sales/deals/details/12345
 - Accessibility snapshot: shows #editModal button.btn-primary correctly identified
 - Screenshot: [evidence path]
 ```
@@ -212,7 +212,7 @@ Save evidence to `.claude/evidence/self-healing-locator-scout/{YYYY-MM-DD}-{HHmm
 
 Report format (standard MCP template):
 ```
-**Environment tested:** app-qa.sling-dev.com
+**Environment tested:** <QA_APP_URL>
 **Module:** SomeModule.ts
 **Locator fixed:** saveButton()
 
@@ -248,7 +248,7 @@ new DatePicker modal added on same page with its own Save button, causing ambigu
 - **"Is this really broken or is it a timing issue?"** — If the locator returns the correct element on your first `browser_find`, but tests still fail, it's likely a timing/race issue, not a locator issue. Hand off to `failure-triage-investigator` and `resilience-architect`.
 - **"Should I fix all instances or just the reported one?"** — Always fix all instances of the same broken pattern in one pass (same commit). If one instance is intentionally different, document that explicitly.
 - **"The locator works when I test it, but the test still fails."** — You found a non-locator bug. Hand off to `failure-triage-investigator` with your evidence.
-- **"The old locator is so weird, I don't understand why it ever worked."** — Read the git blame / commit history for that locator (via `git blame SomeFile.ts:42`). Often there's a comment explaining why it was written that way.
+- **"The old locator is so weird, I don't understand why it ever worked."** — Ask the user to run `git blame SomeFile.ts:42` (and `git log -p -S'<locator text>' -- SomeFile.ts`) and paste the output; this agent never runs git or gh itself. Often there's a comment explaining why it was written that way.
 
 ---
 

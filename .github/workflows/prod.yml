@@ -103,6 +103,9 @@ jobs:
           PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          NOTIFY_CC: ${{ secrets.NOTIFY_CC }}
+          NOTIFY_FROM_NAME: ${{ secrets.NOTIFY_FROM_NAME }}
           GMAIL_SMTP_HOST: smtp.gmail.com
           GMAIL_SMTP_PORT: '587'
           NOTIFY_ENABLED: 'true'

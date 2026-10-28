@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents where the Kylas app replaced a screen with its own HTTP-429 page or generic error-boundary page, and the `globalSetup` 429 absorption.
 > **Read when:** A test fails with an element-not-found / timeout on a screen that "should" be there, or you are adding navigation/list-readiness code that could meet an app-rendered error page.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-21 @ 3959d7f
 
 The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is still OPEN — see `docs/KNOWN_ISSUES_ACTIVE.md`. The proposal to centralise 429 recovery is decision-record material: see `docs/adr/` (error-page recovery).
 
@@ -41,3 +41,8 @@ The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is st
 - **Fix:** `ErrorCollector.recordRecoveryEvent()` records each recovery and its outcome (retry recovered / failed); `globalSetup` transient retries use a separate main-process file (`recovery-events-main.json`) because `MiscErrorReporter.onBegin()` deletes worker files after `globalSetup`. Shown per shard in the email's "Load Signals by Job" table. Detail: `docs/known-issues/ci-pipelines.md`.
 - **Revert:** Remove the three `recordRecoveryEvent` call sites; report fields render nothing when absent.
 - **Commit:** `1bd03cc`.
+
+### WATCH — POST /contacts/ and PUT /leads/{id} return HTTP 400 `000000` with empty errorDetails on prod — 2026-10-21
+- **Status:** backend response, test must keep failing; classifier entry `contacts-post-400-000000-empty` (label only, KI number pending, needs 5 tests across 2 modules).
+- **Evidence:** main run 39470566009 (20 Oct): `POST /contacts/` -> 400 `000000` "Something didn't work as expected", empty errorDetails, 112 times between 17:57 and 21:02 UTC (19 contacts, 2 companies, 2 meetings tests). Main run 39534804354 (21 Oct): `PUT /leads/{id}` -> 400 `000000` once (leads.rbac:107, passed on retry).
+- **Message:** a failed save now reads `Backend rejected the save: POST /v1/contacts/ -> 400 000000` before the form text.
