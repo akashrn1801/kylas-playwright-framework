@@ -165,8 +165,10 @@ async function main(): Promise<void> {
   process.env.ENV = options.env;
 
   const { chromium } = await import('@playwright/test');
-  const { config } = await import('../config/config');
-  const { AuthManager, registerPageForRecovery } = await import('../src/auth/authManager');
+  const { config, buildApiUrl } = await import('../config/config');
+  const { AuthManager, registerPageForRecovery, isSessionExpiryPage } = await import(
+    '../src/auth/authManager'
+  );
   const { FormFieldsConfigPage, NO_REGEX_OPTION_LABEL } = await import(
     '../src/modules/formFields/FormFieldsConfigPage'
   );
@@ -256,14 +258,54 @@ async function main(): Promise<void> {
     await session.context.close().catch(() => undefined);
     session = null;
   };
+  const authManager = new AuthManager(browser);
+
+  // WHY a server-side check before any field work (local dry-run 2026-10-23,
+  // lead/cfFormFieldLimitText): AuthManager.isSessionValid() reports "still valid"
+  // when `/` lands on a /sales/ URL, and caches that verdict for 30 minutes, so a
+  // token the backend rejects passes it. The first field then waited 60 s for the
+  // "Lead" tab on each of its 3 attempts (each new context reused the same stale
+  // state via the cache) with no "signIn/login or Forbidden" recovery line: at
+  // the 60 s mark the page was not recognised as an expiry page, the recovery
+  // gate being a negative page check that depends on the app's bootstrap timing.
+  // The next field's identical wait did end in recovery, and everything after it
+  // read fine. This asks the backend instead: GET /v1/users/me with the token
+  // from localStorage (the same bearer fetch BasePage.fetchAuthenticatedApiData
+  // already uses); a rejected token is re-authenticated headlessly (which also
+  // refreshes the saved state and the 30-minute cache) before any field is read.
+  const confirmAuthenticated = async (page: Page): Promise<void> => {
+    await page.goto(`${config.appUrl}/sales/home`, {
+      waitUntil: 'domcontentloaded',
+      timeout: config.timeouts.navigation,
+    });
+    const probe = new FormFieldsConfigPage(page, entities[0].entity);
+    const meUrl = buildApiUrl('/users/me');
+    if (await probe.fetchAuthenticatedApiData(meUrl)) return;
+    logger.warn(
+      'reset-field-config: GET /v1/users/me rejected the stored admin token — re-authenticating before reading any field'
+    );
+    await authManager.reauthenticatePage(page, 'admin');
+    if (!(await probe.fetchAuthenticatedApiData(meUrl))) {
+      throw new Error(
+        'admin session still rejected by GET /v1/users/me after headless re-authentication'
+      );
+    }
+  };
+
   const openSession = async (): Promise<Session> => {
-    const authManager = new AuthManager(browser);
     const context = await authManager.getContextForRole('admin');
     const page = await context.newPage();
     // Bounds every Playwright call that has no timeout of its own (inputValue,
     // isDisabled, innerText, ...) — there is no test timeout around this script.
     page.setDefaultTimeout(config.timeouts.navigation);
     registerPageForRecovery(page, 'admin', authManager);
+    try {
+      await confirmAuthenticated(page);
+    } catch (error) {
+      await page.close().catch(() => undefined);
+      await context.close().catch(() => undefined);
+      throw error;
+    }
     return { context, page };
   };
 
@@ -306,6 +348,25 @@ async function main(): Promise<void> {
         logger.warn(
           `${target.entityLabel}/${target.internalName}: attempt ${attempt}/${MAX_ATTEMPTS} failed — ${lastError}`
         );
+        // WHY re-authenticate before closing when the page is on a sign-in/Forbidden
+        // screen: a fresh context alone would reuse the same saved state, and
+        // AuthManager's 30-minute validity cache skips re-validating it.
+        const failedSession = session as Session | null;
+        if (failedSession) {
+          try {
+            if (await isSessionExpiryPage(failedSession.page)) {
+              logger.warn(
+                `${target.entityLabel}/${target.internalName}: the page is on a sign-in/Forbidden screen — ` +
+                  're-authenticating admin before the next attempt'
+              );
+              await authManager.reauthenticatePage(failedSession.page, 'admin');
+            }
+          } catch (reauthError) {
+            logger.warn(
+              `${target.entityLabel}/${target.internalName}: re-authentication after the failed attempt did not complete — ${String(reauthError)}`
+            );
+          }
+        }
         // A fresh context for every retry: a wedged page must not poison the next try.
         await closeSession();
         if (attempt < MAX_ATTEMPTS) await sleep(BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]);

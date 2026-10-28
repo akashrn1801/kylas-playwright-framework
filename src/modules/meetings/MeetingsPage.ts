@@ -13,6 +13,15 @@ import {
 
 export type SelectedMedium = 'GOOGLE_MEET' | 'OUTLOOK' | 'OFFLINE';
 
+// Records a test created itself, related to a meeting by name (see
+// createMeetingWithRelatedRecords). Omitted types are left unselected.
+export interface MeetingRelatedRecords {
+  lead?: string;
+  contact?: string;
+  deal?: string;
+  company?: string;
+}
+
 export class MeetingsPage extends BasePage {
   // WHY: Meetings uses higher retries/wait — calendar data loads slower
   private get retryConfig() {
@@ -1325,6 +1334,103 @@ export class MeetingsPage extends BasePage {
       logger.success(`Meeting "${data.title}" created`);
       return meetingId;
     }, 'createMeeting');
+  }
+
+  // WHY this exists (sandbox run 39561566335, meetings.rbac:139): createMeeting()
+  // relates a RANDOM Lead/Contact/Deal/Company from the shared account. The
+  // trace of the failed attempt shows POST /v1/meetings returning 422 / 01503001
+  // "Invalid deal summary response" three times with the identical body (the
+  // random Deal 104648, one of 11 offered for the random Contact); the test's own
+  // retry, with other random picks, passed. A caller that needs a meeting to
+  // succeed for an invited restricted user must relate records it created and
+  // shared itself (same fixture rule as deals.rbac.spec.ts D20). A NEW method, so
+  // createMeeting()/fillRelatedTo()/fillMeetingForm() and their 18 callers are
+  // unchanged. Skips the random Related To step and relates only the named records.
+  async createMeetingWithRelatedRecords(
+    data: MeetingData,
+    createdBy: string,
+    records: MeetingRelatedRecords
+  ): Promise<number | null> {
+    return this.withSessionExpiryRetry(async () => {
+      logger.info(`Creating meeting: "${data.title}" as ${createdBy} with its own related records`);
+      await this.openAddForm();
+      await this.fillMeetingForm(data, createdBy, true, true);
+      const ordered: Array<[string, string | undefined]> = [
+        ['Lead', records.lead],
+        ['Contact', records.contact],
+        ['Deal', records.deal],
+        ['Company', records.company],
+      ];
+      for (const [entityType, name] of ordered) {
+        if (name) await this.selectRelatedRecord(entityType, name);
+      }
+      // WHY: same title re-check createMeeting() does — selecting related records
+      // re-renders the form and can reset the controlled title input.
+      const titleBeforeSave = await this.titleInput().inputValue();
+      if (titleBeforeSave.trim() !== data.title.trim()) {
+        logger.warn(
+          `Title mismatch before save (expected "${data.title}", got "${titleBeforeSave}") — refilling`
+        );
+        await this.fill(this.titleInput(), data.title, 'Meeting title');
+      }
+      const meetingId = await this.saveMeetingRetryOnEntitySummaryLag();
+      logger.success(`Meeting "${data.title}" created with related records`);
+      return meetingId;
+    }, 'createMeetingWithRelatedRecords');
+  }
+
+  // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", related-to
+  // input), then picks the named record: the option whose text equals the full name.
+  // Where to look, in order (sandbox run 39601551444, meetings.rbac:187): (1) the list
+  // the dropdown shows on opening, which held the just-created contact; (2) a
+  // first-word search; (3) a last-word search. Typing the full two-word name returned
+  // 0 results from POST /v1/search/contact/associated-with-entity, so it is not
+  // tried. Related To is search-only (results carry id and name, there is no way to
+  // enter an id), so the option is matched by its text. No other fallback: when
+  // nothing matches it throws with every term tried and its result count.
+  private async selectRelatedRecord(entityType: string, name: string): Promise<void> {
+    logger.info(`Relating ${entityType} "${name}"`);
+    await this.entitiesDropdown().click();
+    await this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: entityType })
+      .first()
+      .click();
+    const searchPlaceholder = this.page.getByText('Search ...').last();
+    await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
+    await searchPlaceholder.click();
+
+    const exactName = new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`);
+    const option = this.relationOptions().filter({ hasText: exactName }).first();
+    const words = name.trim().split(/\s+/);
+    const firstWord = words[0];
+    const lastWord = words[words.length - 1];
+    const tried: string[] = [];
+
+    const lookup = async (path: string, term: string | null): Promise<boolean> => {
+      if (term !== null) await this.relatedToInput().fill(term);
+      const found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+        () => true,
+        () => false
+      );
+      const results = await this.relationOptions().count();
+      tried.push(`${path}${term !== null ? ` "${term}"` : ''}: ${results} result(s)`);
+      if (found) logger.info(`Related ${entityType} "${name}" found via ${path}`);
+      return found;
+    };
+
+    let found = await lookup('opening list', null);
+    if (!found) found = await lookup('first-word search', firstWord);
+    if (!found && lastWord !== firstWord) found = await lookup('last-word search', lastWord);
+    if (!found) {
+      throw new Error(
+        `Related To ${entityType}: no option with the exact text "${name}". Tried: ${tried.join('; ')}`
+      );
+    }
+    await option.click();
+    await this.relatedToInput().press('Enter');
+    await this.ensureReactSelectMenuClosed(`Related To ${entityType}`);
+    logger.success(`Related ${entityType}: "${name}" (${tried[tried.length - 1]})`);
   }
 
   async updateMeeting(

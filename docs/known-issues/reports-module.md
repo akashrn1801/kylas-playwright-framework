@@ -3,9 +3,9 @@
 > **Purpose:** Confirmed findings and resolved incidents for the Reports module and its run-count verification.
 > **Read when:** touching `ReportsPage.ts`, `reports*.spec.ts`, report-count verification, or considering Playwright project `dependencies`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-27 @ a9f5372
 
-Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Report Name" sort, Meeting-report first-save HTTP 500) live in [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md). The Quotation report-entity-type gap is in [ci-pipelines.md](./ci-pipelines.md). UI-shape patterns (draggable rows, dual react-select families, three-route pages, carousel error banner) are in [../PATTERNS.md](../PATTERNS.md).
+Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Report Name" sort, Meeting-report first-save HTTP 500) are tracked outside this repo. The Quotation report-entity-type gap is in [ci-pipelines.md](./ci-pipelines.md). UI-shape patterns (draggable rows, dual react-select families, three-route pages, carousel error banner) are in [../PATTERNS.md](../PATTERNS.md).
 
 ## Durable facts
 
@@ -62,7 +62,7 @@ Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Repor
 
 ### Run-count test missing a Quotation entity type on stage/prod — 2026-09-09
 - **Symptom:** the quotation report-count tests failed with `locator.waitFor: Timeout 10000ms exceeded` on the Entity Type option.
-- **Root cause:** the Quotation report entity type was deployed to QA only (environment gap, not a flake).
+- **Root cause:** the Quotation report entity type was deployed to QA only (environment gap, not a flake). **UNVERIFIED (re-check per rule 20):** the code contradicts itself: the comment above the endpoint map in `ReportsPage.ts` (~line 103) says Quotation reports were "confirmed deployed to stage/prod 2026-09-03", while `skipIfQuotationEntityTypeUnavailable()` (~line 929) still says "confirmed QA-only as of 2026-09-09". The 09-09 wording cites a qa run that passed and a prod run that failed, but nothing in the repo shows which statement is true today; only the live presence check settles it per environment.
 - **Fix:** see [ci-pipelines.md](./ci-pipelines.md) — `ReportsPage.skipIfQuotationEntityTypeUnavailable()` live presence check.
 - **Revert:** see that entry.
 - **Commit:** `6184a11`
@@ -71,4 +71,4 @@ Real Kylas bugs found here (`removeDimension()` TypeError, non-functional "Repor
 - **Status:** low priority; not reproduced in qa 37897275025 or stage 37897319452 (main 37919166296 was still running when this was written). Cause unconfirmed; revisit if either fails again. Not recorded as fixed.
 - **:1003 (qa 37733648349 shard 1/5, passed on retry):** `waitForReportTotalBelow` read 4 five times over ~16 s; the report also logged `report total (4) exceeds API total (1)`. The test has no filter on purpose (it proves the narrow time window), so other workers' leads in the ±5 min window can move the total (HYPOTHESIS). Live loop to try: log report total and `/v1/search` count every 5 s through a delete with `--workers=2`. Not patched.
 - **:148 (stage 37734268279, Deal, bucket 38 vs list 39 after 3 attempts):** the retry loop re-read the same rendered Table, so it could never see a changed report; it now reloads the report first (hardening). Why the report was 1 behind the list is unknown.
-- **:533 (stage 37778503008 shard 1/5), fixed:** `POST /v3/reports` returned HTTP 500 on the attempt and the retry; the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (retry for 500 + `01403004`, APPLICATION_BUGS.md #4). The 500s' code was not logged (HYPOTHESIS: `01403004`); APPLICATION_BUGS.md #4's "Lead does not show it" has decayed.
+- **:533 (stage 37778503008 shard 1/5), fixed:** `POST /v3/reports` returned HTTP 500 on the attempt and the retry; the test used a bare Save click. It and `reports.rbac.spec.ts` R61 now use `ReportsPage.saveNewReport()` (retry for 500 + `01403004`). The 500s' code was not logged (HYPOTHESIS: `01403004`); the earlier claim that Lead does not show it has decayed.

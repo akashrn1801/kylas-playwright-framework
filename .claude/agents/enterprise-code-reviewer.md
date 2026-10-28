@@ -13,14 +13,14 @@ tools:
 
 ## Activation Triggers
 
-- **Hook:** pre-push gate (scans only changed files in the diff)
+- **Convention:** run before asking the user to push (`scripts/hooks/pre-push` invokes no agent); scans only changed files
 - **Manual:** "review this diff" or "code quality check on X"
 
 ## Scope
 
-- **Only changed files** (via `git diff` against base branch)
+- **Only changed files**: the user supplies the list, or runs `git diff --name-only origin/<base-branch>...HEAD` and pastes the output (this agent never runs git or gh, read-only included; if no list is given it stops and asks)
 - **Never** full-repo sweeps unless explicitly requested
-- **Blocking issues** gate the pre-push hook; advisory/stylistic are informational
+- **Blocking issues** stop the hand-off to the user (nothing enforces this automatically); advisory/stylistic are informational
 
 ## Checklist
 
@@ -83,7 +83,7 @@ For manual request:
 ### Blocking Issues (gates merge)
 - Line 42: No type annotation on `user` parameter; add `: User`
 - Line 58: Bare `throw` with no message; include context
-- Line 73: Hardcoded URL `app-qa.sling-dev.com`; use `requireEnv('QA_APP_URL')`
+- Line 73: Hardcoded URL `<QA_APP_URL>`; use `requireEnv('QA_APP_URL')`
 
 ### Advisory Issues
 - Line 15: Unused import `faker`; remove or add to setup

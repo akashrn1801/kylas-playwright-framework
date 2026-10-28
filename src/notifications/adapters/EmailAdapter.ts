@@ -1,5 +1,5 @@
 import * as nodemailer from 'nodemailer';
-import { notificationConfig } from '../config/notificationConfig';
+import { notificationConfig, getSenderDisplayName } from '../config/notificationConfig';
 
 export interface EmailPayload {
   to: string[];
@@ -37,14 +37,16 @@ export class EmailAdapter {
   async send(payload: EmailPayload): Promise<void> {
     // smtp config accessed via notificationConfig.smtp directly
     const info = await this.transporter.sendMail({
-      from: `"Kylas ${payload.env.toUpperCase()} Automation" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
+      from: `"${getSenderDisplayName(`Kylas ${payload.env.toUpperCase()} Automation`)}" <${process.env.GMAIL_USER || process.env.ZOHO_SMTP_USER || notificationConfig.smtp.user}>`,
       to: payload.to.join(', '),
       cc: payload.cc?.join(', '),
       subject: payload.subject,
       html: payload.html,
     });
     console.log(
-      `[Notification] Email sent to: ${payload.to.join(', ')} — MessageID: ${info.messageId}`
+      // WHY a count, not the addresses: recipients are CI secrets, and GitHub masks only the exact secret
+      // string, so a re-joined list would print unmasked in a public log.
+      `[Notification] Email sent to ${payload.to.length} recipient(s), cc ${payload.cc?.length ?? 0} — MessageID: ${info.messageId}`
     );
   }
 

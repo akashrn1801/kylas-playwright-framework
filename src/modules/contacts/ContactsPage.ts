@@ -1424,14 +1424,30 @@ export class ContactsPage extends BasePage {
     // WHY: Verify Professional tab — department, designation, company
     await this.page.locator('#nav-tab3-tab').click();
     await this.page.waitForTimeout(800);
-    const tab3Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab3Text).toContain(data.department.toLowerCase());
-    expect(tab3Text).toContain(data.designation.toLowerCase());
-    // WHY: confirmed live (2026-07-17) via direct DOM inspection — Company
-    // renders on this same Professional tab, container id "company".
-    if (data.company) {
-      expect(tab3Text).toContain(data.company.toLowerCase());
-    }
+    // WHY auto-retrying assertions, not a one-shot textContent() read (qa run
+    // 39471331508, contacts.spec:551, both attempts): the Professional tab showed
+    // "company271129" where the typed company name was expected. Whether the
+    // lookup renders its id before it resolves the name is NOT confirmed — this
+    // is hardened, root cause not confirmed. A value that never resolves still
+    // fails, with the text the tab actually showed.
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(tabPane, 'Professional tab department').toContainText(data.department, {
+        ignoreCase: true,
+        timeout: 15000,
+      });
+      await expect(tabPane, 'Professional tab designation').toContainText(data.designation, {
+        ignoreCase: true,
+        timeout: 15000,
+      });
+      // WHY: confirmed live (2026-07-17) via direct DOM inspection — Company
+      // renders on this same Professional tab, container id "company".
+      if (data.company) {
+        await expect(tabPane, 'Professional tab company').toContainText(data.company, {
+          ignoreCase: true,
+          timeout: 15000,
+        });
+      }
+    });
     logger.debug(`Professional tab — department: ${data.department} | designation: ${data.designation} | company: ${data.company}`);
     // WHY: Salutation appears in page header/name area — assert in body text
     if (data.salutation) {

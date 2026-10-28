@@ -3,9 +3,9 @@
 > **Purpose:** Resolved RBAC test-isolation bugs, retracted app-bug claims, Lead lookup-field fixes, and durable per-module Hide-Empty-Fields behavior.
 > **Read when:** writing an RBAC test, suspecting an "app bug" in permissions/sharing, or touching Hide Empty Fields tests.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-27 @ a9f5372
 
-Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22). Real product bugs: [../../APPLICATION_BUGS.md](../../APPLICATION_BUGS.md). Rules: [../PATTERNS.md](../PATTERNS.md).
+Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22, KI-43). Real product bugs are tracked outside this repo. Rules: [../PATTERNS.md](../PATTERNS.md).
 
 ### CR9 false conclusion from a reused record — 2026-07
 - **Symptom:** An RBAC test concluded a permission leak.
@@ -30,7 +30,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22
 
 ### Lead Company/Contact Lookup custom fields: nine code bugs — 2026-07-22
 - **Symptom:** L46/L47 and L30/L31 failed in varied ways (qa/stage/prod).
-- **Root cause:** (1) non-cycling Bootstrap carousel not reset on detail page; (2) `CompaniesPage.clickAddCompany()` modal-open race; (3) transient backend 400 unclassified in `createCompany`/`createLead`/`createContact`; (4) Close-Lead toggle visibility flake; (5) ~9-minute share-modal hang from unbounded `userOption.click()` across Leads/Companies/Contacts/Deals, identical in `QuotationsPage.selectFromIsInvalidControl()`; (6) `DealsPage.selectFirstOptionFromDropdown()` random pick on a 25+-option list (stage — an old "qa/prod only" scoping had gone stale, rule 20); (7) `ContactsPage.selectFromContactDropdown()` unbounded click (6 call sites, prod).
+- **Root cause** (the heading says nine; only these seven are recorded): (1) non-cycling Bootstrap carousel not reset on detail page; (2) `CompaniesPage.clickAddCompany()` modal-open race; (3) transient backend 400 unclassified in `createCompany`/`createLead`/`createContact`; (4) Close-Lead toggle visibility flake; (5) ~9-minute share-modal hang from unbounded `userOption.click()` across Leads/Companies/Contacts/Deals, identical in `QuotationsPage.selectFromIsInvalidControl()`; (6) `DealsPage.selectFirstOptionFromDropdown()` random pick on a 25+-option list (stage — an old "qa/prod only" scoping had gone stale, rule 20); (7) `ContactsPage.selectFromContactDropdown()` unbounded click (6 call sites, prod).
 - **Fix:** `revealDetailCarouselSlideFor()`; bounded re-click; classify create POST by body and retry only transient failures; bounded reload-and-retry sized from measured baselines; `openUserShareTypeSearch()` bounded click + 3 attempts in all 4 modules; batch-read + type to filter; bounded click. Each verified 3× on qa/staging/prod.
 - **Revert:** revert per-method.
 - **Commit:** `2a200f1`.
@@ -55,6 +55,15 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22
 - **Fix:** bounded reload-and-retry (fresh mount re-fetches), applied to Leads, Deals, Contacts, Companies.
 - **Revert:** revert the retry loop per module.
 - **Commit:** unknown — see `git log -S'assertRightPanelIconVisible'`.
+
+### OPEN (KI-43): staging search index not reflecting new records — sandbox 38582148420 (64 failed) and 38690038228 (55 failed), 2026-10-14
+- **Symptom:** two consecutive sandbox runs failed on code whose diff vs the last green stage run (`79859d6`) was comments/log strings only. 38582148420 (`ea8925f`): all 5 selective shards, 64 failed, 17 flaky. 38690038228 (staging, 2026-10-15 06:02Z): 55 failed, 20 flaky, 423 passed. Signatures: `.is-invalid__option` never visible after typing a just-created contact/company/deal name (about 25 tests: Deals, Companies, Leads, Quotations, Call Logs; also `No Deal/Lead/Contact options found` and `live search ... returned no options after 3 attempt(s)`); `retryFindDeal`/`retryFindCompany`/`retryFindLead`/`retryFindContact` returning false after the create (about 12); `POST /v1/meetings` 422 `01503001` "Invalid lead/contact/company/deal summary response." persisting through all 3 attempts of `saveMeetingRetryOnEntitySummaryLag` (11 tests; 39 meeting 422s in 38582148420 vs 1-2 expected RBAC 422s in stage 37953246450 / main 38396600241); `POST /call-logs/` 403 (9) and "No Deal options found" (call-logs, reports).
+- **Root cause:** NOT established. HYPOTHESIS: the staging search indexer / event consumer was stalled or backlogged. No test-code fix is possible: the index did not catch up within 188 s, so no bounded wait could succeed.
+- **Evidence:** shard 5 trace (`productsAndServices.rbac.spec.ts:189`, both attempts): `POST /v1/deals/` 201, `POST /v1/search/deal` `totalElements` unchanged 2 s later (5824 in 38582148420, 5828 in 38690038228), `GET /v1/search/deal/lookup?q=id:<name>` 200 `content: []` 9-11 s later. Worst in the first hours of 38582148420 (422s per UTC hour 14/15/16: 17/16/6; started 14:37Z). Live probe 2026-10-15 10:46Z (staging, `--retries=0`): created 1 deal, polled the same lookup every 2 s for 188 s: 90 of 90 polls 200 with 0 results; never findable. Green runs (stage 37953246450, main 38396600241) passed these tests first time on the same test code.
+- **Not verified:** whether contacts/leads/companies were also never indexed (CI logs say yes; only deals were probed); why 5824 became 5828 between the runs; whether the 422/403 clusters share the indexer or are separate backend services.
+- **Ask the Kylas dev team:** is the staging search indexer / event consumer for deal, contact, lead and company stalled or backlogged since about 2026-10-14; do the "summary response" (`01503001`) lookups for meetings read the same index; was there a staging deploy or reindex around 10-14 Oct. Do not add retries or longer waits.
+- **2026-10-26:** sandbox run 40279659288 (`a9f5372`, staging) passed all 14 jobs; see KI-43 for the scope reading. A left-over probe deal named `Probe-IndexLag-*` exists on staging.
+- **Commit:** n/a, no code change.
 
 ### Right-panel "Call Logs" opened Emails — 2026-07
 - **Symptom:** Clicking "Call Logs" on a Lead silently opened Emails.

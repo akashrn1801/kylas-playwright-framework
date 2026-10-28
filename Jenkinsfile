@@ -134,7 +134,10 @@ pipeline {
                         string(credentialsId: "${envPrefix}_RESTRICTED_EMAIL",    variable: 'RESTRICTED_EMAIL'),
                         string(credentialsId: "${envPrefix}_RESTRICTED_PASSWORD", variable: 'RESTRICTED_PASSWORD'),
                         string(credentialsId: 'GMAIL_APP_PASSWORD', variable: 'GMAIL_APP_PASSWORD'),
-                        string(credentialsId: 'GMAIL_USER',    variable: 'GMAIL_USER')
+                        string(credentialsId: 'GMAIL_USER',    variable: 'GMAIL_USER'),
+                        string(credentialsId: 'NOTIFY_TO', variable: 'NOTIFY_TO'),
+                        string(credentialsId: 'NOTIFY_CC', variable: 'NOTIFY_CC'),
+                        string(credentialsId: 'NOTIFY_FROM_NAME', variable: 'NOTIFY_FROM_NAME')
                     ]) {
                         writeFile file: '.env', text: """\
 ENV=${envName}
@@ -149,6 +152,9 @@ CI=true
 NAVIGATION_TIMEOUT=120000
 GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
 GMAIL_USER=${GMAIL_USER}
+NOTIFY_TO=${NOTIFY_TO}
+NOTIFY_CC=${NOTIFY_CC}
+NOTIFY_FROM_NAME=${NOTIFY_FROM_NAME}
 GMAIL_SMTP_HOST=smtp.gmail.com
 GMAIL_SMTP_PORT=587
 NOTIFY_ENABLED=true

@@ -2230,6 +2230,28 @@ export class LeadsPage extends BasePage {
     // Email exists" backend rejection. saveButton() becoming visible is NOT
     // a reliable proxy for the email field's own pre-fill having committed.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
+    // WHY the Last Name pre-fill is awaited before anything is edited or saved
+    // (2026-10-16, sandbox run 38855451748 shard 3/5, leads.spec.ts:175 attempt
+    // 1): the failed attempt's clone (ID captured from the save response, and
+    // its detail page shows the clone's own `clone<ts>@testkylas.com` email)
+    // was saved with the UNCHANGED last name — the detail page header read
+    // "Miss. Levi Kutch(#169947)", no "Copy" — and 25 re-reads over 15s never
+    // saw it change. saveButton() becoming visible is not proof the form's
+    // "<lastName> Copy" pre-fill has committed (the same class as the email
+    // pre-fill race documented above, and as DealsPage.cloneDeal()'s Name wait,
+    // docs/PATTERNS.md P5). Mechanism for THIS failure is inferred from that
+    // analogy plus the saved result, not observed directly (trace not pulled).
+    // Fails loudly here if "Copy" never appears — both callers (L35, L23)
+    // assert "Copy" in the saved last name anyway, so saving without it can
+    // only fail later and less clearly.
+    const cloneFormT0 = Date.now();
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.lastNameInput(),
+        'Clone lead form Last Name should be pre-filled with "Copy" before Save is clicked'
+      ).toHaveValue(/Copy/, { timeout: 20000 })
+    );
+    logger.debug(`Clone lead form Last Name pre-filled ("Copy") at +${Date.now() - cloneFormT0}ms`);
     // WHY: Change email to unique value — same email as original causes
     // duplicate error. WHY waitFor('visible') instead of a one-shot
     // isVisible() (the bug fixed here): isVisible() returns an instant,

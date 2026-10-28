@@ -3,7 +3,7 @@
 > **Purpose:** Symptom → likely cause → first check → where it is documented, for failures seen in this repo's CI and local runs.
 > **Read when:** A CI run or local run failed and you need to know whether it is a code bug, an app bug, an environment effect or a pipeline problem.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-08 @ 4d0794a
+> **Last verified:** 2026-10-20 @ 813e1b9
 
 Every row comes from a real incident. "Documented" links point at the resolved-history topic file; open items are in [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md). Check that first: your failure may already be a tracked open item.
 
@@ -37,6 +37,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | Everything on one shard fails together, other shards green | Shared-state suite split across shards, or a backend blip | Are two files of one shared-config suite on different shards? Static-asset 503 on the app bundle | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
 | A job is silent for hours, then "The operation was canceled" at the job timeout; the cancelled step is `Install Playwright browsers`; 0 tests ran; the email may even say PASSED for the other shards | Runner-side `apt-get update` stall inside `playwright install --with-deps` (run 37669596623: 2 of 6 formFields jobs, last log line 18:48:57Z, cancelled 3h later). Cause of the stall unknown | Open the raw job log: is the last line an apt `Get:`/`Ign:` line? Since 2026-10-08 the step is bounded (3 x 180 s attempts, 10 min step timeout) and fails with `Playwright browser install failed`: re-run the failed jobs. An incomplete run now shows "Incomplete run: N of M shards reported" in the email | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
 | Install step fails all 3 attempts; attempt 1 timed out (exit 124), attempts 2-3 fail at once with `E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process N (apt-get)`, same pid each time (sandbox run 37753304635, formFields (deal)) | Probably attempt 1's `apt-get` outliving `timeout` (`timeout` signals only its own process group; `sudo` may start apt elsewhere). **Not confirmed**; why attempt 1 stalled is also unknown | Look for `leftover apt-get after timed-out attempt (pids: ...)` and the `ps` line under it (parent/pgid evidence) in the log. Since 2026-10-08 the script terminates leftover apt-get after a timeout and apt waits up to 60 s for the dpkg lock; re-run the failed jobs | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
+| Every shard fails in the browser install within seconds with `Playwright does not support chromium on ubuntu26.04-x64` (main run 39456246717, 2026-10-20: image `ubuntu-26.04` 20261012.163.1; the same job family got `ubuntu-24.04` on 2026-10-13) | The runner image changed: `ubuntu-latest` moves from 24.04 to 26.04 between 2026-10-19 and 2026-11-19 and Playwright 1.60 does not support 26.04. All workflows now use `runs-on: ${{ vars.RUNNER_IMAGE \|\| 'ubuntu-24.04' }}` | The `Set up job` log's `Image:` line. `gh variable list` (is `RUNNER_IMAGE` something other than `ubuntu-24.04`?). The install script now stops after the first such failure and says so. **Fix:** `gh variable set RUNNER_IMAGE --body ubuntu-24.04` (no commit), then re-run. **Moving to 26.04:** when the Runner image canary shows 26.04 `supported`, run one sandbox pass on it, then set the variable. **Rollback:** set it back to `ubuntu-24.04` | [ci-pipelines](./CI_PIPELINES.md) |
 
 ### Application page states
 
@@ -48,7 +49,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | Redirected to `/signIn`, or a "Forbidden" page with unchanged URL | Session expiry, two distinct symptoms | `authManager.isSessionExpiryPage()`; a new raw assertion not wrapped in `withSessionExpiryRecovery()`? | [session-expiry-and-auth](./known-issues/session-expiry-and-auth.md) |
 | Repeated re-login "succeeds" then redirects to `/signIn` within seconds | Suspected cross-worker shared-credential-file collision; unconfirmed | Count `Creating authenticated browser context` lines per minute in the log | [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md) |
 | `Target page, context or browser has been closed` | Playwright's outer test timeout fired mid-recovery (a missing `test.setTimeout`), or fixture teardown | The test's own timeout vs `NAVIGATION_TIMEOUT` (CI default test timeout is shorter than local) | [locators-and-timing](./known-issues/locators-and-timing.md) |
-| Client-side `TypeError ... reading 'content'` in `openCallLogForm` | Real Kylas app bug under concurrent access | `APPLICATION_BUGS.md` #1; the page object already reload-retries | [APPLICATION_BUGS.md](../APPLICATION_BUGS.md) |
+| Client-side `TypeError ... reading 'content'` in `openCallLogForm` | Real Kylas app bug under concurrent access | Tracked outside the repo; the page object already reload-retries | [locators-and-timing.md](./known-issues/locators-and-timing.md) |
 | Report creation fails once with HTTP 500 `01403004` for Meeting reports | Real backend defect; immediate retry succeeds | `createReport()` retries that signature once | [reports-module](./known-issues/reports-module.md) |
 
 ### Test-level symptoms
@@ -82,4 +83,4 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 
 ## When it is an app bug
 
-Confirmed real Kylas bugs live in [APPLICATION_BUGS.md](../APPLICATION_BUGS.md), not in the engineering docs. A test stays red for a real app bug; do not mask it. Add a new confirmed one there with live evidence.
+Confirmed real Kylas bugs are kept in a file outside this repo (not tracked), not in the engineering docs. A test stays red for a real app bug; do not mask it. Add a new confirmed one there with live evidence.

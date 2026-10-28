@@ -3,9 +3,9 @@
 > **Purpose:** Durable rules and resolved incidents for the Form Field Limit feature (`/setup/fields/<entity>/list`, custom-field length/regex limits) across all six entities.
 > **Read when:** adding an entity to formFields, editing `FormFieldsConfigPage.ts`, or any test that mutates account-wide field configuration.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-09 @ cbfdbd1
+> **Last verified:** 2026-10-27 @ a9f5372
 
-Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms of run 36573185433 are in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
+Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms (run 36573185433; that run id is not recorded in the linked file) are described in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
 
 ## Durable rules
 
@@ -17,7 +17,7 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 6. **Dedicated custom field per consumer** ([ADR 0001](../adr/0001-dedicated-custom-fields.md), commit `ab06f5e`) ends the shared-field collision class at its root; locks only coordinate processes on one filesystem.
 7. **Entity shape is parameterized:** `FormFieldsConfigPage` takes `{tabLabel, urlSlug}`, confirmed live per entity, never guessed.
 8. **A shared config-mutating helper "working" for one entity is not evidence for another.** Ask what DOM/config state a different file's test could leave the field in, and whether the method handles it defensively.
-9. **Leftover limits on dedicated fields cannot affect core tests** (grep, 2026-10-06): no core test passes the old shared fields (`cfTextField`, `cfNumber`, `cfParagraphText`) to any limit/regex mutator, every mutator call takes a `*_FIELD_INTERNAL_NAME` built from a `*_FORM_FIELD_LIMIT_NAMES` constant, and all 12 importers of those six constants live in `tests/{ui,rbac}/formFields/`. Leftovers only poison the next formFields run. Post-run reset tool: `npm run reset:field-config` ([ADR 0009](../adr/0009-field-config-reset-and-account-lock.md); never run against a real app, [KI-34](../KNOWN_ISSUES_ACTIVE.md)). Re-grep before relying on this if a new consumer of those fields is added.
+9. **Leftover limits on dedicated fields cannot affect core tests** (grep, 2026-10-06; re-confirmed 2026-10-27): no core test passes the old shared fields (`cfTextField`, `cfNumber`, `cfParagraphText`) to any limit/regex mutator, every mutator call takes a `*_FIELD_INTERNAL_NAME` built from a `*_FORM_FIELD_LIMIT_NAMES` constant, and all 12 spec importers of those six constants live in `tests/{ui,rbac}/formFields/` (the only other consumer is `scripts/reset-field-config.ts`, which imports the Lead, Contact, Company and Task constants dynamically at `reset-field-config.ts:175-178`). Leftovers only poison the next formFields run. Post-run reset tool: `npm run reset:field-config` ([ADR 0009](../adr/0009-field-config-reset-and-account-lock.md); run once as a local dry-run on 2026-10-23, never a real reset or CI run, [KI-34](../KNOWN_ISSUES_ACTIVE.md)). Re-grep before relying on this if a new consumer of those fields is added.
 
 ## Incidents
 
@@ -36,9 +36,9 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 - **Commit:** `unknown — see git log -S'configureFieldRegex'`
 
 ### Minimal-fill: unrelated field limits blocked baseline saves — 2026-09 (Lead rollout)
-- **Symptom:** `Save button click resolved but no create request was observed within 4000ms`, classified transient, retried 3×, failing identically for ~6–8 minutes.
+- **Symptom:** `Save button click resolved but no create-lead request was observed within ...` (the wording in `LeadsPage.ts:1675`; the 4000ms figure is as recorded in the incident and is not in the current source), classified transient, retried 3×, failing identically for ~6–8 minutes.
 - **Root cause:** a baseline record filled with realistic data for every field met a min/max or Regex some other test left on another field; the save was correctly blocked client-side, so no request fired. This is a validation-block signature, not a backend/timing bug — check what the last config call left behind.
-- **Fix:** every entity's `fillXxxForm()`/`fillEditForm()` and `createXxx()`/`updateXxx()` accept `{ minimal?: boolean; onlyCustomField?: XxxCustomFieldKey }`; `minimal: true` skips non-essential sections, `onlyCustomField` fills exactly one custom field (none if omitted). Callers omitting it get the original full fill.
+- **Fix:** every entity's `fillXxxForm()`/`fillEditForm()` and `createXxx()`/`updateXxx()` accept `{ minimal?: boolean; onlyCustomField?: XxxCustomFieldKey; onlyCustomFieldName?: string }` (Leads, Contacts; Products & Services takes `minimal` and `onlyCustomField`, and `onlyCustomField` also positionally); `minimal: true` skips non-essential sections, `onlyCustomField` fills exactly one custom field (none if omitted). Callers omitting it get the original full fill.
 - **Revert:** drop the options parameter (additive; all existing callers unaffected).
 - **Commit:** `b9b88d7`
 
@@ -52,7 +52,7 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 ### Reject-path tests routed through `createXxx()` waited for a response that never comes — 2026-09
 - **Symptom:** tests expecting a client-side block waited through the full transient-retry logic.
 - **Root cause:** `createXxx()`/`updateXxx()` wait for a network response; a validation block produces none.
-- **Fix:** reject-path tests open the form, run `fillXxxForm(data, {minimal:true, onlyCustomField})`, assert the inline error, never click Save. Exception: live-correct-in-place tests call the entity's own `saveXxx()` primitive directly, since `createXxx()` would reopen a fresh form on retry.
+- **Fix:** reject-path tests open the form, run `fillXxxForm(data, {minimal:true, onlyCustomField})`, assert the inline error, never click Save. Exception: live-correct-in-place tests call the entity's own save primitive directly (`saveLead`, `saveContact`, `saveCompany`, `saveDeal`, `saveProduct`; Tasks has `saveQuickTask`, `saveDetailedTask` and `saveEditedTask`), since `createXxx()` would reopen a fresh form on retry.
 - **Revert:** n/a — test-design rule.
 - **Commit:** `b9b88d7`
 
@@ -64,4 +64,4 @@ Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--f
 - **Commit:** `9e35fc1`
 
 ### FFPS5 investigation detail (moved from KNOWN_ISSUES_ACTIVE.md, KI-01) — 2026-09-28
-- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; an operator then watched it in headed mode and saw the field never typed into and the edit page reload repeatedly — a different (fill/locator) symptom. Six independent conditions (single worker, forced 3-way concurrency on QA and staging, real code path with DOM/POST/GET/edit-page evidence layers, alongside the core suite, FFPS1–5 in sequence) reproduced neither shape. Full write-up: [APPLICATION_BUGS.md](../../APPLICATION_BUGS.md) entry 6 (reclassified: not a confirmed app bug).
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; an operator then watched it in headed mode and saw the field never typed into and the edit page reload repeatedly — a different (fill/locator) symptom. Six independent conditions (single worker, forced 3-way concurrency on QA and staging, real code path with DOM/POST/GET/edit-page evidence layers, alongside the core suite, FFPS1–5 in sequence) reproduced neither shape. Not a confirmed app bug (reclassified); the conditions above are the evidence.
