@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-10-28 @ 566df8c
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -65,9 +65,9 @@
 - **Next check:** first sandbox push touching one entity's files: expect one `playwright-formFields (<entity>)` job, `playwright-selective` per the scoped files, and a complete-run email.
 
 ### KI-37 — Install-step bound and incomplete-run handling: unproven by a real run's logs
-- **Status:** unverified (implemented 2026-10-08) · **Since:** 2026-10-07
-- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Install bound, leftover-`apt-get` kill, 570 s budget and (since 2026-10-26) the azure apt mirror rewrite were tested only with stubs or not observed in a read log (apt-stall cause in run 37669596623 unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md). Item 6 (build #189 ledger record) is closed: see the CLOSED (6) item in [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
-- **Next check:** read the logs of a real sandbox/qa run for the install steps (2 x 300 s attempts, leftover-apt-get kill, 570 s budget, apt mirror rewrite; sandbox run 40279659288 passed all jobs but its logs were not read); first real install failure shows the `Playwright browser install failed` annotation.
+- **Status:** partly confirmed (implemented 2026-10-08; mirror rewrite and a healthy install read in real CI 2026-10-28) · **Since:** 2026-10-07
+- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1, job 122026090281): the azure apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only, because they did not trigger: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause in run 37669596623 unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Next check:** the first real install failure or retry: it shows the `Playwright browser install failed` annotation and exercises the retry/kill/budget paths.
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -86,8 +86,23 @@
 
 ### KI-14 — Jenkins changes not confirmed by a real execution
 - **Status:** unverified · **Since:** 2026-09-04 / 2026-09-09
-- **What:** the per-stage timeouts in the base `Jenkinsfile`, its branch-to-test-selection fix, the `github-credentials` binding for `history:sync`/`estimate-duration`, and whether to shard Jenkins at all were verified structurally (lint + read-through) only.
-- **Next check:** watch the first real run per branch — correct `--grep` per branch, each stage timeout enforcing, a new `runSource: "jenkins"` record in `history/<env>.jsonl` on `ci/reporting-history`. A failure here is a hotfix on `dev`, not a "known issue". History: [ci-pipelines.md](./known-issues/ci-pipelines.md).
+- **What:** the per-stage timeouts in the base `Jenkinsfile`, its branch-to-test-selection fix and the `github-credentials` binding for `history:sync`/`estimate-duration` were verified structurally (lint + read-through) only. Whether to shard Jenkins is decided ([ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md)); that runtime is [KI-47](#ki-47--sharded-jenkins-runtime-unproven-until-the-qa-test-runs). Main builds #5-#14: only #8 (2026-09-10) ran tests; the rest were aborted at or before the approval gate.
+- **Next check:** watch the first real run per branch — correct selection per branch, each stage timeout enforcing, a new `runSource: "jenkins"` record in `history/<env>.jsonl` on `ci/reporting-history`. A failure here is a hotfix on `dev`, not a "known issue". History: [ci-pipelines.md](./known-issues/ci-pipelines.md).
+
+### KI-45 — Host suspend stretches Jenkins timeouts (main #13 sat 3,773 min on a 24 h limit)
+- **Status:** fix applied 2026-10-28 (sleep masked by the maintainer; not re-checked by Claude); stamps unconfirmed · **Since:** 2026-10-20
+- **What:** #13 parked at the approval gate 2026-10-20 17:56Z; its 24 h timeout fired 2026-10-23 08:49Z (+38.9 h). The host journal shows 38.8 h of suspend in that window; #10 (1.3 h late, 1.3 h suspended) and #12 (3.1 h late, 2.8 h suspended) fit the same way. Likely mechanism, unverified: Jenkins' timeout runs on JVM timers that do not tick while suspended. Fix: sleep disabled on 2026-10-28 ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 1; the laptop must stay plugged in); the approval step now logs the real wall-clock age. A suspend mid-run would also freeze a test run.
+- **Next check:** the wall-clock stamps on the next real approval (age matches the Jenkins timeout). History: [ci-pipelines.md](./known-issues/ci-pipelines.md).
+
+### KI-46 — GitHub cannot see Jenkins runs
+- **Status:** open (procedural rule only) · **Since:** 2026-10-28
+- **What:** the Jenkins account locks and collision guard stop a Jenkins run overlapping Jenkins or GitHub runs, but the `kylas-*` concurrency groups only see GitHub runs ([ADR 0009](./adr/0009-field-config-reset-and-account-lock.md)) and workflow edits are out of scope. Dispatching `main.yml`/`prod.yml` (or pushing `qa`/`stage`/`sandbox`) while a Jenkins run holds the account is not prevented, and the guard has a check-then-run window.
+- **Next check:** check Jenkins for a running build on that environment before any manual dispatch ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation)). A real fix needs a workflow-side check: a maintainer decision.
+
+### KI-47 — Sharded Jenkins runtime unproven until the QA test runs
+- **Status:** unverified · **Since:** 2026-10-28
+- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md) was checked offline only (Groovy syntax, scripts against stubs, the mode rules with stubbed steps, `tsc`). Never exercised: the lock steps and their order, `parallel`/`node`/`ws`/`stash`, script approvals, the `finally` reset after a real abort, merge/history/notify on a sharded run, the scoped-run email banner, and every speedup/memory figure (estimates). The declarative linter was run by the maintainer twice on 2026-10-28: all five Jenkinsfiles validated. The PAT believed to be in Jenkins ("Jenkins setup", classic, repo scope, no expiry) covers Actions read; still to confirm on the first real guard run that it is the one stored in Jenkins.
+- **Next check:** [RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6: a core-only QA trial (`SHARDED_TEST`, `FF_ENTITIES=none`), then a full sharded QA run compared with GitHub's `qa.yml` results for the same tests.
 
 ### KI-15 — Real GitHub Jobs API response shape for the "CI Job Stats" card
 - **Status:** unverified · **Since:** 2026-09-29

@@ -3,24 +3,23 @@
 > **Purpose:** Where the current feature branch stands (PR, CI result, open questions); a dated snapshot, not a rulebook.
 > **Read when:** You start a session on this branch, or need to know what is unmerged and unproven.
 > **Size budget:** 4k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ 422ae55
+> **Last verified:** 2026-10-28 @ 566df8c
 
-Snapshot of 2026-10-27, from `git`/`gh` output the user confirmed. It decays: re-check before trusting.
+Snapshot of 2026-10-28. Git facts come from the session's start (branch, HEAD, clean tree) and the maintainer's statements; it decays: re-check before trusting.
 
-## `feature/main-run-failures-20261021`
+## `feature/jenkins-main-sharding-20261028`
 
-- 8 commits ahead of `origin/dev`; **no PR exists**. The last two, `bd59b79` and `422ae55`, are committed locally and **not yet pushed**.
-- Contents: `b3e10bb` backend-rejected writes surfaced in validation errors and main-run failure classification · `a4ce53f` call-log edit save wait, meetings.rbac:139 · `b220296` meetings.rbac related-record selection · `f1858b0` P&S write-shape logging, reset-field-config re-auth · `d13481e` browser install 2 x 300 s · `a9f5372` apt mirror rewrite · `bd59b79` chore: git and gh deny rules (6 files: `.claude/settings.json` and 5 agent files) · `422ae55` docs: re-verification, KI-44, KI-43 move (17 files).
-- Latest sandbox run: 40279659288 (`a9f5372`) passed all 14 jobs. It predates `bd59b79` and `422ae55`, which change only docs and `.claude/` config. Nobody has read its logs, so it is **unconfirmed** that the apt-mirror rewrite and the 2 x 300 s retry fired. Run 40277774212 (`d13481e`) was cancelled, not failed.
-- `npx tsc --noEmit` passes; `npm run check:docs` passes (3 size warnings).
+- Cut from `dev` at `566df8c` (merge of PR #674). The maintainer confirmed that before this work the base `Jenkinsfile` was identical on `dev`, `qa`, `stage`, `prod`, `main` and `sandbox`. Everything below is **uncommitted** in the working tree; no PR exists.
+- Code: `Jenkinsfile` (sharded engine, locks, guard, approval stamps, one branch-to-environment rule: `sandbox` now staging); `Jenkinsfile.prod`/`.qa`/`.staging`/`.sandbox` (account lock + guard; approver `akashpersonal` in `.prod` and `.staging`); new `scripts/jenkins-collision-guard.sh`, `jenkins-resolve-selection.sh`, `jenkins-shard-plan.ts`, `jenkins-collect-shard.sh`; `RunHistory.ts`, `syncHistory.ts` (`lanes`), `ShardCompleteness.ts`, `EmailTemplate.ts` (scoped-run marker); `scripts/lib/docFigures.ts` (Jenkins row).
+- Docs: ADR 0012, `CI_PIPELINES.md` 5.1, `RUNBOOK.md` setup section, KI-14/45/46/47, `REPORTING.md`, `sharding-and-locks.md`, `known-issues/ci-pipelines.md`, `CHANGELOG.md`.
+- Checked offline only: `npx tsc --noEmit`, the guard against a stub API (all three environments, every status), the plan helper on real `plan-shards.ts` output (smoke, module, full suite), the selection script (every branch, sandbox incl. a failed fetch), Groovy syntax of all five Jenkinsfiles, `check:failure-labels`.
+- The maintainer ran the Jenkins declarative linter twice on 2026-10-28: all five Jenkinsfiles validated. Sleep was disabled on the host on 2026-10-28 (KI-45).
+- **Never run:** any sharded Jenkins build. A GitHub `main.yml` run was in progress during the work; no workflow file was touched.
 
 ## Still open
 
-- No PR yet; the user opens it into `dev` after pushing the two new commits.
-- Install steps (mirror rewrite, 2 x 300 s attempts, leftover-apt-get kill, 570 s budget): needs a read of run 40279659288's logs; KI-37 stays unverified until then.
-- KI-43 (staging search index) is open pending confirmation from the Kylas team; the 2026-10-26 pass is evidence of recovery, not proof. A leftover `Probe-IndexLag-*` deal on staging needs cleaning up.
-- KI-44 (`CompaniesPage.captureCompanyIdFromResponse()`, bare `includes('companies')`) is latent, to be fixed on a separate branch.
-- The Quotation report deployment claim is unverified: `ReportsPage.ts` says stage/prod confirmed 2026-09-03 and also QA-only as of 2026-09-09.
-- `check:docs` compares "Last verified" with file mtime, which a checkout or reset resets, so a clean checkout can show false errors (analysis delivered, script not changed).
-- `docs/known-issues/sharding-and-locks.md` (2026-10-07 entries) still says "Commit: not committed yet"; not checkable without git.
-- Registry entries `products-put-500-00903002` and `contacts-post-400-000000-empty` carry a `KI-TBD` placeholder `kiRef`.
+- [KI-47](./KNOWN_ISSUES_ACTIVE.md): QA test runs of the sharded path ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) steps 5-6). Until they pass, leave `KYLAS_SHARDED_BRANCHES` unset.
+- [KI-45](./KNOWN_ISSUES_ACTIVE.md): confirm the wall-clock stamps on the next real approval. [KI-46](./KNOWN_ISSUES_ACTIVE.md): check Jenkins before dispatching `main.yml`/`prod.yml` by hand.
+- [KI-37](./KNOWN_ISSUES_ACTIVE.md): the install-log read is done (sandbox run 40454948545: mirror rewrite and a healthy install confirmed); the retry, kill and budget paths stay stub-tested, so KI-37 is no longer an open item here.
+- `check:docs` compares "Last verified" with file mtime, which a checkout or reset resets, so a clean checkout can show false errors.
+- Open items carried from the previous snapshot (KI-43, KI-44, the Quotation deployment claim, `KI-TBD` registry refs) were not re-checked today; see [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md).

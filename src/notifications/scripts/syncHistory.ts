@@ -545,7 +545,8 @@ function buildCurrentRecord(
   jsonReportPath: string,
   gitCommit: string,
   isDevEquivalentRun: boolean,
-  workers: number | undefined
+  workers: number | undefined,
+  lanes: string | undefined
 ): RunHistoryRecord {
   const parser = new ReportParser();
   const report = parser.parse(jsonReportPath);
@@ -565,6 +566,7 @@ function buildCurrentRecord(
     gitCommit,
     isDevEquivalentRun,
     ...(workers !== undefined ? { workers } : {}),
+    ...(lanes !== undefined ? { lanes } : {}),
     total: report.total,
     passed: report.passed,
     failed: report.failed,
@@ -667,6 +669,10 @@ async function main() {
     workersEnv !== undefined && workersEnv !== '' && !Number.isNaN(Number(workersEnv))
       ? Number(workersEnv)
       : undefined;
+  // WHY: set only by a sharded Jenkins run (Jenkinsfile exports CI_LANES, e.g.
+  // "core=2,ff=2"); unset/empty for every other run, so no other record changes.
+  const lanesEnv = (process.env.CI_LANES || '').trim();
+  const lanes = lanesEnv !== '' ? lanesEnv : undefined;
   const gitRemoteUrl = resolveGitRemoteUrl();
   const isDevEquivalentRun = detectDevEquivalentRun(gitRemoteUrl, gitCommit);
   const jsonReportPath = path.resolve(
@@ -706,7 +712,8 @@ async function main() {
       jsonReportPath,
       gitCommit,
       isDevEquivalentRun,
-      workers
+      workers,
+      lanes
     );
   } catch (err) {
     warn('[syncHistory] Failed to parse current run for history — skipping:', err);
