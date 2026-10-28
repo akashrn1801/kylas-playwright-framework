@@ -3,22 +3,21 @@
 > **Purpose:** Where the current feature branch stands (PR, CI result, open questions); a dated snapshot, not a rulebook.
 > **Read when:** You start a session on this branch, or need to know what is unmerged and unproven.
 > **Size budget:** 4k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-28 @ 0f87be3
 
-Snapshot of 2026-10-28. Git facts come from the session's start (branch, HEAD, clean tree) and the maintainer's statements; it decays: re-check before trusting.
+Snapshot of 2026-10-28. Git facts come from the maintainer's statements (`0f87be3` committed, unpushed); it decays: re-check before trusting.
 
 ## `feature/jenkins-main-sharding-20261028`
 
-- Cut from `dev` at `566df8c` (merge of PR #674). The maintainer confirmed that before this work the base `Jenkinsfile` was identical on `dev`, `qa`, `stage`, `prod`, `main` and `sandbox`. Everything below is **uncommitted** in the working tree; no PR exists.
-- Code: `Jenkinsfile` (sharded engine, locks, guard, approval stamps, one branch-to-environment rule: `sandbox` now staging); `Jenkinsfile.prod`/`.qa`/`.staging`/`.sandbox` (account lock + guard; approver `akashpersonal` in `.prod` and `.staging`); new `scripts/jenkins-collision-guard.sh`, `jenkins-resolve-selection.sh`, `jenkins-shard-plan.ts`, `jenkins-collect-shard.sh`; `RunHistory.ts`, `syncHistory.ts` (`lanes`), `ShardCompleteness.ts`, `EmailTemplate.ts` (scoped-run marker); `scripts/lib/docFigures.ts` (Jenkins row).
-- Docs: ADR 0012, `CI_PIPELINES.md` 5.1, `RUNBOOK.md` setup section, KI-14/45/46/47, `REPORTING.md`, `sharding-and-locks.md`, `known-issues/ci-pipelines.md`, `CHANGELOG.md`.
-- Checked offline only: `npx tsc --noEmit`, the guard against a stub API (all three environments, every status), the plan helper on real `plan-shards.ts` output (smoke, module, full suite), the selection script (every branch, sandbox incl. a failed fetch), Groovy syntax of all five Jenkinsfiles, `check:failure-labels`.
-- The maintainer ran the Jenkins declarative linter twice on 2026-10-28: all five Jenkinsfiles validated. Sleep was disabled on the host on 2026-10-28 (KI-45).
-- **Never run:** any sharded Jenkins build. A GitHub `main.yml` run was in progress during the work; no workflow file was touched.
+- Cut from `dev` at `566df8c` (merge of PR #674). The Jenkins sharding work is committed as `0f87be3` (25 files, **not pushed**, no PR). It covers the five Jenkinsfiles, `scripts/jenkins-*`, the `src/notifications/*` history and email changes, ADR 0012 and the related docs (KI-14/45/46/47).
+- **Next commit:** the CO9 / CR17 notes fix (`tests/ui/companies/companies.spec.ts`, `tests/rbac/contacts.rbac.spec.ts`: `notesPanel()` instead of a one-shot placeholder-prone count; 5/5 on QA each, PROD flake not reproduced) plus its docs (CHANGELOG, KI-48).
+- Checked offline for the Jenkins work: `tsc`, the guard against a stub API, the plan helper, the selection script, Groovy syntax, `check:failure-labels`, and the maintainer's Jenkins linter run on all five files. **Never run:** any sharded Jenkins build.
 
 ## Still open
 
-- [KI-47](./KNOWN_ISSUES_ACTIVE.md): QA test runs of the sharded path ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) steps 5-6). Until they pass, leave `KYLAS_SHARDED_BRANCHES` unset.
+- **Investigation open:** GitHub qa run 40477938102 (2026-10-27): `deals.rbac.spec.ts:342` ("Contact ID not captured after save", `ContactsPage.saveContact()`) and `quotations.spec.ts:620` / `:640` (see [KI-48](./KNOWN_ISSUES_ACTIVE.md)); traces not yet read.
+- [KI-48](./KNOWN_ISSUES_ACTIVE.md): Quotation create form crash (PROD run 40637702829).
+- [KI-47](./KNOWN_ISSUES_ACTIVE.md): QA test runs of the sharded path ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6; step 5, the linter, is done). Until they pass, leave `KYLAS_SHARDED_BRANCHES` unset.
 - [KI-45](./KNOWN_ISSUES_ACTIVE.md): confirm the wall-clock stamps on the next real approval. [KI-46](./KNOWN_ISSUES_ACTIVE.md): check Jenkins before dispatching `main.yml`/`prod.yml` by hand.
 - [KI-37](./KNOWN_ISSUES_ACTIVE.md): the install-log read is done (sandbox run 40454948545: mirror rewrite and a healthy install confirmed); the retry, kill and budget paths stay stub-tested, so KI-37 is no longer an open item here.
 - `check:docs` compares "Last verified" with file mtime, which a checkout or reset resets, so a clean checkout can show false errors.

@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-28 @ 0f87be3
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -19,7 +19,7 @@
 ### KI-02 — FFRPS8 is a load-dependent flake with no prior record
 - **Status:** inconclusive · **Since:** 2026-10-06 CI results (reported by the repo owner)
 - **What:** `FFRPS8 restricted user should confirm typing too few characters in the Text field is rejected when creating a product` (`tests/rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts`) — fails intermittently under concurrent CI load; nothing in git history or the old issue log mentions it.
-- **Next check:** per rule 21 a clean isolated run proves nothing; look for the same symptom on sibling tests sharing the Products & Services lock ([sharding-and-locks.md](./known-issues/sharding-and-locks.md)) before treating it as test-specific. Possibly related to KI-01 (same entity, same Text field) — unconfirmed.
+- **Next check:** per rule 21 a clean isolated run proves nothing; look for the same symptom on sibling tests sharing the P&S form-field lock (`productsAndServicesFormFieldLock.ts`; generic lock: [sharding-and-locks.md](./known-issues/sharding-and-locks.md)) before treating it as test-specific. Possibly related to KI-01 (same entity, same Text field) — unconfirmed.
 
 ### KI-03 — Quotations "auto-reveal a hidden field" is a timing outlier
 - **Status:** open · **Since:** 2026-09-09
@@ -44,6 +44,11 @@
 - **Status:** inconclusive · **Since:** 2026-08-26
 - **What:** a thrown Protocol error during fixture setup in one long multi-worker run (resource-pressure-consistent, never reproduced). The adjacent structural gap (recovery login not wrapped, so setup got one attempt instead of two) was fixed ([locators-and-timing.md](./known-issues/locators-and-timing.md)); the Protocol error itself was deliberately not hardened (rule 10).
 - **Next check:** a recurrence with resource metrics (`free -h`, process counts) from the runner.
+
+### KI-48 — Quotation form app crash (`getCurrencyId`) blanks the page
+- **Status:** open · **Since:** 2026-10-28 (PROD main run 40637702829, Q27)
+- **What:** uncaught `TypeError` in `getCurrencyId` blanks the page after the layout GET (200). Unchecked: QA run 40477938102 `quotations.spec.ts:640`/`:620`. `BasePage.fill()` has no timeout.
+- **Detail:** [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ---
 
@@ -151,7 +156,7 @@
 
 ### KI-24 — Four private `selectDateInPicker()` copies; the month-jump control is unused
 - **Status:** open (verified: `QuotationsPage`, `CallLogsPage`, `DealsPage`, `ReportsPage`) · **Since:** 2026-08-10
-- **What:** native date pickers are independently maintained, unlike the shared custom-field version; a `.custom-month-year-dropdown` direct-jump control (~41% faster for distant months) is adopted nowhere.
+- **What:** native date pickers are independently maintained, unlike the shared custom-field version; a `.custom-month-year-dropdown` direct-jump control (~41% faster for distant months) is not used in the repo.
 
 ### KI-25 — Stale "always runs `--workers=1`" comments in Reports specs
 - **Status:** open, doc-only (verified at `tests/ui/reports/reports.spec.ts` ~L127/L152 and `tests/rbac/reports.rbac.spec.ts` ~L114) · **Since:** 2026-09-09
@@ -168,11 +173,11 @@
 - **What / evidence:** just-created deals/contacts/leads/companies never appeared in search lookups (react-select empty, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s (90 of 90 polls empty) on a live probe; green runs passed the same code. Cause on the Kylas side not established (HYPOTHESIS: indexing backlog).
 - **Ask the Kylas dev team:** is the staging search indexer / event consumer stalled or backlogged since about 2026-10-14, and was there a staging deploy or reindex around 10-14 Oct?
 - **Next check:** sandbox run 40279659288 (2026-10-26, `a9f5372`, staging) passed all 14 jobs, so the signatures did not appear. From the code its scope was the full `@regression` run (five selective shards exist only when `detect-tests.sh` returns `--grep @regression`; all 6 formFields jobs ran; that tag covers the Deals, Companies, Leads, Quotations, Call Logs, Meetings RBAC and Reports specs; test steps have no `continue-on-error`). That is evidence the index recovered, NOT proof: no probe was repeated and the Kylas team did not confirm. Repeat the lookup probe or ask the Kylas team before closing; if the signatures return with a healthy index, reopen as a framework issue.
-- **History link:** full signatures, traces, probe and not-verified list: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (entry "OPEN (KI-43)"; share-propagation lag, 2026-08, is the closest earlier pattern).
+- **History link:** full signatures, traces, probe and not-verified list: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (entry "OPEN (KI-43)").
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
 - **Status:** open for CI confirmation · **Since:** 2026-10-07
-- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by every site; Units passed in CI run 37778400646, DB27 and both Call Logs tests passed locally on QA (2026-10-08). Symptom, evidence and live results: [locators-and-timing.md](./known-issues/locators-and-timing.md). NOT verified: why QA differs from stage; which path (natural close vs Escape) closed the menu in DB27/Call Logs.
+- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by BasePage's helpers and 9 modules' pick sites (not `LeadsPage.ts`); Units passed in CI run 37778400646, DB27 and both Call Logs tests passed locally on QA (2026-10-08). Symptom, evidence and live results: [locators-and-timing.md](./known-issues/locators-and-timing.md). NOT verified: why QA differs from stage; which path (natural close vs Escape) closed the menu in DB27/Call Logs.
 - **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
 
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
@@ -188,6 +193,6 @@
 ## D. Accepted behavior / decisions needed
 
 - **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
-- **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's does). Create-only was the lower-risk choice; extending it is a maintainer decision.
+- **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
 - **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
 - **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` (~line 103) says Quotation reports were confirmed deployed to stage/prod 2026-09-03, its skip message (~line 929) says QA-only as of 2026-09-09, and nothing in the repo settles which holds today); the two tests that need it self-skip via a live presence check, so nothing to fix — re-verify the claim per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).

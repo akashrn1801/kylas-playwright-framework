@@ -162,19 +162,29 @@ test.describe('Companies', () => {
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     // WHY: Click Notes icon to open notes panel, then capture baseline before adding
     await companiesPage.clickRightPanelIcon('Notes');
-    await adminPage.waitForTimeout(500);
+    // WHY the Notes card is scoped and its skeleton rows awaited before ANY count
+    // is read (2026-10-28, GitHub main run 40637702829 shard 4, PROD): the old
+    // page-wide `div.row.pt-2.pl-2.pr-2` count read 3 as the baseline for a
+    // brand-new company whose GET /v1/notes/relation returned totalElements 0,
+    // then 1 after the add — the 3 were loading-skeleton rows, not notes (same
+    // race as COR17, see BasePage.notesPanel()). Counts are asserted with the
+    // retrying toHaveCount(), never a one-shot count() + toBe().
+    const { rows: noteRows, waitForSettled } = companiesPage.notesPanel();
+    await waitForSettled();
     // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
-    const baselineCount = await adminPage.locator('div.row.pt-2.pl-2.pr-2').count();
+    const baselineCount = await noteRows.count();
     const noteText = `Test note CO9 ${Date.now()}`;
+    const richTextEditor = adminPage.getByRole('textbox', { name: 'Rich Text Editor, main' });
     await adminPage.locator('textarea.notes-textarea').click();
-    await adminPage.waitForTimeout(1000);
-    await adminPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill(noteText);
-    await adminPage.waitForTimeout(500);
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill(noteText);
     await adminPage.getByText('Add', { exact: true }).click();
-    await adminPage.waitForTimeout(1500);
+    await waitForSettled();
     // WHY: Verify note row count increased relative to baseline
-    const notesAfterAdd = await adminPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesAfterAdd).toBe(baselineCount + 1);
+    await expect(noteRows, 'Note count should be baseline + 1 after the add').toHaveCount(
+      baselineCount + 1,
+      { timeout: 10000 }
+    );
     // WHY: Verify note text via CKEditor iframe (skip active editor)
     const checkNoteText = async (text: string): Promise<boolean> =>
       adminPage.evaluate((t) => {

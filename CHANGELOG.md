@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-28 @ 0f87be3
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-28 — fix: the CO9 (`companies.spec.ts`) and CR17 (`contacts.rbac.spec.ts`) note tests counted `div.row.pt-2.pl-2.pr-2` once, which also matches the Notes card's loading placeholder rows, so a new company's baseline read 3 instead of 0 (GitHub main run 40637702829, PROD, shard 4: `GET /v1/notes/relation` returned `totalElements: 0`, count read 3, expected 4, received 1); both now use the existing `BasePage.notesPanel()` pattern (settle, count the real `.note.card` rows, retrying `toHaveCount`). QA: 5/5 passes each (`--repeat-each=5`). The PROD flake is not reproduced, so this is hardening with the root cause inferred from the trace, not proven (pending)
 - 2026-10-28 — docs: Jenkins sharding documented: ADR 0012, CI_PIPELINES 5.1 (environment map, triggers, locks, engine), RUNBOOK setup steps, KI-45/46/47 (KI-14 updated), REPORTING `lanes` and scoped-run marker, sharding-and-locks and ci-pipelines entries; the generated Jenkins matrix row no longer says "Sharded by planner: no" (pending)
 - 2026-10-28 — ci: the Jenkins collision guard also checks the `pending` and `requested` run statuses (pending)
 - 2026-10-28 — ci: `Jenkinsfile.prod` and `Jenkinsfile.staging` approver changed from `akashrn1801` (no such Jenkins user; the id is `akash.rn1801`) to `akashpersonal` (pending)

@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents where the Kylas app replaced a screen with its own HTTP-429 page or generic error-boundary page, and the `globalSetup` 429 absorption.
 > **Read when:** A test fails with an element-not-found / timeout on a screen that "should" be there, or you are adding navigation/list-readiness code that could meet an app-rendered error page.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-21 @ 3959d7f
+> **Last verified:** 2026-10-28 @ 0f87be3
 
 The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is still OPEN — see `docs/KNOWN_ISSUES_ACTIVE.md`. The proposal to centralise 429 recovery is decision-record material: see `docs/adr/` (error-page recovery).
 
@@ -46,3 +46,11 @@ The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is st
 - **Status:** backend response, test must keep failing; classifier entry `contacts-post-400-000000-empty` (label only, KI number pending, needs 5 tests across 2 modules).
 - **Evidence:** main run 39470566009 (20 Oct): `POST /contacts/` -> 400 `000000` "Something didn't work as expected", empty errorDetails, 112 times between 17:57 and 21:02 UTC (19 contacts, 2 companies, 2 meetings tests). Main run 39534804354 (21 Oct): `PUT /leads/{id}` -> 400 `000000` once (leads.rbac:107, passed on retry).
 - **Message:** a failed save now reads `Backend rejected the save: POST /v1/contacts/ -> 400 000000` before the form text.
+
+### OPEN (KI-48) — Add Quotation form crashes into a blank page (`getCurrencyId`) — 2026-10-28
+- **Symptom:** `quotations.rbac.spec.ts:718` (Q27) hit the 480000 ms test timeout waiting for `[id="0_11_input_quotationNumber"]` in `QuotationsPage.fillQuotationForm`; the admin failure screenshot is entirely white.
+- **Evidence (PROD main run 40637702829, shard 4, trace of the admin page):** Add Quotation clicked at 669.2 s; `GET /v1/quotations/layout/create` 200 (65 KB, 961 ms); at 670.5 s an uncaught `TypeError: Cannot read properties of undefined (reading 'id')` at `getCurrencyId` (`componentDidUpdate`), then CKEditor `Cannot read properties of null (reading 'model')`. All `api.kylas.io` calls were 200 (the only 429 was Sentry ingest); `/v1/users/me` and `/v1/tenants` 200 throughout, URL stayed `/sales/quotations/list`. No `/v1/currencies` request appears in the trace; `users/me` has `idNameStore.currency: {}`. Why the currency lookup is undefined is not established.
+- **Not the error-boundary page:** that one shows "Something is broken here" and had no `pageerror`; this one has the `pageerror` and a blank page.
+- **Test side:** `BasePage.fill()` (`locator.waitFor({ state: 'visible' })`, no timeout) turns the crash into an 8-minute hang. Bounding it is shared code (rule 9); not done. No fix applied.
+- **Unconfirmed matches:** QA run 40477938102 `quotations.spec.ts:640` (same wait) and `:620` ('Add Quotation' not visible in 120000 ms): read their traces for a `getCurrencyId` `pageerror` and a blank final snapshot.
+
