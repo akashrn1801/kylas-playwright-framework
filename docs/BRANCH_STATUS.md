@@ -5,12 +5,13 @@
 > **Size budget:** 4k chars (hard cap 60k)
 > **Last verified:** 2026-10-28 @ 0f87be3
 
-Snapshot of 2026-10-28. Git facts come from the maintainer's statements (`0f87be3` committed, unpushed); it decays: re-check before trusting.
+Snapshot of 2026-10-28. Git facts come from the maintainer's statements (`0f87be3` and `353da8f` committed, unpushed); it decays: re-check before trusting.
 
 ## `feature/jenkins-main-sharding-20261028`
 
 - Cut from `dev` at `566df8c` (merge of PR #674). The Jenkins sharding work is committed as `0f87be3` (25 files, **not pushed**, no PR). It covers the five Jenkinsfiles, `scripts/jenkins-*`, the `src/notifications/*` history and email changes, ADR 0012 and the related docs (KI-14/45/46/47).
-- **Next commit:** the CO9 / CR17 notes fix (`tests/ui/companies/companies.spec.ts`, `tests/rbac/contacts.rbac.spec.ts`: `notesPanel()` instead of a one-shot placeholder-prone count; 5/5 on QA each, PROD flake not reproduced) plus its docs (CHANGELOG, KI-48).
+- Second commit `353da8f` (6 files, **not pushed**): the CO9 / CR17 notes fix (`tests/ui/companies/companies.spec.ts`, `tests/rbac/contacts.rbac.spec.ts`: `notesPanel()` instead of a one-shot placeholder-prone count; 5/5 on QA each, PROD flake not reproduced), KI-48 and the verified KI/status docs.
+- **Next:** push the branch, let sandbox CI run, then the Jenkins QA test runs ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6).
 - Checked offline for the Jenkins work: `tsc`, the guard against a stub API, the plan helper, the selection script, Groovy syntax, `check:failure-labels`, and the maintainer's Jenkins linter run on all five files. **Never run:** any sharded Jenkins build.
 
 ## Still open

@@ -12,7 +12,7 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 - **Root cause:** the Jenkins host is a laptop that suspends. `journalctl` shows 38.8 h of suspend inside #13's 24 h window (0.3 h, 2.4 h and 36.1 h on 10-21 to 10-23); #10 and #12 fit within 0.3 h. Jenkins' `timeout` does not count suspended time (the likely mechanism, JVM timers that do not tick during suspend, was not verified in Jenkins' code). Not a Jenkinsfile bug: the `timeout(time: 24, unit: 'HOURS')` is correct.
 - **Fix:** sleep was disabled on the host on 2026-10-28 (done by the maintainer, [RUNBOOK](../RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 1; not checkable from the repo; the laptop must stay plugged in); the approval steps of the base `Jenkinsfile`, `Jenkinsfile.prod` and `Jenkinsfile.staging` now log a wall-clock stamp before `input` and the real age after it (also when the timeout fires), so a stretched wait is visible. Still to confirm: the stamps on the next real approval ([KI-45](../KNOWN_ISSUES_ACTIVE.md)).
 - **Revert:** remove the `wallClockEpoch()`/`wallClockStamp()` logging; `systemctl unmask` the sleep targets.
-- **Commit:** not committed yet.
+- **Commit:** `0f87be3`.
 
 ### Jenkins pipeline-wide timeout drifted from the test count — 2026-09-09
 - **Symptom:** The root `Jenkinsfile` (primary CI for `prod`/`main`) would be killed mid-run; the pipeline-wide `options { timeout(...) }` was hand-bumped (60→150→300 min) each time the suite grew, while `Run Tests` computed its own inner timeout from the test count. A slow `Approval Gate` also consumed the test run's budget.

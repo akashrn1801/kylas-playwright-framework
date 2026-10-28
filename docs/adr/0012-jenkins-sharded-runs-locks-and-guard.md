@@ -39,4 +39,4 @@ Accepted — 2026-10-28. Checked offline only (Groovy syntax, scripts against st
 Set `KYLAS_SHARDING=off` (no commit), or unset `KYLAS_SHARDED_BRANCHES`. **This only disables sharding:** the account locks and the collision guard stay active on every Jenkins run, and sandbox stays on staging. If the PAT expires, the fail-closed guard refuses every Jenkins run and the kill switch does not help: renew the `github-credentials` token. Full revert: restore the base `Jenkinsfile`'s `Run Tests` stage without `withAccountLock`, remove the other four Jenkinsfiles' `withAccountLock` wrappers, delete `scripts/jenkins-*`, the `lanes` and `scoped` fields (`RunHistory.ts`, `syncHistory.ts`, `ShardCompleteness.ts`, `EmailTemplate.ts`).
 
 ## Commit(s)
-Not committed yet.
+`0f87be3`.

@@ -91,7 +91,7 @@ Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the
 - **Root cause:** no cross-job lock and no GitHub check in any Jenkinsfile; the branch-to-environment rule fell through to QA for `sandbox`.
 - **Fix:** [ADR 0012](../adr/0012-jenkins-sharded-runs-locks-and-guard.md). Lock order is fixed: `kylas-<env>-account`, then the collision guard, then (sharded only) `jenkins-heavy-run`, so two runs cannot wait on each other. The reset is in a `finally` and runs whenever the formFields phase started (`ffStarted`, set after the guard passes and before the lanes start), inside the account lock and after a fresh guard check, so an abort or a failed entity still gets a reset; a second abort would interrupt it. Merge, history and notify run in `post`, outside both locks. Every shard is its own workspace, so the per-entity `.locks` directory and `storageStates` are per workspace; an entity's UI+RBAC pair stays in one workspace (ADR 0002). `npm ci` runs in every shard workspace (about 5 s in `main` #14's main workspace: 126 packages); the browsers are installed once in the shared `PLAYWRIGHT_BROWSERS_PATH`. Sandbox: a failed `origin/dev` fetch fails the build instead of falling back to `--grep @smoke`.
 - **Revert:** [ADR 0012](../adr/0012-jenkins-sharded-runs-locks-and-guard.md) "How to revert".
-- **Commit:** not committed yet. Open: [KI-47](../KNOWN_ISSUES_ACTIVE.md), [KI-46](../KNOWN_ISSUES_ACTIVE.md).
+- **Commit:** `0f87be3`. Open: [KI-47](../KNOWN_ISSUES_ACTIVE.md), [KI-46](../KNOWN_ISSUES_ACTIVE.md).
 
 ### Open-item checklists moved from KNOWN_ISSUES_ACTIVE.md (KI-34, KI-36, KI-37, KI-38) — 2026-10-09
 Full text of the numbered open items, unchanged; the active entries keep a summary and the next check.
