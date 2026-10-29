@@ -3,9 +3,16 @@
 > **Purpose:** Resolved incidents about Jenkins/GitHub Actions pipeline behaviour: timeouts, test selection, duration estimates, fixture-setup navigation, deadline-aware waits, load signals.
 > **Read when:** Editing a `Jenkinsfile*`/workflow, `src/fixtures/index.ts` fixture setup, `BasePage.waitForEntityListPage()` timing, or `src/notifications/scripts/estimateDuration.ts`.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-10-28 @ 566df8c
 
 Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real Jenkins/GitHub execution of several items below could not be performed from the authoring environment; the ones marked **unverified** need a real run.
+
+### Jenkins approval "24 h" timeout lasted up to 62.9 h: the host suspended — 2026-10-28
+- **Symptom:** `main` #13 sat at the Approval Gate from 2026-10-20 17:56:50Z ("Timeout set to expire in 1 day 0 hr") and ended "Timeout has been exceeded" at 2026-10-23 08:49:52Z (3,773 min, +38.9 h). `prod` #14, parked at 18:00Z, ended with the same duration. `main` #10 (+1.3 h) and #12 (+3.1 h) also overran.
+- **Root cause:** the Jenkins host is a laptop that suspends. `journalctl` shows 38.8 h of suspend inside #13's 24 h window (0.3 h, 2.4 h and 36.1 h on 10-21 to 10-23); #10 and #12 fit within 0.3 h. Jenkins' `timeout` does not count suspended time (the likely mechanism, JVM timers that do not tick during suspend, was not verified in Jenkins' code). Not a Jenkinsfile bug: the `timeout(time: 24, unit: 'HOURS')` is correct.
+- **Fix:** sleep was disabled on the host on 2026-10-28 (done by the maintainer, [RUNBOOK](../RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 1; not checkable from the repo; the laptop must stay plugged in); the approval steps of the base `Jenkinsfile`, `Jenkinsfile.prod` and `Jenkinsfile.staging` now log a wall-clock stamp before `input` and the real age after it (also when the timeout fires), so a stretched wait is visible. Still to confirm: the stamps on the next real approval ([KI-45](../KNOWN_ISSUES_ACTIVE.md)).
+- **Revert:** remove the `wallClockEpoch()`/`wallClockStamp()` logging; `systemctl unmask` the sleep targets.
+- **Commit:** `0f87be3`.
 
 ### Jenkins pipeline-wide timeout drifted from the test count — 2026-09-09
 - **Symptom:** The root `Jenkinsfile` (primary CI for `prod`/`main`) would be killed mid-run; the pipeline-wide `options { timeout(...) }` was hand-bumped (60→150→300 min) each time the suite grew, while `Run Tests` computed its own inner timeout from the test count. A slow `Approval Gate` also consumed the test run's budget.

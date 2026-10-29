@@ -59,59 +59,62 @@ pipeline {
       // To run manually: Jenkins → Build Now (not triggered by push).
       steps {
         script {
-          // WHY: Dynamic timeout — scales automatically as the suite grows.
-          // Previously calibrated at ~20 sec/test, but a real full-suite local
-          // run (235 tests, workers=2, 2.9 hours) measured ~44.4 sec/test —
-          // more than double. 20 sec/test made this timeout the actual cause
-          // of the pipeline being killed mid-suite, not a symptom of it.
-          // Recalibrated to 60 sec/test (~35% margin over the measured rate,
-          // to also absorb Jenkins hardware being slower than local) plus a
-          // larger buffer. Counts only @regression-tagged tests since that's
-          // what this stage runs.
-          def testCount = sh(
-            script: "grep -rh \"@regression\" tests/ | wc -l",
-            returnStdout: true
-          ).trim().toInteger()
-          def secondsPerTest = 60
-          def bufferMinutes = 30
-          def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
-          echo "Detected ${testCount} @regression tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
-          // WHY additive only, not replacing computedTimeoutMinutes above
-          // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
-          // same reasoning, applied consistently. WHY WORKERS=2 here, not
-          // this file's own top-level `environment { WORKERS = '1' }`
-          // (2026-09-04, found while implementing this): that env-level value
-          // is dead — the actual test run below passes --workers=2 as an
-          // explicit CLI flag, which always wins over a WORKERS env var per
-          // this repo's own documented convention (CLAUDE.md rule 23). Using
-          // the stale env value here would tag every history record with the
-          // wrong concurrency, silently corrupting future estimates for this
-          // branch — not fixed here (out of scope, a separate pre-existing
-          // inconsistency), just not propagated into new code.
-          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
-            sh '''
-              BRANCH_NAME="${GIT_BRANCH#origin/}"
-              ENV=qa WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
-            '''
-          }
-          timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
-            // WHY: Confirmed live (2026-07-07 reporting audit) — this used to pass
-            // --reporter=line,allure-playwright, which REPLACES (not merges with)
-            // playwright.config.ts's full reporter array. That silently disabled
-            // the html/json reporters and MiscErrorReporter on every Jenkins-run
-            // branch, so no results.json, no misc-errors.json, no HTML report ever
-            // existed here — only a bare terminal list and Allure. Dropping the
-            // override lets the config's full array run, matching what GitHub
-            // Actions already gets for this same branch. Allure results now land
-            // at reports/allure-results (per playwright.config.ts's CI path)
-            // instead of allure-playwright's own bare ./allure-results default —
-            // see the `mv` line below, updated to match.
-            sh '''
-              ENV=qa npx playwright test \
-                --project=chromium \
-                --grep @regression \
-                --workers=2
-            '''
+          // WHY (sharded Jenkins work): lock the account, then run the collision guard, before any test starts.
+          withAccountLock('qa') {
+            // WHY: Dynamic timeout — scales automatically as the suite grows.
+            // Previously calibrated at ~20 sec/test, but a real full-suite local
+            // run (235 tests, workers=2, 2.9 hours) measured ~44.4 sec/test —
+            // more than double. 20 sec/test made this timeout the actual cause
+            // of the pipeline being killed mid-suite, not a symptom of it.
+            // Recalibrated to 60 sec/test (~35% margin over the measured rate,
+            // to also absorb Jenkins hardware being slower than local) plus a
+            // larger buffer. Counts only @regression-tagged tests since that's
+            // what this stage runs.
+            def testCount = sh(
+              script: "grep -rh \"@regression\" tests/ | wc -l",
+              returnStdout: true
+            ).trim().toInteger()
+            def secondsPerTest = 60
+            def bufferMinutes = 30
+            def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
+            echo "Detected ${testCount} @regression tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+            // WHY additive only, not replacing computedTimeoutMinutes above
+            // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
+            // same reasoning, applied consistently. WHY WORKERS=2 here, not
+            // this file's own top-level `environment { WORKERS = '1' }`
+            // (2026-09-04, found while implementing this): that env-level value
+            // is dead — the actual test run below passes --workers=2 as an
+            // explicit CLI flag, which always wins over a WORKERS env var per
+            // this repo's own documented convention (CLAUDE.md rule 23). Using
+            // the stale env value here would tag every history record with the
+            // wrong concurrency, silently corrupting future estimates for this
+            // branch — not fixed here (out of scope, a separate pre-existing
+            // inconsistency), just not propagated into new code.
+            withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+              sh '''
+                BRANCH_NAME="${GIT_BRANCH#origin/}"
+                ENV=qa WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+              '''
+            }
+            timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
+              // WHY: Confirmed live (2026-07-07 reporting audit) — this used to pass
+              // --reporter=line,allure-playwright, which REPLACES (not merges with)
+              // playwright.config.ts's full reporter array. That silently disabled
+              // the html/json reporters and MiscErrorReporter on every Jenkins-run
+              // branch, so no results.json, no misc-errors.json, no HTML report ever
+              // existed here — only a bare terminal list and Allure. Dropping the
+              // override lets the config's full array run, matching what GitHub
+              // Actions already gets for this same branch. Allure results now land
+              // at reports/allure-results (per playwright.config.ts's CI path)
+              // instead of allure-playwright's own bare ./allure-results default —
+              // see the `mv` line below, updated to match.
+              sh '''
+                ENV=qa npx playwright test \
+                  --project=chromium \
+                  --grep @regression \
+                  --workers=2
+              '''
+            }
           }
         }
       }
@@ -172,5 +175,22 @@ pipeline {
       }
       cleanWs()
     }
+  }
+}
+
+// ---- Account lock and collision guard (sharded Jenkins work) -----------------
+// Every Jenkins test run takes the per-account lock (Lockable Resources) and then runs the
+// collision guard inside it, so it cannot overlap another Jenkins run or a GitHub Actions run
+// that drives the same account. Same helpers as the base Jenkinsfile (a Jenkinsfile cannot
+// share code without a shared library).
+def withAccountLock(String envName, Closure body) {
+  def resource = "kylas-${envName}-account"
+  echo "Taking lock '${resource}' (waits while another Jenkins run holds it)"
+  lock(resource: resource) {
+    echo "Lock '${resource}' held"
+    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+      sh "bash scripts/jenkins-collision-guard.sh ${envName}"
+    }
+    body()
   }
 }

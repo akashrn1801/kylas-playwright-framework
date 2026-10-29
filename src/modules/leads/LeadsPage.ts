@@ -1086,6 +1086,7 @@ export class LeadsPage extends BasePage {
     id: number | null;
     transient: boolean;
     noResponseObserved: boolean;
+    detail: string;
   }> {
     try {
       const response = await this.armResponseWaitWithRecovery(
@@ -1103,7 +1104,12 @@ export class LeadsPage extends BasePage {
           (body?.data as { id?: number } | undefined)?.id ??
           null) as number | null;
         logger.success(`Captured lead ID: ${id} from ${response.url()}`);
-        return { id, transient: false, noResponseObserved: false };
+        return {
+          id,
+          transient: false,
+          noResponseObserved: false,
+          detail: id ? '' : `${await this.describeMatchedResponse(response)} (2xx but no id in the body)`,
+        };
       }
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
@@ -1119,7 +1125,12 @@ export class LeadsPage extends BasePage {
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
           `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
       );
-      return { id: null, transient, noResponseObserved: false };
+      return {
+        id: null,
+        transient,
+        noResponseObserved: false,
+        detail: await this.describeMatchedResponse(response),
+      };
     } catch (error) {
       // WHY reclassified from non-transient to transient (fixed 2026-08-11,
       // staging run failure — Group C, call-logs.rbac.spec.ts via
@@ -1142,7 +1153,12 @@ export class LeadsPage extends BasePage {
       logger.warn(
         `Lead create response not captured (${String(error)}) — treating as TRANSIENT (will retry whole create)`
       );
-      return { id: null, transient: true, noResponseObserved: true };
+      return {
+        id: null,
+        transient: true,
+        noResponseObserved: true,
+        detail: this.describeMissedResponse(error, config.timeouts.navigation),
+      };
     }
   }
 
@@ -1735,7 +1751,7 @@ export class LeadsPage extends BasePage {
     // instead fails fast and loudly with the actual cause, rather than
     // masking it behind a misleading transient-backend classification.
     if (outcome.noResponseObserved && formError) {
-      throw formError;
+      throw this.appendCreateDetail(formError, outcome.detail);
     }
 
     // Transient backend rejection → distinct, catchable error so createLead()
@@ -1744,23 +1760,22 @@ export class LeadsPage extends BasePage {
     // for a transient is itself just a generic message.
     if (outcome.transient) {
       throw new TransientLeadSaveError(
-        'Lead create hit a transient backend error (no field-level validation) — retryable'
+        `Lead create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`
       );
     }
 
     // Genuine, user-facing validation error → surface it unchanged so it
     // fails loudly and is never retried into a false pass.
     if (formError) {
-      throw formError;
+      throw this.appendCreateDetail(formError, outcome.detail);
     }
 
     // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
     // logged "Lead saved successfully" and returned null, letting callers proceed on a lead
     // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
     // convention already used elsewhere in this codebase.
-    throw new Error(
-      'Lead ID not captured after save — cannot proceed (save likely failed silently)'
-    );
+    // WHY the cause is in the message: see ContactsPage.saveContact().
+    throw new Error(`Lead ID not captured after save — cannot proceed (${outcome.detail})`);
   }
 
   // ──────────────────────────────────────────────────────────

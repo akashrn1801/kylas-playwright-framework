@@ -159,7 +159,10 @@ function workflowMatrix(): string {
     for (const m of text.matchAll(/--workers=(\d+)/g)) workers.add(m[1]);
     const grep = new Set<string>();
     for (const m of text.matchAll(/--grep (@\w+)/g)) grep.add(m[1]);
-    rows.push(`| \`${f}\` | Jenkins | ${[...grep].sort().join(', ') || 'full suite / selective'} | ${[...workers].sort().join(', ') || '—'} | no |`);
+    // WHY derived, not a constant "no": the base Jenkinsfile runs scripts/plan-shards.ts for the branches listed in
+    // KYLAS_SHARDED_BRANCHES (the sharded engine); the four fallback Jenkinsfiles never do.
+    const sharded = /scripts\/plan-shards\.ts/.test(text) ? 'yes (listed branches only)' : 'no';
+    rows.push(`| \`${f}\` | Jenkins | ${[...grep].sort().join(', ') || 'full suite / selective'} | ${[...workers].sort().join(', ') || '—'} | ${sharded} |`);
   }
   return rows.join('\n');
 }

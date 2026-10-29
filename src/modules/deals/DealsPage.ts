@@ -480,7 +480,7 @@ export class DealsPage extends BasePage {
     }
   }
 
-  private async captureDealIdFromResponse(): Promise<number | null> {
+  private async captureDealIdFromResponse(): Promise<{ id: number | null; detail: string }> {
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -500,17 +500,31 @@ export class DealsPage extends BasePage {
           (res.url().includes('/v1/deals') || res.url().includes('/v1/deal')) &&
           !res.url().includes('/reports/') &&
           res.request().method() === 'POST' &&
-          (res.status() === 200 || res.status() === 201),
+          // WHY a non-2xx is matched too, but ONLY on the exact create URL
+          // (2026-10-28, qa run 40477938102): the 200/201-only predicate
+          // never saw a rejected create, so the wait ran the full timeout and
+          // the error could not name the status/message. Other URLs that
+          // contain /v1/deal keep the original 200/201 requirement, so no
+          // unrelated failing POST can win the race.
+          (res.status() === 200 ||
+            res.status() === 201 ||
+            /\/v1\/deals\/?(?:\?|$)/.test(res.url())),
         'capture deal ID',
         config.timeouts.navigation
       );
+      if (response.status() !== 200 && response.status() !== 201) {
+        return { id: null, detail: await this.describeMatchedResponse(response) };
+      }
       const body = await response.json();
       const dealId = body?.id ?? body?.data?.id ?? body?.dealId ?? null;
       logger.success(`Captured deal ID: ${dealId} from ${response.url()}`);
-      return dealId;
+      return {
+        id: dealId,
+        detail: dealId ? '' : `${await this.describeMatchedResponse(response)} (2xx but no id in the body)`,
+      };
     } catch (error) {
       logger.warn(`Unable to capture deal ID: ${String(error)}`);
-      return null;
+      return { id: null, detail: this.describeMissedResponse(error, config.timeouts.navigation) };
     }
   }
 
@@ -1128,17 +1142,30 @@ export class DealsPage extends BasePage {
 
   async saveDeal(): Promise<number | null> {
     logger.info('Saving deal');
-    const dealIdPromise = this.captureDealIdFromResponse();
+    // WHY `seen` (2026-10-28): assertNoFormErrors() runs BEFORE the id wait and
+    // throws the toast text first. The create response's detail is appended
+    // only if that response was already captured when the toast was read;
+    // nothing here waits for it, so a client-side validation block (no
+    // request at all) still fails as fast as before.
+    const seen = { detail: '' };
+    const dealIdPromise = this.captureDealIdFromResponse().then((outcome) => {
+      seen.detail = outcome.detail;
+      return outcome;
+    });
     await this.click(this.saveButton(), 'save button');
-    await this.assertNoFormErrors('deal create form');
-    const dealId = await dealIdPromise;
+    try {
+      await this.assertNoFormErrors('deal create form');
+    } catch (error) {
+      throw this.appendCreateDetail(error, seen.detail);
+    }
+    const { id: dealId, detail: dealIdDetail } = await dealIdPromise;
     // WHY: Confirmed live (2026-07-07) — a failed save (backend 4xx/5xx) previously still
     // logged "Deal saved successfully" and returned null, letting callers proceed on a deal
     // that doesn't exist. Fail fast instead, matching the "Fresh company ID not captured"
     // convention already used elsewhere in this codebase.
     if (!dealId) {
       throw new Error(
-        'Deal ID not captured after save — cannot proceed (save likely failed silently)'
+        `Deal ID not captured after save — cannot proceed (${dealIdDetail})`
       );
     }
     await this.waitForDealListPage();
@@ -2209,11 +2236,11 @@ export class DealsPage extends BasePage {
     // Success is instead: the clone POST returned 200/201 with an ID (captureDealIdFromResponse
     // returns null on any other status or a missing response), and that deal, opened by ID,
     // carries the submitted name including the "Copy" marker.
-    const clonedId = await dealIdPromise;
+    const { id: clonedId, detail: clonedIdDetail } = await dealIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveDeal() above.
     if (!clonedId) {
       throw new Error(
-        'Cloned deal ID not captured after save — the clone POST did not return 200/201 with an ID (save failed)'
+        `Cloned deal ID not captured after save — the clone POST did not return 200/201 with an ID (${clonedIdDetail})`
       );
     }
     if (!/Copy/.test(submittedName)) {
