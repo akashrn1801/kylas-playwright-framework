@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents behind how CI splits the suite (6h ceiling, file-atomic planner, formFields carve-out/sequencing) and how shared account-wide config is protected.
 > **Read when:** Changing a workflow's shard/`needs:` structure, `scripts/plan-shards.ts`, `config/sharedConfigSuites.json`, `tests/ui/formFields/formFieldLockFactory.ts`, or adding a test that depends on order or on shared config.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-29 @ 9e60850
 
 Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the new `concurrency:` groups, KI-34) are in `docs/KNOWN_ISSUES_ACTIVE.md`. The decisions are summarised in `docs/adr/`.
 
@@ -90,6 +90,7 @@ Open follow-ups (non-scaling formFields matrix; unproven GitHub behaviour of the
 - **Symptom:** Jenkins ran the whole suite as one unsharded job (the one full run on record: `main` #8, 316 min for 515 tests), and nothing stopped two Jenkins runs, or a Jenkins and a GitHub run, from driving one account at once; the GitHub `kylas-*` groups do not see Jenkins ([ADR 0009](../adr/0009-field-config-reset-and-account-lock.md)).
 - **Root cause:** no cross-job lock and no GitHub check in any Jenkinsfile; the branch-to-environment rule fell through to QA for `sandbox`.
 - **Fix:** [ADR 0012](../adr/0012-jenkins-sharded-runs-locks-and-guard.md). Lock order is fixed: `kylas-<env>-account`, then the collision guard, then (sharded only) `jenkins-heavy-run`, so two runs cannot wait on each other. The reset is in a `finally` and runs whenever the formFields phase started (`ffStarted`, set after the guard passes and before the lanes start), inside the account lock and after a fresh guard check, so an abort or a failed entity still gets a reset; a second abort would interrupt it. Merge, history and notify run in `post`, outside both locks. Every shard is its own workspace, so the per-entity `.locks` directory and `storageStates` are per workspace; an entity's UI+RBAC pair stays in one workspace (ADR 0002). `npm ci` runs in every shard workspace (about 5 s in `main` #14's main workspace: 126 packages); the browsers are installed once in the shared `PLAYWRIGHT_BROWSERS_PATH`. Sandbox: a failed `origin/dev` fetch fails the build instead of falling back to `--grep @smoke`.
+- **Live results, 2026-10-28 (reported by the maintainer; Claude did not read these logs):** (1) an unsharded Jenkins `sandbox` build: lock `kylas-staging-account`, guard Clear, 51 passed; (2) sharded build 2 on QA: account and heavy-run locks, guard Clear three times, one core lane plus two formFields lanes, the field-config reset, "All 7 shards reported", merge, history and the PARTIAL email. Still unproven: two core lanes at once, script approvals, the `finally` reset after an abort, the speed/memory estimates, and that the credential the guard used is the "Jenkins setup" PAT (Clear shows only that it can read Actions).
 - **Revert:** [ADR 0012](../adr/0012-jenkins-sharded-runs-locks-and-guard.md) "How to revert".
 - **Commit:** `0f87be3`. Open: [KI-47](../KNOWN_ISSUES_ACTIVE.md), [KI-46](../KNOWN_ISSUES_ACTIVE.md).
 

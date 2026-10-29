@@ -3,10 +3,10 @@
 > **Purpose:** Records why and how Jenkins shards a branch's run, which branches and triggers may do it, and how Jenkins runs are kept from colliding with each other and with GitHub runs.
 > **Read when:** You change the base `Jenkinsfile`'s sharded path, `scripts/jenkins-*`, the account or heavy-run lock, the collision guard, or `KYLAS_SHARDED_BRANCHES`.
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-29 @ 9e60850
 
 ## Status
-Accepted — 2026-10-28. Checked offline only (Groovy syntax, scripts against stubs, the mode rules run with stubbed steps). No sharded Jenkins build has run: [KI-47](../KNOWN_ISSUES_ACTIVE.md).
+Accepted — 2026-10-28. Checked offline only (Groovy syntax, scripts against stubs, the mode rules run with stubbed steps). Live on 2026-10-28: an unsharded sandbox build and sharded build 2 on QA completed; two core lanes at once is unproven: [KI-47](../KNOWN_ISSUES_ACTIVE.md).
 
 ## Context
 - The base `Jenkinsfile` ran one unsharded `playwright test --workers=2` per build. The only full Jenkins run on record (`main` #8, 2026-09-10) took 316 minutes (about 27 of them waiting at the approval gate) for 515 tests; the suite is now 932. The GitHub twins shard with `scripts/plan-shards.ts` and a per-entity formFields track ([ADR 0002](0002-formfields-carve-out-from-sharding.md), [ADR 0003](0003-file-atomic-shard-planner.md), [ADR 0007](0007-sequence-formfields-after-core.md)).
@@ -18,7 +18,7 @@ Accepted — 2026-10-28. Checked offline only (Groovy syntax, scripts against st
 - **Parity per branch.** `scripts/jenkins-resolve-selection.sh` gives each branch its twin's selection, workers and `--timeout`, reusing `detect-tests.sh` and `split-formfields-target.sh` for sandbox and `plan-shards.ts` for core shards. One function, `kylasEnvFor()`, maps branch to environment (stage and sandbox: staging; prod and main: prod; else QA).
 - **Which builds shard.** Only branches in the Jenkins global variable `KYLAS_SHARDED_BRANCHES` (unset: none), and only when the build may run tests at all: `prod` and `main` on any trigger, every other branch on a manual build. `KYLAS_SHARDING=off` turns it off everywhere. "Listed" chooses how a permitted run executes, never whether it runs.
 - **One engine.** Core shards from `plan-shards.ts` are dealt across `CORE_LANES` lanes (1-4, default 2); formFields entities run after the core track in any result, across `FF_LANES` lanes, never in a core shard. Each shard/entity has its own workspace, `.env`, `storageStates` and `.locks`, and the same source stash.
-- **Locks and guard.** Every Jenkins test run, sharded or not, in all five Jenkinsfiles, takes `lock('kylas-<env>-account')` (Lockable Resources) after the approval gate, then runs `scripts/jenkins-collision-guard.sh` (fail closed; statuses queued, in_progress, waiting, pending, requested; workflows of the same environment). Sharded runs add `lock('jenkins-heavy-run')`, always inside the account lock. The guard re-runs before the formFields phase and the reset. The reset runs in a `finally` whenever the formFields phase started. Merge, history and notify run outside both locks.
+- **Locks and guard.** Every Jenkins test run, sharded or not, in all five Jenkinsfiles, takes `lock('kylas-<env>-account')` (Lockable Resources) after the approval gate where the file has one (base, `.prod`, `.staging`; `.qa` and `.sandbox` have none), then runs `scripts/jenkins-collision-guard.sh` (fail closed; statuses queued, in_progress, waiting, pending, requested; workflows of the same environment). Sharded runs add `lock('jenkins-heavy-run')`, always inside the account lock. The guard re-runs before the formFields phase and the reset. The reset runs in a `finally` whenever the formFields phase started. Merge, history and notify run outside both locks.
 - **Marking.** Sharded runs carry `lanes` in the history record (excluded from duration estimates); `SHARDED_TEST` runs with `TEST_GREP`/`FF_ENTITIES` are marked partial in the email.
 
 ## Consequences

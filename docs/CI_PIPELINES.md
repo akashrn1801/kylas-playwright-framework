@@ -146,7 +146,7 @@ Workers: 2 when the rest-of-suite count is above 50, else 1; the formFields trac
 
 ### 5.1 Jenkins: environments, locks and the sharded engine
 
-Decision record: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Operating steps: [RUNBOOK.md](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation). Status: checked offline only, never run: [KI-47](./KNOWN_ISSUES_ACTIVE.md).
+Decision record: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Operating steps: [RUNBOOK.md](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation). Status: run live on QA on 2026-10-28 (maintainer's report); two core lanes at once still unproven: [KI-47](./KNOWN_ISSUES_ACTIVE.md).
 
 **Who runs tests.** In the base `Jenkinsfile`, Install, Setup Environment, Clear Auth State, the Approval Gate and the test stages admit `prod`, `main` and manual builds (`UserIdCause`) only. Automatic builds of any other branch only check out.
 
@@ -196,7 +196,7 @@ Jenkins binds the same names as credentials (`credentials('QA_ADMIN_EMAIL')`, et
 
 - `concurrency:` groups now exist per account (section 4) but their runtime behaviour and the new reset job are unproven; see [KI-34](./KNOWN_ISSUES_ACTIVE.md). History: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - The fixed formFields matrix does not scale with test growth; see [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md).
-- The sharded Jenkins engine has not run yet ([KI-47](./KNOWN_ISSUES_ACTIVE.md)), and GitHub cannot see Jenkins runs ([KI-46](./KNOWN_ISSUES_ACTIVE.md)).
+- The sharded Jenkins engine ran live on QA on 2026-10-28, but two core lanes at once is still unproven ([KI-47](./KNOWN_ISSUES_ACTIVE.md)), and GitHub cannot see Jenkins runs ([KI-46](./KNOWN_ISSUES_ACTIVE.md)).
 
 ## 8. Changing CI safely
 

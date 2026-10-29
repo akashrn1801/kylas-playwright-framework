@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 44a20dd
+> **Last verified:** 2026-10-29 @ 9e60850
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -52,11 +52,16 @@
 
 ### KI-49 — QA backend DNS failures: HTTP 400 "Failed to resolve 'sd-…'" (2026-10-27)
 - **Status:** open, environment · **Since:** 2026-10-27 (QA run 40477938102)
-- **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/` and `GET /v1/quotations/layout/{list,create}`. Create flows and the Quotations layout wait now report status, code, message. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
+- **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/` and `GET /v1/quotations/layout/{list,create}`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ---
 
 ## B. Infrastructure and CI
+
+### KI-50 — QA front end drops custom-field values typed in the first ~0.5 s of the product form
+- **Status:** test-side fix `9e60850`, unverified by a full QA run; app-side drop to be reported to Kylas · **Since:** 2026-10-28 (about 14:10 UTC)
+- **What:** on QA's new front end a custom-field value typed within about 0.5 s of the P&S form opening is posted at the top level (HTTP 200) and dropped; `waitForFormFieldDefinitions()` now waits for the definitions. Interim: 47 passed, 0 failed, all saves NESTED, one unexplained FFRPS24 timeout. Detail: [products-and-services.md](./known-issues/products-and-services.md).
+- **Next check:** the promotion `qa.yml` run: no FLAT saves or "definitions not seen" warnings.
 
 ### KI-34 — Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed
 - **Status:** unverified (implemented 2026-10-06; only static checks done) · **Since:** 2026-10-06
@@ -95,23 +100,23 @@
 
 ### KI-14 — Jenkins changes not confirmed by a real execution
 - **Status:** unverified · **Since:** 2026-09-04 / 2026-09-09
-- **What:** the per-stage timeouts in the base `Jenkinsfile`, its branch-to-test-selection fix and the `github-credentials` binding for `history:sync`/`estimate-duration` were verified structurally (lint + read-through) only. Sharding: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md), runtime [KI-47](#ki-47--sharded-jenkins-runtime-unproven-until-the-qa-test-runs). Main builds #5-#14: only #8 (2026-09-10) ran tests; the rest were aborted at or before the approval gate.
+- **What:** the base `Jenkinsfile`'s per-stage timeouts, branch-to-test-selection fix and `github-credentials` binding for `history:sync`/`estimate-duration` were verified structurally only. Sharding: [KI-47](#ki-47--sharded-jenkins-two-core-lanes-at-once-still-unproven). Main builds #5-#14: only #8 ran tests; the rest were aborted at or before the approval gate.
 - **Next check:** watch the first real run per branch: selection, stage timeouts enforcing, a new `runSource: "jenkins"` record in `history/<env>.jsonl` on `ci/reporting-history`. History: [ci-pipelines.md](./known-issues/ci-pipelines.md).
 
 ### KI-45 — Host suspend stretches Jenkins timeouts (main #13 sat 3,773 min on a 24 h limit)
 - **Status:** fix applied 2026-10-28 (sleep masked by the maintainer; not re-checked by Claude); stamps unconfirmed · **Since:** 2026-10-20
-- **What:** #13 parked at the approval gate 2026-10-20 17:56Z; its 24 h timeout fired 2026-10-23 08:49Z; the journal shows 38.8 h of suspend in that window (#10, #12 fit too). Likely mechanism, unverified: JVM timers stop during suspend. Fix: sleep disabled 2026-10-28 ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 1; keep the laptop plugged in); the approval step logs the real wall-clock age.
+- **What:** #13 parked at the approval gate 2026-10-20 17:56Z; its 24 h timeout fired 2026-10-23 08:49Z; the journal shows 38.8 h of suspend in that window (#10, #12 fit too). Likely (unverified): JVM timers stop in suspend. Fix: sleep disabled 2026-10-28 ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 1; keep the laptop plugged in); the approval step logs the real wall-clock age.
 - **Next check:** the wall-clock stamps on the next real approval (age matches the Jenkins timeout). History: [ci-pipelines.md](./known-issues/ci-pipelines.md).
 
 ### KI-46 — GitHub cannot see Jenkins runs
-- **Status:** open (procedural rule only) · **Since:** 2026-10-28
-- **What:** the Jenkins account locks and collision guard stop a Jenkins run overlapping Jenkins or GitHub runs, but the `kylas-*` concurrency groups only see GitHub runs ([ADR 0009](./adr/0009-field-config-reset-and-account-lock.md)) and workflow edits are out of scope. Dispatching `main.yml`/`prod.yml` (or pushing `qa`/`stage`/`sandbox`) while a Jenkins run holds the account is not prevented, and the guard has a check-then-run window.
-- **Next check:** check Jenkins for a running build on that environment before any manual dispatch ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation)). A real fix needs a workflow-side check: a maintainer decision.
+- **Status:** open (procedural only) · **Since:** 2026-10-28
+- **What:** the Jenkins locks and guard keep a Jenkins run from overlapping Jenkins or GitHub runs, but the `kylas-*` concurrency groups only see GitHub runs ([ADR 0009](./adr/0009-field-config-reset-and-account-lock.md)); workflow edits are out of scope. Dispatching `main.yml`/`prod.yml` (or pushing `qa`/`stage`/`sandbox`) while Jenkins holds the account is not prevented, and the guard has a check-then-run window.
+- **Next check:** check Jenkins for a running build on that environment before any manual dispatch ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation)). A real fix needs a workflow-side check (maintainer decision).
 
-### KI-47 — Sharded Jenkins runtime unproven until the QA test runs
-- **Status:** unverified · **Since:** 2026-10-28
-- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md) was checked offline only (Groovy syntax, stubs, `tsc`; the maintainer's linter run on 2026-10-28 validated all five Jenkinsfiles). Never run: the lock steps (in every Jenkins test run, sharded or not), `parallel`/`node`/`ws`/`stash`, script approvals, the `finally` reset after an abort, sharded merge/history/notify, the scoped-run banner, every speedup/memory estimate. To confirm on the first guard run: the PAT believed to be in Jenkins ("Jenkins setup", classic, repo scope, no expiry; covers Actions read) is the stored one.
-- **Next check:** [RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6, in order: (1) one ordinary manual build of the branch on QA, `SHARDED_TEST` off: `Taking lock 'kylas-qa-account'`, `Lock ... held`, the guard's `Clear` line, then the normal Run Tests stage (no scope option on that path: full suite, est. 8.6-11 h; abort once Run Tests starts); (2) a core-only QA trial (`SHARDED_TEST`, `FF_ENTITIES=none`); (3) a full sharded QA run compared with GitHub's `qa.yml` results.
+### KI-47 — Sharded Jenkins: two core lanes at once still unproven
+- **Status:** partly confirmed (live 2026-10-28) · **Since:** 2026-10-28
+- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Live 2026-10-28 (maintainer): an unsharded sandbox build (lock `kylas-staging-account`, guard Clear, 51 passed) and sharded build 2 on QA (both locks, guard Clear 3 times, 1 core + 2 formFields lanes, reset, "All 7 shards reported", merge, history, PARTIAL email). Unproven: 2 core lanes at once, script approvals, `finally` reset after an abort, speed/memory estimates, the guard's PAT being the "Jenkins setup" one. Detail: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Next check:** a full sharded QA run with the default 2 core lanes, compared with GitHub's `qa.yml` results ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6).
 
 ### KI-15 — Real GitHub Jobs API response shape for the "CI Job Stats" card
 - **Status:** unverified · **Since:** 2026-09-29
@@ -187,7 +192,7 @@
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
 - **Status:** latent, NOT reproduced (no failing run or trace is attributed to it) · **Since:** code comment dated 2026-07-16; recorded here 2026-10-27
 - **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says this was deliberate: the exact company create/clone endpoint had not been confirmed in that run's logs, so only `/reports/` was excluded rather than guessing a full path.
-- **Risk:** the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1164`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.
+- **Risk:** the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1171`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.
 - **Next check:** separate branch: reuse that `/v1/companies/` regex after confirming the clone POST path from a trace (rule 10); re-run clone 3-5x (rule 8).
 
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).

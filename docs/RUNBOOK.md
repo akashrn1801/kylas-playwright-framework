@@ -3,7 +3,7 @@
 > **Purpose:** Symptom → likely cause → first check → where it is documented, for failures seen in this repo's CI and local runs.
 > **Read when:** A CI run or local run failed and you need to know whether it is a code bug, an app bug, an environment effect or a pipeline problem.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-10-29 @ 9e60850
 
 Every row comes from a real incident. "Documented" links point at the resolved-history topic file; open items are in [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md). Check that first: your failure may already be a tracked open item.
 
@@ -59,7 +59,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 
 | Symptom | Likely cause | First check | Documented |
 |---|---|---|---|
-| "Save button click resolved but no create request was observed within 4000ms", retried 3x identically | Client-side validation block: a still-active Min/Max or Regex setting left by another test makes the filled value invalid, so no request fires | What did the last field-config call leave behind? Does the filled value satisfy it? Not a backend or timing bug | [form-fields](./known-issues/form-fields.md) |
+| Leads: "Save button click resolved but no create-lead request was observed within 4000ms (attempt N/3)", retried 3x identically | Client-side validation block: a still-active Min/Max or Regex setting left by another test makes the filled value invalid, so no request fires | What did the last field-config call leave behind? Does the filled value satisfy it? Not a backend or timing bug | [form-fields](./known-issues/form-fields.md) |
 | Next formFields run starts with a non-blank Min/Max/Regex on a dedicated field (previous run killed/cancelled, or the email says "dedicated form-field limit(s) could not be reset") | Leftover limits on a `cfFormFieldLimit*` field; the reset tool exists but is unproven on a real app ([KI-34](./KNOWN_ISSUES_ACTIVE.md)) | `npm run reset:field-config -- --env <env> --dry-run` (read-only, lists non-blank fields), then the same without `--dry-run`; prod needs `--confirm-prod`. Run only while no CI run is active on that account | [ADR 0009](./adr/0009-field-config-reset-and-account-lock.md) |
 | formFields test fails on a disabled Min-Length input or a wrong Regex label | Shared account-wide field config mutated by a test in a different file/shard | Are UI and RBAC files of that entity on one shard? Lock heartbeat | [form-fields](./known-issues/form-fields.md), [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md) |
 | A test hangs for minutes with no error | Unbounded click/wait, or shared lock acquisition starving | The lock files under `.locks/`; a missing `test.setTimeout(480000)` | [sharding-and-locks](./known-issues/sharding-and-locks.md) |
@@ -86,7 +86,7 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 
 ## Jenkins sharded runs: setup and operation
 
-Design: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md); behaviour: [CI_PIPELINES.md](./CI_PIPELINES.md) section 5.1. Nothing here has been exercised by a real sharded build yet ([KI-47](./KNOWN_ISSUES_ACTIVE.md)). Do the steps in this order; each says whether it can be undone.
+Design: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md); behaviour: [CI_PIPELINES.md](./CI_PIPELINES.md) section 5.1. Exercised live on 2026-10-28 (an unsharded sandbox build and a sharded QA build); two core lanes at once is still unproven ([KI-47](./KNOWN_ISSUES_ACTIVE.md)). Do the steps in this order; each says whether it can be undone.
 
 | # | Step | Undo |
 |---|---|---|
@@ -101,6 +101,8 @@ Design: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md); behaviou
 | 9 | **Go live.** Set `KYLAS_SHARDED_BRANCHES` (step 4) only after a full sharded QA run (the `qa` branch's `@regression` selection) has been compared with GitHub's `qa.yml` results for the same tests; an unsharded 9-11 h Jenkins baseline is optional, not required. Then restore the branch filter (step 6). | Reversible: unset it, or `KYLAS_SHARDING=off` (sharding only, see the warning below) |
 
 **`KYLAS_SHARDING=off` only turns sharding off.** The account locks and the collision guard stay active on every Jenkins run, and `sandbox` stays on staging. If the `github-credentials` PAT expires or loses Actions read, the fail-closed guard refuses every Jenkins run and the kill switch does not help: renew the `github-credentials` token (step 3 checks it).
+
+**Watching a sharded build:** use the Stages (Pipeline Graph View) page or the console. The classic Stage View and Blue Ocean misdraw or stop refreshing parallel lanes.
 
 **When a lock is held.** A second build waits at `Taking lock '<name>'` until the holder finishes; Manage Jenkins, Lockable Resources shows who holds it. The lock is released on abort.
 

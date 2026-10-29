@@ -398,9 +398,16 @@ export class ProductsAndServicesPage extends BasePage {
         { timeout: config.timeouts.expect }
       );
       const outcome = await handle.jsonValue();
-      logger.info(
-        `${formName}: ${outcome} after ${Date.now() - startedAt} ms (custom-field definitions in the form)`
-      );
+      if (outcome === 'no-react-fiber') {
+        logger.warn(
+          `${formName}: React's fiber key (__reactFiber$) was not found on the Name input after ${Date.now() - startedAt} ms — ` +
+            `the custom-field readiness wait could not run, so a value typed now may be posted FLAT (see productWriteShape.ts)`
+        );
+      } else {
+        logger.info(
+          `${formName}: ${outcome} after ${Date.now() - startedAt} ms (custom-field definitions in the form)`
+        );
+      }
     } catch (error) {
       logger.warn(
         `${formName}: custom-field definitions not seen in the form within ${config.timeouts.expect} ms ` +
