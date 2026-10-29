@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 44a20dd
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-10-29 — fix: sandbox 40821683680: a contact picks no company unless `company` is set (`RANDOM_EXISTING_COMPANY` opts in; Hide Empty and detail-page tests do; `createContact`/`updateContact` write the picked company back onto the caller's data after a successful save), the live-search error reports the attempts actually made, the first `/sales/` race in fixture setup no longer consumes the whole budget so the `/sales/home` recovery can run; KI-43 recurrence note, KI-51 (cross-shard admin session storm), KI-49 seen on staging; `TasksPage` relation entity-type pick bounded; `check:docs` compares Last verified with the commit author date (mtime only for uncommitted files, skipped in a shallow clone) (pending)
 - 2026-10-29 — fix: `waitForFormFieldDefinitions()` logs a WARNING (not info) when React's fiber key is not found, because the readiness wait could not run and a value typed now may be posted FLAT (pending)
 - 2026-10-29 — fix: Products & Services create/edit forms wait for their custom-field definitions before typing; QA's new front end posted a custom-field value typed within about 0.5 s of the form opening at the top level and dropped it, KI-50 (9e60850)
 - 2026-10-28 — fix: create failures explain themselves. Contacts/Companies/Leads/Deals create flows put the matched request, HTTP status, code and message (or no response / session expiry) in the thrown error instead of "save likely failed silently"; Quotations list/create fail at once with the status and message when `layout/list` or `layout/create` returns 4xx/5xx; `BasePage.fill()`'s `waitFor` is bounded by `config.timeouts.navigation`; registry signature `backend-service-discovery-failure`; KI-49 (QA run 40477938102 was a backend DNS outage, not the KI-48 crash). a thrown form error (Contacts/Companies/Leads, Deals when the response was already captured) keeps its text and gets the request detail appended. No new retries; verified on staging with a mocked 400 and the create/clone/Quotations regression runs, not on QA (02fc52e)

@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 9e60850
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 **Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -13,8 +13,8 @@
 
 ### KI-01 — FFPS5: stable across re-testing, root cause unconfirmed
 - **Status:** inconclusive (currently stable; original symptom never reproduced) · **Since:** 2026-09-23 (re-investigated 2026-09-28)
-- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Originally read as a backend dropping the custom-field value; a headed-mode watch showed a different (fill/locator) symptom. Six independent conditions reproduced neither shape. Write-up: [form-fields.md](./known-issues/form-fields.md) (conditions list).
-- **Next check:** if it fails again, capture the failing run's `trace.zip` or a screen recording *at that moment* — the one evidence type never obtained; do not re-argue from theory. Existing bounded retries in `productsAndServicesFieldLimits.spec.ts` and `ProductsAndServicesPage.assertCustomFieldValueOnEditPage()` stay as labeled hardening (rule 10).
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Six independent conditions reproduced neither the dropped-value nor the fill/locator symptom. Write-up: [form-fields.md](./known-issues/form-fields.md) (conditions list).
+- **Next check:** if it fails again, capture the failing run's `trace.zip` or a screen recording *at that moment* (never obtained); do not re-argue from theory. Existing bounded retries stay as labeled hardening (rule 10).
 
 ### KI-02 — FFRPS8 is a load-dependent flake with no prior record
 - **Status:** inconclusive · **Since:** 2026-10-06 CI results (reported by the repo owner)
@@ -50,9 +50,15 @@
 - **What:** uncaught `TypeError` in `getCurrencyId` blanks the page after the layout GET (200). QA `quotations.spec.ts:620`/`:640` were not this crash (KI-49).
 - **Detail:** [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
-### KI-49 — QA backend DNS failures: HTTP 400 "Failed to resolve 'sd-…'" (2026-10-27)
-- **Status:** open, environment · **Since:** 2026-10-27 (QA run 40477938102)
-- **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/` and `GET /v1/quotations/layout/{list,create}`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
+### KI-49 — Backend DNS failures: HTTP 400 "Failed to resolve 'sd-…'" (QA, once on staging)
+- **Status:** open, environment · **Since:** 2026-10-27 (QA run 40477938102); staging 2026-10-29
+- **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/`, `GET /v1/quotations/layout/{list,create}` and (staging) `POST /v1/quotations/`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
+
+### KI-51 — Sandbox 40821683680: cross-shard admin session storm
+- **Status:** open; trigger confirmed from the log, "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
+- **What:** every shard shares one admin account. At 05:26:50 shard 3 logged `token for role admin has only 595s remaining — proactively refreshing` and re-logged in; shards 1, 2, 4 saw `Session expiry detected` within 3 s and re-logged in until 05:34. Failed once in that window: `quotations.rbac:369`, `deals.rbac:593`, `call-logs.rbac:370`/`:468`, `companies.spec:136`. Cached admin tokens had about 600 s left.
+- **Done:** first `/sales/` race capped (`fixtures/index.ts`); the storm is untouched.
+- **Ask / next check:** does a new admin login kill older admin tokens on staging, and why was the cached admin token 26 min? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ---
 
@@ -181,7 +187,7 @@
 - **Status:** open (staging environment problem, CONFIRMED by a live probe 2026-10-15; no test-code fix is possible; later run passed, recovery unconfirmed) · **Since:** 2026-10-14
 - **What / evidence:** just-created deals/contacts/leads/companies never appeared in search lookups (react-select empty, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s (90 of 90 polls empty) on a live probe; green runs passed the same code. Cause on the Kylas side not established (HYPOTHESIS: indexing backlog).
 - **Ask the Kylas dev team:** is the staging search indexer / event consumer stalled or backlogged since about 2026-10-14, and was there a staging deploy or reindex around 10-14 Oct?
-- **Next check:** sandbox run 40279659288 (2026-10-26, `a9f5372`, staging) passed all 14 jobs, so the signatures did not appear. From the code its scope was the full `@regression` run (five selective shards exist only when `detect-tests.sh` returns `--grep @regression`; all 6 formFields jobs ran; that tag covers the Deals, Companies, Leads, Quotations, Call Logs, Meetings RBAC and Reports specs; test steps have no `continue-on-error`). That is evidence the index recovered, NOT proof: no probe was repeated and the Kylas team did not confirm. Repeat the lookup probe or ask the Kylas team before closing; if the signatures return with a healthy index, reopen as a framework issue.
+- **Next check:** run 40279659288 (2026-10-26) passed all 14 jobs: evidence of recovery, not proof. **2026-10-29 recurrence?** (run 40821683680): a company made 06:13 was not searchable at 06:15 (`leads.spec:543` retry); `meetings.rbac:187`, `deals.rbac:1501`, `contacts.spec:601`, `tasks.rbac:312` also failed once. Probe or ask the Kylas team before closing.
 - **History link:** full signatures, traces, probe and not-verified list: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (entry "OPEN (KI-43)").
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
@@ -192,7 +198,7 @@
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
 - **Status:** latent, NOT reproduced (no failing run or trace is attributed to it) · **Since:** code comment dated 2026-07-16; recorded here 2026-10-27
 - **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says this was deliberate: the exact company create/clone endpoint had not been confirmed in that run's logs, so only `/reports/` was excluded rather than guessing a full path.
-- **Risk:** the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1171`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.
+- **Risk:** the first 200/201 POST whose URL contains `companies` outside `/reports/`, during the clone save window, is taken as the clone POST; a wrong id would be returned and the next step would open that record. Its only caller is `cloneCompany()` (`:1171`); a null id fails loudly. No other matching POST is known (full analysis: [locators-and-timing.md](./known-issues/locators-and-timing.md), entry "KI-44 detail").
 - **Next check:** separate branch: reuse that `/v1/companies/` regex after confirming the clone POST path from a trace (rule 10); re-run clone 3-5x (rule 8).
 
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).

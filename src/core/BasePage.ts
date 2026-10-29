@@ -807,8 +807,14 @@ export class BasePage {
     // give-up path. Only ever paid when a transient error was actually seen.
     const transientRetryWaitMs = 1500;
     let lastTransient: string | null = null;
+    // WHY counted, not printed as `maxAttempts` (sandbox run 40821683680,
+    // leads.spec:543): a failure with no transient network error breaks out
+    // after the FIRST attempt, but the message said "after 3 attempt(s)" —
+    // wrongly implying the search had been re-triggered twice.
+    let attemptsMade = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      attemptsMade = attempt;
       // Scoped listener armed BEFORE triggering the search so the failure event
       // can't be missed; records the transient error text synchronously, then is
       // removed in `finally`. Matches only backend API requests (/v1.. /v9..) so
@@ -859,8 +865,10 @@ export class BasePage {
     }
 
     throw new Error(
-      `${description}: live search for "${searchTerm}" returned no options after ${maxAttempts} attempt(s)` +
-        (lastTransient ? ` — last transient network error: ${lastTransient}` : '')
+      `${description}: live search for "${searchTerm}" returned no options after ${attemptsMade} attempt(s)` +
+        (lastTransient
+          ? ` — last transient network error: ${lastTransient}`
+          : ' — no transient network error was seen, so the search was not re-triggered')
     );
   }
 

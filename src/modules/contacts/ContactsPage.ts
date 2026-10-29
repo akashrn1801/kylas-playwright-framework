@@ -5,6 +5,7 @@ import {
   ContactData,
   CONTACT_CUSTOM_FIELD_NAMES,
   ContactCustomFieldKey,
+  RANDOM_EXISTING_COMPANY,
 } from '../../data/factories/contactFactory';
 import { config } from '../../../config/config';
 import { logger } from '../../utils/logger';
@@ -721,21 +722,8 @@ export class ContactsPage extends BasePage {
       await this.fill(this.twitterInput(), data.twitter, 'twitter');
       await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
       // WHY: Company sits right after LinkedIn and before Department (confirmed
-      // live DOM order). A live async lookup, not a static picklist — searched
-      // and selected within THIS page's own current role/session, so the
-      // result set is naturally role-scoped without any explicit branching.
-      // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
-      // data.company with a known, freshly-created company name (e.g. so it
-      // can independently share that exact company too) gets that exact
-      // company selected instead of a random pick; passing '' (the default
-      // placeholder) preserves the original random-pick behavior unchanged.
-      data.company = await this.selectRandomFromSearchableReactSelect(
-        this.companyControl(),
-        this.companyInput(),
-        'com',
-        'Company',
-        data.company || undefined
-      );
+      // live DOM order). See selectCompanyIfRequested() for what is picked.
+      await this.selectCompanyIfRequested(data);
       await this.fill(this.departmentInput(), data.department, 'department');
       await this.fill(this.designationInput(), data.designation, 'designation');
       // WHY: UTM fields sit below address and may be off-screen.
@@ -990,19 +978,8 @@ export class ContactsPage extends BasePage {
       await this.fill(this.facebookInput(), data.facebook, 'facebook');
       await this.fill(this.twitterInput(), data.twitter, 'twitter');
       await this.fill(this.linkedinInput(), data.linkedin, 'linkedin');
-      // WHY: Update company — same live, role-scoped lookup reasoning as create
-      // WHY: exactValue passthrough (2026-07-16) — a caller that pre-populates
-      // data.company with a known, freshly-created company name (e.g. so it
-      // can independently share that exact company too) gets that exact
-      // company selected instead of a random pick; passing '' (the default
-      // placeholder) preserves the original random-pick behavior unchanged.
-      data.company = await this.selectRandomFromSearchableReactSelect(
-        this.companyControl(),
-        this.companyInput(),
-        'com',
-        'Company',
-        data.company || undefined
-      );
+      // WHY: Update company — same rules as create, see selectCompanyIfRequested()
+      await this.selectCompanyIfRequested(data);
       // WHY: Update professional fields
       await this.fill(this.departmentInput(), data.department, 'department');
       await this.fill(this.designationInput(), data.designation, 'designation');
@@ -1654,6 +1631,37 @@ export class ContactsPage extends BasePage {
   // 10. Workflow Wrappers
   // ──────────────────────────────────────────────────────────
 
+  // WHY the Company field is only filled when the caller asks for it (sandbox
+  // run 40821683680, leads.spec:543 failed on both attempts with `Company: live
+  // search for "com" returned no options`): it used to be filled
+  // unconditionally with a random pick of whatever existing company the live
+  // search returned for "com", so every contact created by every test depended
+  // on staging already holding a company matching that term and on its search
+  // index answering. Now:
+  //   - `data.company` = '' (the default): no company is picked, the field is
+  //     left blank (an edit leaves the saved company untouched);
+  //   - `data.company` = RANDOM_EXISTING_COMPANY: the previous behaviour, a
+  //     random existing company from the live "com" search (for tests that
+  //     assert on the Company field itself, e.g. the Hide Empty Fields tests,
+  //     where Company is the only populated Professional field);
+  //   - any other value: that exact company (a freshly-created, known one).
+  // The live search is a real, role-scoped async lookup (needs 3+ characters),
+  // so the term is not data this method can invent: the random pick stays
+  // opt-in for the few tests that need it.
+  private async selectCompanyIfRequested(data: ContactData): Promise<void> {
+    if (!data.company) {
+      logger.info('Company left blank (no company requested for this contact)');
+      return;
+    }
+    data.company = await this.selectRandomFromSearchableReactSelect(
+      this.companyControl(),
+      this.companyInput(),
+      'com',
+      'Company',
+      data.company === RANDOM_EXISTING_COMPANY ? undefined : data.company
+    );
+  }
+
   // WHY: shared by createContact()/updateContact() below — confirmed live
   // that fillContactForm()/fillEditForm() mutate their parameter in place
   // (timezone, address, company are reassigned directly on the object; the
@@ -1696,7 +1704,13 @@ export class ContactsPage extends BasePage {
         try {
           await this.clickAddContact();
           await this.fillContactForm(attemptData, options);
-          return await this.saveContact();
+          const contactId = await this.saveContact();
+          // WHY copied back, only after a successful save: the form fill ran on a
+          // clone, so a RANDOM_EXISTING_COMPANY request would otherwise stay the
+          // sentinel string on the caller's object, and a later
+          // assertContactDetailFields(data) would look for that string on the page.
+          data.company = attemptData.company;
+          return contactId;
         } catch (error) {
           if (error instanceof TransientContactSaveError && attempt < maxAttempts) {
             logger.warn(
@@ -1730,6 +1744,8 @@ export class ContactsPage extends BasePage {
       await this.clickEditIcon();
       await this.fillEditForm(attemptData);
       await this.saveEditedContact();
+      // WHY: same write-back as createContact() — see the comment there.
+      newData.company = attemptData.company;
     }, 'updateContact');
   }
 

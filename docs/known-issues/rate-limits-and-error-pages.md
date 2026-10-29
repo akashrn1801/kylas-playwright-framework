@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents where the Kylas app replaced a screen with its own HTTP-429 page or generic error-boundary page, and the `globalSetup` 429 absorption.
 > **Read when:** A test fails with an element-not-found / timeout on a screen that "should" be there, or you are adding navigation/list-readiness code that could meet an app-rendered error page.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 44a20dd
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is still OPEN — see `docs/KNOWN_ISSUES_ACTIVE.md`. The proposal to centralise 429 recovery is decision-record material: see `docs/adr/` (error-page recovery).
 
@@ -64,3 +64,4 @@ The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is st
 - **Test-side change (2026-10-28, no retry added):** the Contacts, Companies, Leads and Deals create flows now put the matched request, HTTP status, code and message (or "no response within N ms" / "session expired") in the thrown error and in the transient-retry error; the Quotations list and create flows fail at once when `layout/list` or `layout/create` returns 4xx/5xx; registry signature `backend-service-discovery-failure` labels it environment-suspected.
 - **Not done:** widening the transient classifier. A retry would not have rescued an outage still failing 80 s later, and would hide an environment failure.
 - **Ask the Kylas team:** was QA service discovery (cluster DNS for `sd-sales`, `sd-rule`, `sd-marketplace`, `sd-order-management`) unhealthy on 2026-10-27 between about 09:15 and 11:30 UTC?
+- **Staging occurrence, 2026-10-29** (local run, `quotations.rbac.spec.ts:369`, first run): `POST https://api-stage.sling-dev.com/v1/quotations/` -> HTTP 400 `{"code":"000000","message":"Connection prematurely closed BEFORE response","fieldErrors":null}`; the test reported `Save failed with an unrelated error (not the inaccessible-entity 029003 error)`. A single re-run of that test passed (1.8 min), as did the same test in the next 11-test run, so it did not repeat. No `Session expiry detected` lines in the run (not KI-51). No code change: the test handled the response correctly.
