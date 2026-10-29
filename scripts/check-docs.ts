@@ -10,7 +10,8 @@
  *    (warns at >=70% of budget)
  *  - a missing header field (Purpose / Read when / Size budget / Last verified)
  *  - a malformed or stale "Last verified" (bad shape, unknown commit, or a
- *    date older than the file's own last modification)
+ *    date older than the doc's last change: its last commit's author date when it
+ *    has no uncommitted edits, its mtime when it does; skipped in a shallow clone)
  *  - a dead internal markdown link, or a dead `#anchor` inside a link
  *  - a backticked repo path / bare file name / `npm run` script that no longer
  *    exists (opt out per line with `<!-- ref-ok -->`; CHANGELOG.md is exempt)
@@ -50,8 +51,8 @@ const warn = (file: string, message: string): void => void findings.push({ level
 const root = process.env.CHECK_DOCS_ROOT ? path.resolve(process.env.CHECK_DOCS_ROOT) : REPO_ROOT;
 const rel = (p: string): string => path.relative(root, p).split(path.sep).join('/');
 
-function git(cmd: string): string {
-  return execSync(`git ${cmd}`, { cwd: REPO_ROOT, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+function git(cmd: string, cwd: string = REPO_ROOT): string {
+  return execSync(`git ${cmd}`, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
 function listDocs(): string[] {
@@ -112,6 +113,57 @@ function anchorsForFile(abs: string): Set<string> {
   return anchorCache.get(abs)!;
 }
 
+// WHY the last COMMIT date for a committed, unmodified doc, and the mtime only
+// for one with uncommitted edits: a checkout, pull, stash or branch switch
+// rewrites mtimes of files nobody edited (8 docs failed this check on
+// 2026-10-29 for that reason), so mtime alone flags docs that were not touched.
+// WHY the AUTHOR date (%as), not the committer date (%cs): a rebase,
+// cherry-pick or squash-merge rewrites the committer date, which would make a
+// doc verified before the rebase look older than its "last change".
+// WHY the shallow check comes FIRST and skips the whole check: a shallow clone
+// (CI) cannot answer "when was this file last committed" (git reports the
+// shallow boundary commit's date for every file, later than the real change),
+// and a CI step that rewrites a doc before this runs (e.g. docs:refresh) would
+// make the mtime path raise false errors too. Any git failure also skips it:
+// this check never raises an error it cannot prove. Git runs in `root`, the same
+// tree `file` is relative to (CHECK_DOCS_ROOT overrides it in tests).
+let shallowRepo: boolean | undefined;
+function isShallowRepo(): boolean {
+  if (shallowRepo === undefined) {
+    try {
+      const flag = git('rev-parse --is-shallow-repository', root).trim() === 'true';
+      // Older git (< 2.15) answers the flag command with "--is-shallow-repository"
+      // text instead of true/false, so also look for the shallow file itself.
+      const shallowFile = path.resolve(root, git('rev-parse --git-path shallow', root).trim());
+      shallowRepo = flag || fs.existsSync(shallowFile);
+    } catch {
+      shallowRepo = true;
+    }
+  }
+  return shallowRepo;
+}
+
+function localDay(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function lastChangeDay(file: string): { day: string; source: string } | null {
+  if (isShallowRepo()) return null;
+  let dirty: boolean;
+  try {
+    dirty = git(`status --porcelain -- "${file}"`, root).trim() !== '';
+  } catch {
+    return null;
+  }
+  if (dirty) return { day: localDay(fs.statSync(path.join(root, file)).mtime), source: 'uncommitted edits, file mtime' };
+  try {
+    const day = git(`log -1 --format=%as -- "${file}"`, root).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) ? { day, source: 'last commit (author date)' } : null;
+  } catch {
+    return null;
+  }
+}
+
 function checkHeader(file: string, text: string): void {
   const head = text.split('\n').slice(0, 14).join('\n');
   const fields: Record<string, string> = {};
@@ -140,9 +192,8 @@ function checkHeader(file: string, text: string): void {
       } catch {
         err(file, `"Last verified" commit ${m[2]} is not a commit in this repo`);
       }
-      const mtime = fs.statSync(path.join(root, file)).mtime;
-      const mtimeDay = `${mtime.getFullYear()}-${String(mtime.getMonth() + 1).padStart(2, '0')}-${String(mtime.getDate()).padStart(2, '0')}`;
-      if (m[1] < mtimeDay) err(file, `"Last verified" date ${m[1]} is older than the file's last modification (${mtimeDay}) — update it when you touch a doc`);
+      const changed = lastChangeDay(file);
+      if (changed && m[1] < changed.day) err(file, `"Last verified" date ${m[1]} is older than the doc's last change (${changed.day}, ${changed.source}) — update it when you touch a doc`);
     }
   }
 }

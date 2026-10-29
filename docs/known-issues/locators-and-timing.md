@@ -3,7 +3,7 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
@@ -161,3 +161,6 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 ### WATCH — Call Logs `selectRandomFromMultiReactSelect()` re-opens with a synthetic `mousedown` — 2026-10-09
 - **Status:** low priority; no failure seen in qa 37897275025 or stage 37897319452; cause of any failure unconfirmed, revisit if it fails again. Not changed.
 - **What:** it re-opens even if the menu is already open (a 2-pick count, 50% of calls) and never checks that the second option was clicked. React-select closes an open menu on that mousedown (library behaviour, not confirmed on this app).
+
+### KI-44 detail (moved from the active file) — `captureCompanyIdFromResponse()` bare match
+- the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1171`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.

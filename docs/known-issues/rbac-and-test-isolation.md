@@ -3,7 +3,7 @@
 > **Purpose:** Resolved RBAC test-isolation bugs, retracted app-bug claims, Lead lookup-field fixes, and durable per-module Hide-Empty-Fields behavior.
 > **Read when:** writing an RBAC test, suspecting an "app bug" in permissions/sharing, or touching Hide Empty Fields tests.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22, KI-43). Real product bugs are tracked outside this repo. Rules: [../PATTERNS.md](../PATTERNS.md).
 
@@ -62,6 +62,7 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22
 - **Evidence:** shard 5 trace (`productsAndServices.rbac.spec.ts:189`, both attempts): `POST /v1/deals/` 201, `POST /v1/search/deal` `totalElements` unchanged 2 s later (5824 in 38582148420, 5828 in 38690038228), `GET /v1/search/deal/lookup?q=id:<name>` 200 `content: []` 9-11 s later. Worst in the first hours of 38582148420 (422s per UTC hour 14/15/16: 17/16/6; started 14:37Z). Live probe 2026-10-15 10:46Z (staging, `--retries=0`): created 1 deal, polled the same lookup every 2 s for 188 s: 90 of 90 polls 200 with 0 results; never findable. Green runs (stage 37953246450, main 38396600241) passed these tests first time on the same test code.
 - **Not verified:** whether contacts/leads/companies were also never indexed (CI logs say yes; only deals were probed); why 5824 became 5828 between the runs; whether the 422/403 clusters share the indexer or are separate backend services.
 - **Ask the Kylas dev team:** is the staging search indexer / event consumer for deal, contact, lead and company stalled or backlogged since about 2026-10-14; do the "summary response" (`01503001`) lookups for meetings read the same index; was there a staging deploy or reindex around 10-14 Oct. Do not add retries or longer waits.
+- **2026-10-29 (run 40821683680, staging):** from the log, `leads.spec:543` first failed in `ContactsPage.fillContactForm` (Company search `"com"`, no transient error, so ONE attempt although the message said 3); its retry created a company at 06:12-06:13 and `Company Lookup` for `"Lang"` still found nothing at 06:15:21; the same company was found by later tests at 06:33 and 06:54. `meetings.rbac:187`: company saved 05:55:30, contact-form search for its exact name empty by 05:56:10. No `live search hit a transient` line appears anywhere in the log. Fixed on our side: contacts no longer pick a random company unless asked (`RANDOM_EXISTING_COMPANY`), and the message reports the real attempt count.
 - **2026-10-26:** sandbox run 40279659288 (`a9f5372`, staging) passed all 14 jobs; see KI-43 for the scope reading. A left-over probe deal named `Probe-IndexLag-*` exists on staging.
 - **Commit:** n/a, no code change.
 

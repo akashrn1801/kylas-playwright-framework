@@ -3,7 +3,7 @@
 > **Purpose:** Durable facts, deliberate deviations and resolved incidents for the Products & Services (P&S) module.
 > **Read when:** touching `ProductsAndServicesPage.ts`, P&S fixtures, product-row pickers on Deals/Quotations, or the Units / description / date-picker helpers.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-21 @ 3959d7f
+> **Last verified:** 2026-10-29 @ 9e60850
 
 Open P&S items (JWT lifetime, `assertQuotationInList()` false-positive, duplicated date pickers) are tracked in [KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-16, KI-23, KI-24). Module-agnostic rules are in [PATTERNS.md](../PATTERNS.md).
 
@@ -21,6 +21,15 @@ Do not "normalize" these back to the standard shape.
 8. **Custom-field id suffix style is `plain`** (`_input_cf<Name>`), not the legacy `customFieldValues.cf<Name>` — pass `suffixStyle: 'plain'`; a wrong style silently no-ops.
 
 ## Incidents
+
+### QA front end drops custom-field values typed in the first ~0.5 s of the product form — 2026-10-28 (KI-50)
+- **Symptom:** from about 14:10 UTC on 2026-10-28 (QA bundle `index.c10e3ae0cc27b96b`, first seen with an HTTP 503 on the bundle), P&S create/edit saves came back HTTP 200 with a custom-field value missing. `productWriteShape.ts` reported the write as FLAT. Jenkins QA rerun `02fc52e` (15:10-16:02 UTC): FLAT when the value was typed 0.25-0.46 s after the form opened, NESTED at 0.43-0.77 s; build 2 (`44a20dd`, 13:10-14:14 UTC, older bundles) was all NESTED.
+- **Root cause (live, QA):** for about 0.5-0.9 s after the inputs render, the form component's `customFields` prop is an empty array; nothing in the DOM or network marks when it fills (11 items on QA). A value typed while it is empty is sent at the TOP LEVEL (`cfFormFieldLimitText`, `customFieldValues: {}`); the backend answers 200 and drops it. Edit form, fresh product each time: `customFields`=0 at fill gave 4 of 4 FLAT, waiting until it was above 0 (~750 ms) gave 4 of 4 NESTED. Create form: waiting also 4 of 4 NESTED. Not the cause: limits, field type, layout response, bundle hash. `networkidle` also worked in probes, but only because third-party widget traffic outlasts the 0.8 s.
+- **Fix (test side, `9e60850`):** `ProductsAndServicesPage.waitForFormFieldDefinitions()`, bounded by `config.timeouts.expect`, walks React's fiber tree from the Name input to an ancestor whose `customFields` prop is a non-empty array; called at the end of `goToCreateProductForm()` and in both branches of `openProductForEdit()`. Brittle by design (reads `__reactFiber$` and the prop name). On timeout it warns and continues; since the follow-up change, a missing fiber key also logs a WARNING (readiness wait could not run).
+- **Interim evidence (not a complete run):** `/home/akash/kylas-notes/ps-formfields-2026-10-29/NOTES.md`: UI+RBAC field-limits pair on QA, 47 passed, 0 failed, 2 interrupted, 21 not run when stopped by hand; every P&S custom-field save NESTED; wait 500-900 ms. One timeout, FFRPS24 (restricted user, read-only reopen of the edit form), cause unexplained. One earlier probe saw the prop stay empty on a create form for 12 s while the fill was still NESTED, so the prop is probably not the whole mechanism; the signal is stronger for edit than create.
+- **Open:** the app-side silent drop (200, value discarded) is to be reported to Kylas; whether it is the same symptom as KI-01 (FFPS5) is unconfirmed. Verification on QA will come from the `qa.yml` run during promotion.
+- **Revert:** remove the `waitForFormFieldDefinitions()` calls.
+- **Commit:** `9e60850` (wait); the WARNING tweak is pending.
 
 ### CKEditor 5 description must be set through its data model — 2026-08
 - **Symptom:** description typed via `.fill()`/`.type()` was absent from the saved payload.
@@ -40,12 +49,12 @@ Do not "normalize" these back to the standard shape.
 - **Symptom:** Deal edit + new product row: Save fired zero requests; initially concluded "unfixable app bug" from headless evidence.
 - **Root cause:** a real feature — a body-level portal modal (`.installments-modal.distribute-modal`, NOT inside `#editEntityModal`) must be resolved before Save's handler does anything. Lesson: never conclude "app bug" from headless evidence alone; verify live, headed, first.
 - **Fix:** `DealsPage.handleDistributeUnallocatedAmountIfPresent()` drives it automatically.
-- **Revert:** remove the call from `DealsPage.fillEditForm()`; PS10/PS11 and Deal edit+product tests then fail.
+- **Revert:** remove the call from `DealsPage.updateDeal()`; PS10/PS11 and Deal edit+product tests then fail.
 - **Commit:** `0c5d3bf`
 
 ### RBAC 403 / `00902001` never matched the expected-RBAC filter — 2026-08-11
 - **Symptom:** P&S RBAC denials surfaced as unexpected background errors.
-- **Root cause:** `RBAC_EXPECTED_STATUS_CODES`/`RBAC_EXPECTED_ERROR_CODES` in `errorFilters.ts` were declared and exported but never read; `isExpectedRbacError()` hardcoded `'422'`/`'029003'`, and the raw error code was never captured (only the message).
+- **Root cause:** `RBAC_EXPECTED_STATUS_CODES`/`RBAC_EXPECTED_ERROR_CODES` in `src/error-collector/errorFilters.ts` were declared and exported but never read; `isExpectedRbacError()` hardcoded `'422'`/`'029003'`, and the raw error code was never captured (only the message).
 - **Fix:** `src/fixtures/index.ts` captures `json?.errorCode || json?.code` into `apiErrorCode`, threaded through `MiscError` to `isExpectedRbacError(message, apiErrorMessage, statusCode, apiErrorCode)`, which now checks the two arrays first; text-pattern matching kept as fallback for `029003`.
 - **Revert:** revert the `apiErrorCode` threading and restore inline checks.
 - **Commit:** `0c5d3bf`
@@ -81,7 +90,6 @@ Do not "normalize" these back to the standard shape.
 ## Resolved one-liners (2026-08-10 consolidated list)
 
 - Item 1: `adminActive` corruption — fixed (above). Item 2: date-picker detachment — fixed (above).
-- Two P&S spec comments still cite a progress file that no longer exists; the substance is in this file.
 - `assertForbiddenOnRestrictedEdit()` 403/`00902001` handling, PS10/PS11 Distribute Equally fix and Batch 7's 12/12 regression are all closed.
 - `npm run test:<module> -- <args>` appends args to the last `&&` command — a standing gotcha, documented in [CONTRIBUTING_TESTS.md](../CONTRIBUTING_TESTS.md).
 

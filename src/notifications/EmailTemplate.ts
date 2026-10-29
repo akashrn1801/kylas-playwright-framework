@@ -15,7 +15,7 @@ import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
-import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
+import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
@@ -185,10 +185,13 @@ export class EmailTemplate {
     // where the banner below the fold won't be seen until the email is
     // opened — prefixed here so it's visible before that.
     const stalePrefix = ctx.reportFreshness?.isStale ? '⚠️ STALE REPORT — ' : '';
+    // WHY: a scoped Jenkins test run (SHARDED_TEST) is not a full-suite result and
+    // must say so in the inbox list, before the banner inside the email is seen.
+    const scopedPrefix = isScopedRun(ctx.shardCompleteness) ? '🔎 PARTIAL (scoped run) — ' : '';
     // WHY a separate "Health:" segment (2026-10-06, sandbox Build #186): the
     // verdict word and icon above come only from this run's own results;
     // health is its own labeled value, never folded into the headline status.
-    return `${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
+    return `${scopedPrefix}${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
   }
 
   html(ctx: EmailContext): string {
@@ -208,6 +211,7 @@ export class EmailTemplate {
 
     const body = [
       this.buildIncompleteRunBanner(ctx.shardCompleteness),
+      this.buildScopedRunBanner(ctx.shardCompleteness),
       this.buildFreshnessWarning(ctx.reportFreshness),
       this.buildMasthead(ctx, health),
       this.buildStatusBanner(verdict),
@@ -302,6 +306,17 @@ ${body}
 <tr><td id="section-incomplete-run" style="background:${FAIL};padding:14px 28px;text-align:center;">
   <div style="font-size:14px;font-weight:700;color:#ffffff;">Incomplete run: ${completeness.reported} of ${completeness.expected} shards reported</div>
   <div style="font-size:12px;color:#ffffff;margin-top:4px;">${missing} shard(s) never uploaded a report (job crashed, hung or was cancelled). Totals, pass rate and health below cover only the shards that reported — this is not a pass. Check the run's job list.</div>
+</td></tr>`;
+  }
+
+  // Renders nothing unless Jenkins marked the run scoped (SHARDED_TEST with TEST_GREP /
+  // FF_ENTITIES): every count below covers only the selected part of the suite.
+  private buildScopedRunBanner(completeness: ShardCompleteness | null | undefined): string {
+    if (!isScopedRun(completeness)) return '';
+    return `
+<tr><td id="section-scoped-run" style="background:${WARN};padding:12px 28px;text-align:center;">
+  <div style="font-size:13px;font-weight:700;color:#ffffff;">Partial run — scoped test build: ${this.esc(completeness.scoped)}</div>
+  <div style="font-size:12px;color:#ffffff;margin-top:4px;">Only the selected part of the suite ran. These totals are not a full-suite result.</div>
 </td></tr>`;
   }
 

@@ -56,17 +56,27 @@ pipeline {
 
     stage('⚠️ Approval — Run PROD?') {
       steps {
-        timeout(time: 24, unit: 'HOURS') {
-          input message: '🚨 You are about to run tests against PRODUCTION. Are you sure?',
-                ok: 'Yes, I approve — run Prod tests',
-                submitter: 'akashrn1801',
-                parameters: [
-                  string(
-                    name: 'REASON',
-                    defaultValue: '',
-                    description: 'Reason for running against Prod (required)'
-                  )
-                ]
+        // WHY the wall-clock stamps: this host suspends, and Jenkins' timeout does not count
+        // suspended time, so a 24h wait can really last days (base Jenkinsfile, build #13).
+        script {
+          def requestedEpoch = wallClockEpoch()
+          echo "Approval requested at ${wallClockStamp()} (wall clock). The 24h limit does not count time the host is suspended."
+          try {
+            timeout(time: 24, unit: 'HOURS') {
+              input message: '🚨 You are about to run tests against PRODUCTION. Are you sure?',
+                    ok: 'Yes, I approve — run Prod tests',
+                    submitter: 'akashpersonal',
+                    parameters: [
+                      string(
+                        name: 'REASON',
+                        defaultValue: '',
+                        description: 'Reason for running against Prod (required)'
+                      )
+                    ]
+            }
+          } finally {
+            sh "echo \"Approval wait ended at \$(date -u +%Y-%m-%dT%H:%M:%SZ): real wall-clock age \$(( (\$(date +%s) - ${requestedEpoch}) / 60 )) min\""
+          }
         }
       }
     }
@@ -74,44 +84,47 @@ pipeline {
     stage('Test — Prod') {
       steps {
         script {
-          // WHY: Dynamic timeout — scales automatically as the suite grows.
-          // Calibrated from real CI data (workers=2): ~20 sec/test average,
-          // including network calls, setup, and assertions. Plus a 20-minute
-          // buffer for checkout/npm install/browser install/report generation.
-          // WHY: Count only @prodSafe tests — prod runs a read-only subset, not the full suite
-          def testCount = sh(
-            script: "grep -rh \"@prodSafe\" tests/ | wc -l",
-            returnStdout: true
-          ).trim().toInteger()
-          def secondsPerTest = 20
-          def bufferMinutes = 20
-          def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
-          echo "Detected ${testCount} @prodSafe tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
-          // WHY additive only, not replacing computedTimeoutMinutes above
-          // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
-          // same reasoning, applied consistently, with the same production-
-          // risk care given this is a PROD pipeline. WHY WORKERS=2 here, not
-          // this file's own top-level `environment { WORKERS = '1' }` — see
-          // Jenkinsfile.qa's identical WHY comment on this exact same
-          // pre-existing, dead env-value inconsistency.
-          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
-            sh '''
-              BRANCH_NAME="${GIT_BRANCH#origin/}"
-              ENV=prod WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
-            '''
-          }
-          timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
-            // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
-            // --reporter=line,allure-playwright override, which was replacing
-            // (not merging with) playwright.config.ts's full reporter array and
-            // silently disabling html/json/MiscErrorReporter here. See
-            // Jenkinsfile.qa for the full explanation — same fix, same reasoning.
-            sh '''
-              ENV=prod npx playwright test \
-                --project=chromium \
-                --grep @prodSafe \
-                --workers=2
-            '''
+          // WHY (sharded Jenkins work): lock the account, then run the collision guard, before any test starts.
+          withAccountLock('prod') {
+            // WHY: Dynamic timeout — scales automatically as the suite grows.
+            // Calibrated from real CI data (workers=2): ~20 sec/test average,
+            // including network calls, setup, and assertions. Plus a 20-minute
+            // buffer for checkout/npm install/browser install/report generation.
+            // WHY: Count only @prodSafe tests — prod runs a read-only subset, not the full suite
+            def testCount = sh(
+              script: "grep -rh \"@prodSafe\" tests/ | wc -l",
+              returnStdout: true
+            ).trim().toInteger()
+            def secondsPerTest = 20
+            def bufferMinutes = 20
+            def computedTimeoutMinutes = (testCount * secondsPerTest + 59) / 60 + bufferMinutes
+            echo "Detected ${testCount} @prodSafe tests — dynamic timeout set to ${computedTimeoutMinutes} minutes"
+            // WHY additive only, not replacing computedTimeoutMinutes above
+            // (2026-09-04) — see Jenkinsfile (main)'s identical WHY comment;
+            // same reasoning, applied consistently, with the same production-
+            // risk care given this is a PROD pipeline. WHY WORKERS=2 here, not
+            // this file's own top-level `environment { WORKERS = '1' }` — see
+            // Jenkinsfile.qa's identical WHY comment on this exact same
+            // pre-existing, dead env-value inconsistency.
+            withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+              sh '''
+                BRANCH_NAME="${GIT_BRANCH#origin/}"
+                ENV=prod WORKERS=2 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+              '''
+            }
+            timeout(time: computedTimeoutMinutes, unit: 'MINUTES') {
+              // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
+              // --reporter=line,allure-playwright override, which was replacing
+              // (not merging with) playwright.config.ts's full reporter array and
+              // silently disabling html/json/MiscErrorReporter here. See
+              // Jenkinsfile.qa for the full explanation — same fix, same reasoning.
+              sh '''
+                ENV=prod npx playwright test \
+                  --project=chromium \
+                  --grep @prodSafe \
+                  --workers=2
+              '''
+            }
           }
         }
       }
@@ -164,4 +177,29 @@ pipeline {
       cleanWs()
     }
   }
+}
+
+// ---- Account lock and collision guard (sharded Jenkins work) -----------------
+// Every Jenkins test run takes the per-account lock (Lockable Resources) and then runs the
+// collision guard inside it, so it cannot overlap another Jenkins run or a GitHub Actions run
+// that drives the same account. Same helpers as the base Jenkinsfile (a Jenkinsfile cannot
+// share code without a shared library).
+def withAccountLock(String envName, Closure body) {
+  def resource = "kylas-${envName}-account"
+  echo "Taking lock '${resource}' (waits while another Jenkins run holds it)"
+  lock(resource: resource) {
+    echo "Lock '${resource}' held"
+    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+      sh "bash scripts/jenkins-collision-guard.sh ${envName}"
+    }
+    body()
+  }
+}
+
+def wallClockEpoch() {
+  return sh(script: 'date +%s', returnStdout: true).trim()
+}
+
+def wallClockStamp() {
+  return sh(script: 'date -u +%Y-%m-%dT%H:%M:%SZ', returnStdout: true).trim()
 }
