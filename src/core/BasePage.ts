@@ -173,6 +173,57 @@ export class BasePage {
     });
   }
 
+  // WHY these two exist (2026-10-28, qa run 40477938102): every create flow
+  // threw the same generic "ID not captured after save (save likely failed
+  // silently)" for failures whose real cause was already in hand: a 400 with
+  // a DNS-resolution message from the QA backend, a response that never
+  // arrived, a session expiry. The HTTP status/code/message sat in a debug
+  // log line or was dropped. These turn a matched response, or a missed
+  // wait, into one line the thrown error can carry. Diagnostic text only;
+  // they classify nothing and retry nothing.
+  protected async describeMatchedResponse(response: Response): Promise<string> {
+    const body = (await response.json().catch(() => null)) as {
+      code?: unknown;
+      message?: unknown;
+      fieldErrors?: unknown;
+    } | null;
+    const hasFieldErrors = Array.isArray(body?.fieldErrors) && body.fieldErrors.length > 0;
+    let path = response.url();
+    try {
+      path = new URL(response.url()).pathname;
+    } catch {
+      // keep the full URL when it cannot be parsed
+    }
+    return (
+      `matched ${response.request().method()} ${path} -> HTTP ${response.status()}, ` +
+      `code ${String(body?.code ?? 'n/a')}, message "${String(body?.message ?? 'n/a')}", ` +
+      `fieldErrors ${hasFieldErrors ? 'present' : 'none'}`
+    );
+  }
+
+  // Appends the create request's diagnostic line AFTER the existing message
+  // of a form error that is about to be thrown (2026-10-28): the toast text
+  // ("Backend rejected the save: POST /v1/contacts/ -> 400 000000") has the
+  // status and code but not the backend's message. Only appends; the original
+  // text, name and stack are kept; an empty detail changes nothing.
+  protected appendCreateDetail(error: unknown, detail: string): unknown {
+    if (detail && error instanceof Error && !error.message.includes(detail)) {
+      error.message = `${error.message}\n[create request] ${detail}`;
+    }
+    return error;
+  }
+
+  protected describeMissedResponse(error: unknown, waitedMs: number): string {
+    const text = String(error);
+    if (/session expired while waiting for a response/i.test(text)) {
+      return 'no create response: the session expired while waiting (session was recovered, the request could not be resumed)';
+    }
+    if (/Timeout \d+ms exceeded/i.test(text)) {
+      return `no matching create request completed within ${waitedMs}ms (the request never fired or the backend did not answer)`;
+    }
+    return `no create response captured: ${text}`;
+  }
+
   // WHY this exists (2026-07-20, Gap 2's other half): a subset of top-level
   // workflow methods (confirmed via a dedicated investigation across all 8
   // page-object files before writing this) are genuinely SAFE to retry from
@@ -540,8 +591,12 @@ export class BasePage {
     logger.info(`Filling ${description} with: ${sensitive ? '[REDACTED]' : value}`);
     // WHY: see click()'s identical comment — must capture before the try.
     const urlBeforeAction = this.page.url();
+    // WHY the waitFor is bounded (2026-10-28, qa run 40477938102, quotations.spec.ts:640):
+    // it had no timeout, so a form that never rendered (layout GET answered
+    // HTTP 400) held the test until the 480000ms test timeout. Bounded by the
+    // same config.timeouts.navigation the Add Quotation waitFor uses.
     try {
-      await locator.waitFor({ state: 'visible' });
+      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
       await locator.clear();
       await locator.fill(value);
     } catch (error) {
@@ -556,7 +611,7 @@ export class BasePage {
         `Filling "${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
       );
       await tryRecoverSessionForPage(this.page, urlBeforeAction);
-      await locator.waitFor({ state: 'visible' });
+      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
       await locator.clear();
       await locator.fill(value);
     }
@@ -752,8 +807,14 @@ export class BasePage {
     // give-up path. Only ever paid when a transient error was actually seen.
     const transientRetryWaitMs = 1500;
     let lastTransient: string | null = null;
+    // WHY counted, not printed as `maxAttempts` (sandbox run 40821683680,
+    // leads.spec:543): a failure with no transient network error breaks out
+    // after the FIRST attempt, but the message said "after 3 attempt(s)" —
+    // wrongly implying the search had been re-triggered twice.
+    let attemptsMade = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      attemptsMade = attempt;
       // Scoped listener armed BEFORE triggering the search so the failure event
       // can't be missed; records the transient error text synchronously, then is
       // removed in `finally`. Matches only backend API requests (/v1.. /v9..) so
@@ -804,8 +865,10 @@ export class BasePage {
     }
 
     throw new Error(
-      `${description}: live search for "${searchTerm}" returned no options after ${maxAttempts} attempt(s)` +
-        (lastTransient ? ` — last transient network error: ${lastTransient}` : '')
+      `${description}: live search for "${searchTerm}" returned no options after ${attemptsMade} attempt(s)` +
+        (lastTransient
+          ? ` — last transient network error: ${lastTransient}`
+          : ' — no transient network error was seen, so the search was not re-triggered')
     );
   }
 

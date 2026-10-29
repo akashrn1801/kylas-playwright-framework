@@ -352,6 +352,71 @@ export class ProductsAndServicesPage extends BasePage {
     );
   }
 
+  // WHY the create/edit form is not "ready" when its inputs are visible (QA 2026-10-28,
+  // Jenkins build 02fc52e + local traces; docs/known-issues/products-and-services.md):
+  // the Name input and every custom-field input render first, but the form component's
+  // `customFields` prop (the custom-field definitions) is an empty array for about
+  // 0.8 s after that (QA bundle index.c10e3ae0cc27b96b), with no request, no DOM change
+  // and no visible cue at the moment it fills. A custom-field value typed while it is
+  // empty is posted at the TOP LEVEL of the PUT/POST body (`cfX` plus an empty
+  // `customFieldValues`), the backend answers 200 and drops it. Live evidence:
+  // `customFields`=0 at fill, 4 of 4 edits FLAT; `customFields`=11 at fill, 4 of 4 NESTED
+  // (productWriteShape.ts reports which). networkidle was NOT used: it only worked
+  // because third-party widget traffic happens to outlast the 0.8 s.
+  // The condition reads React's own fiber tree (`__reactFiber$`), so it is bounded and
+  // never throws: if the app stops exposing it (React or prop rename), or the org has no
+  // custom fields, the wait ends at config.timeouts.expect with a warning and the
+  // FLAT/NESTED check still names the symptom.
+  private async waitForFormFieldDefinitions(formName: string): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      const handle = await this.page.waitForFunction(
+        () => {
+          const input = document.querySelector('input[id$="_input_name"]') as unknown as Record<
+            string,
+            unknown
+          > | null;
+          if (!input) return false;
+          const fiberKey = Object.keys(input).find((key) => key.startsWith('__reactFiber$'));
+          if (!fiberKey) return 'no-react-fiber';
+          let fiber = input[fiberKey] as Record<string, unknown> | null;
+          for (let depth = 0; fiber && depth < 200; depth++) {
+            const props = fiber.memoizedProps as Record<string, unknown> | null;
+            if (
+              props &&
+              typeof fiber.type !== 'string' &&
+              Array.isArray(props.customFields) &&
+              props.customFields.length > 0
+            ) {
+              return 'definitions-loaded';
+            }
+            fiber = fiber.return as Record<string, unknown> | null;
+          }
+          return false;
+        },
+        undefined,
+        { timeout: config.timeouts.expect }
+      );
+      const outcome = await handle.jsonValue();
+      if (outcome === 'no-react-fiber') {
+        logger.warn(
+          `${formName}: React's fiber key (__reactFiber$) was not found on the Name input after ${Date.now() - startedAt} ms — ` +
+            `the custom-field readiness wait could not run, so a value typed now may be posted FLAT (see productWriteShape.ts)`
+        );
+      } else {
+        logger.info(
+          `${formName}: ${outcome} after ${Date.now() - startedAt} ms (custom-field definitions in the form)`
+        );
+      }
+    } catch (error) {
+      logger.warn(
+        `${formName}: custom-field definitions not seen in the form within ${config.timeouts.expect} ms ` +
+          `(${error instanceof Error ? error.message.split('\n')[0] : String(error)}) — continuing; ` +
+          `a value typed now may be posted FLAT (see productWriteShape.ts)`
+      );
+    }
+  }
+
   // WHY a bounded retry here even though no index-lag was observed live
   // (confirmed instant search results immediately after creation, see
   // docs/known-issues/products-and-services.md's investigation notes): per this
@@ -428,6 +493,7 @@ export class ProductsAndServicesPage extends BasePage {
         })
       )
     );
+    await this.waitForFormFieldDefinitions('Products & Services create form');
     logger.info('Opened Products & Services create form');
   }
 
@@ -712,6 +778,7 @@ export class ProductsAndServicesPage extends BasePage {
           expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
         )
       );
+      await this.waitForFormFieldDefinitions('Products & Services edit form');
       logger.info(`Opened product for edit by id: ${nameOrId}`);
       return;
     }
@@ -724,6 +791,7 @@ export class ProductsAndServicesPage extends BasePage {
     await this.withSessionExpiryRecovery(() =>
       expect(this.nameInput()).not.toHaveValue('', { timeout: config.timeouts.expect })
     );
+    await this.waitForFormFieldDefinitions('Products & Services edit form');
     logger.info(`Opened product for edit by name: ${nameOrId}`);
   }
 

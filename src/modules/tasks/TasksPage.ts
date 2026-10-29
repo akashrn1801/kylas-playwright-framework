@@ -711,6 +711,52 @@ export class TasksPage extends BasePage {
     logger.success(`Assigned to: ${userName}`);
   }
 
+  // WHY: see fillRelation(). Bounded react-select pick of the relation entity type.
+  private async selectRelationEntityType(entityType: string): Promise<void> {
+    const maxAttempts = 3;
+    const relationTypeControl = this.taskRelationTypeInput().locator(
+      'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
+    );
+    // WHY getByText resolves to multiple elements — use the dropdown option selector specifically
+    const option = this.page
+      .locator('.is-invalid__option, .is-invalid__option--is-focused')
+      .filter({ hasText: new RegExp('^' + entityType + '$') })
+      .first();
+    // WHY the open-menu checks: clicking a react-select control that is already
+    // open CLOSES it, and Escape with no menu open can close the surrounding
+    // task drawer, so the control is only clicked when no menu is showing and
+    // Escape is only pressed when one is.
+    // Scoped to THIS control's own select container, so a menu left open by another
+    // select (e.g. the entity search of the previous loop iteration) is not mistaken for it.
+    const openMenu = relationTypeControl.locator('xpath=..').locator('.is-invalid__menu').first();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!(await openMenu.isVisible().catch(() => false))) {
+        await relationTypeControl.click({ timeout: config.timeouts.expect }).catch((error: unknown) => {
+          throw new Error(
+            `fillRelation: the relation entity-type control could not be clicked while selecting "${entityType}": ${String(error)}`
+          );
+        });
+      }
+      const visible = await option
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .then(() => true)
+        .catch(() => false);
+      if (visible) {
+        await option.click({ timeout: config.timeouts.expect });
+        return;
+      }
+      logger.warn(
+        `Relation entity type "${entityType}" option not visible after opening the dropdown (attempt ${attempt}/${maxAttempts}) — closing and reopening`
+      );
+      if (await openMenu.isVisible().catch(() => false)) {
+        await this.page.keyboard.press('Escape');
+      }
+    }
+    throw new Error(
+      `fillRelation: the "${entityType}" option never appeared in the relation entity-type dropdown after ${maxAttempts} attempts`
+    );
+  }
+
   async fillRelation(): Promise<void> {
     logger.info('Filling Relation field — all entity types');
     const entityTypes = ['Lead', 'Deal', 'Contact', 'Company'];
@@ -718,21 +764,14 @@ export class TasksPage extends BasePage {
     for (const entityType of entityTypes) {
       logger.info(`Selecting relation entity type: ${entityType}`);
 
-      // Step 1: Click the entity type dropdown (relation type selector)
-      const relationTypeControl = this.taskRelationTypeInput().locator(
-        'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
-      );
-      await relationTypeControl.click();
-      await this.page.waitForTimeout(400);
-
-      // Select entity type
-      // WHY: getByText resolves to multiple elements — use dropdown option selector specifically
-      await this.page
-        .locator('.is-invalid__option, .is-invalid__option--is-focused')
-        .filter({ hasText: new RegExp('^' + entityType + '$') })
-        .first()
-        .click();
-      await this.page.waitForTimeout(500);
+      // Step 1: Open the entity type dropdown (relation type selector) and pick the type.
+      // WHY bounded, re-opened until the option is visible (sandbox run 40821683680,
+      // tasks.rbac:312, 8.2 min): the option click was unbounded and the control click
+      // was followed by a fixed sleep, so when the "Company" option never appeared the
+      // click waited for the whole 480 s test timeout ("Target page ... has been closed")
+      // with no hint of which entity type it was on. Each attempt now waits for the
+      // option itself; a menu that did not open (or closed again) is closed and reopened.
+      await this.selectRelationEntityType(entityType);
 
       // Step 2: Click the entity search dropdown and search
       // WHY: After selecting entity type, a search dropdown appears — same as meetings

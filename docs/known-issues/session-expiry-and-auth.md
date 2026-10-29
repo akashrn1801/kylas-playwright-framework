@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents about login, JWT/session expiry recovery, URL building for auth calls, credential logging and the shared credential file.
 > **Read when:** Touching `AuthManager`, `withSessionExpiryRecovery()`, fixtures' fixture-setup navigation, or investigating a redirect to `/signIn` / "Forbidden" mid-test.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-06 @ 1bd03cc
+> **Last verified:** 2026-10-29 @ 4a85ad7
 
 Open items on this topic (JWT lifetime variance, storage-state age) live in `docs/KNOWN_ISSUES_ACTIVE.md`, not here.
 
@@ -51,3 +51,9 @@ Open items on this topic (JWT lifetime variance, storage-state age) live in `doc
 
 ### `navigateAndConfirmLoggedIn()` landed on neither `/sales/` nor `/signIn` — see ci-pipelines.md
 - Fixture-setup navigation classification (`'wrongPage'` outcome) is recorded in `docs/known-issues/ci-pipelines.md` under Build #239.
+
+### OPEN (KI-51) — cross-shard admin session storm, sandbox run 40821683680 (staging) — 2026-10-29
+- **Timeline (from the log):** `05:24-05:26` every shard logs `token for role admin has 6xx-7xxs remaining`. `05:26:50.147` shard 3: `has only 595s remaining — proactively refreshing`, then `Mid-test session expiry ... re-authenticating headlessly` (two workers, complete 05:26:51-52). `05:26:53` shard 1: `Session expiry detected for admin — redirected to /signIn`. Re-logins then recur on shards 1-4 (05:27:51, 05:29:58, 05:31:43, 05:32:37, 05:34:25) with fresh expiry detections between them. Fresh logins show `42844s` remaining; the cached admin token had about 26 min of life in total.
+- **Tests that failed once in the window (all passed on retry):** `deals.rbac:593` (ended 05:29:35, 1.7 min = the whole 102 s setup budget, `/setup`), `quotations.rbac:369` (05:32:21, same), `call-logs.rbac:370` (7.0 min, `PAGEERROR Cannot read properties of undefined (reading 'content')` on each of 5 reloads while redirected to `/signIn`), `call-logs.rbac:468` (8.2 min), `companies.spec:136` (7.0 min, table not visible).
+- **Fixed:** `navigateAndConfirmLoggedIn()` took the whole remaining setup budget in its first `/sales/`-vs-`/signIn` race, so `wrongPage` was classified with 0 ms left and the forced `/sales/home` retry never ran; non-final attempts now get half of the remaining budget.
+- **Not verified:** that one admin login invalidates older admin tokens (the 3 s gap fits it but proves nothing); why the CI admin token expires in about 26 min while a fresh one lasts about 11.9 h; whether `PROACTIVE_REFRESH_BUFFER_MS` (10 min) should apply in a multi-shard run.

@@ -55,6 +55,12 @@ export const CONTACT_FORM_FIELD_LIMIT_NAMES = {
 // BasePage.clearApplicationCache() — never guess this value.
 export const CONTACT_LAYOUT_CACHE_KEY = 'contacts';
 
+// WHY a sentinel, not '' : '' now means "pick no company" (see
+// ContactsPage.selectCompanyIfRequested()). A test that asserts on the contact's
+// Company field itself passes this to get a random existing company from the live
+// search, instead of every contact in the suite depending on that search.
+export const RANDOM_EXISTING_COMPANY = '__RANDOM_EXISTING_COMPANY__';
+
 export interface ContactCustomFieldData {
   textField: string;
   paragraphText: string;
@@ -198,6 +204,8 @@ export interface ContactData {
   // role-scoped async lookup against real Company records (confirmed live
   // 2026-07-16 that admin and restricted user see genuinely different result
   // sets for the same search term) — never hardcode a company name here.
+  // '' = no company picked; RANDOM_EXISTING_COMPANY = random existing one;
+  // any other value = that exact company.
   timezone: string;
   company: string;
   customFields: ContactCustomFieldData;
@@ -242,12 +250,10 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
   };
 }
 
-// WHY this specific subset: confirmed live via ContactsPage.fillContactForm()
-// that Company (a live async lookup) is unconditionally random-picked
-// regardless of what's passed here (`data.company || undefined` falls
-// through to the random-pick branch on falsy input) — same class of gap as
-// LeadsPage's unconditional react-selects — so Professional never goes
-// fully empty, only mixed. Campaign/Source ARE genuinely conditional here
+// WHY this specific subset: Department/Designation are blanked here, so
+// Company is the ONLY populated Professional field — it is requested
+// explicitly (RANDOM_EXISTING_COMPANY; '' would pick none) so Professional
+// stays mixed, never fully empty. Campaign/Source ARE genuinely conditional here
 // (`if (data.campaign)`/`if (data.source)`), unlike Lead's equivalent —
 // confirmed live via direct code read, not assumed to transfer from Lead —
 // so Campaign Information (unlike Lead's) CAN be driven to a true 100%-empty
@@ -260,6 +266,7 @@ export function generateMinimalContactData(overrides: Partial<ContactData> = {})
     linkedin: '',
     department: '',
     designation: '',
+    company: RANDOM_EXISTING_COMPANY,
     campaign: '',
     source: '',
     subSource: '',

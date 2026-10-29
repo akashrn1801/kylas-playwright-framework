@@ -206,6 +206,9 @@ type NavOutcome = 'sales' | 'signIn' | 'wrongPage' | 'timeout';
 const SETUP_DEADLINE_FRACTION = 0.85;
 const MIN_GOTO_STEP_BUDGET_MS = 5000;
 const MIN_RECOVERY_BUDGET_MS = 15000;
+// Half: with a 102 s CI setup budget the first /sales/ race gets at most ~50 s,
+// leaving well over MIN_RECOVERY_BUDGET_MS for the forced /sales/home retry.
+const NON_FINAL_RACE_BUDGET_SHARE = 0.5;
 
 async function navigateAndConfirmLoggedIn(
   page: Page,
@@ -233,7 +236,19 @@ async function navigateAndConfirmLoggedIn(
   // retry sidesteps whatever "resume last section" logic a bare origin
   // navigation invokes, without touching the FIRST attempt's own
   // behavior (still the plain config.appUrl entry point, unchanged).
-  navigationTargetUrl: string = config.appUrl
+  navigationTargetUrl: string = config.appUrl,
+  // WHY a share of the remaining budget for the /sales/-vs-/signIn race (sandbox
+  // run 40821683680, quotations.rbac:369 and deals.rbac:593, both attempt 1 at
+  // 1.7 min = the whole 102 s setup budget): the race used to wait up to
+  // min(config.timeouts.navigation, everything left) for a URL that was never
+  // coming (the app had resumed the account's last-visited section, /setup).
+  // Only AFTER it timed out was the landing classified 'wrongPage', by which time
+  // 0 ms were left, so the forced `/sales/home` recovery below never ran and the
+  // test failed with "only 0ms left". Every non-final attempt passes a share < 1
+  // so a wrongPage/timeout outcome is classified with budget to spare; the final
+  // attempt keeps the whole remainder (nothing follows it). This only SHORTENS a
+  // wait that was already failing; a normal login reaches /sales/ in seconds.
+  raceBudgetShare: number = 1
 ): Promise<NavOutcome> {
   // WHY: QA env has intermittent TCP timeouts under parallel load — retry the
   // raw navigation itself before ever judging where it landed. Each attempt's
@@ -287,7 +302,7 @@ async function navigateAndConfirmLoggedIn(
   // race's own timeout is now also deadline-bounded, same reasoning as above.
   const raceTimeout = Math.max(
     MIN_GOTO_STEP_BUDGET_MS,
-    Math.min(config.timeouts.navigation, deadline - Date.now())
+    Math.min(config.timeouts.navigation, Math.floor((deadline - Date.now()) * raceBudgetShare))
   );
   const raceOutcome = await Promise.race([
     safeWaitForURL(page, /sales\//, raceTimeout)
@@ -406,7 +421,13 @@ async function createRolePage(
   // has no reason to assume the same "resume last section" state applies.
   let navigationTargetUrl = config.appUrl;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const outcome = await navigateAndConfirmLoggedIn(page, role, setupDeadline, navigationTargetUrl);
+    const outcome = await navigateAndConfirmLoggedIn(
+      page,
+      role,
+      setupDeadline,
+      navigationTargetUrl,
+      attempt < maxAttempts ? NON_FINAL_RACE_BUDGET_SHARE : 1
+    );
     if (outcome === 'sales') {
       landed = true;
       break;
