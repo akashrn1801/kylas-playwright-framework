@@ -1,7 +1,7 @@
 {
   "_comment": "Generated from a real \"npx playwright test --project=chromium --list --reporter=json\" run — never hand-edited. Regenerate via: npx ts-node scripts/generate-expected-test-counts.ts",
-  "generatedAt": "2026-09-29T18:40:04.842Z",
-  "total": 932,
+  "generatedAt": "2026-10-30T13:42:55.637Z",
+  "total": 956,
   "fileCount": 35,
   "perFile": {
     "rbac/call-logs.rbac.spec.ts": 28,
@@ -15,7 +15,7 @@
     "rbac/formFields/leadFieldLimits.rbac.spec.ts": 25,
     "rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts": 31,
     "rbac/formFields/taskFieldLimits.rbac.spec.ts": 31,
-    "rbac/leads.rbac.spec.ts": 31,
+    "rbac/leads.rbac.spec.ts": 39,
     "rbac/meetings.rbac.spec.ts": 12,
     "rbac/productsAndServices.rbac.spec.ts": 7,
     "rbac/quotations.rbac.spec.ts": 17,
@@ -33,7 +33,7 @@
     "ui/formFields/leadFieldLimits.spec.ts": 42,
     "ui/formFields/productsAndServicesFieldLimits.spec.ts": 39,
     "ui/formFields/taskFieldLimits.spec.ts": 39,
-    "ui/leads/leads.spec.ts": 25,
+    "ui/leads/leads.spec.ts": 41,
     "ui/meetings/meetings.spec.ts": 19,
     "ui/productsAndServices/productsAndServices.spec.ts": 9,
     "ui/quotations/quotations.spec.ts": 24,

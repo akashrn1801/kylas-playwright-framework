@@ -7,6 +7,7 @@ import {
   LEAD_CUSTOM_FIELD_NAMES,
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
+import { reportCreatedRecord } from '../../utils/createdRecords';
 import { logger } from '../../utils/logger';
 
 // WHY: same rationale as CompaniesPage's TransientCompanySaveError (2026-07-21
@@ -42,6 +43,81 @@ export class LeadsPage extends BasePage {
   private readonly searchInput = (): Locator => this.page.locator('#fulltext-search');
 
   private readonly searchIcon = (): Locator => this.page.locator('svg:has(#Ic_Search)').first();
+
+  // ── List view controls (filter, page size, sort, bulk bar, smart lists, view mode) ──
+  // WHY these hooks: ids confirmed live 2026-10-30 and none is position-generated —
+  // `check_<leadId>` is keyed by the record, `#totalRecords` / `#sortedBy` are fixed.
+  private readonly filterButton = (): Locator => this.page.locator('#filter-action');
+
+  private readonly filterPanel = (): Locator => this.page.locator('#filterModal');
+
+  private readonly filterFieldPicker = (): Locator =>
+    this.filterPanel().locator('.select__control').first();
+
+  private readonly listDataRows = (): Locator =>
+    this.page.locator('.rt-tr[role="row"]:has(input[id^="check_"]:not(#check_all))');
+
+  private readonly rowCheckboxControl = (leadId: number): Locator =>
+    this.page.locator(`.custom-control:has(#check_${leadId})`);
+
+  private readonly listTotalRecords = (): Locator => this.page.locator('#totalRecords').first();
+
+  private readonly listFooterRange = (): Locator => this.page.locator('#totalRecords').last();
+
+  private readonly listSortedBy = (): Locator => this.page.locator('#sortedBy');
+
+  private readonly pageSizeControl = (): Locator =>
+    this.page.locator('#page-sise-select').locator('xpath=ancestor::div[contains(@class,"control")]');
+
+  private readonly viewModeControl = (): Locator =>
+    this.page.locator('#listing-view').locator('xpath=ancestor::div[contains(@class,"control")]');
+
+  private readonly smartListCaret = (): Locator =>
+    this.page.locator('#selectedSmartList .fa-caret-down');
+
+  private readonly smartListModal = (): Locator => this.page.locator('#smartListModal');
+
+  private readonly kanbanColumnHeaders = (): Locator =>
+    this.page.locator('.kanban-board .kanban-column-header');
+
+  // WHY a text filter, not getByRole: the buttons carry an icon, so their accessible name is not
+  // exactly the label (confirmed live: role + exact name found nothing).
+  private readonly bulkActionButton = (label: string): Locator =>
+    this.page
+      .locator('button')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(label)}\\s*$`) })
+      .first();
+
+  // The open react-select menu (class "css-<hash>-menu", verified live on the list page) — NOT the
+  // Bootstrap `dropdown-menu` blocks, whose names also end in "-menu". Its options end in "-option".
+  private readonly reactSelectMenuOptions = (): Locator =>
+    this.page.locator('div[class$="-menu"]:not(.dropdown-menu) div[class$="-option"]');
+
+  private readonly selectedLeadsBanner = (count: number): Locator =>
+    this.page.getByText(`${count} Lead${count === 1 ? '' : 's'} selected`, { exact: true });
+
+  // ── Notes card (right panel) ──
+  private readonly notesCard = (): Locator =>
+    this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: /^\s*Notes\s*$/ }) })
+      .first();
+
+  private readonly noteItems = (): Locator => this.notesCard().locator('.note.card');
+
+  // ── Convert confirmation (shown only when nothing is ticked) ──
+  private readonly convertConfirmModal = (): Locator => this.page.locator('#confirmModal');
+
+  // ── Edit-form fields found by their visible label, not by a position-generated id ──
+  private readonly editFormGroup = (label: string): Locator =>
+    this.editModal()
+      .locator('.form-group')
+      .filter({
+        has: this.page.locator('label.form-label', {
+          hasText: new RegExp(`^\\s*${this.escapeRegExp(label)}\\s*$`),
+        }),
+      })
+      .first();
 
   private readonly searchLoader = (): Locator => this.page.locator('.spinner, .loader, .loading');
 
@@ -1046,6 +1122,7 @@ export class LeadsPage extends BasePage {
       const leadId = body?.id ?? body?.data?.id ?? null;
 
       logger.success(`Captured lead ID: ${leadId}`);
+      reportCreatedRecord('lead', leadId);
 
       return leadId;
     } catch (error) {
@@ -1104,6 +1181,7 @@ export class LeadsPage extends BasePage {
           (body?.data as { id?: number } | undefined)?.id ??
           null) as number | null;
         logger.success(`Captured lead ID: ${id} from ${response.url()}`);
+        reportCreatedRecord('lead', id);
         return {
           id,
           transient: false,
@@ -2059,8 +2137,11 @@ export class LeadsPage extends BasePage {
 
       await this.waitForLeadDetailsPage();
 
-      await expect(this.firstNameInput()).toHaveValue(data.firstName, {
-        timeout: 10000,
+      // WHY body text, not firstNameInput(): confirmed live (see assertLeadUpdated()) that
+      // input[name="firstName"] exists only on the create/edit FORM, never on the detail page —
+      // this ID branch was dead code until the callers started passing the ID.
+      await expect(this.page.locator('body')).toContainText(data.firstName, {
+        timeout: 15000,
       });
 
       logger.success(`Lead verified: ${data.firstName}`);
@@ -2492,6 +2573,7 @@ export class LeadsPage extends BasePage {
 
   async convertLeadToAll(dealName: string): Promise<void> {
     logger.info(`Converting lead to Deal+Contact+Company — deal name: ${dealName}`);
+    await this.waitForTenantUsageLoaded();
     await this.clickEllipsisOption('Convert');
     await this.page.waitForTimeout(1500);
     // WHY: Check Deal, Contact, Company checkboxes — unchecked by default
@@ -2716,7 +2798,9 @@ export class LeadsPage extends BasePage {
       15000
     ).catch(() => null);
     await this.shareConfirmButton().click();
-    await shareResponsePromise;
+    const shareResponse = await shareResponsePromise;
+    const sharedBody = (await shareResponse?.json().catch(() => null)) as { id?: number } | null;
+    reportCreatedRecord('share rule', sharedBody?.id);
     await this.page.waitForTimeout(300);
     logger.success(`Lead shared with: ${restrictedUserName}`);
   }
@@ -2814,6 +2898,16 @@ export class LeadsPage extends BasePage {
   // second call on an already-disabled toggle is a documented no-op.
   async skipIfCustomFieldsAbsent(): Promise<void> {
     await this.disableRequiredFieldsToggle();
+    // WHY fail on QA: every Lead custom field is known to exist there (live layout, 2026-10-30), so a
+    // missing one means a field was removed or renamed — a skip would report that as "passed". Other
+    // environments do not have these fields yet, so there the whole test skips with a reason.
+    if (config.env === 'qa') {
+      const names = Object.values(LEAD_CUSTOM_FIELD_NAMES);
+      const presence = await Promise.all(names.map((name) => this.isCustomFieldPresent(name)));
+      const missing = names.filter((_, index) => !presence[index]);
+      expect(missing, 'Lead custom fields missing from the QA create/edit form').toEqual([]);
+      return;
+    }
     await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(LEAD_CUSTOM_FIELD_NAMES), 'Lead');
   }
 
@@ -3091,5 +3185,585 @@ export class LeadsPage extends BasePage {
       expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
     );
     logger.success(`Right panel icon not visible: ${title}`);
+  }
+  // ──────────────────────────────────────────────────────────
+  // Detail page: menus, pipeline attach, convert without entities
+  // ──────────────────────────────────────────────────────────
+
+  async getEllipsisOptions(): Promise<string[]> {
+    await this.openEllipsisMenu();
+    const items = this.page.locator('.dropdown-menu.show .dropdown-item');
+    await expect(items.first()).toBeVisible({ timeout: config.timeouts.expect });
+    return (await items.allTextContents()).map((text) => text.trim()).filter(Boolean);
+  }
+
+  async assertEllipsisOptionVisible(optionText: string): Promise<void> {
+    logger.info(`Asserting ellipsis option visible: ${optionText}`);
+    await this.openEllipsisMenu();
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.ellipsisMenuItem(optionText)).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    logger.success(`Ellipsis option visible: ${optionText}`);
+  }
+
+  async assertEllipsisOptions(expected: string[]): Promise<void> {
+    logger.info(`Asserting ellipsis options equal: ${expected.join(', ')}`);
+    const actual = await this.getEllipsisOptions();
+    expect(actual, 'Ellipsis menu options').toEqual(expected);
+    logger.success('Ellipsis options match');
+  }
+
+  // WHY a separate method from convertLeadToAll(): with no entity ticked the app asks for a
+  // confirmation first ("You are about to convert a Lead without creating a
+  // Deal/Contact/Company, please confirm") and only then sends POST /v1/leads/{id}/convert
+  // with an empty body — confirmed live 2026-10-30.
+  async convertLeadWithoutEntities(): Promise<void> {
+    logger.info('Converting lead without creating a Deal/Contact/Company');
+    await this.clickEllipsisOption('Convert');
+    await this.convertButton().waitFor({ state: 'visible', timeout: 10000 });
+    await this.click(this.convertButton(), 'convert button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.convertConfirmModal()).toContainText('without creating a Deal/Contact/Company', {
+        timeout: config.timeouts.expect,
+      })
+    );
+    const convertResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/leads\/\d+\/convert$/) !== null && res.request().method() === 'POST',
+      'lead convert response',
+      15000
+    );
+    // WHY a text filter, not getByRole: the confirm modal carries aria-hidden="true" while it is
+    // shown (confirmed live), and role queries skip aria-hidden subtrees.
+    await this.click(this.convertConfirmModal().locator('button').filter({ hasText: 'Yes, I confirm' }), 'confirm convert');
+    const response = await convertResponsePromise;
+    expect(response.status(), 'POST /v1/leads/{id}/convert should succeed').toBe(200);
+    logger.success('Lead converted without entities');
+  }
+
+  // WHY label-scoped fields (not [id="0_21_input_pipeline"]): that id is generated from the
+  // field's position in the layout, so a layout change would silently move it.
+  async attachPipelineFromDetail(stageName: string): Promise<void> {
+    logger.info(`Attaching pipeline from the detail page at stage: ${stageName}`);
+    await this.click(this.page.getByRole('button', { name: 'Attach Pipeline' }), 'attach pipeline');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    const pipelineGroup = this.editFormGroup('Pipeline');
+    await this.click(pipelineGroup.locator('.is-invalid__control'), 'pipeline select');
+    const pipelineOption = this.page.locator('.is-invalid__option').first();
+    await pipelineOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(pipelineOption, 'pipeline option');
+    const stageGroup = this.editFormGroup('Pipeline Stage');
+    await expect(stageGroup.locator('.is-invalid__control')).not.toHaveClass(/is-disabled/, {
+      timeout: config.timeouts.expect,
+    });
+    await this.click(stageGroup.locator('.is-invalid__control'), 'stage select');
+    const stageOption = this.page
+      .locator('.is-invalid__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(stageName)}\\s*$`) })
+      .first();
+    await stageOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(stageOption, 'stage option');
+    await this.saveEditedLead();
+    logger.success(`Pipeline attached at stage: ${stageName}`);
+  }
+
+  async assertCloseLeadControlVisible(visible: boolean): Promise<void> {
+    logger.info(`Asserting Close Lead control ${visible ? 'visible' : 'absent'}`);
+    await this.withSessionExpiryRecovery(() =>
+      visible
+        ? expect(this.closeLeadToggleButton()).toBeVisible({ timeout: config.timeouts.expect })
+        : expect(this.closeLeadToggleButton()).toHaveCount(0, { timeout: config.timeouts.expect })
+    );
+    logger.success(`Close Lead control ${visible ? 'visible' : 'absent'}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Create form: rejected saves, secondary e-mail
+  // ──────────────────────────────────────────────────────────
+
+  // WHY returns the response instead of throwing: callers that EXPECT a rejection need the
+  // status and the body's error code/details to assert on; saveLead() is for the success path.
+  async clickSaveAndCaptureCreateResponse(): Promise<{
+    status: number;
+    body: { code?: string; message?: string; errorDetails?: Array<{ field: string | null; message: string }> };
+  }> {
+    const createResponsePromise = this.armResponseWaitWithRecovery(
+      // WHY the optional trailing slash: the app posts to /v1/leads/ (confirmed live 2026-10-30)
+      (res) => res.url().match(/\/v1\/leads\/?(?:\?|$)/) !== null && res.request().method() === 'POST',
+      'lead create response',
+      config.timeouts.navigation
+    );
+    await this.waitForClickTargetUnobstructed(this.saveButton());
+    await this.click(this.saveButton(), 'save button');
+    const response = await createResponsePromise;
+    return { status: response.status(), body: await response.json().catch(() => ({})) };
+  }
+
+  // WHY index: the form renders one "Add Email" row per click, `emails[0]` then `emails[1]`…
+  async addEmail(index: number, value: string): Promise<void> {
+    logger.info(`Adding e-mail #${index + 1}`);
+    await this.click(this.addEmailButton(), 'add email button');
+    const emailInput = this.page.locator(`input[name="emails[${index}].value"]`);
+    await this.withSessionExpiryRecovery(() =>
+      expect(emailInput).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    await this.fill(emailInput, value, `email ${index + 1}`);
+    logger.success(`E-mail #${index + 1} filled`);
+  }
+
+  // WHY scoped to the field's own form-group: the form keeps every field's error on screen at
+  // once, so a page-wide text match would be satisfied by an error belonging to another field.
+  async assertFieldInlineError(fieldName: string, expectedMessage: string): Promise<void> {
+    const field = this.page.locator(`input[name="${fieldName}"]`).first();
+    await field.blur();
+    const error = field
+      .locator('xpath=ancestor::div[contains(@class,"form-group") or contains(@class,"email-row")][1]')
+      .locator('.invalid-feedback, .help-text.error')
+      .filter({ hasText: expectedMessage });
+    await this.withSessionExpiryRecovery(() =>
+      expect(error.first(), `Expected inline error "${expectedMessage}" for ${fieldName}`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    logger.success(`Inline error for ${fieldName}: "${expectedMessage}"`);
+  }
+
+  // WHY no response wait: with client-side validation errors on screen the app sends nothing,
+  // so there is no create response to wait for (callers assert that no POST fired).
+  async clickSaveExpectingClientValidation(): Promise<void> {
+    await this.waitForClickTargetUnobstructed(this.saveButton());
+    await this.click(this.saveButton(), 'save button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.saveButton()).toBeVisible({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async fillFormField(fieldName: string, value: string): Promise<void> {
+    const field = this.page.locator(`input[name="${fieldName}"]`).first();
+    await field.scrollIntoViewIfNeeded();
+    await this.fill(field, value, fieldName);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // List view: filter, page size, sort, selection, bulk actions, smart lists, view mode
+  // ──────────────────────────────────────────────────────────
+
+  async waitForListData(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.listDataRows().first()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+  }
+
+  async getFirstListLeadId(): Promise<number> {
+    const checkboxId = await this.listDataRows().first().locator('input[id^="check_"]').getAttribute('id');
+    const match = checkboxId?.match(/^check_(\d+)$/);
+    if (!match) throw new Error(`getFirstListLeadId: unexpected checkbox id "${checkboxId}"`);
+    return Number(match[1]);
+  }
+
+  async getListRowCount(): Promise<number> {
+    return this.listDataRows().count();
+  }
+
+  async getListTotalRecords(): Promise<number> {
+    const text = (await this.listTotalRecords().innerText()).replace(/,/g, '');
+    const match = text.match(/(\d+)\s+items?/);
+    if (!match) throw new Error(`getListTotalRecords: unexpected total text "${text}"`);
+    return Number(match[1]);
+  }
+
+  async getListFooterText(): Promise<string> {
+    return (await this.listFooterRange().innerText()).trim();
+  }
+
+  async getListSortedByText(): Promise<string> {
+    return (await this.listSortedBy().innerText()).trim();
+  }
+
+  async getAvailablePageSizes(): Promise<number[]> {
+    await this.click(this.pageSizeControl(), 'page size select');
+    const options = this.reactSelectMenuOptions();
+    await expect(options.first()).toBeVisible({ timeout: config.timeouts.expect });
+    const sizes = (await options.allTextContents()).map((text) => Number(text.trim()));
+    await this.page.keyboard.press('Escape');
+    return sizes;
+  }
+
+  async selectPageSize(size: number): Promise<void> {
+    logger.info(`Selecting page size: ${size}`);
+    await this.click(this.pageSizeControl(), 'page size select');
+    const option = this.reactSelectMenuOptions()
+      .filter({ hasText: new RegExp(`^\\s*${size}\\s*$`) })
+      .first();
+    await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(option, 'page size option');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.pageSizeControl()).toContainText(String(size), { timeout: config.timeouts.expect })
+    );
+    logger.success(`Page size set to ${size}`);
+  }
+
+  async getListColumnValues(columnHeader: string): Promise<string[]> {
+    // WHY first: the table is rebuilt after a sort or page-size change, and its header row is empty
+    // while it reloads
+    await this.waitForListData();
+    // WHY by position: header cells and row cells are in the same order (cell 0 is the
+    // selection checkbox in both), confirmed live on 18 columns.
+    const headers = (await this.page.locator('.rt-thead .rt-th').allInnerTexts()).map((t) => t.trim());
+    const headerIndex = headers.indexOf(columnHeader);
+    if (headerIndex < 0) {
+      throw new Error(`getListColumnValues: column "${columnHeader}" not shown (shown: ${headers.join(', ')})`);
+    }
+    const cells = this.listDataRows().locator(`.rt-td:nth-child(${headerIndex + 1})`);
+    return (await cells.allTextContents()).map((text) => text.trim());
+  }
+
+  async sortListByColumn(columnHeader: string): Promise<void> {
+    logger.info(`Sorting list by: ${columnHeader}`);
+    const before = await this.getListSortedByText();
+    await this.click(
+      this.page.locator('.sort-header').filter({ hasText: columnHeader }).first(),
+      `sort header ${columnHeader}`
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.listSortedBy()).not.toHaveText(before, { timeout: config.timeouts.expect })
+    );
+    logger.success(`Sorted: ${await this.getListSortedByText()}`);
+  }
+
+  // WHY apply() waits for the total to change away from the unfiltered value only when the
+  // caller says so: the filtered total can legitimately equal the unfiltered one.
+  async filterListBy(fieldLabel: string, value: string): Promise<void> {
+    logger.info(`Filtering list: ${fieldLabel} contains "${value}"`);
+    await this.click(this.filterButton(), 'filter button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.filterPanel()).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    await this.click(this.filterFieldPicker(), 'filter field picker');
+    const fieldOption = this.page
+      .locator('.select__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) })
+      .first();
+    await fieldOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(fieldOption, 'filter field option');
+    await this.fill(this.filterPanel().getByPlaceholder('Enter value'), value, 'filter value');
+    await this.click(this.filterPanel().getByText('Apply', { exact: true }), 'apply filter');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.filterPanel()).toBeHidden({ timeout: config.timeouts.expect })
+    );
+    await this.waitForLoaderToDisappear();
+    logger.success(`Filter applied: ${fieldLabel} contains "${value}"`);
+  }
+
+  async selectLeadRow(leadId: number): Promise<void> {
+    await this.click(this.rowCheckboxControl(leadId), 'row checkbox');
+    await expect(this.page.locator(`#check_${leadId}`)).toBeChecked({ timeout: config.timeouts.expect });
+  }
+
+  async deselectLeadRow(leadId: number): Promise<void> {
+    await this.click(this.rowCheckboxControl(leadId), 'row checkbox');
+    await expect(this.page.locator(`#check_${leadId}`)).not.toBeChecked({ timeout: config.timeouts.expect });
+  }
+
+  async assertSelectedLeadCount(count: number): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.selectedLeadsBanner(count)).toBeVisible({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async assertBulkActionsVisible(labels: string[]): Promise<void> {
+    for (const label of labels) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.bulkActionButton(label), `Bulk action "${label}"`).toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      );
+    }
+  }
+
+  async assertBulkBarHidden(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.bulkActionButton('Export')).toBeHidden({ timeout: config.timeouts.expect })
+    );
+  }
+
+  // WHY the "I understand" acknowledgement is part of the method: the dialog's Update button
+  // stays inert until it is ticked. The dialog also offers "Execute Workflows" / "Execute Score
+  // Rules" switches — this method deliberately never touches them.
+  async bulkUpdateTextField(fieldLabel: string, fieldInternalName: string, value: string): Promise<void> {
+    logger.info(`Bulk updating ${fieldLabel}`);
+    await this.click(this.bulkActionButton('Update'), 'bulk update');
+    const dialog = this.page.locator('.modal.show');
+    await expect(dialog).toContainText('Please select the fields that needs to be updated', {
+      timeout: config.timeouts.expect,
+    });
+    await this.click(dialog.getByText('Choose', { exact: true }), 'bulk field chooser');
+    await this.page.keyboard.type(fieldLabel);
+    await this.click(this.reactSelectMenuOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) }).first(), 'bulk field option');
+    await this.fill(dialog.locator(`input[name="${fieldInternalName}"]`), value, fieldLabel);
+    await this.click(dialog.locator('label').filter({ hasText: 'I understand' }).first(), 'bulk acknowledgement');
+    const jobResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/bulk-action-jobs$/) !== null && res.request().method() === 'POST',
+      'bulk update job',
+      15000
+    );
+    await this.click(dialog.locator('button').filter({ hasText: /^Update$/ }).first(), 'bulk update confirm');
+    const response = await jobResponsePromise;
+    expect(response.status(), 'POST /v1/bulk-action-jobs (update) should be accepted').toBe(201);
+    logger.success(`Bulk update submitted for ${fieldLabel}`);
+  }
+
+  async bulkDeleteSelected(expectedCount: number): Promise<void> {
+    logger.info(`Bulk deleting ${expectedCount} selected leads`);
+    await this.click(this.bulkActionButton('Delete'), 'bulk delete');
+    const dialog = this.page.locator('.modal.show');
+    await expect(dialog).toContainText(`Are you sure you want to delete ${expectedCount} Lead`, {
+      timeout: config.timeouts.expect,
+    });
+    const jobResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/bulk-action-jobs$/) !== null && res.request().method() === 'POST',
+      'bulk delete job',
+      15000
+    );
+    await this.click(dialog.locator('button').filter({ hasText: /^\s*Delete\s*$/ }), 'bulk delete confirm');
+    const response = await jobResponsePromise;
+    expect(response.status(), 'POST /v1/bulk-action-jobs (delete) should be accepted').toBe(201);
+    logger.success('Bulk delete submitted');
+  }
+
+  async openSmartListManager(): Promise<void> {
+    await this.click(this.smartListCaret(), 'smart list caret');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.smartListModal()).toContainText('Manage Smart Lists', { timeout: config.timeouts.expect })
+    );
+  }
+
+  // WHY every page: the dialog shows 10 lists per page ("12 items" → 2 pages), and "All leads" /
+  // "All my leads" are on the second one. WHY it waits for a row: the title and "12 items" render
+  // before the rows do.
+  async getSmartListManagerText(): Promise<string> {
+    // The rows are not table rows, so readiness is read from the text: the header line "Description"
+    // is followed by the first list name once the rows have rendered
+    const readRows = async (changedFrom?: string): Promise<string> => {
+      let rows = '';
+      await this.withSessionExpiryRecovery(() =>
+        expect
+          .poll(
+            async () => {
+              const text = await this.smartListModal().innerText();
+              rows = text.split(/Description/i).slice(1).join(' ').trim();
+              return rows.length > 0 && rows !== changedFrom;
+            },
+            { timeout: config.timeouts.expect, message: 'Smart list rows should render' }
+          )
+          .toBe(true)
+      );
+      return rows;
+    };
+    let rows = await readRows();
+    let text = await this.smartListModal().innerText();
+    const pageLinks = this.smartListModal().locator('ul.pagination a.page-link').filter({ hasText: /^\d+$/ });
+    const pageCount = await pageLinks.count();
+    for (let pageNumber = 2; pageNumber <= pageCount; pageNumber++) {
+      await this.click(pageLinks.filter({ hasText: new RegExp(`^${pageNumber}$`) }), 'smart list page link');
+      rows = await readRows(rows);
+      text += `\n${await this.smartListModal().innerText()}`;
+    }
+    return text;
+  }
+
+  async closeSmartListManager(): Promise<void> {
+    await this.click(this.smartListModal().locator('button.close'), 'close smart list dialog');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.smartListModal()).toBeHidden({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async getRowMenuOptions(leadId: number): Promise<string[]> {
+    const row = this.listDataRows().filter({ has: this.page.locator(`#check_${leadId}`) });
+    await this.withSessionExpiryRecovery(() =>
+      expect(row).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await row.hover();
+    await this.click(row.locator('.text-format-dd button.dropdown-toggle'), 'row menu toggle');
+    const items = this.page.locator('.dropdown-menu.show .dropdown-item');
+    await expect(items.first()).toBeVisible({ timeout: config.timeouts.expect });
+    const options = (await items.allTextContents()).map((text) => text.trim()).filter(Boolean);
+    await this.page.keyboard.press('Escape');
+    return options;
+  }
+
+  async openListViewMode(mode: 'List View' | 'Kanban View'): Promise<void> {
+    logger.info(`Switching list view mode to: ${mode}`);
+    await this.click(this.viewModeControl(), 'view mode select');
+    await this.click(this.reactSelectMenuOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(mode)}\\s*$`) }).first(), 'view mode option');
+    logger.success(`View mode: ${mode}`);
+  }
+
+  async getKanbanStageHeaders(): Promise<string[]> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.kanbanColumnHeaders().first()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    return (await this.kanbanColumnHeaders().allTextContents()).map((text) => text.replace(/\s+/g, ' ').trim());
+  }
+
+  // WHY counts per column (not a card search): the board lazy-loads and is not ordered by recency,
+  // so a specific card cannot be expected among the first few — a filter narrows the board and the
+  // per-column counts then say which stage each matching lead is in.
+  async getKanbanStageCounts(): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const header of await this.getKanbanStageHeaders()) {
+      const match = header.match(/^(.*?)\s*\((\d+)\)$/);
+      if (!match) throw new Error(`getKanbanStageCounts: unexpected column header "${header}"`);
+      counts[match[1].trim()] = Number(match[2]);
+    }
+    return counts;
+  }
+
+  // WHY not "inside the column": the cards are not children of the column elements in the DOM
+  // (confirmed live), so which stage a card belongs to is read from the per-column counts instead
+  // (getKanbanStageCounts) while the board is filtered down to the lead.
+  async assertKanbanCardShown(leadId: number): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.kanban-board .kanban-card').filter({ hasText: `(#${leadId})` })).toHaveCount(1, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+  }
+  // ──────────────────────────────────────────────────────────
+  // Right panel: notes, and readiness of the detail page
+  // ──────────────────────────────────────────────────────────
+
+  // WHY: the Convert dialog's Deal section reads the tenant's plan usage the moment Deal is ticked.
+  // On a page opened by direct URL that usage arrives a few seconds AFTER the page is otherwise
+  // ready, and ticking Deal first crashes the dialog ("Cannot read properties of null (reading
+  // 'addons')", seen in a failing trace: GET /v1/tenants/usage answered 0.3 s after the Deal tick).
+  // The resource timeline says whether the response has already arrived on this document.
+  async waitForTenantUsageLoaded(): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate(() =>
+            performance.getEntriesByType('resource').some((entry) => entry.name.includes('/v1/tenants/usage'))
+          ),
+        { timeout: config.timeouts.navigation, message: 'Tenant usage should have loaded on the lead detail page' }
+      )
+      .toBe(true);
+  }
+
+  async getNoteCount(): Promise<number> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.notesCard().locator('.react-loading-skeleton')).toHaveCount(0, { timeout: 15000 })
+    );
+    return this.noteItems().count();
+  }
+
+  // WHY counts inside the Notes card: a generic row selector also matched unrelated elements, so the
+  // note is proven saved by the card holding exactly one more note than before (skeleton rows that
+  // share the note wrapper are waited out first).
+  async addNote(text: string): Promise<void> {
+    logger.info('Adding a note from the lead detail panel');
+    const baseline = await this.getNoteCount();
+    await this.click(this.notesCard().locator('textarea.notes-textarea'), 'notes textarea');
+    const editor = this.notesCard().getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await editor.fill(text, { timeout: config.timeouts.expect });
+    await this.click(this.notesCard().getByText('Add', { exact: true }), 'add note');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.noteItems(), 'Note count after adding').toHaveCount(baseline + 1, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+    const leadId = this.page.url().match(/\/leads\/details\/(\d+)/)?.[1];
+    // a note has no id of its own here: report it against the lead it sits on
+    reportCreatedRecord('note', leadId ? `on lead ${leadId}` : null, leadId ? `${config.appUrl}/sales/leads/details/${leadId}` : undefined);
+    logger.success('Note added');
+  }
+
+  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
+  async assertNoteTextPresent(text: string): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate((expected) => {
+            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
+              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
+              try {
+                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
+              } catch {
+                /* cross-origin iframe — not a note */
+              }
+            }
+            return false;
+          }, text),
+        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
+      )
+      .toBe(true);
+  }
+  // ──────────────────────────────────────────────────────────
+  // Create form: error summary and the duplicate "View Lead" link
+  // ──────────────────────────────────────────────────────────
+
+  // The summary at the bottom of the form shows ONE error at a time ("<Field label> <message>") with
+  // its position among all errors, e.g. "(1/1)". Confirmed live for a duplicate e-mail and for a
+  // too-long last name.
+  async assertFormErrorSummary(expectedMessage: string, totalErrors = 1): Promise<void> {
+    const summary = this.editModal().locator('.bottom-section .helptext-wrapper');
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(summary.locator('p.help-text.error'), 'Form error summary text').toHaveText(expectedMessage, {
+        timeout: config.timeouts.expect,
+      });
+      await expect(summary, 'Form error summary count').toContainText(`(1/${totalErrors})`, {
+        timeout: config.timeouts.expect,
+      });
+    });
+    logger.success(`Form summary: "${expectedMessage}" (1/${totalErrors})`);
+  }
+
+  private readonly viewLeadLink = (): Locator =>
+    this.editModal().locator('a').filter({ hasText: 'View Lead' }).first();
+
+  // The link under a duplicate-e-mail error opens the Leads list filtered to that e-mail, in a new tab
+  async assertViewLeadLinkTargets(email: string): Promise<void> {
+    const link = this.viewLeadLink();
+    await expect(link).toBeVisible({ timeout: config.timeouts.expect });
+    await expect(link).toHaveAttribute(
+      'href',
+      `/sales/leads/list?emails=equal&emails=${encodeURIComponent(email)}`
+    );
+    await expect(link).toHaveAttribute('target', '_blank');
+  }
+
+  // Opens the "View Lead" link and returns the ids of the leads that list shows (empty while the
+  // search index has not caught up). The new tab is closed again.
+  async getLeadIdsListedByViewLeadLink(): Promise<number[]> {
+    const [listTab] = await Promise.all([
+      this.page.context().waitForEvent('page', { timeout: config.timeouts.expect }),
+      this.viewLeadLink().click(),
+    ]);
+    try {
+      await listTab.waitForLoadState('domcontentloaded');
+      await expect(listTab.locator('#totalRecords').first()).toBeVisible({ timeout: config.timeouts.navigation });
+      const checkboxIds = await listTab
+        .locator('.rt-tr[role="row"] input[id^="check_"]:not(#check_all)')
+        .evaluateAll((inputs) => inputs.map((input) => input.id));
+      return checkboxIds.map((id) => Number(id.replace('check_', '')));
+    } finally {
+      await listTab.close();
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Detail page: what a lead's access level shows
+  // ──────────────────────────────────────────────────────────
+
+  async assertEditButtonVisible(visible: boolean): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      visible
+        ? expect(this.editIconButton()).toBeVisible({ timeout: config.timeouts.expect })
+        : expect(this.editIconButton()).toHaveCount(0, { timeout: config.timeouts.expect })
+    );
   }
 }

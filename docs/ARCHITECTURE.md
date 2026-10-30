@@ -10,7 +10,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 ## 1. Suite at a glance
 
 <!-- GEN:suite-totals:START -->
-**932 tests** in **35 spec files** (UI 509 · RBAC 423)
+**956 tests** in **35 spec files** (UI 525 · RBAC 431)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
@@ -24,7 +24,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Dashboard | 34 | 29 | 63 |
 | Deals | 26 | 30 | 56 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 25 | 31 | 56 |
+| Leads | 41 | 39 | 80 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,7 +33,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **509** | **423** | **932** |
+| **Total** | **525** | **431** | **956** |
 <!-- GEN:module-table:END -->
 
 ## 2. Repository layout
@@ -43,13 +43,13 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | `config/config.ts` | Single source of truth for env vars, timeouts, `searchRetry`/`meetingRetry`, and `buildApiUrl()`. Also `expected-test-counts.json` (suite baseline) and `sharedConfigSuites.json` (shared-config suites the planner excludes). |
 | `src/core/BasePage.ts` | Base class of every page object: bounded click/fill, recovery combinators, entity list/detail readiness, custom-field helpers, react-select helpers. |
 | `src/modules/<module>/<Module>Page.ts` | One page object per module (call-logs, companies, contacts, dashboard, deals, formFields, leads, meetings, productsAndServices, quotations, reports, tasks). `dashboard/` also holds `LoginPage.ts`. |
-| `src/fixtures/index.ts` | `adminPage`, `restrictedPage`, `adminContext`, `restrictedContext`. Always import `test`/`expect` from here (sole exception: `tests/ui/dashboard/login.spec.ts`). |
+| `src/fixtures/index.ts` | `adminPage`, `restrictedPage`, `adminContext`, `restrictedContext`, and the opt-in `leadCleanup` / `shareRuleCleanup` ([ADR 0013](./adr/0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md)). Always import `test`/`expect` from here (sole exception: `tests/ui/dashboard/login.spec.ts`). |
 | `src/auth/` | `globalSetup.ts` (logins + product fixtures), `authManager.ts`, `productFixtureNeed.ts`, `storageStates/<env>/<role>.json`. |
 | `src/data/factories/<module>Factory.ts` | Data generators + per-module custom-field constants. `src/data/productFixtureAccessor.ts` reads the per-run Products & Services fixture file. |
 | `src/error-collector/` | `ErrorCollector.ts` (per-worker singleton) and `errorFilters.ts` (classification). |
 | `src/reporters/MiscErrorReporter.ts` | Merges per-worker error files into `reports/<env>/misc-errors.json`. |
 | `src/notifications/` | Report parsing, run history, failure analysis, email — see [REPORTING.md](./REPORTING.md). |
-| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`, `failedWriteTracker.ts`, `productWriteShape.ts`. |
+| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`, `failedWriteTracker.ts`, `productWriteShape.ts`, and the API helpers `apiClient.ts` (base), `leadApi.ts`, `shareRuleApi.ts` (entity-generic). `src/core/sharePermissions.ts` holds the share vocabulary shared by every entity; `src/modules/shareRules/` is the entity-agnostic Share Data page. |
 | `tests/ui/<module>/`, `tests/rbac/<module>.rbac.spec.ts`, `tests/rbac/formFields/` | UI specs (admin) and RBAC specs (admin + restricted). `tests/ui/formFields/` also holds the lock modules. |
 | `scripts/` | Guards and tooling (`check-test-conventions`, `check-test-counts`, `check-failure-labels`, `check-formfields-matrix-sync`, `plan-shards`, `merge-misc-errors`, `reset-field-config`, `new-module`, `check-docs`, `update-doc-numbers`), the Jenkins sharding helpers (`jenkins-collision-guard.sh`, `jenkins-resolve-selection.sh`, `jenkins-shard-plan.ts`, `jenkins-collect-shard.sh`; [ADR-0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md)) and `scripts/hooks/` (git + Claude Code hooks). |
 | `.github/workflows/`, `Jenkinsfile*`, `.github/scripts/*` (`detect-tests.sh`, `install-playwright-browsers.sh`, `split-formfields-target.sh`, `verify-shard-completeness.sh`) | CI. |
@@ -213,8 +213,8 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 124 / 124 / 119 / 7 | 6 |
-| full suite (stage, main) | 5 | 125 / 124 / 125 / 125 / 16 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 125 / 123 / 28 | 6 |
+| full suite (stage, main) | 5 | 125 / 123 / 125 / 124 / 42 | 6 |
 <!-- GEN:shard-plan:END -->
 
 ```mermaid

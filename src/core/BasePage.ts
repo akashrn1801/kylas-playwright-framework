@@ -1466,7 +1466,7 @@ export class BasePage {
     return this.page.locator(`input[id$="${suffix}"], textarea[id$="${suffix}"]`);
   }
 
-  private async isCustomFieldPresent(
+  protected async isCustomFieldPresent(
     fieldName: string,
     suffixStyle: CustomFieldSuffixStyle = 'legacy'
   ): Promise<boolean> {
