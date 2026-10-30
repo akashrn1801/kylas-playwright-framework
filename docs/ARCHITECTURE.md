@@ -3,7 +3,7 @@
 > **Purpose:** How the framework is built — layers, fixtures, auth, recovery combinators, locking, sharding and CI flow. The single place to learn the shape of the system before changing it.
 > **Read when:** Touching `src/core`, `src/fixtures`, `src/auth`, the error collector, a lock, or a CI workflow; or onboarding to a module you have not worked in.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-20 @ 813e1b9
+> **Last verified:** 2026-10-28 @ 566df8c
 
 Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident history in [known-issues/](./known-issues/session-expiry-and-auth.md); CI detail in [CI_PIPELINES.md](./CI_PIPELINES.md). Terms: [GLOSSARY.md](./GLOSSARY.md).
 
@@ -49,10 +49,10 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | `src/error-collector/` | `ErrorCollector.ts` (per-worker singleton) and `errorFilters.ts` (classification). |
 | `src/reporters/MiscErrorReporter.ts` | Merges per-worker error files into `reports/<env>/misc-errors.json`. |
 | `src/notifications/` | Report parsing, run history, failure analysis, email — see [REPORTING.md](./REPORTING.md). |
-| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`. |
+| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`, `failedWriteTracker.ts`, `productWriteShape.ts`. |
 | `tests/ui/<module>/`, `tests/rbac/<module>.rbac.spec.ts`, `tests/rbac/formFields/` | UI specs (admin) and RBAC specs (admin + restricted). `tests/ui/formFields/` also holds the lock modules. |
-| `scripts/` | Guards and tooling (`check-test-conventions`, `check-test-counts`, `plan-shards`, `new-module`, `check-docs`, `update-doc-numbers`) and `scripts/hooks/` (git + Claude Code hooks). |
-| `.github/workflows/`, `Jenkinsfile*`, `.github/scripts/detect-tests.sh` | CI. |
+| `scripts/` | Guards and tooling (`check-test-conventions`, `check-test-counts`, `check-failure-labels`, `check-formfields-matrix-sync`, `plan-shards`, `merge-misc-errors`, `reset-field-config`, `new-module`, `check-docs`, `update-doc-numbers`), the Jenkins sharding helpers (`jenkins-collision-guard.sh`, `jenkins-resolve-selection.sh`, `jenkins-shard-plan.ts`, `jenkins-collect-shard.sh`; [ADR-0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md)) and `scripts/hooks/` (git + Claude Code hooks). |
+| `.github/workflows/`, `Jenkinsfile*`, `.github/scripts/*` (`detect-tests.sh`, `install-playwright-browsers.sh`, `split-formfields-target.sh`, `verify-shard-completeness.sh`) | CI. |
 
 ```mermaid
 flowchart TB
@@ -141,7 +141,7 @@ Three failure shapes replace a screen mid-test; each has one shared combinator i
 
 | Failure | Detector | Combinator | Remedy |
 |---|---|---|---|
-| Session expired (`/signIn` redirect, "Forbidden" bootstrap page, 401) | `authManager.isSessionExpiryPage()` | `withSessionExpiryRecovery()` (single assertion); `withSessionExpiryRetry()` (whole workflow, once); `armResponseWaitWithRecovery()` (arm a `waitForResponse` before a click) | Headless re-login, re-navigate, retry |
+| Session expired (`/signIn` redirect, "Forbidden" bootstrap page, 401) | `isSessionExpiryPage()` (exported from `authManager.ts`) | `withSessionExpiryRecovery()` (single assertion); `withSessionExpiryRetry()` (whole workflow, once); `armResponseWaitWithRecovery()` (arm a `waitForResponse` before a click) | Headless re-login, re-navigate, retry |
 | App 429 "Whoa! Too many requests" page | `isRateLimitedPage()` | `withRateLimitRecovery()` | Reload and retry once |
 | App error-boundary "Something is broken here" | `isAppErrorBoundaryPage()` | same `withRateLimitRecovery()` (identical remedy) | Reload and retry once |
 
@@ -208,7 +208,7 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 
 - `scripts/plan-shards.ts` discovers tests with `--list`, **excludes shared-config suites** (paths from `config/sharedConfigSuites.json`, a file, not a CLI flag), and bin-packs the remaining **spec files** first-fit-decreasing into a per-shard test budget — a file is never split. Output (`shards_json`) feeds the `run-tests` matrix; each shard receives explicit file paths.
 - The `formFields` suites run in a separate **fixed matrix** (`run-formfields-tests`), one shard per entity, each running that entity's UI+RBAC pair together. The matrix list must match `sharedConfigSuites.json` (`scripts/check-formfields-matrix-sync.ts`).
-- `run-formfields-tests` is sequenced **after** the core shards (`needs: [run-tests]`, `if: ${{ !cancelled() }}`) to cut concurrent `globalSetup` load; `merge-and-report` merges blob reports and sends one notification. Decisions: [ADR-0002](./adr/0002-formfields-carve-out-from-sharding.md), [ADR-0003](./adr/0003-file-atomic-shard-planner.md), [ADR-0006](./adr/0006-serial-sub-blocks.md), [ADR-0007](./adr/0007-sequence-formfields-after-core.md).
+- `run-formfields-tests` is sequenced **after** the core shards (`needs: [run-tests]`, `if: ${{ !cancelled() }}`) to cut concurrent `globalSetup` load; `reset-field-config` (`if: always()`, after both tracks) blanks the dedicated form-field limits, and `merge-and-report` (which needs it) merges blob reports and sends one notification. In `sandbox.yml` the planner job is `detect`; it also sets the `run_scoped_tests` and `run_formfields_track` gates, and the formFields matrix there is the selected entities. Jenkins shards a branch the same way when it is listed in `KYLAS_SHARDED_BRANCHES` ([ADR-0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md)). Decisions: [ADR-0002](./adr/0002-formfields-carve-out-from-sharding.md), [ADR-0003](./adr/0003-file-atomic-shard-planner.md), [ADR-0006](./adr/0006-serial-sub-blocks.md), [ADR-0007](./adr/0007-sequence-formfields-after-core.md).
 
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
@@ -221,7 +221,10 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 flowchart LR
   P[plan<br/>plan-shards.ts] --> RT[run-tests<br/>matrix: core shards]
   RT --> FF[run-formfields-tests<br/>matrix: one per entity<br/>needs run-tests, if !cancelled]
-  RT --> MR[merge-and-report<br/>always]
+  RT --> RF[reset-field-config<br/>always]
+  FF --> RF
+  RF --> MR[merge-and-report<br/>always]
+  RT --> MR
   FF --> MR
   P -. shards_json .-> RT
 ```
@@ -239,7 +242,7 @@ Per-pipeline triggers, scopes and worker counts (generated, never hand-typed):
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |
 | `staging-promotion-gate.yml` | manual | full suite / selective | — | no |
-| `Jenkinsfile` | Jenkins | @prodSafe, @regression, @smoke | 2 | no |
+| `Jenkinsfile` | Jenkins | @prodSafe, @regression, @smoke | 2 | yes (listed branches only) |
 | `Jenkinsfile.prod` | Jenkins | @prodSafe | 2 | no |
 | `Jenkinsfile.qa` | Jenkins | @regression | 2 | no |
 | `Jenkinsfile.sandbox` | Jenkins | full suite / selective | 1 | no |

@@ -171,6 +171,26 @@
       "added": "2026-10-21",
       "confirmed": false,
       "why": "Main run 39470566009 (kylas-prod, observed 2026-10-20): POST /contacts/ returned HTTP 400 code 000000 \"Something didn't work as expected\" with empty errorDetails 112 times between 17:57 and 21:02 UTC; 19 contacts, 2 companies and 2 meetings tests were affected. Code 000000 is generic, so the body shape and a breadth of 5 tests across 2 modules are required before it labels anything."
+    },
+    {
+      "id": "backend-service-discovery-failure",
+      "title": "backend service-discovery (DNS) failure behind the API",
+      "label": "environment-suspected",
+      "errorPatterns": [
+        "Failed to resolve '[^']+' and search domain query",
+        "Connection prematurely closed BEFORE response"
+      ],
+      "errorPatternNotes": [
+        "the API gateway could not resolve an internal service name (cluster DNS), as in 'Failed to resolve sd-sales and search domain query'",
+        "the API connection to an internal service closed before a response was sent"
+      ],
+      "minTests": 2,
+      "minModules": 1,
+      "kiRef": "KI-49",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-10-28",
+      "confirmed": false,
+      "why": "QA run 40477938102 (2026-10-27, traces read 2026-10-28): HTTP 400 code 000000 \"Failed to resolve 'sd-sales' / 'sd-marketplace' / 'sd-rule' / 'sd-order-management' and search domain query for configured domains failed as well\" on POST /v1/contacts/ (09:18 UTC), GET /v1/marketplace/apps/actions, POST /v1/rules/search/action-logs and GET /v1/quotations/layout/create (11:26 UTC), and \"Connection prematurely closed BEFORE response\" on GET /v1/quotations/layout/list (10:57 UTC). The error text names an internal service lookup, so no test or page logic is involved. The text only reaches the failure message since the create flows and the Quotations layout wait began including the response message, so it cannot match older runs. Two tests are required because one captured message is not proven to be the request that failed the test; one module is enough because the text is explicit."
     }
   ]
 }

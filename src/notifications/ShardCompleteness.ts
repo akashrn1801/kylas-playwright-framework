@@ -20,6 +20,11 @@ import * as path from 'path';
 export interface ShardCompleteness {
   expected: number;
   reported: number;
+  // WHY (sharded Jenkins, SHARDED_TEST): a deliberately scoped run (TEST_GREP /
+  // FF_ENTITIES) plans fewer shards on purpose, so it is complete by the count above
+  // but is not a full-suite result. Jenkins adds this text to the file; the email and
+  // history mark the run partial from it. Absent for every other run.
+  scoped?: string;
 }
 
 export function getShardCompletenessPath(env: string): string {
@@ -29,7 +34,7 @@ export function getShardCompletenessPath(env: string): string {
 export function parseShardCompleteness(raw: string): ShardCompleteness | null {
   try {
     const parsed = JSON.parse(raw) as Partial<ShardCompleteness>;
-    const { expected, reported } = parsed;
+    const { expected, reported, scoped } = parsed;
     if (
       typeof expected !== 'number' ||
       typeof reported !== 'number' ||
@@ -40,7 +45,7 @@ export function parseShardCompleteness(raw: string): ShardCompleteness | null {
     ) {
       return null;
     }
-    return { expected, reported };
+    return { expected, reported, ...(typeof scoped === 'string' && scoped !== '' ? { scoped } : {}) };
   } catch {
     return null;
   }
@@ -58,4 +63,8 @@ export function loadShardCompleteness(env: string): ShardCompleteness | null {
 
 export function isIncompleteRun(c: ShardCompleteness | null | undefined): c is ShardCompleteness {
   return !!c && c.reported < c.expected;
+}
+
+export function isScopedRun(c: ShardCompleteness | null | undefined): c is ShardCompleteness & { scoped: string } {
+  return !!c && typeof c.scoped === 'string' && c.scoped !== '';
 }

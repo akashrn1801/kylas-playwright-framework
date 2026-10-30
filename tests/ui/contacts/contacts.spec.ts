@@ -11,6 +11,7 @@ import {
   generateContactCustomFieldInvalidUrl,
   CONTACT_CUSTOM_FIELD_NAMES,
   ContactCustomFieldData,
+  RANDOM_EXISTING_COMPANY,
 } from '../../../src/data/factories/contactFactory';
 import { generateDealData } from '../../../src/data/factories/dealFactory';
 import { config } from '../../../config/config';
@@ -60,7 +61,8 @@ test.describe('Contacts', () => {
   }) => {
     test.setTimeout(480000);
     const contactsPage = new ContactsPage(adminPage);
-    const contactData = generateContactData();
+    // WHY RANDOM_EXISTING_COMPANY: this test verifies the Company field on the detail page
+    const contactData = generateContactData({ company: RANDOM_EXISTING_COMPANY });
     await contactsPage.goToContactsList();
     const contactId = await contactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();
@@ -81,7 +83,8 @@ test.describe('Contacts', () => {
     await contactsPage.goToContactsList();
     const contactId = await contactsPage.createContact(contactData);
     expect(contactId).not.toBeNull();
-    const updatedData = generateContactData();
+    // WHY RANDOM_EXISTING_COMPANY: this test verifies the updated Company on the detail page
+    const updatedData = generateContactData({ company: RANDOM_EXISTING_COMPANY });
     await contactsPage.updateContact(updatedData, contactData.firstName, contactId ?? undefined);
     // WHY: Navigate to detail page via ID to verify all updated fields
     await contactsPage.searchAndOpenContact(updatedData.firstName, contactId ?? undefined);
@@ -553,7 +556,9 @@ test.describe('Contacts', () => {
   }) => {
     test.setTimeout(480000);
     const contactsPage = new ContactsPage(adminPage);
-    const contactData = generateContactData();
+    // WHY RANDOM_EXISTING_COMPANY (here and on updatedData below): the detail-page
+    // check below verifies the Company field
+    const contactData = generateContactData({ company: RANDOM_EXISTING_COMPANY });
 
     // WHY: NOT checking "Get GPS Address" visibility here before filling —
     // confirmed live (2026-07-15) this races the form's own render (the
@@ -576,7 +581,7 @@ test.describe('Contacts', () => {
 
     // WHY: update with a fresh address — re-exercises the same GPS-or-manual
     // path on the edit form, proving it works on both create and update.
-    const updatedData = generateContactData();
+    const updatedData = generateContactData({ company: RANDOM_EXISTING_COMPANY });
     await contactsPage.clickEditIcon();
     await contactsPage.fillEditForm(updatedData);
     await contactsPage.saveEditedContact();
@@ -596,7 +601,7 @@ test.describe('Contacts', () => {
   // ContactsPage.fillContactForm()'s code that Campaign/Source are
   // conditionally filled (`if (data.campaign)`), unlike Lead's equivalent,
   // which is unconditionally random. Professional stays mixed (Company is
-  // unconditionally random-picked regardless of input).
+  // requested explicitly by generateMinimalContactData()).
 
   test('@regression admin should hide empty fields/tabs on a contact with minimal, genuinely-empty Social and Campaign Information tabs', async ({
     adminPage,
