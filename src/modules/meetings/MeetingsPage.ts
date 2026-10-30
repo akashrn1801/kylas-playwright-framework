@@ -215,8 +215,13 @@ export class MeetingsPage extends BasePage {
           // have matched a failed (4xx/5xx) response too. Not independently
           // live-reproduced for Meetings; fixed as defense-in-depth since it
           // shares the identical vulnerable shape.
-          res.url().includes('/v1/meetings') &&
-          !res.url().includes('/reports/') &&
+          // WHY the exact create URL (2026-10-30, hardening — NOT a confirmed root cause): the meeting
+          // list search is also a POST (`POST /v1/meetings/search?page=1&size=10…` answers 200 with
+          // `{content:[…]}` and no `id`), so the old substring match could in principle take a search
+          // response instead of the create response. In 3 live runs the create response (201) always
+          // arrived first, so a null id was NOT reproduced; the other candidate is the 15 s wait below
+          // being shorter than a slow create on CI. Standing rule 15: match the exact endpoint.
+          /\/v1\/meetings\/?(?:\?|$)/.test(res.url()) &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
         'captureIdFromResponse (meeting create)',
