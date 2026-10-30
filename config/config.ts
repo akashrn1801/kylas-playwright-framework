@@ -43,6 +43,9 @@ export const config = {
       role: 'restricted',
     },
   },
+  // WHY off by default: tests keep what they create and QA is cleaned in one go later. CLEANUP_TEST_DATA=1
+  // makes the opt-in cleanup fixtures (leadCleanup, shareRuleCleanup) delete the records they were given.
+  cleanupTestData: process.env.CLEANUP_TEST_DATA === '1',
   timeouts: {
     default: Number(process.env.DEFAULT_TIMEOUT) || 30000,
     navigation: Number(process.env.NAVIGATION_TIMEOUT) || 60000,
