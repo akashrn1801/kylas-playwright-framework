@@ -10,11 +10,11 @@ All figures in tables below are generated (`npm run docs:refresh`), never hand-t
 ## 1. Suite size right now
 
 <!-- GEN:suite-totals:START -->
-**932 tests** in **35 spec files** (UI 509 · RBAC 423)
+**956 tests** in **35 spec files** (UI 525 · RBAC 431)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 898 · `@prodSafe` 55
+`@smoke` 51 · `@regression` 924 · `@prodSafe` 54
 <!-- GEN:tag-counts:END -->
 
 ## 2. Pipeline matrix (generated from the workflow / Jenkinsfile text)
@@ -97,8 +97,8 @@ Replaces Playwright's blind count-based `--shard=N/M`. It runs `playwright test 
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 124 / 124 / 119 / 7 | 6 |
-| full suite (stage, main) | 5 | 125 / 124 / 125 / 125 / 16 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 125 / 123 / 28 | 6 |
+| full suite (stage, main) | 5 | 125 / 123 / 125 / 124 / 42 | 6 |
 <!-- GEN:shard-plan:END -->
 
 Run it locally with `npx ts-node scripts/plan-shards.ts --grep @regression` (read-only). Decision record: [ADR 0003](./adr/0003-file-atomic-shard-planner.md).

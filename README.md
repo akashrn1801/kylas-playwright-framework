@@ -10,7 +10,7 @@ End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (st
 Current suite size (generated; do not edit by hand):
 
 <!-- GEN:suite-totals:START -->
-**932 tests** in **35 spec files** (UI 509 · RBAC 423)
+**956 tests** in **35 spec files** (UI 525 · RBAC 431)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
@@ -24,7 +24,7 @@ Current suite size (generated; do not edit by hand):
 | Dashboard | 34 | 29 | 63 |
 | Deals | 26 | 30 | 56 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 25 | 31 | 56 |
+| Leads | 41 | 39 | 80 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,13 +33,13 @@ Current suite size (generated; do not edit by hand):
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **509** | **423** | **932** |
+| **Total** | **525** | **431** | **956** |
 <!-- GEN:module-table:END -->
 
 Tag counts:
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 898 · `@prodSafe` 55
+`@smoke` 51 · `@regression` 924 · `@prodSafe` 54
 <!-- GEN:tag-counts:END -->
 
 Module names in the table come from `deriveModuleFromFile()` (the same labels the notification email uses). Login's spec lives in `tests/ui/dashboard/` and is counted under Dashboard.
@@ -93,6 +93,8 @@ ENV=qa npx playwright test --grep "admin should create a new lead" --project=chr
 ENV=staging npx playwright test --grep "@smoke" --project=chromium --workers=2
 npx playwright test --project=chromium --list           # discovery only, no app access
 ```
+
+**Test data is kept.** Tests never delete anything as set-up or tidy-up (as always; only the tests of a delete feature delete); every record a Leads test creates is logged as `CREATED <type> <id> — <url>` and shown as a `created …` annotation in the report. To delete the registered records after each test, set `CLEANUP_TEST_DATA=1` (only IDs a test registered; Leads fixtures `leadCleanup`/`shareRuleCleanup`, ADR 0013), e.g. `CLEANUP_TEST_DATA=1 ENV=qa npx playwright test tests/ui/leads/leads.spec.ts --project=chromium`.
 
 Locally four browser projects are configured; pass `--project=chromium` to pick one. CI uses chromium only. Reports: `npm run report:playwright`, `npm run report:allure`; `npm run clean` removes outputs.
 

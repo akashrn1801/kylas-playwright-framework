@@ -55,10 +55,17 @@
 - **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/`, `GET /v1/quotations/layout/{list,create}` and (staging) `POST /v1/quotations/`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ### KI-51 — Sandbox 40821683680: cross-shard admin session storm
-- **Status:** open; trigger confirmed from the log, "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
-- **What:** every shard shares one admin account. At 05:26:50 shard 3 logged `token for role admin has only 595s remaining — proactively refreshing` and re-logged in; shards 1, 2, 4 saw `Session expiry detected` within 3 s and re-logged in until 05:34. Failed once in that window: `quotations.rbac:369`, `deals.rbac:593`, `call-logs.rbac:370`/`:468`, `companies.spec:136`. Cached admin tokens had about 600 s left.
-- **Done:** first `/sales/` race capped (`fixtures/index.ts`); the storm is untouched.
-- **Ask / next check:** does a new admin login kill older admin tokens on staging, and why was the cached admin token 26 min? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **Status:** open; "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
+- **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34 (failures: `quotations.rbac:369`, `deals.rbac:593`, `call-logs.rbac:370`/`:468`, `companies.spec:136`). First `/sales/` race capped; the storm is untouched.
+- **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+
+### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
+- **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
+- **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403 are refused); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
+- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" means fixed: delete the marker and close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
+
+### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30), detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
+- **KI-53 (open, hygiene):** about 2,800 admin leads are visible to the restricted user through old share rules; clean via Setup → Data Management → Share Data in an approved pass. **KI-54 (inconclusive):** both users reported "session expired" at the start of two Lead RBAC runs, cause unknown, do not hide it with a re-login (cf. KI-51). **KI-55 (inconclusive, hardened):** "Meeting ID not captured" was not reproduced; the capture now matches only the create URL and L18/L20 prove the meeting by title.
 
 ---
 
@@ -180,26 +187,20 @@
 ### KI-26 — Repo hygiene
 - **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
 
-### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
-- **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Remote-tracking refs (last fetched 2026-09-10) showed **no** diff on those files between `origin/dev` and the four; files changed since. Re-check after a `git fetch` (rule 25); delete if clean.
+### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
+- **Status:** open (staging environment problem, confirmed by a live probe 2026-10-15; no test-code fix possible; later run 40279659288 passed all 14 jobs: recovery, not proof) · **Since:** 2026-10-14
+- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible 2026-10-29 recurrence in run 40821683680 (`leads.spec:543` retry, `meetings.rbac:187`, `deals.rbac:1501`, `contacts.spec:601`, `tasks.rbac:312`).
+- **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) ("OPEN (KI-43)").
 
-### KI-43 — Staging search index not reflecting new records: sandbox 38582148420 (64 failed) and 38690038228 (55 failed)
-- **Status:** open (staging environment problem, CONFIRMED by a live probe 2026-10-15; no test-code fix is possible; later run passed, recovery unconfirmed) · **Since:** 2026-10-14
-- **What / evidence:** just-created deals/contacts/leads/companies never appeared in search lookups (react-select empty, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s (90 of 90 polls empty) on a live probe; green runs passed the same code. Cause on the Kylas side not established (HYPOTHESIS: indexing backlog).
-- **Ask the Kylas dev team:** is the staging search indexer / event consumer stalled or backlogged since about 2026-10-14, and was there a staging deploy or reindex around 10-14 Oct?
-- **Next check:** run 40279659288 (2026-10-26) passed all 14 jobs: evidence of recovery, not proof. **2026-10-29 recurrence?** (run 40821683680): a company made 06:13 was not searchable at 06:15 (`leads.spec:543` retry); `meetings.rbac:187`, `deals.rbac:1501`, `contacts.spec:601`, `tasks.rbac:312` also failed once. Probe or ask the Kylas team before closing.
-- **History link:** full signatures, traces, probe and not-verified list: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (entry "OPEN (KI-43)").
-
-### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
+### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
 - **Status:** open for CI confirmation · **Since:** 2026-10-07
-- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by BasePage's helpers and 9 modules' pick sites (not `LeadsPage.ts`); Units passed in CI run 37778400646, DB27 and both Call Logs tests passed locally on QA (2026-10-08). Symptom, evidence and live results: [locators-and-timing.md](./known-issues/locators-and-timing.md). NOT verified: why QA differs from stage; which path (natural close vs Escape) closed the menu in DB27/Call Logs.
-- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
+- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by BasePage helpers and 9 modules (not `LeadsPage.ts`); passed locally on QA 2026-10-08. Evidence: [locators-and-timing.md](./known-issues/locators-and-timing.md). Not verified: why QA differs from stage.
+- **Part 2 (open):** `saveEditedProduct()` has no `blur()` + `networkidle` before Save (`b0c6b38` claim); see [products-and-services.md](./known-issues/products-and-services.md).
 
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
-- **Status:** latent, NOT reproduced (no failing run or trace is attributed to it) · **Since:** code comment dated 2026-07-16; recorded here 2026-10-27
-- **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says this was deliberate: the exact company create/clone endpoint had not been confirmed in that run's logs, so only `/reports/` was excluded rather than guessing a full path.
-- **Risk:** the first 200/201 POST whose URL contains `companies` outside `/reports/`, during the clone save window, is taken as the clone POST; a wrong id would be returned and the next step would open that record. Its only caller is `cloneCompany()` (`:1171`); a null id fails loudly. No other matching POST is known (full analysis: [locators-and-timing.md](./known-issues/locators-and-timing.md), entry "KI-44 detail").
-- **Next check:** separate branch: reuse that `/v1/companies/` regex after confirming the clone POST path from a trace (rule 10); re-run clone 3-5x (rule 8).
+- **Status:** latent, NOT reproduced · **Since:** 2026-07-16 (recorded 2026-10-27)
+- **What:** no `/v1/companies/` requirement (`src/modules/companies/CompaniesPage.ts:424-445`; the other modules have it). Deliberate at the time: the clone POST path was unconfirmed. Only caller `cloneCompany()`; a null id fails loudly, a wrong id is the risk.
+- **Next check:** confirm the clone POST path from a trace, then reuse the regex; re-run clone 3-5x. Analysis: [locators-and-timing.md](./known-issues/locators-and-timing.md) ("KI-44 detail").
 
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).
 

@@ -84,6 +84,11 @@ Every row comes from a real incident. "Documented" links point at the resolved-h
 | `saveQuickTask()` hangs from an entity detail panel | Use `saveQuickTaskFromEntityDetail()` |
 | Docs numbers look stale | `npm run docs:refresh`, then `npm run check:docs` |
 
+### Test data is kept; finding it and the opt-in cleanup
+- Tests keep every record they create. Each Leads test logs `CREATED <type> <id> — <url>` and adds a `created <type>` annotation (open the test in the Playwright/Allure report) so the record can be opened in Kylas.
+- `CLEANUP_TEST_DATA=1` makes `leadCleanup` / `shareRuleCleanup` delete the IDs a test registered (converted deal/contact/company first, then the lead; tasks/meetings/call logs created through the API helpers; share rules; notes are not deleted — they go with their lead). Nothing is ever found by searching. List sort/size/view preferences are restored regardless.
+- Old test shares are best removed in bulk on Setup → Data Management → Share Data (filter first), in an approved pass.
+
 ## Jenkins sharded runs: setup and operation
 
 Design: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md); behaviour: [CI_PIPELINES.md](./CI_PIPELINES.md) section 5.1. Exercised live on 2026-10-28 (an unsharded sandbox build and a sharded QA build); two core lanes at once is still unproven ([KI-47](./KNOWN_ISSUES_ACTIVE.md)). Do the steps in this order; each says whether it can be undone.
@@ -110,4 +115,11 @@ Design: [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md); behaviou
 
 ## When it is an app bug
 
-Confirmed real Kylas bugs are kept in a file outside this repo (not tracked), not in the engineering docs. A test stays red for a real app bug; do not mask it. Add a new confirmed one there with live evidence.
+Confirmed real Kylas bugs are kept in a file outside this repo (not tracked), with a Jira key; the engineering docs only carry a `KI-nn` entry that names the key. Never weaken a test to accept the bug, and never delete it.
+
+**Convention (decided 2026-10-30): `test.fail()` with the Jira key.** A test that asserts the CORRECT behaviour is marked `test.fail(true, 'Kylas bug SD-nnnnn: <what the app does wrong>')`. Rules:
+- Call it AFTER the test's set-up assertions (right before the assertions the bug breaks), never at the top. Playwright cannot tell why a marked test failed, so a set-up problem must fail BEFORE the marker is set and show up as a normal red test. Give every assertion after the marker a message that names the ticket (`SD-nnnnn: …`).
+- A thrown error after the marker (transport failure, no HTTP answer) must not count as the expected failure: wrap those calls in `orInconclusive()` (`leads.rbac.spec.ts`), which turns it into `test.skip(true, 'inconclusive: transport error …')` — the run shows SKIPPED, never green-by-accident. Proven once by simulating the error (2026-10-30).
+- One test per ticket, so fixing one bug is not hidden by another still being open.
+- While the bug exists the run is green. The day Kylas fixes it Playwright reports "Expected to fail, but passed": that is the signal to delete the `test.fail()` line, close the `KI-nn` entry and move it to its topic file. Add a new confirmed bug the same way, with live evidence.
+- Example: `tests/rbac/leads.rbac.spec.ts` L77 (SD-32157, notes) and L79 (SD-32158, tasks); `KI-52`.
