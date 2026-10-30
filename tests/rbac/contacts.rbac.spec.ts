@@ -671,73 +671,57 @@ test.describe('Contacts RBAC', () => {
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['note']);
     await restrictedContactsPage.goToContactDetailsById(contactId!);
-    // WHY: Register the response wait BEFORE clicking — confirmed live (staging)
-    // that opening the Notes panel fires GET /v1/notes/relation?...targetEntityType=
-    // CONTACT... to fetch the actual notes list. A flat waitForTimeout(500) here
-    // previously raced that fetch: on a slow load the DOM still shows
-    // react-loading-skeleton placeholder rows (which match the same
-    // div.row.pt-2.pl-2.pr-2 selector used below) instead of the real,
-    // possibly-empty list, so baselineCount could count stale skeleton rows —
-    // the confirmed root cause of this test's flake. Waiting for the real
-    // response makes baselineCount reflect the actual loaded state instead.
-    const notesLoadedPromise = restrictedPage
-      .waitForResponse(
-        (res) =>
-          res.url().includes('/v1/notes/relation') &&
-          res.url().includes('targetEntityType=CONTACT') &&
-          res.request().method() === 'GET',
-        { timeout: 15000 }
-      )
-      .catch(() => null);
-    // WHY: Click Notes icon to open notes panel
-    await restrictedPage
-      .locator('button.btn.btn-transparent:has(svg #paint0_linear_972_2654)')
-      .first()
-      .click();
-    await notesLoadedPromise;
-    // WHY: Small settle wait for React to render the fetched data — the
-    // response promise above is what actually prevents the race; this is
-    // just a bounded margin for the render tick that follows it, not a guess
-    // about how long the fetch itself takes.
-    await restrictedPage.waitForTimeout(300);
+    // WHY the page object's Notes click, then the Notes card is scoped and its
+    // skeleton rows awaited before ANY count is read: opening the Notes panel
+    // fires GET /v1/notes/relation, and until it renders the card shows
+    // react-loading-skeleton placeholder rows that match the page-wide
+    // `div.row.pt-2.pl-2.pr-2` selector — a one-shot count() read them as notes
+    // (the confirmed root cause of this test's flake, and of CO9 / COR17 — see
+    // BasePage.notesPanel()). Counts are asserted with the retrying
+    // toHaveCount(), never a one-shot count() + toBe().
+    await restrictedContactsPage.clickRightPanelIcon('Notes');
+    const { rows: noteRows, waitForSettled } = restrictedContactsPage.notesPanel();
+    await waitForSettled();
     // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
-    const baselineCount = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
+    const baselineCount = await noteRows.count();
+    const richTextEditor = restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' });
     // WHY: Add first note — this note will be kept
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill('Note to keep');
-    await restrictedPage.waitForTimeout(500);
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill('Note to keep');
     await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
+    await waitForSettled();
+    await expect(noteRows, 'Note count should be baseline + 1 after the first add').toHaveCount(
+      baselineCount + 1,
+      { timeout: 10000 }
+    );
     // WHY: Add second note — this note will be deleted
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill('Note to delete');
-    await restrictedPage.waitForTimeout(500);
+    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
+    await richTextEditor.fill('Note to delete');
     await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
+    await waitForSettled();
     // WHY: Verify both new notes were added on top of baseline
-    const notesBeforeDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesBeforeDelete).toBe(baselineCount + 2);
+    await expect(noteRows, 'Note count should be baseline + 2 after the second add').toHaveCount(
+      baselineCount + 2,
+      { timeout: 10000 }
+    );
     // WHY: Delete the first note (newest first display) — "Note to delete" was added last so appears first
-    const lastNoteEllipsis = restrictedPage
-      .locator('div.row.pt-2.pl-2.pr-2')
-      .first()
-      .locator('button[data-toggle="dropdown"]');
-    await lastNoteEllipsis.click();
-    await restrictedPage.waitForTimeout(300);
+    await noteRows.first().locator('button[data-toggle="dropdown"]').click();
     await restrictedPage
       .locator('.dropdown-menu.show .dropdown-item')
       .filter({ hasText: 'Delete' })
       .click();
-    await restrictedPage.waitForTimeout(500);
     // WHY: Confirm delete in modal
-    await restrictedPage.locator('button#confirm.btn-danger').waitFor({ state: 'visible', timeout: 5000 });
-    await restrictedPage.locator('button#confirm.btn-danger').click();
-    await restrictedPage.waitForTimeout(1500);
+    const confirmDelete = restrictedPage.locator('button#confirm.btn-danger');
+    await confirmDelete.waitFor({ state: 'visible', timeout: 5000 });
+    await confirmDelete.click();
+    await waitForSettled();
     // WHY: Verify count dropped by 1 relative to baseline
-    const notesAfterDelete = await restrictedPage.locator('div.row.pt-2.pl-2.pr-2').count();
-    expect(notesAfterDelete).toBe(baselineCount + 1);
+    await expect(noteRows, 'Note count should be baseline + 1 after the delete').toHaveCount(
+      baselineCount + 1,
+      { timeout: 10000 }
+    );
     // WHY: Note text lives in CKEditor iframes — skip the active editor iframe (title="Rich Text Editor, main")
     // and use innerText (excludes hidden/removed nodes) to check only saved-note display iframes
     const checkNoteText = async (text: string): Promise<boolean> =>

@@ -230,6 +230,12 @@ export interface RunHistoryRecord {
   // An already-written partial record can be marked by hand by adding this
   // field to its JSON line.
   incomplete?: { expected: number; reported: number };
+  // WHY (sharded Jenkins main): set from the CI_LANES env var (e.g.
+  // "core=2,ff=2") by a sharded Jenkins run only. Such a run's wall-clock
+  // `duration` is the sharded total, not comparable to an unsharded run at the
+  // same branch and `workers`, so computeDurationEstimate() skips any record
+  // that carries it. Optional: every existing record lacks it (= unsharded).
+  lanes?: string;
 }
 
 export interface RunDelta {
@@ -857,7 +863,7 @@ export function computeDurationEstimate(
   minSamples: number = DURATION_ESTIMATE_MIN_SAMPLES,
   lookback: number = DURATION_ESTIMATE_LOOKBACK
 ): DurationEstimate {
-  const matching = records.filter((r) => !r.incomplete && r.branch === branch && r.workers === workers);
+  const matching = records.filter((r) => !r.incomplete && !r.lanes && r.branch === branch && r.workers === workers);
   const recent = matching.slice(-lookback);
   if (recent.length < minSamples) {
     return {

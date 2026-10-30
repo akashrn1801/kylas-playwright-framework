@@ -119,45 +119,48 @@ REPORT_PATH=reports/playwright-report/results.json
     stage('Run Selective Tests') {
       steps {
         script {
-          // WHY set as the very first statement of this stage (2026-09-10):
-          // marks that this build genuinely reached test execution, as
-          // opposed to being cancelled/failing during an earlier stage
-          // (Install/Setup Environment/Detect Changed Tests). post{always{}}
-          // below reads this flag to decide whether a missing results.json
-          // means "tests never got a chance to run" (skip notification) vs.
-          // "tests were attempted but something genuinely prevented a
-          // report" (a real infra failure — still alert). Same fix as the
-          // base Jenkinsfile — see its own identical WHY comment and
-          // docs/known-issues/ci-pipelines.md's 2026-09-10 entry.
-          env.TESTS_ATTEMPTED = 'true'
-          echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
-          // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
-          // this is NOT a multibranch job — env.BRANCH_NAME is not
-          // Jenkins-native here (only env.GIT_BRANCH, set by the Git plugin
-          // during checkout, typically prefixed "origin/"), so it's derived
-          // via bash parameter expansion inside the single-quoted sh block
-          // below, never Groovy-string-interpolated (same reasoning as the
-          // credential itself — a real bound env var, resolved by bash, never
-          // appears in a logged command string). See docs/known-issues/ci-pipelines.md's
-          // dynamic-duration-estimate entry for the full design and for why
-          // this file's OWN existing "Sync run history" call below needed the
-          // identical fix — confirmed via direct grep that neither ever had a
-          // git credential wired, so this push has always failed silently.
-          withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
-            sh '''
-              BRANCH_NAME="${GIT_BRANCH#origin/}"
-              ENV=staging WORKERS=1 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
-            '''
+          // WHY (sharded Jenkins work): lock the account, then run the collision guard, before any test starts.
+          withAccountLock('staging') {
+            // WHY set as the very first statement of this stage (2026-09-10):
+            // marks that this build genuinely reached test execution, as
+            // opposed to being cancelled/failing during an earlier stage
+            // (Install/Setup Environment/Detect Changed Tests). post{always{}}
+            // below reads this flag to decide whether a missing results.json
+            // means "tests never got a chance to run" (skip notification) vs.
+            // "tests were attempted but something genuinely prevented a
+            // report" (a real infra failure — still alert). Same fix as the
+            // base Jenkinsfile — see its own identical WHY comment and
+            // docs/known-issues/ci-pipelines.md's 2026-09-10 entry.
+            env.TESTS_ATTEMPTED = 'true'
+            echo "Running: npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}"
+            // WHY the credential binding + BRANCH_NAME derivation (2026-09-04):
+            // this is NOT a multibranch job — env.BRANCH_NAME is not
+            // Jenkins-native here (only env.GIT_BRANCH, set by the Git plugin
+            // during checkout, typically prefixed "origin/"), so it's derived
+            // via bash parameter expansion inside the single-quoted sh block
+            // below, never Groovy-string-interpolated (same reasoning as the
+            // credential itself — a real bound env var, resolved by bash, never
+            // appears in a logged command string). See docs/known-issues/ci-pipelines.md's
+            // dynamic-duration-estimate entry for the full design and for why
+            // this file's OWN existing "Sync run history" call below needed the
+            // identical fix — confirmed via direct grep that neither ever had a
+            // git credential wired, so this push has always failed silently.
+            withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+              sh '''
+                BRANCH_NAME="${GIT_BRANCH#origin/}"
+                ENV=staging WORKERS=1 BRANCH_NAME="$BRANCH_NAME" PIPELINE_TOKEN="$GIT_TOKEN" npm run estimate-duration --silent || true
+              '''
+            }
+            // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
+            // --reporter=line,allure-playwright override, which was replacing (not
+            // merging with) playwright.config.ts's full reporter array and silently
+            // disabling html/json/MiscErrorReporter here. See Jenkinsfile.qa for the
+            // full explanation. archiveArtifacts/publishHTML below already existed
+            // and will now actually have html/json/misc-errors.json to publish.
+            sh """
+              npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}
+            """
           }
-          // WHY: Confirmed live (2026-07-07 reporting audit) — dropped the
-          // --reporter=line,allure-playwright override, which was replacing (not
-          // merging with) playwright.config.ts's full reporter array and silently
-          // disabling html/json/MiscErrorReporter here. See Jenkinsfile.qa for the
-          // full explanation. archiveArtifacts/publishHTML below already existed
-          // and will now actually have html/json/misc-errors.json to publish.
-          sh """
-            npx playwright test --project=chromium --workers=1 ${env.TEST_TARGET}
-          """
         }
       }
       post {
@@ -235,5 +238,22 @@ REPORT_PATH=reports/playwright-report/results.json
     unstable {
       echo '⚠️ Sandbox tests unstable — check report'
     }
+  }
+}
+
+// ---- Account lock and collision guard (sharded Jenkins work) -----------------
+// Every Jenkins test run takes the per-account lock (Lockable Resources) and then runs the
+// collision guard inside it, so it cannot overlap another Jenkins run or a GitHub Actions run
+// that drives the same account. Same helpers as the base Jenkinsfile (a Jenkinsfile cannot
+// share code without a shared library).
+def withAccountLock(String envName, Closure body) {
+  def resource = "kylas-${envName}-account"
+  echo "Taking lock '${resource}' (waits while another Jenkins run holds it)"
+  lock(resource: resource) {
+    echo "Lock '${resource}' held"
+    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+      sh "bash scripts/jenkins-collision-guard.sh ${envName}"
+    }
+    body()
   }
 }

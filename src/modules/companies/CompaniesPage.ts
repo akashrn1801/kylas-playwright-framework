@@ -773,7 +773,11 @@ export class CompaniesPage extends BasePage {
   // excludes the has-duplicates GETs and /reports/ analytics that also contain
   // the "companies" substring (the same false-match class already documented
   // for captureXxxIdFromResponse elsewhere).
-  private async captureCompanyCreateOutcome(): Promise<{ id: number | null; transient: boolean }> {
+  private async captureCompanyCreateOutcome(): Promise<{
+    id: number | null;
+    transient: boolean;
+    detail: string;
+  }> {
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -804,7 +808,11 @@ export class CompaniesPage extends BasePage {
         const data = body?.data as { id?: number } | undefined;
         const id = ((body?.id as number | undefined) ?? data?.id ?? null) as number | null;
         logger.success(`Captured company ID: ${id} from ${response.url()}`);
-        return { id, transient: false };
+        return {
+          id,
+          transient: false,
+          detail: id ? '' : `${await this.describeMatchedResponse(response)} (2xx but no id in the body)`,
+        };
       }
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
@@ -817,7 +825,7 @@ export class CompaniesPage extends BasePage {
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
           `${transient ? 'TRANSIENT (will retry whole create)' : 'non-transient'}`
       );
-      return { id: null, transient };
+      return { id: null, transient, detail: await this.describeMatchedResponse(response) };
     } catch (error) {
       // No matching create response (genuinely fast server, or a timeout) —
       // ambiguous; deliberately NOT classified transient so we never blindly
@@ -827,7 +835,7 @@ export class CompaniesPage extends BasePage {
       // debug line gave no way to tell a real 30s timeout apart from some
       // other rejection when this path fires.
       logger.debug(`Company create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false };
+      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000) };
     }
   }
 
@@ -870,22 +878,21 @@ export class CompaniesPage extends BasePage {
     // a generic message.
     if (outcome.transient) {
       throw new TransientCompanySaveError(
-        'Company create hit a transient backend error (no field-level validation) — retryable'
+        `Company create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`
       );
     }
 
     // Genuine, user-facing validation error (e.g. duplicate name) → surface it
     // unchanged so it fails loudly and is never retried into a false pass.
     if (formError) {
-      throw formError;
+      throw this.appendCreateDetail(formError, outcome.detail);
     }
 
     // WHY: a failed save with no captured id and no classified cause must still
     // fail fast, not proceed on a company that doesn't exist (confirmed live
     // 2026-07-07).
-    throw new Error(
-      'Company ID not captured after save — cannot proceed (save likely failed silently)'
-    );
+    // WHY the cause is in the message: see ContactsPage.saveContact().
+    throw new Error(`Company ID not captured after save — cannot proceed (${outcome.detail})`);
   }
 
   async fillFullEditForm(data: CompanyData): Promise<void> {
