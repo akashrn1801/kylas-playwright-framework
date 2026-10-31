@@ -20,6 +20,7 @@ import { faker } from '@faker-js/faker';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
 import { reportCreatedRecord } from '../../../src/utils/createdRecords';
+import { uniqueEmail } from '../../../src/data/factories/uniqueValues';
 import { LeadApi } from '../../../src/utils/leadApi';
 
 // WHY the server read-back: the stage text on the detail page is an unscoped text match, so the
@@ -894,7 +895,7 @@ test.describe('Leads', () => {
   //   already has that e-mail.
   // WHY: duplicate leads split one customer's history across two records and get worked twice; the
   //   link is how a user finds the original instead of guessing.
-  // HOW: UI — the field error, the summary text and its (1/1) count, the "View Lead" link opened in
+  // HOW: precondition — the account's lead uniqueness setting includes e-mail (read, never changed); UI — the field error, the summary text and its (1/1) count, the "View Lead" link opened in
   //   its own tab shows the existing lead; no create request is sent; server — creating the same lead
   //   directly is refused (status and error code only — that response's message wording has a known
   //   defect, tracked outside this repo); persisted — no lead exists under the refused name.
@@ -907,6 +908,14 @@ test.describe('Leads', () => {
     await leadsPage.goToLeadsList();
     const api = await LeadApi.forPage(adminPage);
     try {
+      // WHY a precondition: this test is about the duplicate check, which is an ACCOUNT setting. If someone
+      // switches it off (NONE) the duplicate is really created and the test would fail for a reason that is
+      // not a defect. The test only reads the setting; it never changes it.
+      const uniquenessField = await api.getUniquenessField();
+      expect(
+        uniquenessField,
+        `precondition: lead duplicate check for e-mail is disabled on this account (uniqueness setting is "${uniquenessField}", expected one that includes EMAIL)`
+      ).toMatch(/EMAIL/);
       const existing = generateAdminLeadData();
       const created = await api.createLead({
         firstName: existing.firstName,
@@ -1131,7 +1140,7 @@ test.describe('Leads', () => {
     const api = await LeadApi.forPage(adminPage);
     try {
       const leadData = generateAdminLeadData();
-      const secondEmail = `second${Date.now()}@testkylas.com`;
+      const secondEmail = uniqueEmail('second');
       await leadsPage.goToLeadsList();
       await leadsPage.clickAddLead();
       await leadsPage.fillLeadForm(leadData);

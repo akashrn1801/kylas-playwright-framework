@@ -8,6 +8,8 @@ import {
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { reportCreatedRecord } from '../../utils/createdRecords';
+import { LeadApi } from '../../utils/leadApi';
+import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { logger } from '../../utils/logger';
 
 // WHY: same rationale as CompaniesPage's TransientCompanySaveError (2026-07-21
@@ -2074,10 +2076,43 @@ export class LeadsPage extends BasePage {
   // method's own WHY comment. createLead()'s own retry/save control flow is
   // completely untouched; only what gets FILLED changes. Every existing
   // caller omits `options` and gets the original, unmodified behavior.
+  // WHY (2026-10-30): the account rejects a lead whose e-mail or phone another lead already has, and tests keep
+  // everything they create. The values come from uniqueValues.ts, but the phone space is small, so before the
+  // form is filled the app is asked (`has-duplicates`, answered from the database at once). A used value is
+  // replaced by a new one (at most 5 times, then it fails loudly); the caller's data object is updated so what
+  // it asserts afterwards is what was typed. The check is a safety net: if the page has no session token yet it
+  // is skipped with a warning, and so is an answer that is not OK (hasDuplicate() returns null and logs it):
+  // the form's own duplicate error still stops a collision.
+  private async ensureContactValuesUnused(data: LeadData): Promise<void> {
+    let api: LeadApi;
+    try {
+      api = await LeadApi.forPage(this.page);
+    } catch (error) {
+      logger.warn(`Duplicate pre-check skipped: no session token on this page (${String(error).split('\n')[0]})`);
+      return;
+    }
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const emailUsed = data.email ? (await api.hasDuplicate('emails', data.email)) === true : false;
+        const phoneUsed = data.phone ? (await api.hasDuplicate('phoneNumbers', data.phone)) === true : false;
+        if (!emailUsed && !phoneUsed) return;
+        if (attempt >= 5) {
+          throw new Error(`Test data collision: e-mail ${data.email} / phone ${data.phone} are already used by a lead`);
+        }
+        logger.warn(`Lead test data already used (e-mail: ${emailUsed}, phone: ${phoneUsed}) — generating new values`);
+        if (emailUsed) data.email = uniqueEmail('lead');
+        if (phoneUsed) data.phone = uniquePhone();
+      }
+    } finally {
+      await api.dispose();
+    }
+  }
+
   async createLead(
     data: LeadData,
     options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
+    await this.ensureContactValuesUnused(data);
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22 from
       // CompaniesPage.createCompany after leads.rbac.spec.ts:38 hit the
@@ -2378,8 +2413,7 @@ export class LeadsPage extends BasePage {
           'Clone email field visible but pre-fill value not observed in time — proceeding anyway'
         )
       );
-      const timestamp = Date.now();
-      const newEmail = `clone${timestamp}@testkylas.com`;
+      const newEmail = uniqueEmail('clone');
       await emailInput.fill(newEmail);
       // WHY verified (rule 3 + the same async-commit-race class already
       // hardened for ContactsPage.cloneContact()): confirm the fill()
@@ -2409,8 +2443,7 @@ export class LeadsPage extends BasePage {
       .then(() => true)
       .catch(() => false);
     if (phoneFieldReady) {
-      const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
-      const phone = ['6', '7', '8', '9'][Math.floor(Math.random() * 4)] + digits;
+      const phone = uniquePhone();
       await phoneInput.click({ clickCount: 3 });
       await phoneInput.press('Control+a');
       await phoneInput.fill('');
@@ -3249,18 +3282,20 @@ export class LeadsPage extends BasePage {
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeVisible({ timeout: config.timeouts.expect })
     );
-    const pipelineGroup = this.editFormGroup('Pipeline');
-    await this.click(pipelineGroup.locator('.is-invalid__control'), 'pipeline select');
-    const pipelineOption = this.page.locator('.is-invalid__option').first();
+    // WHY not `.is-invalid__*`: that class prefix is the select's VALIDATION state, not its identity.
+    // The control is found as the element inside the field's group whose class ends in "-control" and the
+    // options as the open react-select menu's "-option" items (same as the list-page menus).
+    const selectControl = (label: string): Locator =>
+      this.editFormGroup(label).locator('div[class$="-control"]').first();
+    await this.click(selectControl('Pipeline'), 'pipeline select');
+    const pipelineOption = this.reactSelectMenuOptions().first();
     await pipelineOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
     await this.click(pipelineOption, 'pipeline option');
-    const stageGroup = this.editFormGroup('Pipeline Stage');
-    await expect(stageGroup.locator('.is-invalid__control')).not.toHaveClass(/is-disabled/, {
+    await expect(selectControl('Pipeline Stage')).not.toHaveClass(/is-disabled/, {
       timeout: config.timeouts.expect,
     });
-    await this.click(stageGroup.locator('.is-invalid__control'), 'stage select');
-    const stageOption = this.page
-      .locator('.is-invalid__option')
+    await this.click(selectControl('Pipeline Stage'), 'stage select');
+    const stageOption = this.reactSelectMenuOptions()
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(stageName)}\\s*$`) })
       .first();
     await stageOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });

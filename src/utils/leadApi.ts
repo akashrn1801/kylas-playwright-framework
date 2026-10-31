@@ -23,6 +23,7 @@ import { Page } from '@playwright/test';
 import { ApiClient, ApiJsonRule, ApiResult, readAccessToken, redactTokens } from './apiClient';
 import { logger } from './logger';
 import { reportCreatedRecord } from './createdRecords';
+import { uniqueEmail } from '../data/factories/uniqueValues';
 
 export type { ApiJsonRule, ApiResult };
 export { readAccessToken };
@@ -80,15 +81,56 @@ export class LeadApi extends ApiClient {
    * attachPipeline() when a test needs Close/Convert.
    */
   async createLead(overrides: Record<string, unknown> & { firstName: string }): Promise<ApiLead> {
-    const unique = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const body = {
       lastName: 'Api',
-      emails: [{ type: 'OFFICE', value: `lead${unique}@testkylas.com`, primary: true }],
+      emails: [{ type: 'OFFICE', value: uniqueEmail('lead'), primary: true }],
       ...overrides,
     };
+    await this.assertContactValuesUnused(body);
     const lead = await this.sendOrThrow<ApiLead>('createLead', 'POST', '/leads', body);
     reportCreatedRecord('lead', lead.id);
     return lead;
+  }
+
+  /**
+   * Ask the app (`GET /leads/has-duplicates`, answered from the database at once — checked live: false
+   * before the create, true right after) whether an e-mail or a phone number is already used by a lead.
+   * Returns null when the endpoint itself does not answer OK (it fails on some environments, e.g. the
+   * product one on PROD): the check is a safety net, so "unknown" is reported to the caller, never thrown.
+   */
+  async hasDuplicate(field: 'emails' | 'phoneNumbers', value: string): Promise<boolean | null> {
+    const result = await this.send<{ duplicate?: boolean }>(
+      'GET',
+      `/leads/has-duplicates?fieldName=${field}&value=${encodeURIComponent(value)}`
+    );
+    if (!result.ok || typeof result.body?.duplicate !== 'boolean') {
+      logger.warn(
+        `Lead duplicate pre-check unavailable (${field}): HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 200)} — create goes ahead without it`
+      );
+      return null;
+    }
+    return result.body.duplicate;
+  }
+
+  /**
+   * Fail LOUDLY, before the create, when a test sends an e-mail or phone that the account already has: the
+   * duplicate check would otherwise refuse (or, on a misconfigured account, mis-handle) the create and the
+   * failure would look like a product defect. Never a retry: callers build their values in uniqueValues.ts.
+   * An endpoint that does not answer (hasDuplicate() === null) never blocks the create.
+   */
+  async assertContactValuesUnused(body: Record<string, unknown>): Promise<void> {
+    const emails = (body.emails as Array<{ value: string }> | undefined) ?? [];
+    const phones = (body.phoneNumbers as Array<{ value: string }> | undefined) ?? [];
+    for (const { value } of emails) {
+      if ((await this.hasDuplicate('emails', value)) === true) {
+        throw new Error(`Test data collision: a lead with e-mail ${value} already exists (values come from uniqueValues.ts)`);
+      }
+    }
+    for (const { value } of phones) {
+      if ((await this.hasDuplicate('phoneNumbers', value)) === true) {
+        throw new Error(`Test data collision: a lead with phone ${value} already exists (values come from uniqueValues.ts)`);
+      }
+    }
   }
 
   /** POST exactly this body and return the raw result (for tests that expect a rejection). */
@@ -170,6 +212,19 @@ export class LeadApi extends ApiClient {
       throw new Error(`attachPipeline failed: HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 400)}`);
     }
     return result.body;
+  }
+
+  /**
+   * The account's lead duplicate-check setting (`GET /configurations/uniqueness/lead` →
+   * `{ field: 'EMAIL_PHONE' }`; the other values seen or expected are NONE, EMAIL and PHONE). Read-only.
+   */
+  async getUniquenessField(): Promise<string> {
+    const result = await this.sendOrThrow<{ field: string }>(
+      'getUniquenessField',
+      'GET',
+      '/configurations/uniqueness/lead'
+    );
+    return result.field;
   }
 
   /** `GET /leads/{id}/pipeline` — 400 `002056` while no pipeline is attached. */
