@@ -45,7 +45,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | `src/modules/<module>/<Module>Page.ts` | One page object per module (call-logs, companies, contacts, dashboard, deals, formFields, leads, meetings, productsAndServices, quotations, reports, tasks). `dashboard/` also holds `LoginPage.ts`. |
 | `src/fixtures/index.ts` | `adminPage`, `restrictedPage`, `adminContext`, `restrictedContext`, and the opt-in `leadCleanup` / `shareRuleCleanup` ([ADR 0013](./adr/0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md)). Always import `test`/`expect` from here (sole exception: `tests/ui/dashboard/login.spec.ts`). |
 | `src/auth/` | `globalSetup.ts` (logins + product fixtures), `authManager.ts`, `productFixtureNeed.ts`, `storageStates/<env>/<role>.json`. |
-| `src/data/factories/<module>Factory.ts` | Data generators + per-module custom-field constants. `src/data/productFixtureAccessor.ts` reads the per-run Products & Services fixture file. |
+| `src/data/factories/<module>Factory.ts` | Data generators + per-module custom-field constants; every e-mail/phone comes from `uniqueValues.ts` ([ADR 0013](./adr/0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md)). `src/data/productFixtureAccessor.ts` reads the per-run Products & Services fixture file. |
 | `src/error-collector/` | `ErrorCollector.ts` (per-worker singleton) and `errorFilters.ts` (classification). |
 | `src/reporters/MiscErrorReporter.ts` | Merges per-worker error files into `reports/<env>/misc-errors.json`. |
 | `src/notifications/` | Report parsing, run history, failure analysis, email — see [REPORTING.md](./REPORTING.md). |
