@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { uniqueEmail, uniquePhone, emailLocalPart } from './uniqueValues';
 import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 
 export const SALUTATION_OPTIONS = ['Mr', 'Mrs', 'Miss'] as const;
@@ -222,8 +223,8 @@ export function generateContactData(overrides: Partial<ContactData> = {}): Conta
   return {
     firstName,
     lastName,
-    email: faker.internet.email({ firstName, lastName }),
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail(emailLocalPart(firstName, lastName)),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -298,8 +299,8 @@ export function generateAdminContactData(overrides: Partial<ContactData> = {}): 
   return {
     firstName,
     lastName,
-    email: `adm${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('adm'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -338,8 +339,8 @@ export function generateSharedContactData(overrides: Partial<ContactData> = {}):
   return {
     firstName,
     lastName,
-    email: `shr${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('shr'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -377,8 +378,8 @@ export function generateRestrictedContactData(overrides: Partial<ContactData> = 
   return {
     firstName,
     lastName,
-    email: `res${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('res'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),

@@ -61,11 +61,22 @@
 
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
-- **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403 are refused); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
-- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" means fixed: delete the marker and close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
+- **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
+- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
 
-### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30), detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
-- **KI-53 (open, hygiene):** about 2,800 admin leads are visible to the restricted user through old share rules; clean via Setup → Data Management → Share Data in an approved pass. **KI-54 (inconclusive):** both users reported "session expired" at the start of two Lead RBAC runs, cause unknown, do not hide it with a re-login (cf. KI-51). **KI-55 (inconclusive, hardened):** "Meeting ID not captured" was not reproduced; the capture now matches only the create URL and L18/L20 prove the meeting by title.
+### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
+- **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
+- **What:** the company clone saved ("Company cloned (Company ID: 272255)") while the Related Deals widget raised its own error toast (`POST /v4/reports/deals` 400 000000); the test failed with "Validation errors found in company clone form". Reproduced by forcing that request to fail. `cloneCompany()` now trusts the create response first; `failedWriteTracker` ignores `/reports/` POSTs. Same shape remains at company create/edit, the meeting form from a company and the other ~90 callers.
+
+### KI-56 — Staging: attach-pipeline test failed once in sandbox run 41066366856; not reproduced
+- **Status:** inconclusive (hardened, root cause not confirmed) · **Since:** 2026-10-30
+- **What:** `.is-invalid__option` never showed in CI; staging opened the menu in 0.3-0.9 s, 10/10. Locators no longer need the prefix; needs the trace.
+
+### KI-58 — Staging: lead and contact creates with an e-mail or phone return 400 000000
+- **Status:** open, root cause not confirmed (backend/config suspected) · **Since:** 2026-10-30 (uniqueness set to EMAIL_PHONE)
+- **What:** 2026-10-31 live: `POST /v1/leads` with unique e-mail and phone (`has-duplicates` false): name only 200; e-mail only, phone only, both 400 `{"code":"000000","errorDetails":[]}`. UI lead/contact creates fail alike; company create and QA pass. Needs the Kylas backend log / staging uniqueness config.
+
+### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
 
 ---
 
@@ -93,8 +104,8 @@
 
 ### KI-37 — Install-step bound and incomplete-run handling: unproven by a real run's logs
 - **Status:** partly confirmed (implemented 2026-10-08; mirror rewrite and a healthy install read in real CI 2026-10-28) · **Since:** 2026-10-07
-- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1, job 122026090281): the azure apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only, because they did not trigger: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause, run 37669596623, unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
-- **Next check:** the first real install failure or retry: it shows the `Playwright browser install failed` annotation and exercises the retry/kill/budget paths.
+- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1): the apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause, run 37669596623, unknown); `syncHistory` via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Next check:** the first real install failure or retry (`Playwright browser install failed` annotation).
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -103,8 +114,8 @@
 
 ### KI-12 — Sequenced formFields-after-core is not yet proven by a real run
 - **Status:** unverified · **Since:** 2026-10-06 (commit `1bd03cc`)
-- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s `run-tests`, `run-formfields-tests`, `reset-field-config` and `merge-and-report` jobs carry `environment: production` (`plan` does not); if that environment has required reviewers a second approval prompt appears (not knowable from the repo). Wall-clock roughly doubles for the sharded workflows by design ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
-- **Next check:** first real run — confirm all three job-graph cases, the "Load Signals by Job" table, and (on `main`) the approval behavior.
+- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s four non-`plan` jobs carry `environment: production`; required reviewers there would add a second approval prompt (not knowable from the repo). Wall-clock roughly doubles by design ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
+- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval behavior.
 
 ### KI-13 — `globalSetup` product-reference-data HTTP 400 on staging
 - **Status:** unverified · **Since:** 2026-09-04
@@ -188,8 +199,8 @@
 - **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
 
 ### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
-- **Status:** open (staging environment problem, confirmed by a live probe 2026-10-15; no test-code fix possible; later run 40279659288 passed all 14 jobs: recovery, not proof) · **Since:** 2026-10-14
-- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible 2026-10-29 recurrence in run 40821683680 (`leads.spec:543` retry, `meetings.rbac:187`, `deals.rbac:1501`, `contacts.spec:601`, `tasks.rbac:312`).
+- **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
+- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible 2026-10-29 recurrence in run 40821683680 (`leads.spec:543`, `meetings.rbac:187` and three more).
 - **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) ("OPEN (KI-43)").
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
@@ -211,4 +222,4 @@
 - **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
 - **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
 - **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
-- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` ~L103 says deployed to stage/prod 2026-09-03, its skip message ~L929 says QA-only as of 2026-09-09; nothing in the repo settles it); the two tests that need it self-skip via a live presence check, so nothing to fix — re-verify the claim per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).
+- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` comments disagree on stage/prod and nothing in the repo settles it); the two tests that need it self-skip via a live presence check — re-verify per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).

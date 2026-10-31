@@ -1,5 +1,5 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
-import { faker } from '@faker-js/faker';
+import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { BasePage } from '../../core/BasePage';
 import {
   ContactData,
@@ -1047,8 +1047,7 @@ export class ContactsPage extends BasePage {
     // WHY: Change email to unique value — same email as original causes duplicate error
     const emailInput = this.emailInput();
     if (await emailInput.isVisible().catch(() => false)) {
-      const timestamp = Date.now();
-      await emailInput.fill(`clone${timestamp}@testkylas.com`);
+      await emailInput.fill(uniqueEmail('clone'));
       logger.debug('Clone email updated to unique value');
     }
     // WHY: Ensure lastName is not empty after email fill — clone pre-fills it but fill() may clear it
@@ -1062,7 +1061,7 @@ export class ContactsPage extends BasePage {
     const phoneInput = this.phoneInput();
     if (await phoneInput.isVisible().catch(() => false)) {
       // WHY: Indian mobile numbers must start with 6/7/8/9 and be exactly 10 digits
-      const newPhone = faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9);
+      const newPhone = uniquePhone();
       await phoneInput.clear();
       await phoneInput.fill(newPhone);
       // WHY (2026-09-07, PROD Build #4, hardened based on review — root
