@@ -1,4 +1,5 @@
 import { Page, expect, Locator, Response, Request } from '@playwright/test';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { BasePage } from '../../core/BasePage';
 import {
   LeadData,
@@ -90,10 +91,8 @@ export class LeadsPage extends BasePage {
       .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(label)}\\s*$`) })
       .first();
 
-  // The open react-select menu (class "css-<hash>-menu", verified live on the list page) — NOT the
-  // Bootstrap `dropdown-menu` blocks, whose names also end in "-menu". Its options end in "-option".
-  private readonly reactSelectMenuOptions = (): Locator =>
-    this.page.locator('div[class$="-menu"]:not(.dropdown-menu) div[class$="-option"]');
+  // The lead's name in the detail header: empty until the lead has loaded (confirmed live, QA)
+  private readonly leadHeaderName = (): Locator => this.page.locator('.d-flex.min-width-0 > .text-truncate').first();
 
   private readonly selectedLeadsBanner = (count: number): Locator =>
     this.page.getByText(`${count} Lead${count === 1 ? '' : 's'} selected`, { exact: true });
@@ -1183,12 +1182,7 @@ export class LeadsPage extends BasePage {
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
       const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
-      const transient =
-        !hasFieldErrors &&
-        (status >= 500 ||
-          /unexpected error occurred|internal server error|something didn't work as expected/i.test(
-            message
-          ));
+      const transient = !hasFieldErrors && isRetryableHttpStatus(status);
       logger.warn(
         `Lead create returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
@@ -1723,10 +1717,15 @@ export class LeadsPage extends BasePage {
       req.method() === 'POST';
 
     for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
-      const requestFiredPromise = this.page
-        .waitForRequest(isCreateLeadRequest, { timeout: CLICK_VERIFY_WINDOW_MS })
-        .then(() => true)
-        .catch(() => false);
+      // WHY a flag set by a listener instead of waitForRequest({timeout}) (2026-11-02, call-logs:721
+      // on sandbox staging; reproduced with 6x CPU throttling): the 4 s window used to start BEFORE
+      // the unobstructed wait and the click, so a loaded runner burned it before the click had even
+      // dispatched. The window now starts when the click has resolved.
+      let requestFired = false;
+      const onRequest = (req: Request): void => {
+        if (isCreateLeadRequest(req)) requestFired = true;
+      };
+      this.page.on('request', onRequest);
       // WHY this wait (added 2026-09-22, real live evidence): the exact
       // `css-1dsbpcp` overlay already root-caused and fixed for the Multi
       // Pick List reopen-click (BasePage.ts's waitForClickTargetUnobstructed())
@@ -1736,13 +1735,29 @@ export class LeadsPage extends BasePage {
       // subtree intercepts pointer events`, confirmed via a real FFL15
       // failure. Proof this overlay is not scoped to one widget — see that
       // method's own updated WHY comment.
-      await this.waitForClickTargetUnobstructed(this.saveButton());
-      await this.click(
-        this.saveButton(),
-        `save button (click-verify attempt ${attempt}/${MAX_CLICK_ATTEMPTS})`
-      );
-      const requestFired = await requestFiredPromise;
-      if (requestFired) return;
+      try {
+        await this.waitForClickTargetUnobstructed(this.saveButton());
+        await this.click(
+          this.saveButton(),
+          `save button (click-verify attempt ${attempt}/${MAX_CLICK_ATTEMPTS})`
+        );
+        // WHY the click also counts as effective once Save is disabled or gone: the form disables
+        // Save while it submits (validation of a long form can outlast the window under load) and
+        // closes it on success. Re-clicking then waits 15 s on a disabled button and fails on a
+        // lead that was in fact created.
+        const submitStarted = (): Promise<boolean> =>
+          expect
+            .poll(
+              async () => requestFired || (await this.page.locator('button[type="submit"].save-button:enabled').count()) === 0,
+              { timeout: CLICK_VERIFY_WINDOW_MS }
+            )
+            .toBe(true)
+            .then(() => true)
+            .catch(() => false);
+        if (await submitStarted()) return;
+      } finally {
+        this.page.off('request', onRequest);
+      }
       // WHY this message's cause is now stated as confirmed, not open
       // (root-caused 2026-09-22 via direct log evidence — see
       // fillLeadCustomFields()'s WHY comment): the app's real onClick
@@ -3154,8 +3169,46 @@ export class LeadsPage extends BasePage {
     logger.info(`Clicking right panel icon: ${title}`);
     const icon = this.rightPanelIcon(title);
     await icon.waitFor({ state: 'visible', timeout: 10000 });
+    if (title !== 'Notes') {
+      await icon.click();
+      // the section the icon opens shows its title in a card header (same signal as
+      // ContactsPage.assertDetailTabContent)
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page
+            .locator('.card-header')
+            .filter({ has: this.page.locator('h2').filter({ hasText: title }) })
+            .first()
+        ).toBeVisible({ timeout: config.timeouts.expect })
+      );
+      logger.success(`Right panel icon clicked: ${title}`);
+      return;
+    }
+    // WHY the lead's name must be on screen first (root-caused 2026-11-02, leads.rbac:411 flaky on sandbox
+    // staging; reproduced by delaying GET /v1/leads/{id} by 6 s): the Notes panel asks for the note list
+    // the moment it opens, and builds that request from the lead the page has loaded. Opened before the
+    // lead arrived, the request had no `targetEntityOwnerId`, the server answered 400 and the panel never
+    // asked again. The header shows the lead's name only once the lead is loaded, so that is the ready
+    // signal; nothing is reloaded or retried.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.leadHeaderName(), 'Lead header name (lead details loaded)').toHaveText(/\S/, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+    const listResponse = this.page.waitForResponse(
+      (res) => /\/notes\/relation\?/.test(res.url()) && res.request().method() === 'GET',
+      { timeout: config.timeouts.expect }
+    );
     await icon.click();
-    await this.page.waitForTimeout(500);
+    const response = await listResponse;
+    // A 400 here means the app refused the list although the lead had fully loaded: not worked around,
+    // reported with the request so it can be raised as an app issue.
+    if (!response.ok()) {
+      throw new Error(
+        `Notes panel list request failed after the lead details had loaded (possible app issue): ` +
+          `${await this.describeMatchedResponse(response)} — ${response.url()}`
+      );
+    }
     logger.success(`Right panel icon clicked: ${title}`);
   }
 
@@ -3377,9 +3430,7 @@ export class LeadsPage extends BasePage {
   }
 
   async getAvailablePageSizes(): Promise<number[]> {
-    await this.click(this.pageSizeControl(), 'page size select');
-    const options = this.reactSelectMenuOptions();
-    await expect(options.first()).toBeVisible({ timeout: config.timeouts.expect });
+    const options = await this.openReactSelectAndWaitForOptions(this.pageSizeControl(), 'page size');
     const sizes = (await options.allTextContents()).map((text) => Number(text.trim()));
     await this.page.keyboard.press('Escape');
     return sizes;
@@ -3387,12 +3438,7 @@ export class LeadsPage extends BasePage {
 
   async selectPageSize(size: number): Promise<void> {
     logger.info(`Selecting page size: ${size}`);
-    await this.click(this.pageSizeControl(), 'page size select');
-    const option = this.reactSelectMenuOptions()
-      .filter({ hasText: new RegExp(`^\\s*${size}\\s*$`) })
-      .first();
-    await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    await this.click(option, 'page size option');
+    await this.selectReactSelectOptionByName(this.pageSizeControl(), String(size), 'page size');
     await this.withSessionExpiryRecovery(() =>
       expect(this.pageSizeControl()).toContainText(String(size), { timeout: config.timeouts.expect })
     );
@@ -3495,7 +3541,7 @@ export class LeadsPage extends BasePage {
     });
     await this.click(dialog.getByText('Choose', { exact: true }), 'bulk field chooser');
     await this.page.keyboard.type(fieldLabel);
-    await this.click(this.reactSelectMenuOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) }).first(), 'bulk field option');
+    await this.click(this.reactSelectOpenOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) }).first(), 'bulk field option');
     await this.fill(dialog.locator(`input[name="${fieldInternalName}"]`), value, fieldLabel);
     await this.click(dialog.locator('label').filter({ hasText: 'I understand' }).first(), 'bulk acknowledgement');
     const jobResponsePromise = this.armResponseWaitWithRecovery(
@@ -3591,8 +3637,7 @@ export class LeadsPage extends BasePage {
 
   async openListViewMode(mode: 'List View' | 'Kanban View'): Promise<void> {
     logger.info(`Switching list view mode to: ${mode}`);
-    await this.click(this.viewModeControl(), 'view mode select');
-    await this.click(this.reactSelectMenuOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(mode)}\\s*$`) }).first(), 'view mode option');
+    await this.selectReactSelectOptionByName(this.viewModeControl(), mode, 'view mode');
     logger.success(`View mode: ${mode}`);
   }
 

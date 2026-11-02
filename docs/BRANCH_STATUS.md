@@ -20,7 +20,7 @@ Snapshot of 2026-10-31. Git facts come from the maintainer's statements; it deca
 ## Still open
 
 - [KI-58](./KNOWN_ISSUES_ACTIVE.md): staging create 400 `000000` with e-mail/phone. The attach-pipeline test (KI-56) was removed 2026-11-02.
-- **Follow-up, separate branch (not changed here):** the lead/contact UI create classifies any generic-error 400 (`000000`, no field errors) as `TransientLeadSaveError` / the contact equivalent and retries the whole create up to 3 times. A 400 is not transient; it hid KI-58 behind retries (staging: 3 identical 400s per create). Revisit what counts as transient and fail on the first definitive 400.
+- 400 `000000` is no longer classified transient (ADR 0014, 2026-11-02); the sandbox run is the proof.
 - [KI-52](./KNOWN_ISSUES_ACTIVE.md) to KI-55: lead coverage known app bugs and watch items; the tests stay green until Kylas fixes them.
 - Jenkins sharded-path items ([KI-45](./KNOWN_ISSUES_ACTIVE.md) to KI-47) and KI-48/49/51 carry over from the previous snapshot (2026-10-29) and were not re-checked.
 - `check:docs` compares "Last verified" with the commit author date; a checkout or reset can show false errors.
