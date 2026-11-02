@@ -1596,6 +1596,56 @@ export class BasePage {
     }
   }
 
+  // WHY one shared react-select open/pick helper (2026-11-02, sandbox rerun: leads.spec "add a pipeline"
+  // waited 10 s for `div[class$="-menu"]… div[class$="-option"]` and never saw an option): pickers opened
+  // the menu with one click and one fixed wait. Live DOM (QA and staging): an option is
+  // `is-invalid__option is-invalid__option--is-focused css-<hash>-option`, menus are `is-invalid__menu` or
+  // `css-<hash>-menu`; there are no ARIA roles or aria-expanded in this react-select version, so the open
+  // state is read from the menu element itself. Both families are matched here in one place.
+  protected reactSelectOpenOptions(): Locator {
+    return this.page.locator(
+      '.is-invalid__menu .is-invalid__option, div[class$="-menu"]:not(.dropdown-menu) div[class$="-option"]'
+    );
+  }
+
+  private reactSelectOpenMenu(): Locator {
+    return this.page.locator('.is-invalid__menu, div[class$="-menu"]:not(.dropdown-menu)');
+  }
+
+  // Opens the select and waits for its options. If nothing appears and NO menu is open, the click did not
+  // register (the React "click lands, nothing happens" race), so click again; if a menu IS open but still
+  // empty it is loading, so only wait (a second click would close it). Bounded; fails loudly.
+  protected async openReactSelectAndWaitForOptions(control: Locator, description: string): Promise<Locator> {
+    const options = this.reactSelectOpenOptions();
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if ((await this.reactSelectOpenMenu().count()) === 0) {
+        await this.click(control, `react-select control: ${description} (open ${attempt}/${maxAttempts})`);
+      }
+      try {
+        await options.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+        return options;
+      } catch (error) {
+        if (attempt === maxAttempts) {
+          throw new Error(
+            `${description}: react-select showed no options after ${maxAttempts} open attempts ` +
+              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}`
+          );
+        }
+        logger.warn(`${description}: no react-select options yet (attempt ${attempt}/${maxAttempts})`);
+      }
+    }
+    throw new Error(`${description}: react-select did not open`);
+  }
+
+  // Picks the option whose whole text is `name`, then clicks it.
+  protected async selectReactSelectOptionByName(control: Locator, name: string, description: string): Promise<void> {
+    const options = await this.openReactSelectAndWaitForOptions(control, description);
+    const option = options.filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`) }).first();
+    await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(option, `${description} option: ${name}`);
+  }
+
   // WHY: shared by any single-select react-select control, custom field or
   // standard field alike — selectPicklistCustomField() below is a thin,
   // presence-checked wrapper for custom fields; standard fields that are
@@ -1607,9 +1657,7 @@ export class BasePage {
     control: Locator,
     description: string
   ): Promise<string> {
-    await this.click(control, `react-select control: ${description}`);
-    const options = this.page.locator('.is-invalid__menu .is-invalid__option');
-    await options.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    const options = await this.openReactSelectAndWaitForOptions(control, description);
     const optionTexts = (await options.allInnerTexts()).map((t) => t.trim());
     if (optionTexts.length === 0) {
       throw new Error(

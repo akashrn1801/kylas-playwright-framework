@@ -1,4 +1,5 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { BasePage } from '../../core/BasePage';
 import {
@@ -795,10 +796,7 @@ export class ContactsPage extends BasePage {
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
       const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
-      const transient =
-        !hasFieldErrors &&
-        (status >= 500 ||
-          /unexpected error occurred|internal server error|something didn't work as expected/i.test(message));
+      const transient = !hasFieldErrors && isRetryableHttpStatus(status);
       logger.warn(
         `Contact create returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
