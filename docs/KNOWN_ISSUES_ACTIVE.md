@@ -56,7 +56,7 @@
 
 ### KI-51 — Sandbox 40821683680: cross-shard admin session storm
 - **Status:** open; "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
-- **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34 (failures: `quotations.rbac:369`, `deals.rbac:593`, `call-logs.rbac:370`/`:468`, `companies.spec:136`). First `/sales/` race capped; the storm is untouched.
+- **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
@@ -66,11 +66,15 @@
 
 ### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
-- **What:** the company clone saved ("Company cloned (Company ID: 272255)") while the Related Deals widget raised its own error toast (`POST /v4/reports/deals` 400 000000); the test failed with "Validation errors found in company clone form". Reproduced by forcing that request to fail. `cloneCompany()` now trusts the create response first; `failedWriteTracker` ignores `/reports/` POSTs. Same shape remains at company create/edit, the meeting form from a company and the other ~90 callers.
+- **What:** the company clone saved ("Company cloned (Company ID: 272255)") while the Related Deals widget raised its own error toast (`POST /v4/reports/deals` 400 000000); the test failed with "Validation errors found in company clone form". Reproduced by forcing that request to fail. Fixed for `cloneCompany()` and `failedWriteTracker` (`/reports/` POSTs); the same shape remains at ~90 other callers.
 
 ### KI-58 — Staging: lead and contact creates with an e-mail or phone return 400 000000
 - **Status:** open, root cause not confirmed (backend/config suspected) · **Since:** 2026-10-30 (uniqueness set to EMAIL_PHONE)
-- **What:** 2026-10-31 live: `POST /v1/leads` with unique e-mail and phone (`has-duplicates` false): name only 200; e-mail only, phone only, both 400 `{"code":"000000","errorDetails":[]}`. UI lead/contact creates fail alike; company create and QA pass. Needs the Kylas backend log / staging uniqueness config.
+- **What:** 2026-10-31 live: `POST /v1/leads` with unique e-mail and phone (`has-duplicates` false): name only 200; e-mail only, phone only, both 400 `{"code":"000000","errorDetails":[]}`. UI lead/contact creates fail alike; company create and QA pass. Needs the Kylas backend log / staging config; a 400 is no longer retried (ADR 0014).
+
+### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
+- **Status:** open, watch · **Since:** 2026-11-02
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header (leads did; no 400 seen for them); other modules keep their own react-select pickers; lead page size/sort/Kanban (L65, L68) are shared per-user state; a dropped POST is never retried. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
 
@@ -196,7 +200,7 @@
 
 ### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
 - **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
-- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible 2026-10-29 recurrence in run 40821683680 (`leads.spec:543`, `meetings.rbac:187` and three more).
+- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible recurrence 2026-10-29 (run 40821683680).
 - **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) ("OPEN (KI-43)").
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
