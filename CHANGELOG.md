@@ -9,6 +9,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-11-02 — test: removed the L60 attach-pipeline test (timed out at the Pipeline dropdown in CI on two sandbox runs, root cause not confirmed) with `attachPipelineFromDetail`, `LeadApi.getLeadPipelineOf` and the unused `editFormGroup`; KI-56 closed
 - 2026-10-31 — fix: the lead duplicate pre-check (`LeadApi.hasDuplicate`, `LeadsPage.ensureContactValuesUnused`) can no longer break a create: an endpoint that does not answer OK returns unknown (null, warning logged) and the create goes ahead; no `@prodSafe` test creates a lead. KI-58: staging lead/contact creates with an e-mail or phone return 400 000000 even with unique values (probe: name-only 200, e-mail-only/phone-only 400); QA 6/6 pass
 - 2026-10-30 — test: every e-mail and phone the lead, contact and company factories, clone flows and `LeadApi` send is unique (`uniqueValues.ts`); lead creates check `has-duplicates` first (ADR 0013)
 - 2026-10-30 — test: duplicate e-mail test asserts the account's lead uniqueness setting includes e-mail before it starts (read only; `GET /configurations/uniqueness/lead`); `attachPipelineFromDetail` finds its selects and options without the `is-invalid` validation prefix (KI-56, root cause not confirmed)

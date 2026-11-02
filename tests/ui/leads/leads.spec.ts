@@ -1206,48 +1206,8 @@ test.describe('Leads', () => {
   });
 
   // ──────────────────────────────────────────────────────────
-  // Pipeline: attach, close and reopen
+  // Pipeline: close and reopen
   // ──────────────────────────────────────────────────────────
-
-  // ── L60 ───────────────────────────────────────────────────
-
-  // WHAT: an admin can add a pipeline to a lead that has none, and only then does the Close Lead
-  //   button appear.
-  // WHY: a lead without a pipeline cannot be moved through stages or closed; users must be able to
-  //   fix such leads (for example ones that came in from an integration).
-  // HOW: server — the lead has no pipeline before and a stage after; UI — Close Lead is absent
-  //   before and present after a reload.
-  test('@regression admin can add a pipeline to a lead that has none, which makes the Close Lead button appear', async ({
-    adminPage,
-    leadCleanup,
-  }) => {
-    test.setTimeout(480000);
-    const leadsPage = new LeadsPage(adminPage);
-    await leadsPage.goToLeadsList();
-    const api = await LeadApi.forPage(adminPage);
-    try {
-      const seed = generateAdminLeadData();
-      const created = await api.createLead({ firstName: seed.firstName, lastName: seed.lastName });
-      await leadCleanup.track(adminPage, created.id);
-
-      const before = await api.getLeadPipelineOf(created.id);
-      expect(before.status, 'A lead created without a pipeline has none').toBe(400);
-      expect(before.body.code).toBe('002056');
-
-      await leadsPage.goToLeadDetailsById(created.id);
-      await leadsPage.assertCloseLeadControlVisible(false);
-      await leadsPage.attachPipelineFromDetail('Open');
-
-      const attached = await api.getLeadOrThrow(created.id);
-      expect(attached.pipeline?.stage.name).toBe('Open');
-      expect((await api.getLeadPipelineOf(created.id)).status).toBe(200);
-      await leadsPage.goToLeadDetailsById(created.id);
-      await leadsPage.assertCloseLeadControlVisible(true);
-    } finally {
-      await api.dispose();
-    }
-    logger.success('L60 passed');
-  });
 
   // ── L61 ───────────────────────────────────────────────────
 

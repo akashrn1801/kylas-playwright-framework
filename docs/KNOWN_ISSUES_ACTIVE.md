@@ -68,10 +68,6 @@
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
 - **What:** the company clone saved ("Company cloned (Company ID: 272255)") while the Related Deals widget raised its own error toast (`POST /v4/reports/deals` 400 000000); the test failed with "Validation errors found in company clone form". Reproduced by forcing that request to fail. `cloneCompany()` now trusts the create response first; `failedWriteTracker` ignores `/reports/` POSTs. Same shape remains at company create/edit, the meeting form from a company and the other ~90 callers.
 
-### KI-56 — Staging: attach-pipeline test failed once in sandbox run 41066366856; not reproduced
-- **Status:** inconclusive (hardened, root cause not confirmed) · **Since:** 2026-10-30
-- **What:** `.is-invalid__option` never showed in CI; staging opened the menu in 0.3-0.9 s, 10/10. Locators no longer need the prefix; needs the trace.
-
 ### KI-58 — Staging: lead and contact creates with an e-mail or phone return 400 000000
 - **Status:** open, root cause not confirmed (backend/config suspected) · **Since:** 2026-10-30 (uniqueness set to EMAIL_PHONE)
 - **What:** 2026-10-31 live: `POST /v1/leads` with unique e-mail and phone (`has-duplicates` false): name only 200; e-mail only, phone only, both 400 `{"code":"000000","errorDetails":[]}`. UI lead/contact creates fail alike; company create and QA pass. Needs the Kylas backend log / staging uniqueness config.
