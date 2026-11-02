@@ -227,11 +227,6 @@ export class LeadApi extends ApiClient {
     return result.field;
   }
 
-  /** `GET /leads/{id}/pipeline` — 400 `002056` while no pipeline is attached. */
-  getLeadPipelineOf(leadId: number): Promise<ApiResult> {
-    return this.send('GET', `/leads/${leadId}/pipeline`);
-  }
-
   /** Close a lead through the stage-activate endpoint the Close Lead dialog uses. */
   async closeLead(leadId: number, stageName: 'Won' | 'Closed Lost' | 'Closed Unqualified'): Promise<void> {
     const pipeline = await this.getLeadPipeline();

@@ -110,17 +110,6 @@ export class LeadsPage extends BasePage {
   // ── Convert confirmation (shown only when nothing is ticked) ──
   private readonly convertConfirmModal = (): Locator => this.page.locator('#confirmModal');
 
-  // ── Edit-form fields found by their visible label, not by a position-generated id ──
-  private readonly editFormGroup = (label: string): Locator =>
-    this.editModal()
-      .locator('.form-group')
-      .filter({
-        has: this.page.locator('label.form-label', {
-          hasText: new RegExp(`^\\s*${this.escapeRegExp(label)}\\s*$`),
-        }),
-      })
-      .first();
-
   private readonly searchLoader = (): Locator => this.page.locator('.spinner, .loader, .loading');
 
   private readonly leadTable = (): Locator => this.page.locator('.rt-table');
@@ -3272,36 +3261,6 @@ export class LeadsPage extends BasePage {
     const response = await convertResponsePromise;
     expect(response.status(), 'POST /v1/leads/{id}/convert should succeed').toBe(200);
     logger.success('Lead converted without entities');
-  }
-
-  // WHY label-scoped fields (not [id="0_21_input_pipeline"]): that id is generated from the
-  // field's position in the layout, so a layout change would silently move it.
-  async attachPipelineFromDetail(stageName: string): Promise<void> {
-    logger.info(`Attaching pipeline from the detail page at stage: ${stageName}`);
-    await this.click(this.page.getByRole('button', { name: 'Attach Pipeline' }), 'attach pipeline');
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.editModal()).toBeVisible({ timeout: config.timeouts.expect })
-    );
-    // WHY not `.is-invalid__*`: that class prefix is the select's VALIDATION state, not its identity.
-    // The control is found as the element inside the field's group whose class ends in "-control" and the
-    // options as the open react-select menu's "-option" items (same as the list-page menus).
-    const selectControl = (label: string): Locator =>
-      this.editFormGroup(label).locator('div[class$="-control"]').first();
-    await this.click(selectControl('Pipeline'), 'pipeline select');
-    const pipelineOption = this.reactSelectMenuOptions().first();
-    await pipelineOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    await this.click(pipelineOption, 'pipeline option');
-    await expect(selectControl('Pipeline Stage')).not.toHaveClass(/is-disabled/, {
-      timeout: config.timeouts.expect,
-    });
-    await this.click(selectControl('Pipeline Stage'), 'stage select');
-    const stageOption = this.reactSelectMenuOptions()
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(stageName)}\\s*$`) })
-      .first();
-    await stageOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    await this.click(stageOption, 'stage option');
-    await this.saveEditedLead();
-    logger.success(`Pipeline attached at stage: ${stageName}`);
   }
 
   async assertCloseLeadControlVisible(visible: boolean): Promise<void> {
