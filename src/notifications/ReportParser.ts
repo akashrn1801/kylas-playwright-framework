@@ -152,6 +152,9 @@ export interface TestResult {
   errorStack?: string;
   errorLocation?: ErrorLocation;
   retries: number;
+  // True for a flaky test that failed every first-run attempt and passed only on the rerun shard (ADR 0015), so the
+  // email can say "recovered on rerun" instead of "passed on retry". A test that passed on an in-job retry is false.
+  recoveredOnRerun?: boolean;
   file: string;
   // WHY: repo-relative path to the failure's trace.zip, e.g.
   // "test-results/qa/rbac-deals.rbac-.../trace.zip" — sourced from Playwright's
@@ -364,6 +367,8 @@ interface PlaywrightJsonTestResult {
   // confirmed present in real raw JSON output.
   errors?: PlaywrightJsonError[];
   attachments?: PlaywrightJsonAttachment[];
+  // Set by scripts/combine-rerun.ts on a result appended from the rerun shard (ADR 0015).
+  rerun?: boolean;
 }
 
 interface PlaywrightJsonAnnotation {
@@ -563,7 +568,6 @@ export class ReportParser {
           for (const test of spec.tests || []) {
             rawTitles.push(spec.title);
             const allResults = test.results || [];
-            const retries = allResults.length - 1;
             const lastResult = allResults[allResults.length - 1];
             // WHY: Derive status from the overall test outcome and last result:
             // - Playwright sets test.status = 'flaky' when it passed on retry
@@ -572,6 +576,17 @@ export class ReportParser {
             // - Using retries > 0 alone is wrong: a test that fails twice has retries=1
             //   but should be 'failed', not 'flaky'
             const status = this.mapStatus(test.status, lastResult?.status);
+            // WHY a skipped test has 0 retries (email review 2026-11-03): a serial dependent that "did not run"
+            // is recorded once per attempt as a `skipped` result (Playwright 1.60.0, checked live: results
+            // [skipped, skipped] with retries=1). Counting that as a retry put never-executed tests into
+            // retriesFromCleanSweeps, whose email text says "passed every attempt but were swept into another
+            // test's serial-block retry" — false for a test that did not run — and inflated the Retries tile.
+            const retries = status === 'skipped' ? 0 : allResults.length - 1;
+            const recoveredOnRerun =
+              status === 'flaky' &&
+              lastResult?.rerun === true &&
+              lastResult.status === 'passed' &&
+              !allResults.some((r) => r.status === 'passed' && r.rerun !== true);
             // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
             // for a flaky test, lastResult is the PASSING retry, which has no
             // trace attachment (trace: 'retain-on-failure' only keeps traces
@@ -625,6 +640,7 @@ export class ReportParser {
               errorSnippet,
               allErrors,
               retries,
+              ...(recoveredOnRerun ? { recoveredOnRerun } : {}),
               file: currentFile,
               tracePath: this.extractAttachmentPaths(traceSourceResult, 'trace')[0],
               screenshotPaths: this.extractAttachmentPaths(traceSourceResult, 'screenshot'),

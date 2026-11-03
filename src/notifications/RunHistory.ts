@@ -236,6 +236,14 @@ export interface RunHistoryRecord {
   // same branch and `workers`, so computeDurationEstimate() skips any record
   // that carries it. Optional: every existing record lacks it (= unsharded).
   lanes?: string;
+  // WHY (ADR 0015): set only when the rerun shard ran for this build. `failed`/`flaky` are the FINAL counts (a test that
+  // recovered on the rerun is counted as flaky, its title is in flakyTestTitles, and it is never in `passed`), so
+  // trends and recurring-flaky stay honest; these fields keep the first-attempt view. Optional: every older record
+  // lacks them (= no rerun) and every reader ignores them.
+  rerun?: { candidates: number; recovered: number; stillFailing: number };
+  firstRunFailed?: number;
+  firstRunFlaky?: number;
+  recoveredOnRerunTitles?: string[];
 }
 
 export interface RunDelta {

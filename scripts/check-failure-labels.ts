@@ -19,10 +19,11 @@ import { enrichClusters, buildFlakyFailureDetails, EnrichedCluster, EnrichmentCo
 import { computeHealthScore, computeOverallVerdict } from '../src/notifications/AutomationHealth';
 import { EmailTemplate, EmailContext } from '../src/notifications/EmailTemplate';
 import { computeNotificationDedupKey, NotificationInput } from '../src/notifications/NotificationService';
-import { assessCauses, summarizeCauses, parseSignatureRegistry, EMPTY_REGISTRY, CauseAssessment, CauseSummary, SignatureRegistry } from '../src/notifications/FailureClassifier';
+import { assessCauses, summarizeCauses, splitText, parseSignatureRegistry, EMPTY_REGISTRY, CauseAssessment, CauseSummary, SignatureRegistry } from '../src/notifications/FailureClassifier';
 import { readSignatureRegistryStrict, loadSignatureRegistry } from '../src/notifications/FailureSignatureLoader';
 import { MiscError, MiscErrorReport } from '../src/error-collector/ErrorCollector';
 import { KnownIssueMatch } from '../src/notifications/KnownIssuesIndex';
+import { RerunSummary } from '../src/notifications/RerunSummary';
 
 interface Spec {
   file: string;
@@ -489,6 +490,84 @@ function main(): void {
   ];
   const ru = build(realUnclassified);
   check([...ru.assessed.values()].every((a) => a.label === 'unclassified') && ru.summary.dominant === undefined, 'real unclassified shapes (403 call-logs, deal not shown, Lead Converted, drill-through, 01503001): all stay unclassified');
+
+
+  // 9. rerun shard (ADR 0015): one email, first run next to after-rerun; without a summary the email is exactly as before
+  const rr = run.ctxFor(true);
+  const baseHtml = tpl.html(rr);
+  const failedT = run.report.failedTests[0];
+  const flakyT = run.report.flakyTests[0];
+  const rerunSummary: RerunSummary = {
+    version: 1, ran: true, maxTests: 60, retries: 0, includeFlaky: true, candidates: 3, recovered: 1, stillFailing: 1,
+    firstRun: { passed: 100, failed: 4, flaky: 2 }, afterRerun: { passed: 100, failed: 3, flaky: 3 },
+    excluded: [{ file: 'ui/formFields/leadFieldLimits.spec.ts', title: 'ff', reason: 'shared-config suite' }],
+    rows: [
+      { key: 'k1', file: failedT.file, line: 1, title: failedT.title, first: 'failed', rerun: 'failed', final: 'failed', reason: 'timedOut' },
+      { key: 'k2', file: flakyT.file, line: 2, title: flakyT.title, first: 'failed', rerun: 'passed', final: 'recovered' },
+    ],
+  };
+  const withRerun = { ...rr, rerun: rerunSummary };
+  const rerunHtml = tpl.html(withRerun);
+  check(normHtml(tpl.html({ ...rr, rerun: null })) === normHtml(baseHtml) && normHtml(tpl.html({ ...rr, rerun: undefined })) === normHtml(baseHtml), 'rerun: no summary (kill switch off, old run) = the email is exactly as before');
+  check(snapshot(withRerun) === snapshot(rr) && tpl.subject(withRerun) === tpl.subject(rr), 'rerun: verdict, health, counts, dedup key and subject do not change with the rerun section');
+  check(/First run<\/th>/.test(rerunHtml) && /After rerun<\/th>/.test(rerunHtml), 'rerun: summary table has the columns "First run" and "After rerun"');
+  check(rerunHtml.includes('(1 recovered on rerun)') && rerunHtml.includes('Flaky - recovered on rerun'), 'rerun: recovered tests are counted as Flaky and named "recovered on rerun"');
+  check(rerunHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final');
+  check((rerunHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
+  check(rerunHtml.includes('were not rerun') && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
+  const capHtml = tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
+  check(capHtml.includes('Not rerun: 90 failed/flaky tests is more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
+  check(tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'none', rows: [] } }).includes('no test failed or was flaky'), 'rerun: nothing to rerun says so');
+  check(tpl.html({ ...rr, rerun: { ...rerunSummary, rerunOf: { runId: '99', runNumber: '12' } } }).includes('Manual rerun of run #12'), 'rerun: a manual rerun names the run it reran');
+
+  // 10. email review 2026-11-03: fixes proven by evidence
+  check(!baseHtml.includes('id=""'), 'email: no empty id="" attribute on flaky rows without detail');
+  const mkReport = (results: Array<{ file: string; title: string; status: string; expected?: string; ann?: boolean; res: string[] }>): ParsedReport => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'review-'));
+    const f = path.join(d, 'results.json');
+    fs.writeFileSync(f, JSON.stringify({
+      config: { version: '1.60.0', workers: 1, projects: [{ name: 'chromium' }] },
+      stats: { duration: 1000, startTime: '2026-11-03T06:00:00.000Z' },
+      suites: results.map((r) => ({ file: r.file, specs: [{ title: r.title, file: r.file, line: 1, tests: [{ projectName: 'chromium', status: r.status, expectedStatus: r.expected ?? 'passed', annotations: r.ann ? [{ type: 'skip' }] : [], results: r.res.map((st) => { const [status, tag] = st.split(':'); return { status, duration: 10, error: status === 'failed' ? { message: 'x' } : undefined, ...(tag === 'rerun' ? { rerun: true } : {}) }; }) }] }] })),
+    }));
+    const rep = new ReportParser().parse(f);
+    fs.rmSync(d, { recursive: true, force: true });
+    return rep;
+  };
+  const sweep = mkReport([
+    { file: 'ui/a.spec.ts', title: 'first fails', status: 'unexpected', res: ['failed', 'failed'] },
+    { file: 'ui/a.spec.ts', title: 'dependent did not run', status: 'skipped', res: ['skipped', 'skipped'] },
+    { file: 'ui/a.spec.ts', title: 'passed in a swept block', status: 'expected', res: ['passed', 'passed'] },
+  ]);
+  check(sweep.totalRetries === 2 && sweep.retriesFromNonCleanTests === 1 && sweep.retriesFromCleanSweeps === 1, 'parser: a serial dependent that did not run ([skipped, skipped]) adds no retry; the swept count is only tests that really passed twice', `${sweep.totalRetries}/${sweep.retriesFromNonCleanTests}/${sweep.retriesFromCleanSweeps}`);
+  check(sweep.skipped === 1 && sweep.total === 3 && sweep.passed + sweep.failed + sweep.flaky + sweep.skipped === sweep.total, 'parser: passed + failed + flaky + skipped = total');
+  const twoRetries = mkReport([{ file: 'ui/a.spec.ts', title: 'flaky twice', status: 'flaky', res: ['failed', 'failed', 'passed'] }, { file: 'ui/a.spec.ts', title: 'flaky once', status: 'flaky', res: ['failed', 'passed'] }]);
+  const retryHtml = tpl.html({ ...rr, report: twoRetries, clusters: [], flakyFailureDetails: [] });
+  check(!retryHtml.includes('id=""'), 'email: flaky rows without a detail card carry no id attribute');
+  check(retryHtml.includes('2 retries</td>') && retryHtml.includes('1 retry</td>') && !retryHtml.includes('2 retry<'), 'email: "1 retry", "2 retries" (never "2 retry")');
+
+
+  // 11. two labels that cannot be confused, and retry vs rerun wording (email review follow-up, 2026-11-03)
+  check(baseHtml.includes('>Passed first time<') && !baseHtml.includes('>Pass Rate<'), 'email: the KPI tile is "Passed first time" (passed / all tests), not "Pass Rate"');
+  check(baseHtml.includes('Passed incl. flaky:') && !baseHtml.includes('Pass rate:'), 'email: the Health factor is "Passed incl. flaky" (passed + flaky over executed), not a second "Pass rate"');
+  const seriesHtml = tpl.html({ ...rr, passRateSeries: [{ buildNumber: '6', passRate: 90, timestamp: 't' }, { buildNumber: '7', passRate: 80, timestamp: 't' }] });
+  check(seriesHtml.includes('Passed first time — last 2 runs') && !seriesHtml.includes('Pass rate — last'), 'email: the trend series is labelled "Passed first time"');
+  const viaRerun = mkReport([
+    { file: 'ui/a.spec.ts', title: 'recovered', status: 'flaky', res: ['failed', 'failed', 'passed:rerun'] },
+    { file: 'ui/a.spec.ts', title: 'retry then rerun', status: 'flaky', res: ['failed', 'passed', 'passed:rerun'] },
+    { file: 'ui/a.spec.ts', title: 'retry only', status: 'flaky', res: ['failed', 'passed'] },
+  ]);
+  const flagOf = (t: string): boolean | undefined => viaRerun.flakyTests.find((x) => x.title === t)?.recoveredOnRerun;
+  check(flagOf('recovered') === true && flagOf('retry then rerun') === undefined && flagOf('retry only') === undefined, 'parser: only a test that failed every first-run attempt and passed on the rerun is "recovered on rerun"');
+  check(splitText(2, 3, 1) === '2 failed outright, 2 passed on retry, 1 recovered on rerun' && splitText(2, 3) === '2 failed outright, 3 passed on retry' && splitText(0, 1, 1) === '1 recovered on rerun', 'wording: splitText says "passed on retry" or "recovered on rerun" by what happened; without a rerun it is unchanged');
+  const viaAssessed = assessCauses(viaRerun.flakyTests.map((t) => ({ test: t, related: [] })), registry, { previousRunFailedTitles: null, recurringFailures: [], shardCompleteness: null });
+  const viaSummary = summarizeCauses(viaAssessed.values(), registry, null);
+  check(viaSummary.retryTotal === 3 && viaSummary.rerunTotal === 1, 'summary: 3 flaky, 1 of them recovered on rerun', `${viaSummary.retryTotal}/${viaSummary.rerunTotal}`);
+  const recoveredEvidence = viaAssessed.get(viaRerun.flakyTests.find((x) => x.title === 'recovered')!)?.evidence[0] ?? '';
+  check(recoveredEvidence.startsWith('recovered on rerun (failed 2 times first)'), 'card evidence: a recovered test says "recovered on rerun", not "passed on retry"', recoveredEvidence);
+  check((viaAssessed.get(viaRerun.flakyTests.find((x) => x.title === 'retry only')!)?.evidence[0] ?? '').startsWith('passed on retry (1 retry)'), 'card evidence: an in-job retry still says "passed on retry"');
+  const viaHtml = tpl.html({ ...rr, report: viaRerun, causeSummary: viaSummary, clusters: [], flakyFailureDetails: [] });
+  check(viaHtml.includes('; 2 passed on retry, 1 recovered on rerun (flaky).'), 'email summary line: "2 passed on retry, 1 recovered on rerun"');
 
   // 6. output
   if (wantTable) {

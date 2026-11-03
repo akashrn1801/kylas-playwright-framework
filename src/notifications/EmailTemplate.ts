@@ -16,6 +16,7 @@ import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
+import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
@@ -88,6 +89,10 @@ export interface EmailContext {
   // shard-completeness.json. When reported < expected the verdict is forced
   // to 'blocked' (computeOverallVerdict) and a banner opens the email.
   shardCompleteness?: ShardCompleteness | null;
+  // WHY optional, same graceful-absence pattern (ADR 0015): the rerun shard's result, from reports/<env>/
+  // rerun-summary.json. Absent = the run had no rerun (kill switch off, old run) and the email is exactly as before.
+  // Only the counts shown here change with it; verdict, health and subject read the combined report as usual.
+  rerun?: RerunSummary | null;
   // WHY: computed once by NotificationService from FailureAnalyzer/
   // AutomationHealth and threaded through here — EmailTemplate only renders,
   // it never re-derives analysis from raw data.
@@ -222,6 +227,7 @@ export class EmailTemplate {
       this.buildHealthScoreBlock(health),
       this.buildRunMetadata(ctx),
       this.buildKpiDashboard(ctx),
+      this.buildRerunSummarySection(ctx.rerun),
       this.buildTrendSection(ctx, testAnchors),
       this.buildModuleAnalytics(ctx),
       this.buildSlowTestsSection(ctx),
@@ -229,7 +235,7 @@ export class EmailTemplate {
       this.buildJobStatsSection(ctx),
       this.buildFlakyTestsSection(ctx),
       this.buildSkippedTestsSection(ctx),
-      this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl),
+      this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl, ctx.rerun),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
       this.buildFieldConfigResetSection(ctx.fieldConfigReset, ctx.env),
       this.buildActionRequiredSection(ctx, health, clusters),
@@ -389,12 +395,12 @@ ${body}
       ? `<div style="font-size:12px;color:${INK};margin-top:6px;"><strong>To ask the Kylas dev team:</strong> ${this.esc(d.askKylasTeam.question)}</div>
   <div style="font-size:12px;color:${SLATE};margin-top:2px;">Observed on ${this.esc(d.askKylasTeam.observed)} (a one-off manual check, not measured by this run): ${this.esc(d.askKylasTeam.observation)}</div>`
       : '';
-    const split = splitText(d.failedCount, d.retryCount);
+    const split = splitText(d.failedCount, d.retryCount, d.rerunCount);
 
     return `
 <tr><td id="section-suspected-environment" style="background:#EEF1FF;padding:12px 28px;border-bottom:1px solid #C9D2F5;">
   <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failures share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.esc(d.kiRef)}</div>
-  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal))}. A test that passed on retry (flaky) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.</div>
+  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal, d.rerunTotal))}. A flaky test (${d.rerunTotal > 0 ? 'passed on retry or recovered on rerun' : 'passed on retry'}) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.</div>
   ${ask}
 </td></tr>`;
   }
@@ -407,7 +413,11 @@ ${body}
       summary.failedTotal > 0
         ? `of the ${summary.failedTotal} that failed outright, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
         : 'none failed outright';
-    const retryPart = summary.retryTotal > 0 ? `; ${summary.retryTotal} passed on retry (flaky)` : '';
+    const retryOnly = summary.retryTotal - summary.rerunTotal;
+    const retryPart =
+      summary.retryTotal > 0
+        ? `; ${[retryOnly > 0 ? `${retryOnly} passed on retry` : '', summary.rerunTotal > 0 ? `${summary.rerunTotal} recovered on rerun` : ''].filter(Boolean).join(', ')} (flaky)`
+        : '';
     return `
 <tr><td id="section-failure-causes" style="padding:4px 28px 8px;">
   <div style="font-size:12px;color:${SLATE};">Suspected cause of the ${summary.total} failures (hints, not verdicts): ${failedPart}${retryPart}.${this.esc(note)}</div>
@@ -657,7 +667,9 @@ ${body}
     const secondaryRow = this.kpiRow([
       {
         value: `${report.passRate}%`,
-        label: 'Pass Rate',
+        // WHY labelled by what it measures (2026-11-03 email review): this is passed / ALL tests, a test that needed a
+        // retry or a rerun is not in it; the Health block's "Passed incl. flaky" is a different number on purpose.
+        label: 'Passed first time',
         variant: report.passRate >= 90 ? 'success' : report.passRate >= 75 ? 'warn' : 'fail',
         subtext: passRateSubtext,
       },
@@ -893,7 +905,7 @@ ${body}
       .join('');
     return `
     <div style="margin-top:10px;">
-      <div style="font-size:11px;color:${SLATE};margin-bottom:4px;">Pass rate — last ${series.length} runs</div>
+      <div style="font-size:11px;color:${SLATE};margin-bottom:4px;">Passed first time — last ${series.length} runs</div>
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>${cells}</tr></table>
     </div>`;
   }
@@ -1324,7 +1336,12 @@ ${body}
   // a regression/chronic badge applies (meaningless for a test that already
   // passed on retry this run). One function, one place to fix a rendering
   // bug, per this codebase's "every new piece of logic does ONE thing" rule.
-  private buildFailureDetailCard(d: FailureDetail, knownIssuesUrl: string | null | undefined, accentColor: string): string {
+  private buildFailureDetailCard(
+    d: FailureDetail,
+    knownIssuesUrl: string | null | undefined,
+    accentColor: string,
+    rerunRows?: Map<string, RerunTestRow>
+  ): string {
     const earlierErrorsHtml =
       d.earlierErrors.length > 0
         ? `<div style="margin-top:6px;">
@@ -1381,9 +1398,96 @@ ${body}
           ${stackHtml}
           <div style="margin-top:6px;font-size:10.5px;color:${SLATE};font-style:italic;">${this.esc(d.diagnosticHint)}</div>
           ${this.causeEvidence(d.cause)}
+          ${this.rerunTestLine(rerunRows?.get(rerunRowKey(d.test.file, d.test.title)))}
           ${knownIssueHtml}
           <div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${artifactLines.join('<br>')}</div>
         </div>`;
+  }
+
+  // ===================== Rerun (ADR 0015) =====================
+
+  private rerunRowMap(rerun: RerunSummary | null | undefined): Map<string, RerunTestRow> | undefined {
+    if (!rerun || !rerun.ran) return undefined;
+    return new Map(rerun.rows.map((r) => [rerunRowKey(r.file, r.title), r]));
+  }
+
+  private rerunColor(final: RerunTestRow['final']): string {
+    return final === 'passed' ? SUCCESS : final === 'failed' ? FAIL : WARN;
+  }
+
+  // One line under a failed/flaky test: first run -> rerun -> final. Nothing for a test that was not rerun.
+  private rerunTestLine(row: RerunTestRow | undefined): string {
+    if (!row) return '';
+    return `<div style="margin-top:6px;font-size:10.5px;color:${SLATE};">Rerun: first run <strong>${this.esc(FIRST_LABEL[row.first])}</strong> &rarr; rerun <strong>${this.esc(RERUN_LABEL[row.rerun])}</strong> &rarr; final <strong style="color:${this.rerunColor(row.final)};">${this.esc(FINAL_LABEL[row.final])}</strong></div>`;
+  }
+
+  // ONE email at the end of the run: the first run next to the result after the rerun shard (a rerun pass is
+  // never a clean pass: a recovered test counts as Flaky), then every rerun test with first -> rerun -> final.
+  private buildRerunSummarySection(rerun: RerunSummary | null | undefined): string {
+    if (!rerun) return '';
+    const origin = rerun.rerunOf
+      ? ` Manual rerun of run${rerun.rerunOf.runNumber ? ` #${this.esc(rerun.rerunOf.runNumber)}` : ` ${this.esc(rerun.rerunOf.runId)}`}.`
+      : '';
+    const heading = `<div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${INK};margin-bottom:8px;">Rerun of failed and flaky tests</div>`;
+    if (!rerun.ran) {
+      const why =
+        rerun.reason === 'none'
+          ? 'no test failed or was flaky, so no rerun was needed'
+          : rerun.reason === 'cap'
+            ? `${rerun.candidates} failed/flaky tests is more than the limit of ${rerun.maxTests}: that points at the environment, so nothing was rerun`
+            : `no rerun result was produced (${this.esc(rerun.reason ?? 'unknown')})`;
+      return `
+<tr><td id="section-rerun" style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
+    ${heading}
+    <div style="font-size:12px;color:${SLATE};">Not rerun: ${why}.${origin}</div>
+  </div>
+</td></tr>`;
+    }
+    const f = rerun.firstRun;
+    const a = rerun.afterRerun;
+    const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
+    const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
+    const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
+    const summaryTable = `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
+      <tr>${th('', 'left')}${th('First run')}${th('After rerun')}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(String(a.passed), SUCCESS)}</tr>
+      <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
+      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${rerun.recovered > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${rerun.recovered} recovered on rerun)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
+    </table>`;
+    const rows = rerun.rows
+      .map(
+        (r) => `
+      <tr style="border-bottom:1px solid ${BORDER};">
+        <td style="padding:5px 8px 5px 0;font-size:11.5px;color:${INK};">${this.esc(r.title)}<div style="font-size:10px;color:${MUTED};">${this.esc(r.file.split('/').pop() ?? r.file)}${r.reason ? ` &middot; ${this.esc(r.reason)}` : ''}</div></td>
+        <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(FIRST_LABEL[r.first])}</td>
+        <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(RERUN_LABEL[r.rerun])}</td>
+        <td style="padding:5px 0 5px 8px;font-size:11.5px;font-weight:700;color:${this.rerunColor(r.final)};white-space:nowrap;">${this.esc(FINAL_LABEL[r.final])}</td>
+      </tr>`
+      )
+      .join('');
+    const testTable =
+      rerun.rows.length > 0
+        ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
+    </table>`
+        : '';
+    const excluded =
+      rerun.excluded.length > 0
+        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun (form-field suites are never rerun, or flaky tests are switched off); their first-run result stands.</div>`
+        : '';
+    const took = rerun.durationMs !== undefined ? ` in ${this.formatDuration(rerun.durationMs)}` : '';
+    return `
+<tr><td id="section-rerun" style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
+    ${heading}
+    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (${rerun.retries} in-job retries): ${rerun.recovered} recovered, ${rerun.stillFailing} still failing. A test that passes only on the rerun is counted as Flaky, never as Passed.${origin}</div>
+    ${summaryTable}
+    ${testTable}
+    ${excluded}
+  </div>
+</td></tr>`;
   }
 
   private buildFlakyTestsSection(ctx: EmailContext): string {
@@ -1391,6 +1495,7 @@ ${body}
     if (report.flakyTests.length === 0) return '';
     const recurringByTitle = new Map((ctx.recurringFlaky ?? []).map((r) => [r.title, r]));
     const detailByTitle = new Map((ctx.flakyFailureDetails ?? []).map((d) => [d.test.title, d]));
+    const rerunRows = this.rerunRowMap(ctx.rerun);
     const rows = report.flakyTests
       .map((t: TestResult) => {
         const recurring = recurringByTitle.get(t.title);
@@ -1407,11 +1512,11 @@ ${body}
         // place (investigation §3 finding 3) — a flaky test's generic "Test
         // timeout exceeded" first error next to the actual specific cause,
         // which only ever surfaces via the full error sequence.
-        const detailHtml = detail ? this.buildFailureDetailCard(detail, ctx.knownIssuesUrl, WARN) : '';
+        const detailHtml = detail ? this.buildFailureDetailCard(detail, ctx.knownIssuesUrl, WARN, rerunRows) : '';
         return `
-      <tr id="${detail ? this.escAttr(detail.anchorId) : ''}" style="border-bottom:1px solid ${WARN_BORDER};">
-        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
-        <td style="padding:6px 0;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} retry</td>
+      <tr${detail ? ` id="${this.escAttr(detail.anchorId)}"` : ''} style="border-bottom:1px solid ${WARN_BORDER};">
+        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}${this.rerunTestLine(rerunRows?.get(rerunRowKey(t.file, t.title)))}</td>
+        <td style="padding:6px 0;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} ${t.retries === 1 ? 'retry' : 'retries'}</td>
         <td style="padding:6px 0 6px 10px;font-size:11px;color:${riskColor};font-weight:700;white-space:nowrap;">${risk} risk</td>
         <td style="padding:6px 0 6px 10px;font-size:10.5px;color:${SLATE};">${this.esc(history)}</td>
         <td style="padding:6px 0 6px 10px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : 'no trace captured'}</td>
@@ -1430,8 +1535,13 @@ ${body}
 
   // ===================== Failed Tests (failure clusters, full detail) =====================
 
-  private buildFailureClustersSection(clusters: EnrichedCluster[], knownIssuesUrl: string | null | undefined): string {
+  private buildFailureClustersSection(
+    clusters: EnrichedCluster[],
+    knownIssuesUrl: string | null | undefined,
+    rerun?: RerunSummary | null
+  ): string {
     if (clusters.length === 0) return '';
+    const rerunRows = this.rerunRowMap(rerun);
     const totalTests = clusters.reduce((sum, c) => sum + c.tests.length, 0);
 
     const clusterBlocks = clusters
@@ -1445,7 +1555,7 @@ ${body}
         const header = `<div style="background:${CANVAS_TINT};border-radius:4px 4px 0 0;padding:8px 10px;font-size:11.5px;font-weight:700;color:${INK};border:1px solid ${FAIL_BORDER};border-bottom:none;">
                  ${c.tests.length > 1 ? `${c.tests.length} tests affected — shared cause (${this.signalTypeLabel(c.signalType)}) · ` : ''}category: ${this.esc(c.category)}
                </div>`;
-        const cards = c.details.map((d) => this.buildFailureDetailCard(d, knownIssuesUrl, FAIL)).join('');
+        const cards = c.details.map((d) => this.buildFailureDetailCard(d, knownIssuesUrl, FAIL, rerunRows)).join('');
         return `
         <div style="margin-bottom:12px;">
           ${header}

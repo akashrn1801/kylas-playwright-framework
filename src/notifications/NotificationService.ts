@@ -8,6 +8,7 @@ import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { loadFieldConfigReset } from './FieldConfigReset';
 import { loadShardCompleteness, isIncompleteRun } from './ShardCompleteness';
+import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
 import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
@@ -159,7 +160,7 @@ export function getNotifiedMarkerDir(env: string): string {
 // produce the identical key — which is exactly the idempotency property
 // needed, nothing broader.
 export function computeNotificationDedupKey(input: NotificationInput, report: ParsedReport): string {
-  const raw = [input.env, input.branch, input.buildNumber, report.startTime, report.total, report.passed, report.failed].join('|');
+  const raw = [input.env, input.branch, input.buildNumber, report.startTime, report.total, report.passed, report.failed, report.flaky].join('|');
   return crypto.createHash('sha1').update(raw).digest('hex');
 }
 
@@ -369,6 +370,7 @@ export class NotificationService {
       jobStats: input.jobStats,
       fieldConfigReset: loadFieldConfigReset(input.env),
       shardCompleteness,
+      rerun: loadRerunSummary(input.env),
       miscErrors,
       historyDelta: historyDeltaFile.delta,
       recurringFlaky: historyDeltaFile.recurringFlaky,

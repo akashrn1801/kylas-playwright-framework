@@ -110,7 +110,7 @@ export function computeHealthScore(
   const passRatePenalty = Math.round((100 - effectivePassRate) * 0.6);
   if (passRatePenalty > 0) {
     score -= passRatePenalty;
-    factors.push({ name: 'Pass rate', impact: -passRatePenalty, note: `${effectivePassRate}% of executed tests passed (flaky counted as passed, scored below)` });
+    factors.push({ name: 'Passed incl. flaky', impact: -passRatePenalty, note: `${effectivePassRate}% of executed tests passed, flaky counted as passed (skipped excluded; flaky is scored separately below)` });
   }
 
   const failPenalty = Math.min(report.failed * 3, 25);

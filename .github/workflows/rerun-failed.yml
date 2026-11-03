@@ -1,0 +1,250 @@
+name: CI — manual rerun of failed and flaky tests
+
+# WHY (2026-11-03, ADR 0015): rerun only the tests that failed or were flaky in a FINISHED run, by hand, and send ONE
+# email with the combined result (first run next to after-rerun). No formFields jobs, no new shards, no reset: only
+# core tests are rerun (formFields tests never are, in v1). The first-run results come from that run's 14-day
+# `playwright-report-*` artifact (the merged results.json), not from its 3-day blob reports. The run's history record
+# is REPLACED (same build number), the same way a GitHub re-run attempt replaces its earlier one.
+#
+# Supported source runs: those that uploaded a `run-meta-*` artifact (today only sandbox.yml, run with the rerun
+# support of ADR 0015); anything older fails fast with a clear message instead of guessing the shard completeness.
+# The workflow appears in the Actions tab once it is on the default branch (dev); to try it earlier, dispatch it
+# from the branch that holds it (it must be the same commit as the run's tests: checked below).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run id of the finished sandbox/stage/qa run to rerun (the number in its URL)'
+        required: true
+        type: string
+      env:
+        description: 'Environment of that run'
+        required: true
+        type: choice
+        options: [qa, staging]
+      include_flaky:
+        description: 'Also rerun tests that were flaky in that run'
+        required: true
+        type: boolean
+        default: true
+
+# WHY the SAME per-account group as the pipelines (ADR 0009): qa -> kylas-qa, staging -> kylas-staging (qa.yml,
+# stage.yml and sandbox.yml share it), so this run queues behind a running pipeline on that account instead of
+# overlapping it. GitHub holds one running and one pending run per group; a third arrival cancels the pending one.
+# Jenkins is not covered (it has its own account lock).
+concurrency:
+  group: kylas-${{ inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    name: playwright-manual-rerun (run ${{ inputs.run_id }})
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    timeout-minutes: 240
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Inspect the run to rerun
+        id: src
+        env:
+          GH_TOKEN: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          ENV_IN: ${{ inputs.env }}
+        run: |
+          set -eu
+          if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then echo "::error::run_id '$RUN_ID' is not a number"; exit 1; fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > run.json
+          STATUS=$(jq -r '.status' run.json)
+          WF=$(jq -r '.path' run.json | sed 's/@.*//')
+          if [ "$STATUS" != "completed" ]; then echo "::error::run $RUN_ID is '$STATUS', not completed: wait for it to finish"; exit 1; fi
+          case "$WF" in
+            .github/workflows/qa.yml)      SRC_ENV=qa;      SUFFIX=qa ;;
+            .github/workflows/stage.yml)   SRC_ENV=staging; SUFFIX=stage ;;
+            .github/workflows/sandbox.yml) SRC_ENV=staging; SUFFIX=sandbox ;;
+            *) echo "::error::run $RUN_ID belongs to '$WF', which this workflow cannot rerun (qa.yml, stage.yml, sandbox.yml only)"; exit 1 ;;
+          esac
+          if [ "$SRC_ENV" != "$ENV_IN" ]; then echo "::error::run $RUN_ID is a $SRC_ENV run but env '$ENV_IN' was chosen"; exit 1; fi
+          {
+            echo "head_sha=$(jq -r '.head_sha' run.json)"
+            echo "head_branch=$(jq -r '.head_branch' run.json)"
+            echo "run_number=$(jq -r '.run_number' run.json)"
+            echo "report_artifact=playwright-report-$SUFFIX"
+            echo "meta_artifact=run-meta-$SUFFIX"
+          } >> "$GITHUB_OUTPUT"
+          echo "Rerunning failed/flaky tests of run $RUN_ID (#$(jq -r '.run_number' run.json), $WF, commit $(jq -r '.head_sha' run.json))"
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      # WHY: the rerun targets are file:line of the ORIGINAL commit's tests, and the scripts used here must exist, so
+      # the dispatched ref must carry the same tests, source and config as the run. Refuse otherwise (dispatch from
+      # the run's branch tip, or rerun a newer run).
+      - name: Check this checkout matches the run's commit
+        env:
+          HEAD_SHA: ${{ steps.src.outputs.head_sha }}
+        run: |
+          if ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            echo "::error::commit $HEAD_SHA of the run is not available in this repository any more"; exit 1
+          fi
+          if ! git diff --quiet "$HEAD_SHA" HEAD -- tests src config playwright.config.ts package-lock.json; then
+            echo "::error::this ref differs from the run's commit $HEAD_SHA in tests/, src/, config/ or the lockfile: file:line targets would not match. Dispatch this workflow from the run's own branch tip, or rerun a newer run."
+            git diff --stat "$HEAD_SHA" HEAD -- tests src config playwright.config.ts package-lock.json | tail -5
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the run's merged report (first run, 14 days)
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.src.outputs.report_artifact }}
+          path: original-report
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+
+      - name: Download the run's metadata (completeness, misc errors, earlier rerun)
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.src.outputs.meta_artifact }}
+          path: original-meta
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+
+      - name: Stage the original results
+        env:
+          ENV_IN: ${{ inputs.env }}
+        run: |
+          set -eu
+          test -f original-report/results.json || { echo "::error::the run's report artifact has no results.json (expired or empty)"; exit 1; }
+          # The completeness verdict is how an INCOMPLETE run stays INCOMPLETE; never guess it.
+          test -f original-meta/shard-completeness.json || { echo "::error::the run's metadata has no shard-completeness.json: it predates rerun support, rerun it with a normal GitHub re-run instead"; exit 1; }
+          mkdir -p reports/playwright-report "reports/$ENV_IN" reports/rerun
+          cp -r original-report/. reports/playwright-report/
+          cp -r original-meta/. "reports/$ENV_IN/"
+
+      - name: Select failed and flaky tests
+        id: select
+        env:
+          RERUN_MAX_TESTS: ${{ vars.RERUN_MAX_TESTS || '60' }}
+          RERUN_RETRIES: ${{ vars.RERUN_RETRIES || '0' }}
+          RERUN_INCLUDE_FLAKY: ${{ inputs.include_flaky }}
+        run: npx ts-node scripts/rerun-select.ts --report reports/playwright-report/results.json --out reports/rerun/rerun-list.json --targets reports/rerun/targets.txt
+
+      - name: Nothing to rerun
+        if: steps.select.outputs.run != 'true'
+        env:
+          DECISION: ${{ steps.select.outputs.decision }}
+        run: |
+          echo "::notice title=Manual rerun::decision '$DECISION': no test was rerun, and no email or history record is written (the cap is the repo variable RERUN_MAX_TESTS)"
+
+      - name: Install Playwright browsers
+        if: steps.select.outputs.run == 'true'
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      - name: Rerun the selected tests once
+        if: steps.select.outputs.run == 'true'
+        env:
+          ENV: ${{ inputs.env }}
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          QA_APP_URL: ${{ secrets.QA_APP_URL }}
+          QA_API_BASE_URL: ${{ secrets.QA_API_BASE_URL }}
+          QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
+          QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          QA_RESTRICTED_EMAIL: ${{ secrets.QA_RESTRICTED_EMAIL }}
+          QA_RESTRICTED_PASSWORD: ${{ secrets.QA_RESTRICTED_PASSWORD }}
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          RERUN_RETRIES: ${{ vars.RERUN_RETRIES || '0' }}
+        run: |
+          mapfile -t TARGETS < reports/rerun/targets.txt
+          echo "Rerunning ${#TARGETS[@]} target(s) with --retries=$RERUN_RETRIES: ${TARGETS[*]}"
+          RC=0
+          npx playwright test --project=chromium --workers=2 --retries="$RERUN_RETRIES" --timeout=120000 \
+            "${TARGETS[@]}" --reporter=blob,list,./src/reporters/MiscErrorReporter.ts || RC=$?
+          echo "rerun exit code: $RC (a failing rerun is data, not a gate)"
+          exit 0
+
+      - name: Merge the rerun blob into one JSON
+        if: steps.select.outputs.run == 'true'
+        run: |
+          if ls blob-report/*.zip >/dev/null 2>&1; then
+            PLAYWRIGHT_JSON_OUTPUT_NAME=reports/rerun/rerun-run.json npx playwright merge-reports --config=merge-json.config.ts ./blob-report \
+              || echo "::warning title=Manual rerun::merge-reports of the rerun blob failed — the rerun result is lost"
+          else
+            echo "::warning title=Manual rerun::the rerun produced no blob report"
+          fi
+
+      - name: Combine the rerun into the report
+        if: steps.select.outputs.run == 'true'
+        env:
+          ENV_IN: ${{ inputs.env }}
+          RERUN_OF_RUN_ID: ${{ inputs.run_id }}
+          RERUN_OF_RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+        run: |
+          npx ts-node scripts/combine-rerun.ts --first reports/playwright-report/results.json --rerun reports/rerun/rerun-run.json \
+            --list reports/rerun/rerun-list.json --summary "reports/$ENV_IN/rerun-summary.json" \
+            --previous-summary original-meta/rerun-summary.json
+
+      # WHY BUILD_NUMBER = the original run number: history keeps one record per build (RunHistory.dedupeByBuild),
+      # so this combined record replaces the original run's, exactly as a GitHub re-run attempt does.
+      - name: Sync run history
+        if: steps.select.outputs.run == 'true'
+        env:
+          ENV: ${{ inputs.env }}
+          BRANCH_NAME: ${{ steps.src.outputs.head_branch }}
+          BUILD_NUMBER: ${{ steps.src.outputs.run_number }}
+          GITHUB_ACTIONS: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+          WORKERS: '2'
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+        run: npm run history:sync || true
+
+      - name: Send notification email
+        if: steps.select.outputs.run == 'true'
+        env:
+          ENV: ${{ inputs.env }}
+          BRANCH_NAME: ${{ steps.src.outputs.head_branch }}
+          BUILD_NUMBER: ${{ steps.src.outputs.run_number }}
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          NOTIFY_CC: ${{ secrets.NOTIFY_CC }}
+          NOTIFY_FROM_NAME: ${{ secrets.NOTIFY_FROM_NAME }}
+          GMAIL_SMTP_HOST: smtp.gmail.com
+          GMAIL_SMTP_PORT: '587'
+          NOTIFY_ENABLED: 'true'
+          REPORT_PATH: reports/playwright-report/results.json
+        run: npm run notify || true
+
+      - uses: actions/upload-artifact@v6
+        if: always() && steps.select.outputs.run == 'true'
+        with:
+          name: manual-rerun-report-${{ inputs.run_id }}
+          overwrite: true
+          path: reports/playwright-report/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v6
+        if: always() && steps.select.outputs.run == 'true'
+        with:
+          name: manual-rerun-test-results-${{ inputs.run_id }}
+          overwrite: true
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
