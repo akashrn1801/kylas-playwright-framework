@@ -26,6 +26,7 @@ All figures in tables below are generated (`npm run docs:refresh`), never hand-t
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `rerun-failed.yml` | manual | full suite / selective | 2 | no |
 | `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |
@@ -75,10 +76,12 @@ flowchart LR
 |---|---|---|---|
 | `plan` (`detect` in sandbox) | none | always | 15 (`plan`); sandbox `detect`: none set (GitHub's default applies) |
 | `run-tests` | `plan` / `detect` | all plan outputs present (sandbox: also `run_scoped_tests == 'true'`, i.e. skipped when only formFields was selected) | 180 |
-| `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `run_formfields_track == 'true'` | 180 |
+| `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`, `rerun-failed`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `run_formfields_track == 'true'` | 180 |
 | `reset-field-config` | `run-tests`, `run-formfields-tests` | `always()` (sandbox: also `run_formfields_track == 'true'`) | 35 job / 25 step |
-| `merge-and-report` | all of the above incl. `reset-field-config` | `always()` | 30 |
+| `merge-and-report` | all of the above incl. `reset-field-config` (sandbox also `rerun-failed`) | `always()` | 30 |
+| `rerun-failed` (sandbox only) | `detect`, `run-tests` | `!cancelled()`, `vars.RERUN_SHARD == 'on'`, `run_scoped_tests == 'true'` | 180 |
 
+- **Rerun shard (`sandbox.yml` only, 2026-11-03, [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), not yet run):** job `rerun-failed` (`playwright-rerun (failed+flaky)`) sits between the core shards and formFields (`detect → run-tests → rerun-failed → run-formfields-tests → reset → merge`). Only with repo variable `RERUN_SHARD == 'on'` (any other value = skipped, run as before; `RERUN_MAX_TESTS` 60, `RERUN_RETRIES` 0, `RERUN_INCLUDE_FLAKY` true). It picks failed, flaky, timed-out, cut-off and did-not-run core tests from the shard blobs (`scripts/rerun-select.ts`; serial files whole; formFields never), reruns them once, uploads `rerun-*` artifacts (never named like `blob-report-*` / `misc-errors-*`), and `merge-and-report` combines them (`scripts/combine-rerun.ts`) into one report and one email. Manual: `.github/workflows/rerun-failed.yml` (`run_id`, `env`, `include_flaky`; group `kylas-<env>`; sandbox runs with `run-meta-sandbox` only). Kill switch and rollback: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
 - **Re-run of a core shard in `sandbox.yml` (2026-11-03, [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), not yet run):** GitHub re-runs the dependent formFields, reset and merge jobs. Each formFields job first runs `.github/scripts/formfields-attempt-gate.sh ff` and skips its remaining steps in seconds if the same job passed in an earlier attempt of this run (log "formFields <entity> already passed in attempt N — skipped"); `reset-field-config` skips when no formFields job ran tests in this attempt; both run normally in attempt 1, in "Re-run all jobs" and on any doubt. All uploads in `sandbox.yml` use `overwrite: true`; `merge-and-report` reads the earlier attempt's artifacts for skipped jobs (UNVERIFIED on GitHub). qa/stage/main unchanged.
 - **Why formFields runs after core, not beside it:** both tracks starting together put every core and formFields job through `globalSetup` against one backend at once, which produced 429s. `needs` alone would skip formFields on any core failure, so `if: !cancelled()` is required. Cost: wall-clock roughly doubles. Decision record: [ADR 0007](./adr/0007-sequence-formfields-after-core.md).
 - **`merge-and-report`:** downloads every shard's blob report, `npx playwright merge-reports --config=merge.config.ts`, aggregates misc-errors (`scripts/merge-misc-errors.ts`), then `npm run history:sync || true` and `npm run notify || true`. `allure-playwright` is deliberately excluded from the merge config. See [REPORTING.md](./REPORTING.md).
