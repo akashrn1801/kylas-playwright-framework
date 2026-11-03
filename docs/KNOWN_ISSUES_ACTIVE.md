@@ -28,7 +28,7 @@
 
 ### KI-04 — Inconclusive one-off flakes (do not re-close without new evidence)
 - **Status:** inconclusive · **Since:** 2026-07-06 … 2026-08-03
-- **What:** six one-off flakes (Deals shared-deal Call-log permission; Quotations RBAC ~8-min `openCreateForm()` timeout; call-logs company live-search "no options"; meetings reschedule 3× HTTP 500; tasks RBAC edit-modal hang; meeting-creation 500 / Deals RBAC Task-permission timeout). Each was one occurrence or unreproducible locally; rule 21 forbids dismissing load-dependent flakes. Full list and detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md). Search by test title, not line number.
+- **What:** six one-off flakes (Deals shared-deal Call-log permission; Quotations RBAC ~8-min `openCreateForm()` timeout; call-logs company live-search "no options"; meetings reschedule 3× HTTP 500; tasks RBAC edit-modal hang; meeting-creation 500 / Deals RBAC Task-permission timeout), each one occurrence or unreproducible. Detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-05 — Dashboard render race (DB33 / DB36) and the stuck-dashlet symptom
 - **Status:** open · **Since:** 2026-09-02
@@ -74,7 +74,11 @@
 
 ### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
 - **Status:** open, watch · **Since:** 2026-11-02
-- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header (leads did; no 400 seen for them); other modules keep their own react-select pickers; lead page size/sort/Kanban (L65, L68) are shared per-user state; a dropped POST is never retried. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers; lead page size/sort/Kanban are shared per-user state. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+
+### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
+- **Status:** open · **Since:** 2026-11-03 (sandbox, staging)
+- **What:** `POST /v3/reports` 500 `01403004` hit Save As and a Lead report ("Meeting-only" is stale); both now fail at once with status/code (the one existing create retry stays). Product control stays disabled if `GET /v1/deals/{id}` fails (now a labelled fast failure). 400 "Connection prematurely closed BEFORE response" on a quotation save is KI-49, not retried. `quotations.rbac` edit-shared "Save toast not visible": hardened, cause unconfirmed, needs a trace.
 
 ### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
 
@@ -139,7 +143,7 @@
 
 ### KI-47 — Sharded Jenkins: two core lanes at once still unproven
 - **Status:** partly confirmed (live 2026-10-28) · **Since:** 2026-10-28
-- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Live 2026-10-28 (maintainer): an unsharded sandbox build (lock `kylas-staging-account`, guard Clear, 51 passed) and sharded build 2 on QA (both locks, guard Clear 3 times, 1 core + 2 formFields lanes, reset, "All 7 shards reported", merge, history, PARTIAL email). Unproven: 2 core lanes at once, script approvals, `finally` reset after an abort, speed/memory estimates, the guard's PAT being the "Jenkins setup" one. Detail: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Live 2026-10-28: an unsharded sandbox build and a sharded QA build both passed (locks, guard Clear, "All 7 shards reported", merge, history, PARTIAL email). Unproven: 2 core lanes at once, script approvals, `finally` reset after an abort, speed/memory estimates, the guard's PAT. Detail: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** a full sharded QA run with the default 2 core lanes, compared with GitHub's `qa.yml` results ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6).
 
 ### KI-15 — Real GitHub Jobs API response shape for the "CI Job Stats" card
@@ -159,7 +163,7 @@
 
 ### KI-18 — Unmeasured reporting pipeline gaps
 - **Status:** open · **Since:** 2026-09-30 / 2026-10-06
-- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` are written to a pid-named worker file (`WORKER_ID` falls back to `process.pid`) that `MiscErrorReporter.onBegin()` deletes (pre-existing); recovery events are not affected, they go to `recovery-events-main.json` (`MAIN_PROCESS_EVENTS_PATH`), which `MiscErrorReporter` merges; (c) the `/fields` list `ERR_ABORTED` noise is allowlisted; any other `ERR_ABORTED` family still needs the zero-correlation evidence bar first.
+- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` go to a pid-named worker file that `MiscErrorReporter.onBegin()` deletes (pre-existing; recovery events are unaffected, they use `recovery-events-main.json`); (c) the `/fields` list `ERR_ABORTED` noise is allowlisted; any other `ERR_ABORTED` family needs the zero-correlation evidence bar first.
 - **History:** [reporting-and-notifications.md](./known-issues/reporting-and-notifications.md).
 
 ---
@@ -168,7 +172,7 @@
 
 ### KI-19 — The escalated sandbox run's formFields track ignores `--grep @regression`
 - **Status:** open · **Since:** 2026-10-06
-- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged, so 18 untagged tests run). 932 = 515 + 417; 916 = 499 + 417. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Per-shard arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged; 932 = 515 + 417, 916 = 499 + 417). Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** decide whether formFields should honor the tag filter; the one skipped test is the known `call-logs.spec.ts:568` `test.skip`.
 
 ### KI-20 — `waitForTimeout(500)` left in `openUserShareTypeSearch()` catch backoff
