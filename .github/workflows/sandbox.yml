@@ -340,12 +340,21 @@ jobs:
 
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
-    needs: detect
+    # WHY sequenced AFTER reset-field-config (2026-11-03, ADR 0015): the formFields
+    # track and its reset now run BEFORE the core shards, so core shards never
+    # overlap formFields on the shared account, and re-running one failed core
+    # shard in the Actions UI no longer re-runs the formFields jobs (they are
+    # upstream, not dependents). HARD REQUIREMENT: a failed or
+    # skipped formFields/reset job must NEVER suppress the core shards, so the
+    # `if` uses `!cancelled()` (never the implicit success()). The explicit
+    # `needs.detect.result == 'success'` keeps the old behaviour that a failed
+    # detect runs nothing.
+    needs: [detect, reset-field-config]
     # WHY (2026-10-07): skipped when the selection was formFields-only — all of
     # it runs in run-formfields-tests, so nothing is left here and a "no tests
     # found" failure cannot happen. Skipped (not failed) lets
-    # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
-    if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
+    # merge-and-report proceed.
+    if: ${{ !cancelled() && needs.detect.result == 'success' && needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
@@ -516,18 +525,15 @@ jobs:
   # 37658909999).
   run-formfields-tests:
     name: playwright-formFields (${{ matrix.entity }})
-    # WHY sequenced AFTER run-tests (2026-10-06): see qa.yml's identical
-    # comment for the full reasoning. Here the pre-existing run_formfields_track
-    # gate is KEPT and combined with `!cancelled()`: `needs: [detect, run-tests]`
-    # alone would apply the implicit success() gate and skip formFields
-    # whenever any core shard failed. detect stays in `needs` because the
-    # matrix and the gate read its outputs. If run-tests is ever skipped
-    # (e.g. detect failed upstream), run_formfields_track is empty and this job
-    # is skipped by its own gate, exactly as before; if detect succeeded and
-    # run-tests were skipped for any other reason, `!cancelled()` still lets
-    # formFields run.
-    needs: [detect, run-tests]
-    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
+    # WHY sequenced BEFORE run-tests (2026-11-03, ADR 0015; was AFTER run-tests
+    # since 2026-10-06, see ADR 0007): the tracks still never run at the same
+    # time (peak concurrency stays one track), but this track is now the
+    # upstream one, so a re-run of a single core shard does not re-run these
+    # jobs. The pre-existing run_formfields_track gate is KEPT; detect is the
+    # only `needs` because the matrix and the gate read its outputs (implicit
+    # success() of detect applies: a failed detect runs nothing, as before).
+    needs: [detect]
+    if: ${{ needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
@@ -629,7 +635,8 @@ jobs:
   # of the NEXT run (which may select other entities) known. Core tests never
   # touch these fields (docs/known-issues/form-fields.md), so leftovers only
   # poison the NEXT formFields run's starting state — this restores the baseline.
-  # `if: always()` runs it after both tracks in ANY result. GitHub limits: a
+  # `if: always()` runs it after the formFields track in ANY result (since
+  # 2026-11-03, ADR 0015, it runs BEFORE the core shards, which wait for it). GitHub limits: a
   # normal cancel still schedules `always()` jobs, but a FORCE-cancel skips them,
   # and a runner crash or the 6h ceiling can kill it too — so this is best-effort
   # and `npm run reset:field-config` (docs/RUNBOOK.md) is the manual fallback.
@@ -639,7 +646,7 @@ jobs:
   # field-config-reset-staging, which no test report reads.
   reset-field-config:
     name: reset dedicated form-field limits
-    needs: [detect, run-tests, run-formfields-tests]
+    needs: [detect, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 35
