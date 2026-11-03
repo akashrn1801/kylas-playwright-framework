@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { uniqueEmail, uniquePhone } from './uniqueValues';
 import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -242,8 +243,8 @@ export function generateCompanyData(overrides: Partial<CompanyData> = {}): Compa
     website: `https://www.${slug}.com`,
     uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
     uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
-    email: faker.internet.email(),
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('company'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -302,8 +303,8 @@ export function generateAdminCompanyData(overrides: Partial<CompanyData> = {}): 
     website: `https://www.${slug}.com`,
     uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
     uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
-    email: `adm${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('adm'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -332,8 +333,8 @@ export function generateRestrictedCompanyData(overrides: Partial<CompanyData> = 
     website: `https://www.${slug}.com`,
     uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
     uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
-    email: `res${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('res'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -363,8 +364,8 @@ export function generateSharedCompanyData(overrides: Partial<CompanyData> = {}):
     website: `https://www.${slug}.com`,
     uniqueText1: `${faker.lorem.word()}_${Date.now()}`,
     uniqueText2: `${faker.lorem.word()}_${Date.now() + 1}`,
-    email: `shr${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('shr'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),

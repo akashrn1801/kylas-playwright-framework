@@ -49,6 +49,9 @@ export function trackFailedWrites(page: Page): void {
       return;
     }
     if (!API_PATH.test(pathname)) return;
+    // /reports/ calls are POSTed READS (dashboards, Related Deals widgets): a failing one is not a rejected save
+    // (seen 2026-10-30: a transient `POST /v4/reports/deals` 400 000000 was reported as the company clone's failure)
+    if (/\/reports\//.test(pathname)) return;
     const status = response.status();
     void readApiCode(response).then((code) => {
       lastFailedWrite.set(page, {

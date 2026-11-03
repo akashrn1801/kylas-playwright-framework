@@ -216,8 +216,22 @@ export class QuotationsPage extends BasePage {
     this.page.locator('.rrt-middle-container').filter({ hasText: /uh.?oh/i });
 
   // ─── 3. Constructor ──────────────────────────────────────────────────────────
+  // Failed deal/product loads seen on this page, kept only as evidence for
+  // waitForProductControlEnabled()'s failure message (the product control
+  // stays disabled when the deal or product data never loads).
+  private readonly failedDealProductLoads: string[] = [];
+  private saveToastShown = false;
+
   constructor(page: Page) {
     super(page);
+    page.on('response', (res: Response) => {
+      if (res.status() < 400) return;
+      const path = new URL(res.url()).pathname;
+      if (/^\/v1\/(deals|products)\b/.test(path)) {
+        this.failedDealProductLoads.push(`${res.request().method()} ${path} -> HTTP ${res.status()}`);
+        if (this.failedDealProductLoads.length > 5) this.failedDealProductLoads.shift();
+      }
+    });
   }
 
   // ─── 4. Private helpers ──────────────────────────────────────────────────────
@@ -826,6 +840,28 @@ export class QuotationsPage extends BasePage {
     logger.success('Product row filled in panel-opened quotation modal');
   }
 
+  // WHY (2026-11-03, quotations.rbac "should not be able to find quotation owned by admin"): the
+  // product control is disabled until a deal is linked and its data (GET /v1/deals/{id}, products)
+  // has loaded. A click on a disabled control is never actionable, so the unbounded click retried
+  // ~700 times until the 480 s test timeout. Wait for the real enable signal and fail at once,
+  // saying whether a deal is selected and which deal/product loads failed.
+  private async waitForProductControlEnabled(control: Locator, row: number): Promise<void> {
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(control).not.toHaveClass(/is-invalid__control--is-disabled/, {
+          timeout: config.timeouts.expect,
+        })
+      );
+    } catch {
+      const deal = await this.selectedDealName().innerText({ timeout: 1000 }).catch(() => '');
+      throw new Error(
+        `Product row ${row} stayed disabled for ${config.timeouts.expect}ms after the deal step — ` +
+          `selected deal: ${deal ? `"${deal.trim()}"` : 'NONE (deal not linked)'}; ` +
+          `failed deal/product loads: ${this.failedDealProductLoads.join('; ') || 'none seen'}`
+      );
+    }
+  }
+
   private async addRandomProduct(row: number): Promise<void> {
     const productInput = this.productIdInput(row);
     const productVisible = await productInput.isVisible().catch(() => false);
@@ -836,7 +872,8 @@ export class QuotationsPage extends BasePage {
     const productControl = productInput.locator(
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
-    await productControl.click();
+    await this.waitForProductControlEnabled(productControl, row);
+    await productControl.click({ timeout: config.timeouts.expect });
     await productInput.fill('BHK'); // WHY: App requires min 3 chars; 'BHK' matches known QA products
 
     // WHY: When modal is open, scope options to #editEntityModal to avoid picking
@@ -1350,6 +1387,21 @@ export class QuotationsPage extends BasePage {
     // doubling exposure to the already-documented "click registers but
     // nothing visibly happens" React-timing race (rule 2) — this helper's
     // bounded wait + built-in recovery closes that gap for both attempts.
+    // WHY (2026-11-03, quotations.rbac "edit shared quotation", HARDENING — root cause of that CI
+    // failure not confirmed): the success toast lives only ~2.8 s on QA (measured), while
+    // saveQuotation() spends >= 1.5 s in assertNoFormErrors() plus the modal-hidden wait before the
+    // caller's assertSuccessToast() looks, so a slow runner can miss a toast that did appear.
+    // Record it from the click on; assertSuccessToast() accepts "shown since this save".
+    this.saveToastShown = false;
+    void this.successToast()
+      .first()
+      .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+      .then(
+        () => {
+          this.saveToastShown = true;
+        },
+        () => undefined
+      );
     await this.click(this.modalSaveButton(), 'quotation save (attempt)');
     const response = await responsePromise;
     if (!response || response.ok()) {
@@ -1581,6 +1633,7 @@ export class QuotationsPage extends BasePage {
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       logger.info(`Saving quotation — attempt ${attempt}/3`);
+      this.saveToastShown = false; // a toast from an earlier save must not satisfy this one
       // WHY: Register the response wait BEFORE clicking — same convention as
       // captureQuotationIdFromResponse() elsewhere in this file. Match on
       // parsed pathname (not the raw URL string) so an edit's query string,
@@ -1681,9 +1734,17 @@ export class QuotationsPage extends BasePage {
       if (!isInaccessibleEntityError) {
         // WHY: A genuinely different failure — don't hide it behind this
         // fallback's retry logic, surface it immediately.
+        // WHY (2026-11-03, quotations.spec "change owner during edit"): HTTP 400 "Connection
+        // prematurely closed BEFORE response" is the gateway dropping the hop to the quotation
+        // service (KI-49); the request never reached it. It is an app/infra fault, so it fails at
+        // once and says so, not retried (the retry above covers the "has been closed" wording only).
+        const gatewayDrop = /closed BEFORE response/i.test(rawMessage);
         throw new Error(
-          `Save failed with an unrelated error (not the inaccessible-entity 029003 error): ` +
-            `HTTP ${response.status()} — "${rawMessage}"`
+          gatewayDrop
+            ? `Save not processed — the Kylas gateway dropped the connection (app/infra issue, KI-49): ` +
+                `HTTP ${response.status()} — "${rawMessage}"`
+            : `Save failed with an unrelated error (not the inaccessible-entity 029003 error): ` +
+                `HTTP ${response.status()} — "${rawMessage}"`
         );
       }
 
@@ -1883,6 +1944,11 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertSuccessToast(): Promise<void> {
+    if (this.saveToastShown) {
+      this.saveToastShown = false;
+      logger.success('Success toast was shown after the save click');
+      return;
+    }
     try {
       await this.successToast().waitFor({ state: 'visible', timeout: 8000 });
       logger.success('Success toast visible');
