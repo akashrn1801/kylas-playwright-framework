@@ -21,6 +21,7 @@ import * as os from 'os';
 import { loadDotEnv } from './loadDotEnv';
 import { ReportParser } from '../ReportParser';
 import { loadShardCompleteness, isIncompleteRun } from '../ShardCompleteness';
+import { loadRerunSummary } from '../RerunSummary';
 import {
   appendAndPrune,
   parseHistory,
@@ -556,7 +557,21 @@ function buildCurrentRecord(
   // branch/workflow/Jenkinsfile with zero per-pipeline configuration.
   const { scope, basis } = deriveTestScope(report.allTestTitlesRaw, report.modules);
   log(`[syncHistory] Derived test scope: "${scope}" (basis: ${basis})`);
+  // WHY (ADR 0015): with a rerun, `report` is the COMBINED report, so failed/flaky below are the final counts and a
+  // test that recovered on the rerun is already a flaky one (title in flakyTestTitles). The first-attempt view is
+  // kept in extra optional fields. No summary (or ran:false) = no fields = a record exactly as before.
+  const rerunSummary = loadRerunSummary(env);
+  const rerunFields: Partial<RunHistoryRecord> =
+    rerunSummary && rerunSummary.ran
+      ? {
+          rerun: { candidates: rerunSummary.candidates, recovered: rerunSummary.recovered, stillFailing: rerunSummary.stillFailing },
+          firstRunFailed: rerunSummary.firstRun.failed,
+          firstRunFlaky: rerunSummary.firstRun.flaky,
+          recoveredOnRerunTitles: rerunSummary.rows.filter((r) => r.final === 'recovered').map((r) => r.title),
+        }
+      : {};
   return {
+    ...rerunFields,
     timestamp: new Date(report.startTime).toISOString(),
     env,
     scope,

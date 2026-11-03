@@ -98,6 +98,8 @@ export interface CauseAssessment {
   // matches one) — the summary and banner count by it.
   signatureId?: string;
   kiRef?: string;
+  // Flaky test that passed only on the rerun shard (not on an in-job retry): worded "recovered on rerun".
+  recoveredOnRerun?: boolean;
 }
 
 export interface FailureCauseInput {
@@ -123,6 +125,9 @@ export interface DominantSignature {
   retryCount: number;
   failedTotal: number;
   retryTotal: number;
+  // The part of retryCount / retryTotal that recovered on the rerun shard rather than on an in-job retry (ADR 0015).
+  rerunCount: number;
+  rerunTotal: number;
   confirmed: boolean;
   added: string;
   askKylasTeam?: AskKylasTeam;
@@ -133,6 +138,7 @@ export interface CauseSummary {
   // total = failedTotal + retryTotal (retryTotal = the flaky count); shown by the summary line and banner.
   failedTotal: number;
   retryTotal: number;
+  rerunTotal: number;
   counts: Record<SuspectedCause, number>;
   dominant?: DominantSignature;
   incompleteRun: boolean;
@@ -228,22 +234,28 @@ interface Spread {
   tests: number;
   failedTests: number;
   retryTests: number;
+  rerunTests: number;
   modules: Set<string>;
 }
-const newSpread = (): Spread => ({ tests: 0, failedTests: 0, retryTests: 0, modules: new Set<string>() });
+const newSpread = (): Spread => ({ tests: 0, failedTests: 0, retryTests: 0, rerunTests: 0, modules: new Set<string>() });
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** "N failed outright, M passed on retry" (a zero side is left out) — the one wording the cards, banner and summary share. */
-export function splitText(failed: number, retry: number): string {
+/**
+ * "N failed outright, M passed on retry, K recovered on rerun" (a zero part is left out) — the one wording the cards,
+ * banner and summary share. `retry` counts ALL flaky tests; `rerun` is the part of them that passed only on the rerun
+ * shard, so "passed on retry" is retry - rerun. With rerun = 0 the text is exactly the pre-rerun one.
+ */
+export function splitText(failed: number, retry: number, rerun = 0): string {
   const parts: string[] = [];
   if (failed > 0) parts.push(`${failed} failed outright`);
-  if (retry > 0) parts.push(`${retry} passed on retry`);
+  if (retry - rerun > 0) parts.push(`${retry - rerun} passed on retry`);
+  if (rerun > 0) parts.push(`${rerun} recovered on rerun`);
   return parts.join(', ');
 }
 
 function breadthText(s: Spread): string {
-  return `${plural(s.tests, 'test')} across ${plural(s.modules.size, 'module')} ${s.tests === 1 ? 'shares' : 'share'} it (${splitText(s.failedTests, s.retryTests)})`;
+  return `${plural(s.tests, 'test')} across ${plural(s.modules.size, 'module')} ${s.tests === 1 ? 'shares' : 'share'} it (${splitText(s.failedTests, s.retryTests, s.rerunTests)})`;
 }
 
 function hasNetworkError(related: MiscError[]): boolean {
@@ -270,7 +282,10 @@ export function assessCauses(
       m.set(sig.id, hit);
       const s = spread.get(sig.id) ?? newSpread();
       s.tests += 1;
-      if (f.test.status === 'flaky') s.retryTests += 1;
+      if (f.test.status === 'flaky') {
+        s.retryTests += 1;
+        if (f.test.recoveredOnRerun) s.rerunTests += 1;
+      }
       else s.failedTests += 1;
       s.modules.add(deriveModuleFromFile(f.test.file).name);
       spread.set(sig.id, s);
@@ -314,13 +329,13 @@ export function assessCauses(
 
     let assessment: CauseAssessment;
     if (t.status === 'flaky') {
-      const lines = [`passed on retry (${t.retries} retry${t.retries === 1 ? '' : 's'}) — flaky this run`, ...evidence];
+      const lines = [t.recoveredOnRerun ? `recovered on rerun (failed ${t.retries} time${t.retries === 1 ? '' : 's'} first) — flaky this run` : `passed on retry (${t.retries} retry${t.retries === 1 ? '' : 's'}) — flaky this run`, ...evidence];
       if (chosen) {
         const s = spread.get(chosen.sig.id)!;
         lines.push(`failing attempt matched ${chosen.sig.id} — ${chosen.sig.title}: ${chosen.hit.how}; ${breadthText(s)}; see ${chosen.sig.kiRef}`);
       }
       lines.push(...unmet);
-      assessment = { label: 'flaky', evidence: lines, signatureId: chosen?.sig.id, kiRef: chosen?.sig.kiRef };
+      assessment = { label: 'flaky', evidence: lines, signatureId: chosen?.sig.id, kiRef: chosen?.sig.kiRef, ...(t.recoveredOnRerun ? { recoveredOnRerun: true } : {}) };
     } else if (chosen) {
       const s = spread.get(chosen.sig.id)!;
       const lines = [`${chosen.sig.id} — ${chosen.sig.title}: ${chosen.hit.how}; ${breadthText(s)}; see ${chosen.sig.kiRef}`, ...evidence];
@@ -370,7 +385,7 @@ export function assessCauses(
       if (a.label !== 'test-or-code-suspected') continue;
       a.label = 'unclassified';
       a.evidence.unshift(
-        `not labelled test/code: ${dominant.count} of ${dominant.total} failures this run share the environment signature "${dominant.title}" (${splitText(dominant.failedCount, dominant.retryCount)}), so a locator/assertion miss is not attributed to the test code without more evidence`
+        `not labelled test/code: ${dominant.count} of ${dominant.total} failures this run share the environment signature "${dominant.title}" (${splitText(dominant.failedCount, dominant.retryCount, dominant.rerunCount)}), so a locator/assertion miss is not attributed to the test code without more evidence`
       );
     }
   }
@@ -380,16 +395,21 @@ export function assessCauses(
 function dominantEnvironmentSignature(assessments: Iterable<CauseAssessment>, registry: SignatureRegistry): DominantSignature | undefined {
   // WHY failed and retry are split: a flaky test passed on retry, but its failing attempt still counts toward the
   // signature's breadth. The banner must show both so it agrees with the summary line (which lists flaky separately).
-  const bySignature = new Map<string, { failed: number; retry: number }>();
+  const bySignature = new Map<string, { failed: number; retry: number; rerun: number }>();
   let failedTotal = 0;
   let retryTotal = 0;
+  let rerunTotal = 0;
   for (const a of assessments) {
-    if (a.label === 'flaky') retryTotal += 1;
-    else failedTotal += 1;
+    if (a.label === 'flaky') {
+      retryTotal += 1;
+      if (a.recoveredOnRerun) rerunTotal += 1;
+    } else failedTotal += 1;
     if (a.signatureId) {
-      const c = bySignature.get(a.signatureId) ?? { failed: 0, retry: 0 };
-      if (a.label === 'flaky') c.retry += 1;
-      else c.failed += 1;
+      const c = bySignature.get(a.signatureId) ?? { failed: 0, retry: 0, rerun: 0 };
+      if (a.label === 'flaky') {
+        c.retry += 1;
+        if (a.recoveredOnRerun) c.rerun += 1;
+      } else c.failed += 1;
       bySignature.set(a.signatureId, c);
     }
   }
@@ -397,7 +417,7 @@ function dominantEnvironmentSignature(assessments: Iterable<CauseAssessment>, re
   let dominant: DominantSignature | undefined;
   for (const sig of registry.signatures) {
     if (sig.label !== 'environment-suspected') continue;
-    const split = bySignature.get(sig.id) ?? { failed: 0, retry: 0 };
+    const split = bySignature.get(sig.id) ?? { failed: 0, retry: 0, rerun: 0 };
     const count = split.failed + split.retry;
     if (total > 0 && count >= sig.minTests && count / total >= DOMINANT_SHARE && (!dominant || count > dominant.count)) {
       dominant = {
@@ -408,8 +428,10 @@ function dominantEnvironmentSignature(assessments: Iterable<CauseAssessment>, re
         total,
         failedCount: split.failed,
         retryCount: split.retry,
+        rerunCount: split.rerun,
         failedTotal,
         retryTotal,
+        rerunTotal,
         confirmed: sig.confirmed,
         added: sig.added,
         askKylasTeam: sig.confirmed ? sig.askKylasTeam : undefined,
@@ -434,5 +456,5 @@ export function summarizeCauses(
     unclassified: 0,
   };
   for (const a of list) counts[a.label] += 1;
-  return { total: list.length, failedTotal: list.length - counts.flaky, retryTotal: counts.flaky, counts, dominant: dominantEnvironmentSignature(list, registry), incompleteRun: isIncompleteRun(shardCompleteness) };
+  return { total: list.length, failedTotal: list.length - counts.flaky, retryTotal: counts.flaky, rerunTotal: list.filter((a) => a.recoveredOnRerun).length, counts, dominant: dominantEnvironmentSignature(list, registry), incompleteRun: isIncompleteRun(shardCompleteness) };
 }

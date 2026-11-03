@@ -118,8 +118,8 @@
 
 ### KI-12 — Sequenced formFields-after-core is not yet proven by a real run
 - **Status:** unverified · **Since:** 2026-10-06 (commit `1bd03cc`)
-- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s four non-`plan` jobs carry `environment: production`; required reviewers there would add a second approval prompt (not knowable from the repo). Wall-clock roughly doubles by design ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
-- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval behavior.
+- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked offline only. `main.yml`'s four non-`plan` jobs carry `environment: production`; required reviewers there would add a second approval. Wall-clock roughly doubles ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
+- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval behavior. Sandbox re-run gate: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
 
 ### KI-13 — `globalSetup` product-reference-data HTTP 400 on staging
 - **Status:** unverified · **Since:** 2026-09-04

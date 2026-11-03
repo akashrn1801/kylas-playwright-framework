@@ -238,6 +238,7 @@ Per-pipeline triggers, scopes and worker counts (generated, never hand-typed):
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `rerun-failed.yml` | manual | full suite / selective | 2 | no |
 | `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |

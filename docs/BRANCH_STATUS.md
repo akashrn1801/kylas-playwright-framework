@@ -5,7 +5,7 @@
 > **Size budget:** 4k chars (hard cap 60k)
 > **Last verified:** 2026-10-29 @ 9e60850
 
-Snapshot of 2026-10-31. Git facts come from the maintainer's statements; it decays: re-check before trusting.
+Snapshot of 2026-11-03 (Leads part 2026-10-31, Jenkins items 2026-10-28). Git facts come from the maintainer and the session-start log; re-check before trusting.
 
 ## `feature/leads-coverage-gaps-20261030`
 
@@ -16,6 +16,11 @@ Snapshot of 2026-10-31. Git facts come from the maintainer's statements; it deca
   - Staging 1/6: company create passes; lead and contact creates fail with 400 `000000`, including the duplicate-e-mail and attach-pipeline tests (they create a lead first).
   - Probe on staging (unique e-mail and phone, `has-duplicates` false): name only 200; e-mail only, phone only, both 400. The unique values did not fix it: [KI-58](./KNOWN_ISSUES_ACTIVE.md), backend/config suspected, not a test-data problem.
 - **Next:** commit the working tree; have staging's lead/contact create checked (backend log for the failed requests, uniqueness config); sandbox CI after that.
+
+## `feature/ci-rerun-shard-20261103` (cut from `dev`, nothing committed, nothing run on GitHub)
+
+- **Built (sandbox.yml only):** formFields attempt gate, `rerun-failed` shard behind `vars.RERUN_SHARD == 'on'`, combined report/email/history, manual `rerun-failed.yml`, email review fixes ([ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), [REPORTING](./REPORTING.md) 3.1). Offline checks pass (`check:rerun`, `check:failure-labels`, actionlint); the UNVERIFIED GitHub behaviours are listed in the ADR. **Next:** review the diff, commit, run sandbox with `RERUN_SHARD` off, then on.
+- **Follow-ups (seen, not changed):** JobStats lists only the latest attempt's jobs, so a re-run's job-minutes exclude the earlier attempt; the email's "Artifacts:" line shows a runner path, not a link; a manual rerun's email shows the original build number but links to the manual run; the merged HTML report stays the first run (only `results.json` is combined); rerun misc errors are uploaded but not aggregated; the manual workflow needs `run-meta-*` (sandbox runs only); qa/stage/main are not wired; Jenkins is not covered.
 
 ## Still open
 
