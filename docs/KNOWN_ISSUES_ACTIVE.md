@@ -94,10 +94,10 @@
 - **What:** `run-formfields-tests` is a fixed one-job-per-entity matrix (deliberate, [ADR 0002](./adr/0002-formfields-carve-out-from-sharding.md)), so growth can only lengthen an entity's own job. The slowest entity (Lead) measured about 110 min against a 180-minute `timeout-minutes` (~1.6× margin) when the matrix still ran alongside the core shards.
 - **Next check:** re-measure that entity's real shard duration before merging any large formFields addition; if near the ceiling, split that entity's UI and RBAC files into two sequenced jobs (the proven constraint is "never split a pair across *concurrent* machines").
 
-### KI-12 — Sequenced formFields order is not yet proven by a real run
-- **Status:** unverified · **Since:** 2026-10-06 (commit `1bd03cc`); sandbox reversed 2026-11-03
-- **What:** `run-formfields-tests` after the core shards (`!cancelled()`; [ADR 0007](./adr/0007-sequence-formfields-after-core.md)) and, in `sandbox.yml` only, the reversed order formFields → reset → core shards ([ADR 0015](./adr/0015-sandbox-formfields-before-core-and-rerun-shard.md)) are checked by reading only. `main.yml` jobs (not `plan`) carry `environment: production`.
-- **Next check:** first sandbox runs (selective, escalated, formFields-only, nothing-to-run; a forced formFields failure must not stop core shards); the "Load Signals by Job" table; on `main` the approval.
+### KI-12 — Sequenced formFields-after-core is not yet proven by a real run
+- **Status:** unverified · **Since:** 2026-10-06 (commit `1bd03cc`)
+- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s `run-tests`, `run-formfields-tests`, `reset-field-config` and `merge-and-report` jobs carry `environment: production`; if that environment has required reviewers a second approval prompt appears. Wall-clock roughly doubles for the sharded workflows ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
+- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval. Sandbox re-run gate: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
 
 ### KI-13 — `globalSetup` product-reference-data HTTP 400 on staging
 - **Status:** unverified · **Since:** 2026-09-04

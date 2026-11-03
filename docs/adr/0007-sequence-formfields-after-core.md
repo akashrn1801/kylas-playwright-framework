@@ -6,7 +6,7 @@
 > **Last verified:** 2026-10-06 @ 1bd03cc
 
 ## Status
-Accepted — 2026-10-06. **Amended 2026-11-03 ([ADR 0015](0015-sandbox-formfields-before-core-and-rerun-shard.md)): in `sandbox.yml` only, the order is reversed (formFields, then reset, then core shards, so a core shard can be re-run alone); this ADR's text below still describes `qa.yml`, `stage.yml` and `main.yml`.**
+Accepted — 2026-10-06.
 
 ## Context
 The carve-out ([ADR 0002](0002-formfields-carve-out-from-sharding.md)) made core shards and the six formFields shards start together, so about ten jobs each ran `globalSetup` (two logins plus product-fixture creation) against one backend within seconds; one job got HTTP 429 before any test ran. A bounded retry now absorbs that, but peak concurrency was still the driver of 429 and app error-page failures ([ADR 0008](0008-error-page-recovery.md)).

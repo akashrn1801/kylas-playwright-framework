@@ -21,7 +21,7 @@ One page per decision, max about 3.5k chars. Never edit an accepted ADR's decisi
 | [0010](0010-incomplete-run-handling-and-bounded-install.md) | Incomplete runs never green; bounded browser install | Accepted (partly run) |
 | [0011](0011-react-select-menu-closed-contract.md) | A react-select pick must end with its menu verified closed | Accepted (partly run) |
 | [0012](0012-jenkins-sharded-runs-locks-and-guard.md) | Jenkins shards like its GitHub twin; account locks and a collision guard | Accepted (partly run) |
-| [0015](0015-sandbox-formfields-before-core-and-rerun-shard.md) | formFields + reset before core shards (sandbox first); rerun shard design | Proposed (step 1 in sandbox.yml, not yet run) |
+| [0015](0015-skip-passed-formfields-on-rerun-and-rerun-shard.md) | A re-run skips formFields jobs that already passed (sandbox first); rerun shard design | Proposed (step 1 in sandbox.yml, not yet run) |
 
 ## Template
 ```

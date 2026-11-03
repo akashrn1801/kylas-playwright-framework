@@ -340,21 +340,12 @@ jobs:
 
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
-    # WHY sequenced AFTER reset-field-config (2026-11-03, ADR 0015): the formFields
-    # track and its reset now run BEFORE the core shards, so core shards never
-    # overlap formFields on the shared account, and re-running one failed core
-    # shard in the Actions UI no longer re-runs the formFields jobs (they are
-    # upstream, not dependents). HARD REQUIREMENT: a failed or
-    # skipped formFields/reset job must NEVER suppress the core shards, so the
-    # `if` uses `!cancelled()` (never the implicit success()). The explicit
-    # `needs.detect.result == 'success'` keeps the old behaviour that a failed
-    # detect runs nothing.
-    needs: [detect, reset-field-config]
+    needs: detect
     # WHY (2026-10-07): skipped when the selection was formFields-only — all of
     # it runs in run-formfields-tests, so nothing is left here and a "no tests
     # found" failure cannot happen. Skipped (not failed) lets
-    # merge-and-report proceed.
-    if: ${{ !cancelled() && needs.detect.result == 'success' && needs.detect.outputs.run_scoped_tests == 'true' }}
+    # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
+    if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
@@ -475,6 +466,7 @@ jobs:
         if: always()
         with:
           name: blob-report-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
           path: blob-report/
           retention-days: 3
           if-no-files-found: warn
@@ -487,6 +479,7 @@ jobs:
         if: always()
         with:
           name: misc-errors-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
           path: reports/staging/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
@@ -495,6 +488,7 @@ jobs:
         if: always()
         with:
           name: playwright-test-results-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
@@ -525,15 +519,18 @@ jobs:
   # 37658909999).
   run-formfields-tests:
     name: playwright-formFields (${{ matrix.entity }})
-    # WHY sequenced BEFORE run-tests (2026-11-03, ADR 0015; was AFTER run-tests
-    # since 2026-10-06, see ADR 0007): the tracks still never run at the same
-    # time (peak concurrency stays one track), but this track is now the
-    # upstream one, so a re-run of a single core shard does not re-run these
-    # jobs. The pre-existing run_formfields_track gate is KEPT; detect is the
-    # only `needs` because the matrix and the gate read its outputs (implicit
-    # success() of detect applies: a failed detect runs nothing, as before).
-    needs: [detect]
-    if: ${{ needs.detect.outputs.run_formfields_track == 'true' }}
+    # WHY sequenced AFTER run-tests (2026-10-06): see qa.yml's identical
+    # comment for the full reasoning. Here the pre-existing run_formfields_track
+    # gate is KEPT and combined with `!cancelled()`: `needs: [detect, run-tests]`
+    # alone would apply the implicit success() gate and skip formFields
+    # whenever any core shard failed. detect stays in `needs` because the
+    # matrix and the gate read its outputs. If run-tests is ever skipped
+    # (e.g. detect failed upstream), run_formfields_track is empty and this job
+    # is skipped by its own gate, exactly as before; if detect succeeded and
+    # run-tests were skipped for any other reason, `!cancelled()` still lets
+    # formFields run.
+    needs: [detect, run-tests]
+    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
@@ -547,27 +544,53 @@ jobs:
         entity: ${{ fromJSON(needs.detect.outputs.formfields_entities_json) }}
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
+      # WHY this gate (2026-11-03, ADR 0015): re-running one failed core shard
+      # ("Re-run failed jobs" / "Re-run job") also re-runs this job, because it
+      # `needs` run-tests. If THIS entity's job (same name) passed its tests in an
+      # earlier attempt of this run, skip everything below in seconds: that
+      # attempt's blob-report-sandbox-formfields-<entity> / misc-errors artifacts
+      # stay in the run and merge-and-report reads them. A job that failed or did
+      # not run earlier runs normally. The script never skips on doubt and never
+      # fails the job (.github/scripts/formfields-attempt-gate.sh). Nothing below
+      # uploads when skipped, so the earlier artifacts are neither overwritten nor
+      # duplicated. The name in JOB_NAME must equal this job's `name:` above, and
+      # the test step's name must keep the prefix "Run formFields tests for ".
+      - name: Skip if this formFields entity already passed in an earlier attempt
+        id: gate
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          JOB_NAME: playwright-formFields (${{ matrix.entity }})
+          ARTIFACT_NAME: blob-report-sandbox-formfields-${{ matrix.entity }}
+          LABEL: ${{ matrix.entity }}
+        run: bash .github/scripts/formfields-attempt-gate.sh ff
+
       - uses: actions/setup-node@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
         run: npm ci
 
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: steps.gate.outputs.skip != 'true'
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
+        if: steps.gate.outputs.skip != 'true'
         env:
           ENV: staging
           CI: true
@@ -602,25 +625,28 @@ jobs:
           exit $EXIT_CODE
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: blob-report-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: blob-report/
           retention-days: 3
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: misc-errors-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: reports/staging/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: playwright-test-results-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
@@ -635,8 +661,7 @@ jobs:
   # of the NEXT run (which may select other entities) known. Core tests never
   # touch these fields (docs/known-issues/form-fields.md), so leftovers only
   # poison the NEXT formFields run's starting state — this restores the baseline.
-  # `if: always()` runs it after the formFields track in ANY result (since
-  # 2026-11-03, ADR 0015, it runs BEFORE the core shards, which wait for it). GitHub limits: a
+  # `if: always()` runs it after both tracks in ANY result. GitHub limits: a
   # normal cancel still schedules `always()` jobs, but a FORCE-cancel skips them,
   # and a runner crash or the 6h ceiling can kill it too — so this is best-effort
   # and `npm run reset:field-config` (docs/RUNBOOK.md) is the manual fallback.
@@ -646,32 +671,52 @@ jobs:
   # field-config-reset-staging, which no test report reads.
   reset-field-config:
     name: reset dedicated form-field limits
-    needs: [detect, run-formfields-tests]
+    needs: [detect, run-tests, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 35
     continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.PIPELINE_TOKEN }}
 
+      # WHY this gate (2026-11-03, ADR 0015): on a re-run of a core shard every
+      # formFields job that already passed skips itself, and then nothing touched
+      # the form-field limits in this attempt, so the reset has nothing to undo (the
+      # earlier attempt's reset result and artifact stand). Runs as today in
+      # attempt 1, in "Re-run all jobs", and whenever any formFields job ran tests
+      # in this attempt. Never skips on doubt.
+      - name: Skip if no formFields job ran tests in this attempt
+        id: gate
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PIPELINE_TOKEN || github.token }}
+        run: bash .github/scripts/formfields-attempt-gate.sh reset
+
       - uses: actions/setup-node@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
         run: npm ci
 
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: steps.gate.outputs.skip != 'true'
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Reset dedicated form-field limits
         id: reset
+        if: steps.gate.outputs.skip != 'true'
         continue-on-error: true
         timeout-minutes: 25
         env:
@@ -693,9 +738,10 @@ jobs:
           exit 0
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: field-config-reset-staging
+          overwrite: true
           path: reports/staging/field-config-reset.json
           retention-days: 3
           if-no-files-found: ignore
@@ -840,5 +886,6 @@ jobs:
         if: always()
         with:
           name: playwright-report-sandbox
+          overwrite: true
           path: reports/playwright-report/
           retention-days: 7
