@@ -9,6 +9,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-11-04 — fix: sessions validated once per role by one API call in globalSetup (workers trust the state; a 401/signIn still clears it), at most 2 concurrent logins per machine (`src/auth/loginGate.ts`, replaces the random pre-login sleep), login retries only for no-response/429/5xx and a 400 fails naming status+code+message; ADR 0016, KI-51 updated; QA 18/18 first attempt, staging proof pending (pending)
 - 2026-11-04 — chore: hardening batch B0 (measurement): `RETRY_COUNT=0` now honoured (was forced to 1), response-wait timeouts and `waitForListReady` name the awaited signal and elapsed ms; ADR 0016 started; no timeout/retry/outcome changed (pending)
 - 2026-11-04 — fix: flaky tests of sandbox run 2026-11-03: `actionTimeout` (was unbounded), `BasePage.waitForRendered()`/`explainAppErrorPage()` fail fast on the app error screen / a failed page GET, Tasks ID-open recovers from the 429 page, the lock wait has its own fixture budget, R65 compares the report with the live API count, not `< before`; `npm run check:fail-fast` (pending)
 - 2026-11-03 — fix: email labels: KPI/trend "Passed first time" vs Health "Passed incl. flaky" (were two "Pass rate" numbers); flaky tests say "passed on retry" or "recovered on rerun" (cards, banner, summary); covered by `check:failure-labels` (pending)

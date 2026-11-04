@@ -4,6 +4,8 @@ import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
+import { acquireLoginSlot, clearLoginSlots } from './loginGate';
+import { isRetryableHttpStatus } from '../utils/retryableStatus';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -42,6 +44,8 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
       /* not present */
     }
   }
+
+  clearLoginSlots(STORAGE_STATE_DIR);
 
   // WHY: --no-sandbox is required inside Docker/Jenkins containers
   // Without it Chromium cannot create a sandbox process and times out
@@ -425,6 +429,50 @@ async function createOneProductFixture(
   };
 }
 
+// ADR 0016 (S1): the one place a saved session is validated — one authenticated, read-only API
+// call per role (what the app itself needs), instead of every worker opening the app in a
+// browser. Only a transport error, 429 or 5xx is retried (ADR 0014 §1, bounded, 3 tries);
+// 401/403 means the session is not usable; any other 4xx is reported with status and body.
+async function sessionAcceptedByApi(role: 'admin' | 'restricted'): Promise<boolean> {
+  return tokenAcceptedByApi(role, await getAccessTokenForRole(role));
+}
+
+export async function tokenAcceptedByApi(role: string, token: string): Promise<boolean> {
+  const url = buildApiUrl('/products/layout?view=create');
+  const apiContext = await apiRequest.newContext();
+  try {
+    const attempts = 3;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      let status: number | null = null;
+      let body = '';
+      try {
+        const response = await apiContext.get(url, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+        status = response.status();
+        body = (await response.text()).slice(0, 300);
+      } catch (error) {
+        if (attempt === attempts) {
+          throw new Error(`[globalSetup] Session check for ${role}: no response from ${url} after ${attempts} attempts (${String(error)})`);
+        }
+        console.warn(`[globalSetup] Session check for ${role}: no response (${String(error)}) — retry ${attempt}/${attempts - 1}`);
+        continue;
+      }
+      if (status >= 200 && status < 300) return true;
+      if (status === 401 || status === 403) return false;
+      if (isRetryableHttpStatus(status) && attempt < attempts) {
+        console.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+        continue;
+      }
+      throw new Error(`[globalSetup] Session check for ${role}: HTTP ${status} from ${url}. Response: ${body}`);
+    }
+    return false;
+  } finally {
+    await apiContext.dispose();
+  }
+}
+
 async function setupRole(
   role: 'admin' | 'restricted',
   browser: import('@playwright/test').Browser
@@ -437,8 +485,15 @@ async function setupRole(
   if (fs.existsSync(stateFile) && !process.env.CI) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
     if (age < 1 * 60 * 60 * 1000) {
-      console.log(`[globalSetup] Reusing fresh state for: ${role}`);
-      return;
+      const accepted = await sessionAcceptedByApi(role).catch((error) => {
+        console.warn(`[globalSetup] Session check for ${role} could not be completed: ${String(error)}`);
+        return false;
+      });
+      if (accepted) {
+        console.log(`[globalSetup] Reusing fresh state for: ${role} (accepted by the API)`);
+        return;
+      }
+      console.log(`[globalSetup] Saved state for ${role} was not accepted by the API — logging in again`);
     }
   }
 
@@ -451,7 +506,12 @@ async function setupRole(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`[globalSetup] Logging in as: ${role} (attempt ${attempt}/${maxAttempts})`);
+    const releaseLoginSlot = await acquireLoginSlot(STORAGE_STATE_DIR, `globalSetup login ${role}`);
     const context = await browser.newContext();
+    // ADR 0016 / ADR 0014 §1: the login request's own answer decides whether another attempt is
+    // allowed. 429/5xx or no answer: retry as before; any other 4xx (e.g. 400 "Database error")
+    // is definitive and fails naming status, code and message.
+    let loginRejection: { status: number; body: string } | null = null;
     // WHY: retain-on-failure, same convention as playwright.config.ts's own
     // test-level tracing — start unconditionally (cheap), only save the
     // trace to disk if this attempt actually fails, so a green CI run never
@@ -460,6 +520,12 @@ async function setupRole(
     const page = await context.newPage();
     let capturedUserName = '';
     let succeeded = false;
+
+    page.on('response', async (r) => {
+      if (r.request().method() === 'PUT' && /\/users\/login(\?|$)/.test(r.url()) && !r.ok()) {
+        loginRejection = { status: r.status(), body: (await r.text().catch(() => '')).slice(0, 300) };
+      }
+    });
 
     // Intercept /v1/users/me response to capture display name
     page.on('response', async (r) => {
@@ -555,6 +621,9 @@ async function setupRole(
           await context.storageState({ path: stateFile });
         }
       }
+      if (!(await sessionAcceptedByApi(role))) {
+        throw new Error(`[globalSetup] The API rejected (401/403) the session just created for ${role}`);
+      }
       console.log(`[globalSetup] State saved for: ${role}`);
 
       // Save captured display name to userNames.json
@@ -578,6 +647,13 @@ async function setupRole(
       console.warn(
         `[globalSetup] Login attempt ${attempt}/${maxAttempts} failed for ${role}: ${String(error)}`
       );
+      const rejection = loginRejection as { status: number; body: string } | null;
+      if (rejection && !isRetryableHttpStatus(rejection.status)) {
+        throw new Error(
+          `[globalSetup] Login for ${role} (ENV=${config.env}) was rejected with HTTP ${rejection.status}: ${rejection.body}. ` +
+            `Not retried (ADR 0014 §1): fewer parallel logins is the fix, not another attempt.`
+        );
+      }
       if (attempt < maxAttempts) {
         console.log('[globalSetup] Retrying in 5 seconds...');
         await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -599,6 +675,7 @@ async function setupRole(
           );
       }
       await context.close();
+      releaseLoginSlot();
     }
   }
 

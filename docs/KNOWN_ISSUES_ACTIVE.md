@@ -55,7 +55,7 @@
 - **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/`, `GET /v1/quotations/layout/{list,create}` and (staging) `POST /v1/quotations/`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ### KI-51 — Sandbox 40821683680: cross-shard admin session storm
-- **Status:** open; "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
+- **Status:** open; measured 2026-11-04 on QA and staging: a new login does NOT invalidate other access tokens; the mid-run refresh path (`GET /v1/tokens/refresh/`) is untested; per-worker re-login storm addressed by ADR 0016 S1/S2 (code on this branch, not yet proven under the 10-worker sandbox load) · **Since:** 2026-10-29
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 

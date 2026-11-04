@@ -1,7 +1,8 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
-import { safeWaitForURL } from '../utils/navigation';
+import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { withLoginSlot } from './loginGate';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -164,56 +165,6 @@ export class AuthManager {
     }
   }
 
-  private async isSessionValid(stateFile: string): Promise<boolean> {
-    let context: BrowserContext | null = null;
-
-    try {
-      context = await this.browser.newContext({
-        storageState: stateFile,
-      });
-
-      const page = await context.newPage();
-
-      logger.info('Validating existing session');
-
-      await page.goto(config.appUrl, {
-        waitUntil: 'commit',
-        timeout: 30000,
-      });
-
-      try {
-        // WHY: migrated 2026-07-19 to safeWaitForURL() — this was a bare
-        // waitForURL() defaulting to 'load'. This method is called from
-        // getContextForRole() on every cache-miss (see that method's own
-        // call site) — CI evidence (2026-07-19, sandbox run 29673393047,
-        // commit a91270f) shows 58 "Test timeout of 120000ms exceeded while
-        // setting up 'adminPage'/'restrictedPage'" fixture failures with a
-        // clean signal (zero backend-connectivity noise in the same run),
-        // strongly implicating this exact call: a 'load' hang here can
-        // falsely report a valid session as invalid, forcing a full
-        // re-login under file-lock contention that can cascade past the
-        // 120s fixture-setup budget.
-        await safeWaitForURL(page, /sales\//, 10000);
-      } catch {
-        logger.warn('Did not redirect to sales page');
-        return false;
-      }
-
-      const currentUrl = page.url();
-
-      logger.info(`Session validation URL: ${currentUrl}`);
-
-      return currentUrl.includes('/sales/');
-    } catch (error) {
-      logger.warn(`Session validation failed: ${String(error)}`);
-      return false;
-    } finally {
-      if (context) {
-        await context.close();
-      }
-    }
-  }
-
   async loginAndSaveState(role: UserRole): Promise<void> {
     // WHY: Fast path for same-process concurrent callers (e.g. adminPage +
     // restrictedPage fixtures both requesting a login in the same worker) —
@@ -241,7 +192,7 @@ export class AuthManager {
           return;
         }
       }
-      await this._doLogin(role);
+      await withLoginSlot(this.storageStatePath, `login ${role}`, () => this._doLogin(role));
     });
 
     AuthManager.loginInProgress.set(role, loginPromise);
@@ -410,29 +361,13 @@ export class AuthManager {
     const stateFile = this.getStorageStateFile(role);
 
     if (fs.existsSync(stateFile)) {
-      // WHY: Check in-memory cache first — if we validated this role within
-      // SESSION_CACHE_MS, skip the full browser navigation check entirely.
-      // This prevents 35 extra browser launches for a 35-test suite.
-      const lastValidatedAt = AuthManager.lastValidated.get(role) ?? 0;
-      const cacheAge = Date.now() - lastValidatedAt;
-
-      if (cacheAge < AuthManager.SESSION_CACHE_MS) {
-        logger.info(
-          `Session cache hit for role: ${role} (age: ${Math.round(cacheAge / 1000)}s) — skipping validation`
-        );
-      } else {
-        logger.info(`Existing storage state found for role: ${role}`);
-        const valid = await this.isSessionValid(stateFile);
-
-        if (!valid) {
-          logger.warn(`Session expired or invalid for role: ${role}`);
-          await this.loginAndSaveState(role);
-        } else {
-          logger.info(`Session is still valid for role: ${role}`);
-        }
-        // WHY: Update cache timestamp after successful validation or re-login
-        AuthManager.lastValidated.set(role, Date.now());
-      }
+      // ADR 0016 (S1): the worker trusts the saved state. globalSetup validated it once per role
+      // with one authenticated API call; opening the app in a browser per worker (the old
+      // isSessionValid) falsely reported "expired" for all workers at once and made them
+      // re-login together. A real expiry is still handled: a 401 or a /signIn redirect clears
+      // the state file (fixtures/index.ts), so the next call lands in the branch below.
+      logger.info(`Using storage state validated by globalSetup for role: ${role}`);
+      AuthManager.lastValidated.set(role, Date.now());
     } else {
       logger.warn(`No storage state found for role: ${role}. Logging in fresh.`);
       await this.loginAndSaveState(role);
@@ -532,19 +467,51 @@ export class AuthManager {
     // getLoginUrl() normalizes so this is correct regardless of which shape a
     // given environment's config happens to have, instead of re-relying on a
     // convention that has already silently drifted once between local and CI.
-    const response = await page.request.put(this.getLoginUrl(), {
-      data: { email: credentials.email, password: credentials.password, rememberMe: false },
-    });
-    if (!response.ok()) {
+    // ADR 0016 / ADR 0014 §1: only a transport error, 429 or 5xx is retried (bounded, 3 tries);
+    // any 4xx (incl. 400 {"code":"000004","message":"Database error"}) is definitive and fails
+    // naming status, code and message. Fewer parallel logins is the answer to those, not retries.
+    const loginAttempts = 3;
+    let token: string | undefined;
+    for (let attempt = 1; attempt <= loginAttempts; attempt++) {
+      let status: number | null = null;
+      let bodyText = '';
+      try {
+        token = await withLoginSlot(this.storageStatePath, `headless login ${role}`, async () => {
+          const response = await page.request.put(this.getLoginUrl(), {
+            data: { email: credentials.email, password: credentials.password, rememberMe: false },
+          });
+          status = response.status();
+          bodyText = await response.text();
+          if (!response.ok()) return undefined;
+          const parsed = JSON.parse(bodyText) as { token?: string };
+          if (!parsed.token) {
+            throw new Error(`Headless login for role ${role} returned no token in the response body`);
+          }
+          return parsed.token;
+        });
+      } catch (error) {
+        if (status !== null) throw error;
+        // transport error (no response): retryable
+        if (attempt === loginAttempts) {
+          throw new Error(`Headless login failed for role ${role}: no response after ${attempt} attempts (${String(error)})`);
+        }
+        logger.warn(`Headless login for role ${role}: no response (${String(error)}) — retry ${attempt}/${loginAttempts - 1}`);
+        continue;
+      }
+      if (token) break;
+      const failedStatus = status as number | null;
+      if (failedStatus !== null && isRetryableHttpStatus(failedStatus) && attempt < loginAttempts) {
+        logger.warn(`Headless login for role ${role}: HTTP ${failedStatus} — retry ${attempt}/${loginAttempts - 1}`);
+        continue;
+      }
       throw new Error(
-        `Headless login failed for role ${role}: HTTP ${response.status()} from ${this.getLoginUrl()}`
+        `Headless login failed for role ${role}: HTTP ${failedStatus} from ${this.getLoginUrl()}. Response: ${bodyText.slice(0, 300)}`
       );
     }
-    const body = (await response.json()) as { token?: string };
-    if (!body.token) {
-      throw new Error(`Headless login for role ${role} returned no token in the response body`);
+    if (!token) {
+      throw new Error(`Headless login for role ${role} returned no token`);
     }
-    return body.token;
+    return token;
   }
 
   // WHY mid-test session recovery lives here (2026-07-09 investigation,
@@ -628,20 +595,24 @@ export class AuthManager {
       );
     }
 
-    await this.navigateToLoginPage(page);
+    // The slot covers the UI login only and is released before the per-role file lock below:
+    // loginAndSaveState takes lock then slot, so holding a slot while waiting for the lock could deadlock.
+    await withLoginSlot(this.storageStatePath, `UI re-login ${role}`, async () => {
+      await this.navigateToLoginPage(page);
 
-    const emailInput = page.locator('#input_email');
-    await emailInput.clear();
-    await emailInput.fill(credentials.email);
+      const emailInput = page.locator('#input_email');
+      await emailInput.clear();
+      await emailInput.fill(credentials.email);
 
-    const passwordInput = page.locator('#input_password');
-    await passwordInput.clear();
-    await passwordInput.fill(credentials.password);
+      const passwordInput = page.locator('#input_password');
+      await passwordInput.clear();
+      await passwordInput.fill(credentials.password);
 
-    await page.locator('#loginBtn:not([disabled])').waitFor({ state: 'visible', timeout: 15000 });
-    await page.locator('#loginBtn').click();
-    await page.waitForURL(/sales\//, { timeout: 90000, waitUntil: 'domcontentloaded' });
-    await this.dismissPopupIfPresent(page);
+      await page.locator('#loginBtn:not([disabled])').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#loginBtn').click();
+      await page.waitForURL(/sales\//, { timeout: 90000, waitUntil: 'domcontentloaded' });
+      await this.dismissPopupIfPresent(page);
+    });
 
     await this.withFileLock(role, async () => {
       const stateFile = this.getStorageStateFile(role);

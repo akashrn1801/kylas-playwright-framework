@@ -410,10 +410,7 @@ async function createRolePage(
   // param on every page object.
   registerPageForRecovery(page, role, authManager);
 
-  // WHY: Stagger restricted user initialization on CI to avoid concurrent session conflicts
-  if (role === 'restricted' && process.env.CI) {
-    await page.waitForTimeout(Math.floor(Math.random() * 3000));
-  }
+  // Login pacing is the cross-process login slot gate in src/auth/loginGate.ts (ADR 0016, S2), not a random sleep here.
 
   const maxAttempts = 2;
   let landed = false;
