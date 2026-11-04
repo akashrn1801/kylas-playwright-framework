@@ -111,8 +111,9 @@ export function classifyTest(t: JsonTest): Classified {
   if (t.status === 'unexpected') return { cls: 'failed', reason: last?.status ?? 'failed' };
   if (t.status === 'flaky') return { cls: 'flaky' };
   if (t.status === 'expected') return { cls: 'passed' };
-  // A run cut off by a signal leaves the test `skipped` with an interrupted result: it never finished, so rerun it.
-  if (t.results.some((r) => r.status === 'interrupted')) return { cls: 'failed', reason: 'interrupted' };
+  // A run cut off by a signal leaves the test `skipped` with an interrupted result: it never finished (it did not
+  // fail), so it is a did-not-run test that is rerun.
+  if (t.results.some((r) => r.status === 'interrupted')) return { cls: 'not-run', reason: 'cut off' };
   if (t.status === 'skipped') {
     const deliberate =
       t.expectedStatus === 'skipped' || (t.annotations ?? []).some((a) => a.type === 'skip' || a.type === 'fixme');
@@ -161,6 +162,13 @@ export interface RerunList {
 export function selectRerun(report: JsonReport, opts: SelectOptions, meta: { retries: number; runId?: string; runAttempt?: number }): RerunList {
   const candidates: RerunCandidate[] = [];
   const excluded: RerunList['excluded'] = [];
+  // Decision 2026-11-03: a run with ANY failed, timed-out or did-not-run test (formFields ones included, they just are
+  // not rerun) reruns only those; the flaky tests are rerun only when there is nothing else wrong in the first run.
+  let hardIssues = 0;
+  walkTests(report, (t) => {
+    const k = classifyTest(t.test).cls;
+    if (k === 'failed' || k === 'not-run') hardIssues += 1;
+  });
   walkTests(report, (t) => {
     const c = classifyTest(t.test);
     if (c.cls === 'passed' || c.cls === 'skipped') return;
@@ -169,8 +177,8 @@ export function selectRerun(report: JsonReport, opts: SelectOptions, meta: { ret
       excluded.push({ file: t.file, title: t.title, reason: 'shared-config suite (formFields): never rerun in v1' });
       return;
     }
-    if (c.cls === 'flaky' && !opts.includeFlaky) {
-      excluded.push({ file: t.file, title: t.title, reason: 'flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)' });
+    if (c.cls === 'flaky' && (!opts.includeFlaky || hardIssues > 0)) {
+      excluded.push({ file: t.file, title: t.title, reason: hardIssues > 0 ? 'the run has failed tests: only those are rerun, flaky tests are not' : 'flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)' });
       return;
     }
     candidates.push({
@@ -199,19 +207,26 @@ function rerunOutcome(t: JsonTest | undefined): RerunOutcome {
   return isPass(t) ? 'passed' : 'failed';
 }
 
-function finalStatus(first: RerunFirstStatus, rerun: RerunOutcome): RerunFinalStatus {
-  if (first === 'flaky') return 'flaky'; // it passed once in the first run: extra executions never turn it into a failure
-  if (first === 'failed') return rerun === 'passed' ? 'recovered' : 'failed';
-  return rerun === 'passed' ? 'passed' : rerun === 'failed' ? 'failed' : 'not-run';
+// `base` = where the test stands before this rerun: its first-run status, or (stacked reruns) the final status the
+// earlier rerun gave it. A did-not-run test never failed: passing on the rerun makes it simply Passed (it ran only on
+// the rerun), failing makes it Failed, and without a rerun result it stays 'not-run'.
+function finalStatus(base: RerunFirstStatus | RerunFinalStatus, rerun: RerunOutcome): RerunFinalStatus {
+  if (base === 'flaky') return 'flaky'; // it passed once in the first run: extra executions never turn it into a failure
+  if (base === 'recovered') return 'recovered'; // already recovered in an earlier rerun: stays flaky, never failed, never clean
+  if (base === 'not-run') return rerun === 'passed' ? 'passed' : rerun === 'failed' ? 'failed' : 'not-run';
+  return rerun === 'passed' ? 'recovered' : 'failed';
 }
 
 export function countStatuses(report: JsonReport): RerunCounts {
-  const counts: RerunCounts = { passed: 0, failed: 0, flaky: 0 };
+  const counts: RerunCounts = { passed: 0, failed: 0, flaky: 0, skipped: 0, didNotRun: 0, total: 0 };
   walkTests(report, (t) => {
     const c = classifyTest(t.test).cls;
+    counts.total = (counts.total ?? 0) + 1;
     if (c === 'passed') counts.passed += 1;
-    else if (c === 'failed') counts.failed += 1;
     else if (c === 'flaky') counts.flaky += 1;
+    else if (c === 'skipped') counts.skipped = (counts.skipped ?? 0) + 1;
+    else if (c === 'not-run') counts.didNotRun = (counts.didNotRun ?? 0) + 1;
+    else counts.failed += 1; // failed, timed out
   });
   return counts;
 }
@@ -259,9 +274,14 @@ export function combineRerun(
     excluded: list.excluded,
     ...(meta.rerunOf ? { rerunOf: meta.rerunOf } : {}),
   };
+  // A stacked rerun that has nothing (more) to run keeps the earlier rerun's rows, so the email still explains the
+  // difference between "first run" and "after rerun".
+  const carried = meta.previous?.ran ? meta.previous : null;
   const noRun = (reason: string): { combined: JsonReport; summary: RerunSummary } => ({
     combined,
-    summary: { ...base, ran: false, reason, afterRerun: countStatuses(combined), rows: [], recovered: 0, stillFailing: 0 },
+    summary: carried
+      ? { ...base, ran: true, afterRerun: countStatuses(combined), rows: carried.rows, recovered: carried.recovered, stillFailing: carried.stillFailing, durationMs: carried.durationMs }
+      : { ...base, ran: false, reason, afterRerun: countStatuses(combined), rows: [], recovered: 0, stillFailing: 0 },
   });
   if (list.decision !== 'run') return noRun(list.decision);
   if (!rerun) return noRun('no-results');
@@ -278,17 +298,12 @@ export function combineRerun(
     const firstStatus: RerunFirstStatus = prev ? prev.first : cand.first;
     const rt = rerunTests.get(t.key);
     const outcome = rerunOutcome(rt);
+    const final = finalStatus(prev ? prev.final : firstStatus, outcome);
     if (rt && outcome !== 'not-rerun') {
       const tagged = rt.results.map((r) => ({ ...r, rerun: true }));
-      if (firstStatus === 'not-run' && cand.first === 'not-run') {
-        // Nothing real happened in the first run: the rerun result replaces the "skipped" placeholders.
-        t.test.results = tagged;
-        t.test.status = rt.status === 'flaky' ? 'flaky' : isPass(rt) ? 'expected' : 'unexpected';
-      } else {
-        t.test.results = [...t.test.results, ...tagged];
-        if (firstStatus === 'failed') t.test.status = outcome === 'passed' ? 'flaky' : 'unexpected';
-        else t.test.status = 'flaky';
-      }
+      // Nothing real happened before (serial dependent that did not run): the rerun result replaces the "skipped" placeholders.
+      t.test.results = cand.first === 'not-run' ? tagged : [...t.test.results, ...tagged];
+      t.test.status = final === 'failed' ? 'unexpected' : final === 'passed' ? 'expected' : 'flaky';
       t.spec.ok = t.spec.tests.every((x) => x.status === 'expected' || x.status === 'flaky' || x.status === 'skipped');
     }
     rows.push({
@@ -298,10 +313,13 @@ export function combineRerun(
       title: t.title,
       first: firstStatus,
       rerun: outcome,
-      final: finalStatus(firstStatus, outcome),
-      ...(cand.reason ? { reason: cand.reason } : {}),
+      final,
+      ...(cand.reason ? { reason: cand.reason } : prev?.reason ? { reason: prev.reason } : {}),
     });
   });
+  // Rows of an earlier rerun whose test was not selected again stay in the summary.
+  const done = new Set(rows.map((r) => r.key));
+  const allRows = [...(meta.previous?.rows ?? []).filter((r) => !done.has(r.key)), ...rows];
 
   recomputeStats(combined, rerun.stats?.duration ?? 0);
   return {
@@ -311,9 +329,9 @@ export function combineRerun(
       ran: true,
       durationMs: rerun.stats?.duration,
       afterRerun: countStatuses(combined),
-      rows,
-      recovered: rows.filter((r) => r.final === 'recovered').length,
-      stillFailing: rows.filter((r) => r.final === 'failed').length,
+      rows: allRows,
+      recovered: allRows.filter((r) => r.final === 'recovered').length,
+      stillFailing: allRows.filter((r) => r.final === 'failed').length,
     },
   };
 }
