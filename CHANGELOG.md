@@ -9,6 +9,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-11-04 — chore: hardening batch B0 (measurement): `RETRY_COUNT=0` now honoured (was forced to 1), response-wait timeouts and `waitForListReady` name the awaited signal and elapsed ms; ADR 0016 started; no timeout/retry/outcome changed (pending)
 - 2026-11-04 — fix: flaky tests of sandbox run 2026-11-03: `actionTimeout` (was unbounded), `BasePage.waitForRendered()`/`explainAppErrorPage()` fail fast on the app error screen / a failed page GET, Tasks ID-open recovers from the 429 page, the lock wait has its own fixture budget, R65 compares the report with the live API count, not `< before`; `npm run check:fail-fast` (pending)
 - 2026-11-03 — fix: email labels: KPI/trend "Passed first time" vs Health "Passed incl. flaky" (were two "Pass rate" numbers); flaky tests say "passed on retry" or "recovered on rerun" (cards, banner, summary); covered by `check:failure-labels` (pending)
 - 2026-11-03 — test: scenario suite for the rerun shard (`scripts/check-rerun-scenarios.ts`, run by `check:rerun`): 16 scenarios through the real parser, email and history; fixes: did-not-run tests counted apart from Failed and Passed (not Flaky) when they pass on rerun, a test recovered in an earlier rerun stays Flaky when a later rerun fails it, stacked reruns keep earlier rows, both table columns add up (Skipped, Did not run, Total rows), no rerun section when nothing needed one (pending)

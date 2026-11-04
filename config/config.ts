@@ -88,7 +88,9 @@ export const config = {
   },
   execution: {
     workers: Number(process.env.WORKERS) || 2,
-    retryCount: Number(process.env.RETRY_COUNT) || 1,
+    // RETRY_COUNT=0 is honoured (measurement runs: every failure is a first-attempt failure);
+    // unset or non-numeric keeps the default of 1. CI never sets it to 0.
+    retryCount: process.env.RETRY_COUNT !== undefined && process.env.RETRY_COUNT !== '' && Number.isInteger(Number(process.env.RETRY_COUNT)) && Number(process.env.RETRY_COUNT) >= 0 ? Number(process.env.RETRY_COUNT) : 1,
   },
 };
 
