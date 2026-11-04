@@ -538,7 +538,7 @@ function detectDevEquivalentRun(gitRemoteUrl: string, gitCommit: string): boolea
   return !!devHeadSha && devHeadSha === gitCommit;
 }
 
-function buildCurrentRecord(
+export function buildCurrentRecord(
   env: string,
   branch: string,
   buildNumber: string,
@@ -564,7 +564,7 @@ function buildCurrentRecord(
   const rerunFields: Partial<RunHistoryRecord> =
     rerunSummary && rerunSummary.ran
       ? {
-          rerun: { candidates: rerunSummary.candidates, recovered: rerunSummary.recovered, stillFailing: rerunSummary.stillFailing },
+          rerun: { candidates: rerunSummary.candidates, recovered: rerunSummary.recovered, stillFailing: rerunSummary.stillFailing, ranOnlyOnRerun: rerunSummary.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length },
           firstRunFailed: rerunSummary.firstRun.failed,
           firstRunFlaky: rerunSummary.firstRun.flaky,
           recoveredOnRerunTitles: rerunSummary.rows.filter((r) => r.final === 'recovered').map((r) => r.title),

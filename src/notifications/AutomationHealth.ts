@@ -326,7 +326,26 @@ export function computeOverallVerdict(
   // rendered as its own labeled value (subject segment, masthead, Health
   // Score block). computeHealthScore() also guarantees a 0-failure run never
   // reaches Critical, so nothing here depends on that label.
-  if (report.flaky > 0) {
+  // WHY (2026-11-03, rule "green only when every test passed on its first try"): a test that never ran (serial
+  // dependent after a failure, cut-off shard; no skip annotation) or that ran only on the rerun was not verified by
+  // the first run. It never failed, so the run is not red, but it is never a clean Passed either.
+  // A flaky test that passed again on the rerun shard is resolved: it stays flaky in the counts, history and the list,
+  // but when it is the only issue the run is green.
+  const unresolvedFlaky = report.flaky - (report.flakyPassedOnRerun ?? 0);
+  const notVerified = (report.didNotRun ?? 0) + (report.ranOnlyOnRerun ?? 0);
+  if (unresolvedFlaky === 0 && notVerified > 0) {
+    const parts = [
+      report.didNotRun > 0 ? `${report.didNotRun} did not run` : '',
+      report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : '',
+    ].filter(Boolean);
+    return {
+      verdict: 'caution',
+      bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
+      bannerTone: 'warning',
+      headline: 'Deployment likely safe — but not every test ran in the first run; review them',
+    };
+  }
+  if (unresolvedFlaky > 0) {
     const aboveBudget = report.flaky > FLAKY_BUDGET;
     return {
       verdict: 'caution',

@@ -240,7 +240,7 @@ export interface RunHistoryRecord {
   // recovered on the rerun is counted as flaky, its title is in flakyTestTitles, and it is never in `passed`), so
   // trends and recurring-flaky stay honest; these fields keep the first-attempt view. Optional: every older record
   // lacks them (= no rerun) and every reader ignores them.
-  rerun?: { candidates: number; recovered: number; stillFailing: number };
+  rerun?: { candidates: number; recovered: number; stillFailing: number; ranOnlyOnRerun?: number };
   firstRunFailed?: number;
   firstRunFlaky?: number;
   recoveredOnRerunTitles?: string[];

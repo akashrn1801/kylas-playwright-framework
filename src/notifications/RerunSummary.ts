@@ -16,7 +16,7 @@ import * as path from 'path';
 export type RerunFirstStatus = 'failed' | 'flaky' | 'not-run';
 /** What the rerun made of it ('not-rerun' = it was selected but produced no result). */
 export type RerunOutcome = 'passed' | 'failed' | 'not-rerun';
-/** Final status: 'recovered' = failed on every first-run attempt, passed on the rerun (counts as FLAKY, never as clean). */
+/** Final status: 'passed' on a row whose first status is 'not-run' = it ran only on the rerun (never failed, so not flaky). 'recovered' = failed on every first-run attempt, passed on the rerun (counts as FLAKY, never as clean). */
 export type RerunFinalStatus = 'passed' | 'recovered' | 'flaky' | 'failed' | 'not-run';
 
 export interface RerunTestRow {
@@ -33,8 +33,14 @@ export interface RerunTestRow {
 
 export interface RerunCounts {
   passed: number;
+  // Failed = failed on every attempt, including timeouts. A test that never ran is counted in didNotRun, not here.
   failed: number;
   flaky: number;
+  // skipped = deliberate skips only; didNotRun = serial dependents after a failure, tests of a cut-off shard.
+  // Optional with `total`: older summaries lack them. passed + failed + flaky + skipped + didNotRun = total.
+  skipped?: number;
+  didNotRun?: number;
+  total?: number;
 }
 
 export interface RerunSummary {
@@ -100,15 +106,19 @@ export function loadRerunSummary(env: string): RerunSummary | null {
   }
 }
 
-export const FIRST_LABEL: Record<RerunFirstStatus, string> = { failed: 'Failed', flaky: 'Flaky', 'not-run': 'Not run' };
+export const FIRST_LABEL: Record<RerunFirstStatus, string> = { failed: 'Failed', flaky: 'Flaky', 'not-run': 'Did not run' };
 export const RERUN_LABEL: Record<RerunOutcome, string> = { passed: 'Passed', failed: 'Failed', 'not-rerun': 'Not rerun' };
 export const FINAL_LABEL: Record<RerunFinalStatus, string> = {
   passed: 'Passed',
   recovered: 'Flaky - recovered on rerun',
   flaky: 'Flaky',
   failed: 'Failed',
-  'not-run': 'Not run',
+  'not-run': 'Did not run',
 };
+
+/** First-run flaky test that passed again on the rerun: still flaky (history, trends, list) but resolved. */
+export const isFlakyPassedOnRerun = (r: { first: RerunFirstStatus; rerun: RerunOutcome; final: RerunFinalStatus }): boolean =>
+  r.first === 'flaky' && r.rerun === 'passed' && r.final === 'flaky';
 
 /** Row lookup key used by the email: the title as ReportParser shows it, plus its file. */
 export const rerunRowKey = (file: string, title: string): string => `${file}::${title}`;

@@ -16,7 +16,7 @@ import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
-import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
+import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey, isFlakyPassedOnRerun } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
@@ -227,6 +227,7 @@ export class EmailTemplate {
       this.buildHealthScoreBlock(health),
       this.buildRunMetadata(ctx),
       this.buildKpiDashboard(ctx),
+      this.buildNotVerifiedNote(ctx.report),
       this.buildRerunSummarySection(ctx.rerun),
       this.buildTrendSection(ctx, testAnchors),
       this.buildModuleAnalytics(ctx),
@@ -661,7 +662,10 @@ ${body}
       { value: String(report.passed), label: 'Passed', variant: 'success' },
       { value: String(report.flaky), label: 'Flaky', variant: report.flaky > 0 ? 'warn' : 'neutral', anchor: report.flaky > 0 ? '#section-flaky-tests' : undefined },
       { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral', anchor: report.failed > 0 ? '#section-failed-tests' : undefined },
-      { value: String(report.skipped), label: 'Skipped', variant: report.skipped > 0 ? 'warn' : 'neutral' },
+      // Skipped = deliberate skips only; tests that never ran have their own tile (same split as the rerun table), so
+      // Passed + Flaky + Failed + Skipped + Did not run = Total.
+      { value: String(report.skipped - report.didNotRun), label: 'Skipped', variant: report.skipped - report.didNotRun > 0 ? 'warn' : 'neutral' },
+      ...(report.didNotRun > 0 ? [{ value: String(report.didNotRun), label: 'Did not run', variant: 'warn' as const }] : []),
     ]);
 
     const secondaryRow = this.kpiRow([
@@ -1260,8 +1264,9 @@ ${body}
   // module tag here always agrees with its own row there.
   private buildSkippedTestsSection(ctx: EmailContext): string {
     const { report } = ctx;
-    if (report.skippedTests.length === 0) return '';
-    const rows = report.skippedTests
+    const deliberate = report.skippedTests.filter((t) => !t.didNotRun);
+    if (deliberate.length === 0) return '';
+    const rows = deliberate
       .map((t: TestResult) => {
         const { name, type } = deriveModuleFromFile(t.file);
         const typeStyle =
@@ -1288,7 +1293,7 @@ ${body}
     return `
 <tr><td id="section-skipped-tests" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
-    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Skipped Tests (${report.skippedTests.length})</div>
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Skipped Tests (${deliberate.length})</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
   </div>
 </td></tr>`;
@@ -1411,6 +1416,13 @@ ${body}
     return new Map(rerun.rows.map((r) => [rerunRowKey(r.file, r.title), r]));
   }
 
+  // A test that did not run first and passed on the rerun never failed: it is Passed, labelled by how it got there.
+  private finalLabel(row: RerunTestRow): string {
+    if (row.first === 'not-run' && row.final === 'passed') return 'Passed (did not run → passed on rerun)';
+    if (isFlakyPassedOnRerun(row)) return 'Flaky - passed on rerun';
+    return FINAL_LABEL[row.final];
+  }
+
   private rerunColor(final: RerunTestRow['final']): string {
     return final === 'passed' ? SUCCESS : final === 'failed' ? FAIL : WARN;
   }
@@ -1418,13 +1430,15 @@ ${body}
   // One line under a failed/flaky test: first run -> rerun -> final. Nothing for a test that was not rerun.
   private rerunTestLine(row: RerunTestRow | undefined): string {
     if (!row) return '';
-    return `<div style="margin-top:6px;font-size:10.5px;color:${SLATE};">Rerun: first run <strong>${this.esc(FIRST_LABEL[row.first])}</strong> &rarr; rerun <strong>${this.esc(RERUN_LABEL[row.rerun])}</strong> &rarr; final <strong style="color:${this.rerunColor(row.final)};">${this.esc(FINAL_LABEL[row.final])}</strong></div>`;
+    return `<div style="margin-top:6px;font-size:10.5px;color:${SLATE};">Rerun: first run <strong>${this.esc(FIRST_LABEL[row.first])}</strong> &rarr; rerun <strong>${this.esc(RERUN_LABEL[row.rerun])}</strong> &rarr; final <strong style="color:${this.rerunColor(row.final)};">${this.esc(this.finalLabel(row))}</strong></div>`;
   }
 
   // ONE email at the end of the run: the first run next to the result after the rerun shard (a rerun pass is
   // never a clean pass: a recovered test counts as Flaky), then every rerun test with first -> rerun -> final.
   private buildRerunSummarySection(rerun: RerunSummary | null | undefined): string {
     if (!rerun) return '';
+    // Nothing failed or was flaky: no rerun was needed and there is nothing to explain, so the email has no rerun section.
+    if (!rerun.ran && rerun.reason === 'none' && rerun.excluded.length === 0) return '';
     const origin = rerun.rerunOf
       ? ` Manual rerun of run${rerun.rerunOf.runNumber ? ` #${this.esc(rerun.rerunOf.runNumber)}` : ` ${this.esc(rerun.rerunOf.runId)}`}.`
       : '';
@@ -1446,15 +1460,19 @@ ${body}
     }
     const f = rerun.firstRun;
     const a = rerun.afterRerun;
+    const ranOnly = rerun.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length;
     const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
     const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
     const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
     const summaryTable = `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
       <tr>${th('', 'left')}${th('First run')}${th('After rerun')}</tr>
-      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(String(a.passed), SUCCESS)}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${ranOnly} ran only on rerun)</span>` : ''}`, SUCCESS)}</tr>
       <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
       <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${rerun.recovered > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${rerun.recovered} recovered on rerun)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
+      ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
+      <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
+      <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
     </table>`;
     const rows = rerun.rows
       .map(
@@ -1463,7 +1481,7 @@ ${body}
         <td style="padding:5px 8px 5px 0;font-size:11.5px;color:${INK};">${this.esc(r.title)}<div style="font-size:10px;color:${MUTED};">${this.esc(r.file.split('/').pop() ?? r.file)}${r.reason ? ` &middot; ${this.esc(r.reason)}` : ''}</div></td>
         <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(FIRST_LABEL[r.first])}</td>
         <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(RERUN_LABEL[r.rerun])}</td>
-        <td style="padding:5px 0 5px 8px;font-size:11.5px;font-weight:700;color:${this.rerunColor(r.final)};white-space:nowrap;">${this.esc(FINAL_LABEL[r.final])}</td>
+        <td style="padding:5px 0 5px 8px;font-size:11.5px;font-weight:700;color:${this.rerunColor(r.final)};white-space:nowrap;">${this.esc(this.finalLabel(r))}</td>
       </tr>`
       )
       .join('');
@@ -1475,7 +1493,7 @@ ${body}
         : '';
     const excluded =
       rerun.excluded.length > 0
-        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun (form-field suites are never rerun, or flaky tests are switched off); their first-run result stands.</div>`
+        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun (form-field suites are never rerun; when the run has failed tests only those are rerun; or flaky tests are switched off); their first-run result stands.</div>`
         : '';
     const took = rerun.durationMs !== undefined ? ` in ${this.formatDuration(rerun.durationMs)}` : '';
     return `
@@ -1487,6 +1505,23 @@ ${body}
     ${testTable}
     ${excluded}
   </div>
+</td></tr>`;
+  }
+
+  // "N tests did not run" / "N tests ran only on rerun": why a run with no failure is Unstable and not Passed.
+  private buildNotVerifiedNote(report: ParsedReport): string {
+    const lines = [
+      report.didNotRun > 0
+        ? `${report.didNotRun} test${report.didNotRun === 1 ? '' : 's'} did not run (a serial test after a failure, or a cut-off shard; not skipped on purpose). The run is not a clean pass.`
+        : '',
+      report.ranOnlyOnRerun > 0
+        ? `${report.ranOnlyOnRerun} test${report.ranOnlyOnRerun === 1 ? '' : 's'} ran only on the rerun (they did not run in the first run, then passed). The run is not a clean pass.`
+        : '',
+    ].filter(Boolean);
+    if (lines.length === 0) return '';
+    return `
+<tr><td id="section-not-verified" style="padding:4px 28px 8px;">
+  <div style="border-left:3px solid ${WARN};padding:6px 12px;font-size:12px;color:${INK};background:${CANVAS_TINT};">${lines.map((l) => this.esc(l)).join('<br>')}</div>
 </td></tr>`;
   }
 

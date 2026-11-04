@@ -97,24 +97,28 @@ function main(): void {
   check(classifyTest(test('did-not-run')).cls === 'not-run', 'classify: serial dependent that did not run = not-run');
   check(classifyTest(test('skip-annotated')).cls === 'skipped', 'classify: skip annotation = deliberate skip, not a candidate');
   check(classifyTest(test('declared-skip')).cls === 'skipped', 'classify: expectedStatus skipped = deliberate skip');
-  check(classifyTest(test('interrupted')).cls === 'failed' && classifyTest(test('interrupted')).reason === 'interrupted', 'classify: interrupted (cut off) = failed');
+  check(classifyTest(test('interrupted')).cls === 'not-run' && classifyTest(test('interrupted')).reason === 'cut off', 'classify: interrupted (cut off) = did not run (never failed)');
 
   // ── selection ──
   const list = selectRerun(report(FIRST), OPTS, META);
   const titles = list.candidates.map((c) => c.title).sort();
   check(list.decision === 'run', 'select: decision run');
-  check(JSON.stringify(titles) === JSON.stringify(['cut off', 'flaky one', 'hard fail', 'q1 fails', 'q2 did not run', 'q3 did not run', 'times out']), 'select: failed, flaky, timeout, cut-off and did-not-run are candidates; passed, annotated and declared skips are not', titles.join(' | '));
+  check(JSON.stringify(titles) === JSON.stringify(['cut off', 'hard fail', 'q1 fails', 'q2 did not run', 'q3 did not run', 'times out']), 'select: failed, timeout, cut-off and did-not-run are candidates, flaky ones are NOT (the run has failed tests); passed, annotated and declared skips are not', titles.join(' | '));
   check(!list.candidates.some((c) => c.file.includes('formFields')) && list.excluded.some((e) => e.file.includes('formFields')), 'select: formFields tests are excluded (and listed as excluded), never rerun');
   check(list.targets.includes('tests/ui/leads/leads.spec.ts:30') && list.targets.includes('tests/ui/leads/leads.spec.ts:40'), 'select: a normal file is targeted as file:line');
   check(list.targets.includes('tests/ui/quotations/quotations.spec.ts') && !list.targets.some((t) => t.startsWith('tests/ui/quotations/quotations.spec.ts:')), 'select: a serial file is targeted whole (file only, no file:line)');
   check(new Set(list.targets).size === list.targets.length, 'select: targets are unique');
   check(list.maxTests === 60 && list.retries === 0 && list.runId === '100' && list.runAttempt === 1, 'select: list carries cap, retries, run id and attempt');
 
-  const noFlaky = selectRerun(report(FIRST), { ...OPTS, includeFlaky: false }, META);
-  check(!noFlaky.candidates.some((c) => c.title === 'flaky one') && noFlaky.excluded.some((e) => e.title === 'flaky one'), 'select: includeFlaky off leaves flaky tests out and says so');
+  const flakyOnly: Def[] = [{ file: 'ui/a.spec.ts', title: 'ok', line: 1, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'flaky x', line: 2, kind: 'flaky' }, { file: 'ui/a.spec.ts', title: 'flaky y', line: 3, kind: 'flaky' }];
+  const fo = selectRerun(report(flakyOnly), OPTS, META);
+  check(fo.decision === 'run' && fo.candidates.length === 2 && fo.candidates.every((c) => c.first === 'flaky'), 'select: no failed/timed-out/did-not-run test in the run = the flaky tests are rerun');
+  check(list.excluded.some((e) => e.title === 'flaky one' && /failed tests/.test(e.reason)), 'select: with failed tests the flaky ones are listed as excluded, with the reason');
+  const noFlaky = selectRerun(report(flakyOnly), { ...OPTS, includeFlaky: false }, META);
+  check(!noFlaky.candidates.some((c) => c.title === 'flaky x') && noFlaky.excluded.some((e) => e.title === 'flaky x'), 'select: includeFlaky off leaves flaky tests out and says so');
   const capped = selectRerun(report(FIRST), { ...OPTS, maxTests: 3 }, META);
-  check(capped.decision === 'cap' && capped.targets.length === 0 && capped.candidates.length === 7, 'select: more candidates than the cap = decision cap, no targets');
-  const atCap = selectRerun(report(FIRST), { ...OPTS, maxTests: 7 }, META);
+  check(capped.decision === 'cap' && capped.targets.length === 0 && capped.candidates.length === 6, 'select: more candidates than the cap = decision cap, no targets');
+  const atCap = selectRerun(report(FIRST), { ...OPTS, maxTests: 6 }, META);
   check(atCap.decision === 'run', 'select: exactly the cap still runs');
   const clean = selectRerun(report([{ file: 'ui/a.spec.ts', title: 'ok', line: 1, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'skip', line: 2, kind: 'declared-skip' }]), OPTS, META);
   check(clean.decision === 'none' && clean.candidates.length === 0 && clean.targets.length === 0, 'select: nothing failed or flaky = decision none');
@@ -148,19 +152,22 @@ function main(): void {
   const stat = (t: string): string => { let s = ''; walkTests(combined, (x) => { if (x.title === t) s = x.test.status; }); return s; };
   check(row('hard fail')?.first === 'failed' && row('hard fail')?.rerun === 'passed' && row('hard fail')?.final === 'recovered' && stat('hard fail') === 'flaky', 'combine: failed first, passed on rerun = recovered, test status flaky (never a clean pass)');
   check(row('times out')?.final === 'failed' && stat('times out') === 'unexpected', 'combine: failed first, failed on rerun = failed');
-  check(row('flaky one')?.first === 'flaky' && row('flaky one')?.final === 'flaky' && stat('flaky one') === 'flaky', 'combine: flaky first, passed on rerun = still flaky');
-  check(row('q1 fails')?.final === 'recovered' && row('q2 did not run')?.first === 'not-run' && row('q2 did not run')?.final === 'passed' && stat('q2 did not run') === 'expected', 'combine: serial dependent that did not run and passes on rerun = passed, first shown as "not-run"');
+  check(!row('flaky one') && stat('flaky one') === 'flaky', 'combine: a flaky test of a run with failures is not rerun (no row, stays flaky even if the rerun report has it)');
+  const fl = selectRerun(report(flakyOnly), OPTS, META);
+  const flc = combineRerun(report(flakyOnly), report([{ file: 'ui/a.spec.ts', title: 'flaky x', line: 2, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'flaky y', line: 3, kind: 'failed' }], 100), fl, {});
+  check(flc.summary.rows.find((r) => r.title === 'flaky x')?.final === 'flaky' && flc.summary.rows.find((r) => r.title === 'flaky y')?.final === 'flaky' && flc.summary.afterRerun.flaky === 2, 'combine: flaky first stays flaky whatever the rerun does (passed or failed)');
+  check(row('q1 fails')?.final === 'recovered' && row('q2 did not run')?.first === 'not-run' && row('q2 did not run')?.final === 'passed' && stat('q2 did not run') === 'expected', 'combine: serial dependent that did not run never failed: passing on rerun = Passed (ran only on rerun), not flaky');
   check(row('q3 did not run')?.final === 'failed' && stat('q3 did not run') === 'unexpected', 'combine: a dependent that did not run and fails on rerun = failed');
-  check(row('cut off')?.final === 'recovered', 'combine: cut-off (interrupted) test that passes on rerun = recovered');
+  check(row('cut off')?.first === 'not-run' && row('cut off')?.final === 'passed', 'combine: cut-off (interrupted) test that passes on rerun = Passed (it never failed)');
   let hardResults = 0; walkTests(combined, (x) => { if (x.title === 'hard fail') hardResults = x.test.results.length; });
   check(hardResults === 3, 'combine: the rerun result is appended to the first run results (2 attempts + 1 rerun)', String(hardResults));
   let q2Results = 0; walkTests(combined, (x) => { if (x.title === 'q2 did not run') q2Results = x.test.results.length; });
   check(q2Results === 1, 'combine: "did not run" placeholders are replaced by the rerun result');
-  check(summary.recovered === 3 && summary.stillFailing === 2 && summary.rows.length === 7 && summary.ran, 'combine: recovered 3 (hard fail, q1, cut off), still failing 2 (times out, q3)', `${summary.recovered}/${summary.stillFailing}/${summary.rows.length}`);
-  check(JSON.stringify(summary.firstRun) === JSON.stringify({ passed: 1, failed: 5, flaky: 1 }), 'combine: first-run counts come from the report before the rerun', JSON.stringify(summary.firstRun));
-  check(JSON.stringify(summary.afterRerun) === JSON.stringify({ passed: 2, failed: 3, flaky: 4 }), 'combine: after-rerun counts: recovered tests count as flaky, not passed (passed 1 + q2 = 2; failed = times out, q3 and the excluded formFields test)', JSON.stringify(summary.afterRerun));
+  check(summary.recovered === 2 && summary.stillFailing === 2 && summary.rows.length === 6 && summary.ran, 'combine: recovered 2 (hard fail, q1; q2 and cut off ran only on rerun), still failing 2 (times out, q3)', `${summary.recovered}/${summary.stillFailing}/${summary.rows.length}`);
+  check(JSON.stringify(summary.firstRun) === JSON.stringify({ passed: 1, failed: 4, flaky: 1, skipped: 2, didNotRun: 3, total: 11 }), 'combine: first-run counts come from the report before the rerun (did-not-run counted apart from failed)', JSON.stringify(summary.firstRun));
+  check(JSON.stringify(summary.afterRerun) === JSON.stringify({ passed: 3, failed: 3, flaky: 3, skipped: 2, didNotRun: 0, total: 11 }), 'combine: after-rerun counts: recovered tests count as flaky; q2 and cut off count as passed; failed = times out, q3 and the excluded formFields test', JSON.stringify(summary.afterRerun));
   check(combined.stats?.duration === 690000, 'combine: rerun wall-clock time is added to the run duration', String(combined.stats?.duration));
-  check(!summary.rows.some((r) => r.title === 'ff fails') && summary.excluded.length === 1, 'combine: excluded tests stay untouched and are listed');
+  check(!summary.rows.some((r) => r.title === 'ff fails') && summary.excluded.length === 2, 'combine: excluded tests (formFields, flaky of a failing run) stay untouched and are listed');
 
   // a test that fails in the rerun but was NOT selected (serial file rerun whole) must be ignored
   const wholeFileRerun = report([...rerunDefs, { file: 'ui/quotations/quotations.spec.ts', title: 'q0 passed first', line: 4, kind: 'failed' }], 1000);
@@ -193,7 +200,6 @@ function main(): void {
   const srow = (t: string) => stacked.summary.rows.find((r) => r.title === t);
   check(JSON.stringify(stacked.summary.firstRun) === JSON.stringify(summary.firstRun), 'stacked: first-run counts stay those of the original run');
   check(srow('times out')?.first === 'failed' && srow('times out')?.final === 'recovered', 'stacked: failed -> failed -> passed is recovered (first stays "failed")');
-  check(srow('hard fail')?.first === 'failed' && srow('hard fail')?.final === 'failed', 'stacked: a test that failed first and fails the later rerun is failed, never a clean pass');
   check(stacked.summary.rerunOf?.runNumber === '12', 'stacked: rerunOf is recorded');
 
   // ── the real ReportParser on a combined report ──
@@ -214,7 +220,7 @@ function main(): void {
   // ── summary reader ──
   check(parseRerunSummary('{ nope') === null && parseRerunSummary('{"version":2}') === null && parseRerunSummary('{"version":1,"ran":true}') === null, 'summary reader: garbage, wrong version or missing parts = null (email behaves as before)');
   const back = parseRerunSummary(JSON.stringify(summary));
-  check(!!back && back.rows.length === summary.rows.length && back.firstRun.failed === 5, 'summary reader: a written summary reads back');
+  check(!!back && back.rows.length === summary.rows.length && back.firstRun.failed === 4, 'summary reader: a written summary reads back');
 
   out(failures === 0 ? '\ncheck:rerun — all checks passed' : `\ncheck:rerun — ${failures} check(s) FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

@@ -155,6 +155,14 @@ export interface TestResult {
   // True for a flaky test that failed every first-run attempt and passed only on the rerun shard (ADR 0015), so the
   // email can say "recovered on rerun" instead of "passed on retry". A test that passed on an in-job retry is false.
   recoveredOnRerun?: boolean;
+  // Status 'skipped' without a skip/fixme annotation or declared skip: the test never ran (serial dependent after a
+  // failure, tests of a cut-off shard). It never failed, but the run did not verify it, so the run is never green.
+  didNotRun?: boolean;
+  // Flaky in the first run (passed on an in-job retry) and passed again on the rerun shard: still flaky for history and
+  // trends and listed in the email, but resolved: it does not by itself keep the run from being green.
+  flakyPassedOnRerun?: boolean;
+  // Passed, but only on the rerun shard: it never ran in the first run (did not run -> passed on rerun). Also never green.
+  ranOnlyOnRerun?: boolean;
   file: string;
   // WHY: repo-relative path to the failure's trace.zip, e.g.
   // "test-results/qa/rbac-deals.rbac-.../trace.zip" — sourced from Playwright's
@@ -253,6 +261,11 @@ export interface ParsedReport {
   passed: number;
   failed: number;
   skipped: number;
+  // Of `skipped`, the tests that were not deliberately skipped (see TestResult.didNotRun); and tests that passed only on the rerun.
+  didNotRun: number;
+  ranOnlyOnRerun: number;
+  // Of `flaky`, the tests that passed again on the rerun (see TestResult.flakyPassedOnRerun).
+  flakyPassedOnRerun: number;
   flaky: number;
   duration: number;
   startTime: string;
@@ -385,6 +398,7 @@ interface PlaywrightJsonTest {
   // WHY added 2026-09-03: see TestResult.skipReason's own WHY comment —
   // confirmed live present at this (test) level, not just per-result.
   annotations?: PlaywrightJsonAnnotation[];
+  expectedStatus?: string;
 }
 
 interface PlaywrightJsonSpec {
@@ -425,6 +439,9 @@ export class ReportParser {
     // output to within a second, while the summed value was ~2x too high
     // (reported email showed 4h35m for a run that actually took 2h31m).
     const duration = raw.stats?.duration ?? results.reduce((sum, r) => sum + r.duration, 0);
+    const didNotRun = results.filter((r) => r.didNotRun).length;
+    const ranOnlyOnRerun = results.filter((r) => r.ranOnlyOnRerun).length;
+    const flakyPassedOnRerun = results.filter((r) => r.flakyPassedOnRerun).length;
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
     const skippedTests = results.filter((r) => r.status === 'skipped');
@@ -447,8 +464,8 @@ export class ReportParser {
         ? 'no-tests-executed'
         : failed > 0
           ? 'failed'
-          : flaky > 0
-            ? 'unstable'
+          : flaky - flakyPassedOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
+            ? 'unstable' // green only when every test passed on its first try: not-run and rerun-only tests are never clean
             : 'passed';
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
     // WHY: Confirmed live (same incident) — raw.startTime does not exist at
@@ -534,6 +551,9 @@ export class ReportParser {
       passed,
       failed,
       skipped,
+      didNotRun,
+      ranOnlyOnRerun,
+      flakyPassedOnRerun,
       flaky,
       duration,
       startTime,
@@ -626,6 +646,16 @@ export class ReportParser {
               .map((e) => e.message || e.value)
               .filter((m): m is string => Boolean(m))
               .map(stripAnsi);
+            const deliberateSkip =
+              test.expectedStatus === 'skipped' || (test.annotations ?? []).some((a) => a.type === 'skip' || a.type === 'fixme');
+            // Flaky first (it passed on an in-job retry), and the last result is a passing rerun result.
+            const flakyPassedOnRerun =
+              status === 'flaky' &&
+              lastResult?.rerun === true &&
+              lastResult.status === 'passed' &&
+              allResults.some((r) => r.status === 'passed' && r.rerun !== true);
+            const didNotRun = status === 'skipped' && !deliberateSkip;
+            const ranOnlyOnRerun = status === 'passed' && allResults.length > 0 && allResults.every((r) => r.rerun === true);
             const skipReason =
               status === 'skipped'
                 ? test.annotations?.find((a) => a.type === 'skip')?.description
@@ -641,6 +671,9 @@ export class ReportParser {
               allErrors,
               retries,
               ...(recoveredOnRerun ? { recoveredOnRerun } : {}),
+              ...(didNotRun ? { didNotRun } : {}),
+              ...(flakyPassedOnRerun ? { flakyPassedOnRerun } : {}),
+              ...(ranOnlyOnRerun ? { ranOnlyOnRerun } : {}),
               file: currentFile,
               tracePath: this.extractAttachmentPaths(traceSourceResult, 'trace')[0],
               screenshotPaths: this.extractAttachmentPaths(traceSourceResult, 'screenshot'),
