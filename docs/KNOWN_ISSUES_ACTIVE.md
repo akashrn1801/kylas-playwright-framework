@@ -5,7 +5,7 @@
 > **Size budget:** 30k chars (hard cap 60k)
 > **Last verified:** 2026-10-29 @ 4a85ad7
 
-**Rules for this file.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line incident summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status words: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
+**Rules.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
 ---
 
@@ -28,7 +28,7 @@
 
 ### KI-04 — Inconclusive one-off flakes (do not re-close without new evidence)
 - **Status:** inconclusive · **Since:** 2026-07-06 … 2026-08-03
-- **What:** six one-off flakes (Deals shared-deal Call-log permission; Quotations RBAC ~8-min `openCreateForm()` timeout; call-logs company live-search "no options"; meetings reschedule 3× HTTP 500; tasks RBAC edit-modal hang; meeting-creation 500 / Deals RBAC Task-permission timeout). Each was one occurrence or unreproducible locally; rule 21 forbids dismissing load-dependent flakes. Full list and detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md). Search by test title, not line number.
+- **What:** six one-off flakes (Deals shared-deal Call-log permission; Quotations RBAC ~8-min `openCreateForm()` timeout; call-logs company live-search "no options"; meetings reschedule 3× HTTP 500; tasks RBAC edit-modal hang; meeting-creation 500 / Deals RBAC Task-permission timeout), each a single or unreproducible occurrence. Detail: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-05 — Dashboard render race (DB33 / DB36) and the stuck-dashlet symptom
 - **Status:** open · **Since:** 2026-09-02
@@ -55,10 +55,32 @@
 - **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/`, `GET /v1/quotations/layout/{list,create}` and (staging) `POST /v1/quotations/`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ### KI-51 — Sandbox 40821683680: cross-shard admin session storm
-- **Status:** open; trigger confirmed from the log, "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
-- **What:** every shard shares one admin account. At 05:26:50 shard 3 logged `token for role admin has only 595s remaining — proactively refreshing` and re-logged in; shards 1, 2, 4 saw `Session expiry detected` within 3 s and re-logged in until 05:34. Failed once in that window: `quotations.rbac:369`, `deals.rbac:593`, `call-logs.rbac:370`/`:468`, `companies.spec:136`. Cached admin tokens had about 600 s left.
-- **Done:** first `/sales/` race capped (`fixtures/index.ts`); the storm is untouched.
-- **Ask / next check:** does a new admin login kill older admin tokens on staging, and why was the cached admin token 26 min? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **Status:** open; "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
+- **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
+- **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+
+### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
+- **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
+- **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
+- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
+
+### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
+- **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
+- **What:** the company clone saved ("Company cloned (Company ID: 272255)") while the Related Deals widget raised its own error toast (`POST /v4/reports/deals` 400 000000); the test failed with "Validation errors found in company clone form". Reproduced by forcing that request to fail. Fixed for `cloneCompany()` and `failedWriteTracker` (`/reports/` POSTs); the same shape remains at ~90 other callers.
+
+### KI-58 — Staging: lead and contact creates with an e-mail or phone return 400 000000
+- **Status:** open, root cause not confirmed (backend/config suspected) · **Since:** 2026-10-30 (uniqueness set to EMAIL_PHONE)
+- **What:** 2026-10-31 live: `POST /v1/leads` with unique e-mail and phone (`has-duplicates` false): name only 200; e-mail only, phone only, both 400 `{"code":"000000","errorDetails":[]}`. UI lead/contact creates fail alike; company create and QA pass. Needs the Kylas backend log / staging config; a 400 is no longer retried (ADR 0014).
+
+### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
+- **Status:** open, watch · **Since:** 2026-11-02
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers; lead page size/sort/Kanban are shared per-user state. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+
+### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
+- **Status:** open · **Since:** 2026-11-03 (sandbox, staging)
+- **What:** `POST /v3/reports` 500 `01403004` hit Save As and a Lead report ("Meeting-only" is stale); both now fail at once with status/code (the one existing create retry stays). Product control stays disabled if `GET /v1/deals/{id}` fails (now a labelled fast failure). 400 "Connection prematurely closed BEFORE response" on a quotation save is KI-49, not retried. `quotations.rbac` edit-shared "Save toast not visible": hardened, cause unconfirmed, needs a trace.
+
+### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
 
 ---
 
@@ -86,8 +108,8 @@
 
 ### KI-37 — Install-step bound and incomplete-run handling: unproven by a real run's logs
 - **Status:** partly confirmed (implemented 2026-10-08; mirror rewrite and a healthy install read in real CI 2026-10-28) · **Since:** 2026-10-07
-- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1, job 122026090281): the azure apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only, because they did not trigger: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause, run 37669596623, unknown); `syncHistory` only via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
-- **Next check:** the first real install failure or retry: it shows the `Playwright browser install failed` annotation and exercises the retry/kill/budget paths.
+- **What:** [ADR 0010](./adr/0010-incomplete-run-handling-and-bounded-install.md). Confirmed in sandbox run 40454948545 (shard 1): the apt mirror rewrite and a first-attempt install in 28 s (limit 300 s). Still stub-tested only: the retry, the leftover-`apt-get` kill and the 570 s budget (apt-stall cause, run 37669596623, unknown); `syncHistory` via pure functions. Full list: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **Next check:** the first real install failure or retry (`Playwright browser install failed` annotation).
 
 ### KI-11 — The formFields shard matrix does not scale with test growth
 - **Status:** open · **Since:** 2026-09-29
@@ -96,8 +118,8 @@
 
 ### KI-12 — Sequenced formFields-after-core is not yet proven by a real run
 - **Status:** unverified · **Since:** 2026-10-06 (commit `1bd03cc`)
-- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s `run-tests`, `run-formfields-tests`, `reset-field-config` and `merge-and-report` jobs carry `environment: production`; if that environment has required reviewers a second approval prompt appears. Wall-clock roughly doubles for the sharded workflows ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
-- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval. Sandbox re-run gate: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
+- **What:** `needs: run-tests` + `if: ${{ !cancelled() }}` on `run-formfields-tests`, the conditional product-fixture creation (`src/auth/productFixtureNeed.ts`) and the load-signal table are checked by actionlint and synthetic runs only. `main.yml`'s four non-`plan` jobs carry `environment: production`; required reviewers there would add an approval prompt (not knowable from the repo). Wall-clock roughly doubles by design ([ADR 0007](./adr/0007-sequence-formfields-after-core.md)).
+- **Next check:** first real run: the three job-graph cases, the "Load Signals by Job" table, `main` approval behavior. Sandbox re-run gate: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
 
 ### KI-13 — `globalSetup` product-reference-data HTTP 400 on staging
 - **Status:** unverified · **Since:** 2026-09-04
@@ -121,7 +143,7 @@
 
 ### KI-47 — Sharded Jenkins: two core lanes at once still unproven
 - **Status:** partly confirmed (live 2026-10-28) · **Since:** 2026-10-28
-- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Live 2026-10-28 (maintainer): an unsharded sandbox build (lock `kylas-staging-account`, guard Clear, 51 passed) and sharded build 2 on QA (both locks, guard Clear 3 times, 1 core + 2 formFields lanes, reset, "All 7 shards reported", merge, history, PARTIAL email). Unproven: 2 core lanes at once, script approvals, `finally` reset after an abort, speed/memory estimates, the guard's PAT being the "Jenkins setup" one. Detail: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** [ADR 0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md). Live 2026-10-28: an unsharded sandbox build and a sharded QA build both passed (locks, guard Clear, "All 7 shards reported", merge, history, PARTIAL email). Unproven: 2 core lanes at once, script approvals, `finally` reset after an abort, speed/memory estimates, the guard's PAT. Detail: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** a full sharded QA run with the default 2 core lanes, compared with GitHub's `qa.yml` results ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6).
 
 ### KI-15 — Real GitHub Jobs API response shape for the "CI Job Stats" card
@@ -141,7 +163,7 @@
 
 ### KI-18 — Unmeasured reporting pipeline gaps
 - **Status:** open · **Since:** 2026-09-30 / 2026-10-06
-- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (verified: 11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` are written to a pid-named worker file (`WORKER_ID` falls back to `process.pid`) that `MiscErrorReporter.onBegin()` deletes (pre-existing); recovery events are not affected, they go to `recovery-events-main.json` (`MAIN_PROCESS_EVENTS_PATH`), which `MiscErrorReporter` merges; (c) the `/fields` list `ERR_ABORTED` noise is allowlisted; any other `ERR_ABORTED` family still needs the zero-correlation evidence bar first.
+- **What:** (a) `syncHistory.ts`, `notify.ts`, `src/reporters/MiscErrorReporter.ts` still use `console.*` instead of `logger` (11 / 1 / 28 call sites); (b) misc errors captured by `ErrorCollector` inside `globalSetup` go to a pid-named worker file that `MiscErrorReporter.onBegin()` deletes (pre-existing; recovery events use `recovery-events-main.json`); (c) the `/fields` list `ERR_ABORTED` noise is allowlisted; any other `ERR_ABORTED` family needs zero-correlation evidence first.
 - **History:** [reporting-and-notifications.md](./known-issues/reporting-and-notifications.md).
 
 ---
@@ -150,7 +172,7 @@
 
 ### KI-19 — The escalated sandbox run's formFields track ignores `--grep @regression`
 - **Status:** open · **Since:** 2026-10-06
-- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged, so 18 untagged tests run). 932 = 515 + 417; 916 = 499 + 417. `qa.yml`/`stage.yml`/`main.yml` use the same formFields command. Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails) and the "Verify all shards reported" check counts zips, so a stale blob still satisfies it. Per-shard arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
+- **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged; 932 = 515 + 417, 916 = 499 + 417). Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails); "Verify all shards reported" counts zips, so a stale blob passes. Arithmetic: [sharding-and-locks.md](./known-issues/sharding-and-locks.md).
 - **Next check:** decide whether formFields should honor the tag filter; the one skipped test is the known `call-logs.spec.ts:568` `test.skip`.
 
 ### KI-20 — `waitForTimeout(500)` left in `openUserShareTypeSearch()` catch backoff
@@ -180,26 +202,20 @@
 ### KI-26 — Repo hygiene
 - **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
 
-### KI-27 — Dev-branch lint-fix drift (carried over; likely closed)
-- **Status:** unverified · **What:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main. Remote-tracking refs (last fetched 2026-09-10) showed **no** diff on those files between `origin/dev` and the four; files changed since. Re-check after a `git fetch` (rule 25); delete if clean.
+### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
+- **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
+- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible recurrence 2026-10-29 (run 40821683680).
+- **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) ("OPEN (KI-43)").
 
-### KI-43 — Staging search index not reflecting new records: sandbox 38582148420 (64 failed) and 38690038228 (55 failed)
-- **Status:** open (staging environment problem, CONFIRMED by a live probe 2026-10-15; no test-code fix is possible; later run passed, recovery unconfirmed) · **Since:** 2026-10-14
-- **What / evidence:** just-created deals/contacts/leads/companies never appeared in search lookups (react-select empty, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s (90 of 90 polls empty) on a live probe; green runs passed the same code. Cause on the Kylas side not established (HYPOTHESIS: indexing backlog).
-- **Ask the Kylas dev team:** is the staging search indexer / event consumer stalled or backlogged since about 2026-10-14, and was there a staging deploy or reindex around 10-14 Oct?
-- **Next check:** run 40279659288 (2026-10-26) passed all 14 jobs: evidence of recovery, not proof. **2026-10-29 recurrence?** (run 40821683680): a company made 06:13 was not searchable at 06:15 (`leads.spec:543` retry); `meetings.rbac:187`, `deals.rbac:1501`, `contacts.spec:601`, `tasks.rbac:312` also failed once. Probe or ask the Kylas team before closing.
-- **History link:** full signatures, traces, probe and not-verified list: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) (entry "OPEN (KI-43)").
-
-### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI; `b0c6b38` part 2 not ported
+### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
 - **Status:** open for CI confirmation · **Since:** 2026-10-07
-- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by BasePage's helpers and 9 modules' pick sites (not `LeadsPage.ts`); Units passed in CI run 37778400646, DB27 and both Call Logs tests passed locally on QA (2026-10-08). Symptom, evidence and live results: [locators-and-timing.md](./known-issues/locators-and-timing.md). NOT verified: why QA differs from stage; which path (natural close vs Escape) closed the menu in DB27/Call Logs.
-- **Part 2 (open):** `saveEditedProduct()` does no `blur()` + `networkidle` before Save; `b0c6b38` claims a wiped `customFieldValues` on the PUT. Current evidence does not involve it. See [products-and-services.md](./known-issues/products-and-services.md).
+- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](./adr/0011-react-select-menu-closed-contract.md)) is used by BasePage helpers and 9 modules (not `LeadsPage.ts`); passed locally on QA 2026-10-08. Evidence: [locators-and-timing.md](./known-issues/locators-and-timing.md). Not verified: why QA differs from stage.
+- **Part 2 (open):** `saveEditedProduct()` has no `blur()` + `networkidle` before Save (`b0c6b38` claim); see [products-and-services.md](./known-issues/products-and-services.md).
 
 ### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
-- **Status:** latent, NOT reproduced (no failing run or trace is attributed to it) · **Since:** code comment dated 2026-07-16; recorded here 2026-10-27
-- **What:** the predicate is `res.url().includes('companies') && !res.url().includes('/reports/') && POST && (200 || 201)` (`src/modules/companies/CompaniesPage.ts:424-445`), so it has no `/v1/<module>/` requirement, which standing rule 15 asks for; Deals, Leads, Contacts, Tasks and Meetings have it. The code comment says this was deliberate: the exact company create/clone endpoint had not been confirmed in that run's logs, so only `/reports/` was excluded rather than guessing a full path.
-- **Risk:** the first 200/201 POST whose URL contains `companies` outside `/reports/`, during the clone save window, is taken as the clone POST; a wrong id would be returned and the next step would open that record. Its only caller is `cloneCompany()` (`:1171`); a null id fails loudly. No other matching POST is known (full analysis: [locators-and-timing.md](./known-issues/locators-and-timing.md), entry "KI-44 detail").
-- **Next check:** separate branch: reuse that `/v1/companies/` regex after confirming the clone POST path from a trace (rule 10); re-run clone 3-5x (rule 8).
+- **Status:** latent, NOT reproduced · **Since:** 2026-07-16 (recorded 2026-10-27)
+- **What:** no `/v1/companies/` requirement (`src/modules/companies/CompaniesPage.ts:424-445`; the other modules have it). Deliberate at the time: the clone POST path was unconfirmed. Only caller `cloneCompany()`; a null id fails loudly, a wrong id is the risk.
+- **Next check:** confirm the clone POST path from a trace, then reuse the regex; re-run clone 3-5x. Analysis: [locators-and-timing.md](./known-issues/locators-and-timing.md) ("KI-44 detail").
 
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
@@ -210,4 +226,4 @@
 - **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
 - **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
 - **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
-- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` ~L103 says deployed to stage/prod 2026-09-03, its skip message ~L929 says QA-only as of 2026-09-09; nothing in the repo settles it); the two tests that need it self-skip via a live presence check, so nothing to fix — re-verify the claim per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).
+- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` comments disagree on stage/prod and nothing in the repo settles it); the two tests that need it self-skip via a live presence check — re-verify per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).

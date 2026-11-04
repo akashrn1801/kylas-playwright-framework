@@ -1,5 +1,6 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
-import { faker } from '@faker-js/faker';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
+import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { BasePage } from '../../core/BasePage';
 import {
   CompanyData,
@@ -817,9 +818,7 @@ export class CompaniesPage extends BasePage {
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
       const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
-      const transient =
-        !hasFieldErrors &&
-        (status >= 500 || /unexpected error occurred|internal server error/i.test(message));
+      const transient = !hasFieldErrors && isRetryableHttpStatus(status);
       logger.warn(
         `Company create returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
@@ -1155,25 +1154,30 @@ export class CompaniesPage extends BasePage {
     // WHY: Change email to unique value — same email as original causes duplicate error
     const emailInput = this.emailInput();
     if (await emailInput.isVisible().catch(() => false)) {
-      const timestamp = Date.now();
-      await emailInput.fill(`clone${timestamp}@testkylas.com`);
+      await emailInput.fill(uniqueEmail('clone'));
       logger.debug('Clone email updated to unique value');
     }
     // WHY: Change phone to unique value — same phone as original causes duplicate error
     const phoneInput = this.phoneInput();
     if (await phoneInput.isVisible().catch(() => false)) {
       // WHY: Indian mobile numbers must start with 6/7/8/9 and be exactly 10 digits
-      const newPhone = faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9);
+      const newPhone = uniquePhone();
       await phoneInput.clear();
       await phoneInput.fill(newPhone);
       logger.debug(`Clone phone updated to: ${newPhone}`);
     }
     const companyIdPromise = this.captureCompanyIdFromResponse();
     await this.click(this.saveButton(), 'save cloned company');
-    await this.assertNoFormErrors('company clone form');
+    // WHY the server's answer first (2026-10-30, root cause proven by simulation): the clone succeeds when the
+    // create POST answers 200/201 with an id. assertNoFormErrors() reads ANY error toast on the page, and the
+    // Related Deals widget of the original company can raise its own ("Uhoh! Something didn't work as
+    // expected", `POST /v4/reports/deals` 400 000000) at the same moment — the clone had been saved ("Company
+    // cloned (Company ID: …)") and the test still failed. So the form-error check now only runs when no id came
+    // back, where it explains why the save was refused.
     const companyId = await companyIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
     if (!companyId) {
+      await this.assertNoFormErrors('company clone form');
       throw new Error('Cloned company ID not captured after save — cannot proceed (save likely failed silently)');
     }
     // WHY: After clone save, app stays on original company detail — no

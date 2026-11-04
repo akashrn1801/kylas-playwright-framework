@@ -5,19 +5,24 @@
 > **Size budget:** 4k chars (hard cap 60k)
 > **Last verified:** 2026-10-29 @ 9e60850
 
-Snapshot of 2026-11-03 (the Jenkins-branch part is from 2026-10-28). Git facts come from the maintainer's statements and the session-start log; it decays: re-check before trusting.
+Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part is from 2026-10-28. Git facts come from the maintainer's statements and the session-start log; they decay: re-check before trusting.
 
 ## `feature/ci-rerun-shard-20261103` (cut from `dev`, nothing committed, nothing run on GitHub)
 
-- **Built (sandbox.yml only):** formFields attempt gate, `rerun-failed` shard behind `vars.RERUN_SHARD == 'on'`, combined report/email/history, manual `rerun-failed.yml`, email review fixes ([ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), [REPORTING](./REPORTING.md) 3.1). Offline checks pass (`check:rerun`, `check:failure-labels`, actionlint); the UNVERIFIED GitHub behaviours are listed in the ADR. **Next:** review the diff, commit, run sandbox with `RERUN_SHARD` off, then on.
-- **Follow-ups (seen, deliberately not changed):** JobStats lists only the latest attempt's jobs, so a re-run's job-minutes exclude the earlier attempt; the email's "Artifacts:" line shows a runner path, not a link; a manual rerun's email shows the original build number but links to the manual run; the merged HTML report stays the first run (only `results.json` is combined); rerun misc errors are uploaded but not aggregated; the manual workflow needs `run-meta-*` (sandbox runs only); qa/stage/main are not wired; Jenkins is not covered. `withRateLimitRecovery` reloads on the 'Something is broken' screen too; review whether that should fail fast instead (ADR 0014).
+- **Built (sandbox.yml only):** formFields attempt gate, `rerun-failed` shard behind `vars.RERUN_SHARD == 'on'`, combined report/email/history, manual `rerun-failed.yml`, email review fixes ([ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), [REPORTING](./REPORTING.md) 3.1). Offline checks pass (`check:rerun`, `check:failure-labels`, actionlint); the UNVERIFIED GitHub behaviours are in the ADR. **Next:** review the diff, commit, run sandbox with `RERUN_SHARD` off, then on.
+- **Follow-ups (seen, deliberately not changed):** JobStats lists only the latest attempt's jobs, so a re-run's job-minutes exclude the earlier attempt; the email's "Artifacts:" line shows a runner path, not a link; a manual rerun's email shows the original build number but links to the manual run; the merged HTML report stays the first run (only `results.json` is combined); rerun misc errors are uploaded but not aggregated; the manual workflow needs `run-meta-*` (sandbox runs only); qa/stage/main are not wired; Jenkins is not covered. `withRateLimitRecovery` reloads on the 'Something is broken' screen too; review whether that should fail fast (ADR 0014).
+
+## `feature/leads-coverage-gaps-20261030` (PR #684, merged into `dev`)
+
+- Four commits pushed (last `3373bfe`). Sandbox run 41066366856 on staging: all passed except two new lead tests: duplicate e-mail (staging uniqueness was NONE, now EMAIL_PHONE; the test checks the setting first) and attach-pipeline (not reproducible; removed 2026-11-02, KI-56 closed in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), root cause not confirmed).
+- **Uncommitted at the 2026-10-31 snapshot:** `uniqueValues.ts` (unique e-mail/phone for lead, contact, company factories, clone flows, `LeadApi`) and the lead `has-duplicates` pre-check (a duplicate fails loudly, a non-OK endpoint is skipped with a warning, no `@prodSafe` test creates a lead).
+- **Live 2026-10-31 (one run each; sandbox CI is the proof):** QA 6/6 pass. Staging 1/6: company create passes; lead and contact creates fail 400 `000000`. Probe: name only 200; e-mail only, phone only, both 400, so unique values did not fix it: [KI-58](./KNOWN_ISSUES_ACTIVE.md), backend/config suspected.
+- **Next:** have staging's lead/contact create checked (backend log, uniqueness config); sandbox CI after that.
 
 ## Still open
 
-- **Investigated, fix committed (`02fc52e`), not run on QA:** GitHub qa run 40477938102 (2026-10-27): `deals.rbac.spec.ts:342`, `quotations.spec.ts:620` / `:640` were QA backend DNS failures ([KI-49](./KNOWN_ISSUES_ACTIVE.md)). Fix: Contacts/Companies/Leads/Deals create flows report status/code/message, Quotations layout fail-fast, bounded `BasePage.fill()`, a registry signature. Unverified on QA.
-- [KI-48](./KNOWN_ISSUES_ACTIVE.md): Quotation create form crash (PROD run 40637702829).
-- [KI-47](./KNOWN_ISSUES_ACTIVE.md): QA test runs of the sharded path ([RUNBOOK](./RUNBOOK.md#jenkins-sharded-runs-setup-and-operation) step 6; step 5, the linter, is done). Until they pass, leave `KYLAS_SHARDED_BRANCHES` unset.
-- [KI-45](./KNOWN_ISSUES_ACTIVE.md): confirm the wall-clock stamps on the next real approval. [KI-46](./KNOWN_ISSUES_ACTIVE.md): check Jenkins before dispatching `main.yml`/`prod.yml` by hand.
-- [KI-37](./KNOWN_ISSUES_ACTIVE.md): the install-log read is done (sandbox run 40454948545: mirror rewrite and a healthy install confirmed); the retry, kill and budget paths stay stub-tested, so KI-37 is no longer an open item here.
-- `check:docs` compares "Last verified" with file mtime, which a checkout or reset resets, so a clean checkout can show false errors.
-- Open items carried from the previous snapshot (KI-43, KI-44, the Quotation deployment claim, `KI-TBD` registry refs) were not re-checked today; see [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md).
+- [KI-58](./KNOWN_ISSUES_ACTIVE.md): staging create 400 `000000` with e-mail/phone. The attach-pipeline test (KI-56) was removed 2026-11-02.
+- 400 `000000` is no longer classified transient (ADR 0014, 2026-11-02); the sandbox run is the proof.
+- [KI-52](./KNOWN_ISSUES_ACTIVE.md) to KI-55: lead coverage known app bugs and watch items; the tests stay green until Kylas fixes them.
+- Jenkins sharded-path items ([KI-45](./KNOWN_ISSUES_ACTIVE.md) to KI-47) and KI-48/49/51 carry over from the previous snapshot (2026-10-29) and were not re-checked.
+- `check:docs` compares "Last verified" with the commit author date; a checkout or reset can show false errors.

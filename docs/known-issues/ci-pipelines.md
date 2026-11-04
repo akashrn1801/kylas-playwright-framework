@@ -86,3 +86,9 @@ Sharding and lock history is in `docs/known-issues/sharding-and-locks.md`. Real 
 
 ### Repo hygiene detail (detail for KNOWN_ISSUES_ACTIVE.md KI-26, which stays open there) — 2026-10-09
 - **Status:** open · **What:** `.env.example` is gitignored and never committed, so a fresh clone has no credential template (the README lists the real required variables; the local file only holds dead `*_DEAL_NAME` entries); `.eslintrc.json` is a legacy config never read by `npm run lint` (`eslint.config.js` is active); pre-existing prettier drift in `LeadsPage.ts` and `BasePage.ts` (`npx prettier --check` 2026-10-27; `QuotationsPage.ts` is clean); `.claude/settings.json` carries an inert `agent_delegation` / `investigation_log` block whose `INVESTIGATION_LOG.md` does not exist. <!-- ref-ok -->
+
+### Dev-branch lint-fix drift (former KI-27) — closed 2026-10-30
+- **Symptom:** `CLAUDE.md` once recorded 3 lint-suppression hunks missing on `dev` but present on qa/stage/prod/main.
+- **Root cause:** not established; the drift was carried over from an old note and never reproduced.
+- **Evidence (user-run, 2026-10-30):** after `git fetch origin`, `git diff --stat origin/dev origin/{qa,stage,prod,main} -- src tests` printed nothing for all four: `dev`'s code is identical to the four branches.
+- **Fix:** None needed. **Revert:** n/a. **Commit:** n/a.

@@ -21,6 +21,8 @@ One page per decision, max about 3.5k chars. Never edit an accepted ADR's decisi
 | [0010](0010-incomplete-run-handling-and-bounded-install.md) | Incomplete runs never green; bounded browser install | Accepted (partly run) |
 | [0011](0011-react-select-menu-closed-contract.md) | A react-select pick must end with its menu verified closed | Accepted (partly run) |
 | [0012](0012-jenkins-sharded-runs-locks-and-guard.md) | Jenkins shards like its GitHub twin; account locks and a collision guard | Accepted (partly run) |
+| [0013](0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md) | API set-up for Lead tests, opt-in cleanup fixtures, generic share-rule support | Accepted |
+| [0014](0014-definitive-errors-and-ready-signals.md) | Definitive errors are not retried; interact only on a real ready signal | Accepted |
 | [0015](0015-skip-passed-formfields-on-rerun-and-rerun-shard.md) | A re-run skips formFields jobs that already passed (sandbox first); rerun shard design | Proposed (step 1 in sandbox.yml, not yet run) |
 
 ## Template

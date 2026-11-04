@@ -1411,7 +1411,17 @@ export class ReportsPage extends BasePage {
     // reliable signal is the URL's id portion actually changing from what
     // it was before this action.
     const originalId = this.captureReportIdFromUrl();
+    // WHY (2026-11-03, reports.spec "save as"): Save As POSTs /v3/reports like a create, and it
+    // can return the same HTTP 500 01403004. Without reading that response the test waited out
+    // the whole waitForURL timeout. Armed before the click; a rejected save fails at once.
+    const saveResponse = this.page
+      .waitForResponse(
+        (res) => res.request().method() === 'POST' && this.isReportCreatePath(res),
+        { timeout: config.timeouts.navigation }
+      )
+      .catch(() => null);
     await this.click(this.saveAsConfirmButton(), 'Save As — confirm');
+    await this.failIfReportSaveRejected(await saveResponse, 'Save As');
     await this.page.waitForURL(
       (url) => /\/reports\/details\/\d+/.test(url.pathname) && !url.pathname.endsWith(`/${originalId}`),
       { timeout: config.timeouts.navigation }
@@ -2153,7 +2163,31 @@ export class ReportsPage extends BasePage {
   // iteration), and the caller below reads as plain, sequential control
   // flow: try once, and only if that one exact confirmed signature comes
   // back, fall back to trying again.
-  private async attemptSaveOnceAndClassify(): Promise<'done' | 'confirmedTransientBackendBug'> {
+  private isReportCreatePath(res: Response): boolean {
+    return /\/v3\/reports\/?$/.test(new URL(res.url()).pathname);
+  }
+
+  // WHY: a rejected report save never navigates, so every later wait just burns its timeout.
+  // Throws with the status, code and body of the POST /v3/reports so the failure labels itself.
+  // `null` (no response captured, e.g. client-side validation) is left to the caller's own checks.
+  private async failIfReportSaveRejected(response: Response | null, action: string): Promise<void> {
+    if (!response || response.ok()) return;
+    const body = (await response.json().catch(() => null)) as { code?: string; message?: string } | null;
+    const code = body?.code ?? 'none';
+    const known =
+      response.status() === 500 && code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE
+        ? ' — known Kylas backend defect (docs/known-issues/reports-module.md), not a test fault'
+        : '';
+    throw new Error(
+      `${action} rejected by the server: HTTP ${response.status()} code ${code} message ` +
+        `"${body?.message ?? ''}" on POST /v3/reports${known}`
+    );
+  }
+
+  private async attemptSaveOnceAndClassify(): Promise<{
+    outcome: 'done' | 'confirmedTransientBackendBug';
+    response: Response | null;
+  }> {
     // WHY armed BEFORE the click, matching this codebase's own established
     // "ID-capture set up before Save" convention (.claude/reference-
     // patterns.md §7): the response can land before the click's own
@@ -2173,12 +2207,12 @@ export class ReportsPage extends BasePage {
       // network) — either way, this isn't the confirmed backend signature,
       // so let the caller's own waitForReportDetailPage()/form-error checks
       // be the real signal, unmodified.
-      return 'done';
+      return { outcome: 'done', response };
     }
     const body = await response.json().catch(() => null);
     const isConfirmedTransientBackendBug =
       response.status() === 500 && body?.code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE;
-    return isConfirmedTransientBackendBug ? 'confirmedTransientBackendBug' : 'done';
+    return { outcome: isConfirmedTransientBackendBug ? 'confirmedTransientBackendBug' : 'done', response };
   }
 
   // WHY this exists, and why the retry below is a FALLBACK, never the
@@ -2202,8 +2236,9 @@ export class ReportsPage extends BasePage {
     // PRIMARY ATTEMPT — a normal, unmodified Save click. No special-casing,
     // no workaround logic: this is exactly what a plain `clickSaveButton()`
     // call would do.
-    const primaryOutcome = await this.attemptSaveOnceAndClassify();
-    if (primaryOutcome !== 'confirmedTransientBackendBug') {
+    const primary = await this.attemptSaveOnceAndClassify();
+    if (primary.outcome !== 'confirmedTransientBackendBug') {
+      await this.failIfReportSaveRejected(primary.response, 'Report save');
       return;
     }
 
@@ -2218,7 +2253,10 @@ export class ReportsPage extends BasePage {
         '(confirmed Kylas backend bug — see docs/known-issues/reports-module.md) on the primary attempt — ' +
         'retrying Save once as a fallback'
     );
-    await this.attemptSaveOnceAndClassify();
+    const fallback = await this.attemptSaveOnceAndClassify();
+    // WHY (2026-11-03, reports.spec "delete a report"): when the retry is rejected too the details
+    // page never renders; fail now with the response, not after the next wait's timeout.
+    await this.failIfReportSaveRejected(fallback.response, 'Report save (after the one 01403004 retry)');
   }
 
   // WHY public (2026-10-09, stage run 37778503008 shard 1/5, reports.spec.ts:533): tests that
