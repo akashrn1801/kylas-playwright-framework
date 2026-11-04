@@ -131,7 +131,15 @@ export class BasePage {
     description: string,
     timeout = 30000
   ): Promise<Response> {
-    const responsePromise = this.page.waitForResponse(predicate, { timeout });
+    const armedAt = Date.now();
+    // Label only: a plain Playwright timeout names no step. Same error, same moment,
+    // now saying what was awaited and for how long (B0, ADR 0016).
+    const responsePromise = this.page.waitForResponse(predicate, { timeout }).catch((error: Error) => {
+      if (/Timeout \d+ms exceeded/i.test(error.message)) {
+        throw new Error(`${description}: no matching response within ${Date.now() - armedAt}ms (limit ${timeout}ms). ${error.message}`);
+      }
+      throw error;
+    });
 
     // WHY: a page never registered for recovery (e.g. login.spec.ts's plain
     // `page` fixture) gets the exact pre-existing behavior, unchanged — see
@@ -1218,22 +1226,32 @@ export class BasePage {
     // Purely additive: any non-429 load behaves exactly as before (the first
     // racer to settle wins; a false match only costs one harmless Refresh).
     // Read-only, so safe for the @prodSafe callers of this shared method.
-    const firstSignal = await Promise.race([
+    // Measurement label (B0, ADR 0016): which racer ended the wait and after how
+    // long. 'timed-out' = that racer hit its bound; the outcome handling below is
+    // unchanged (every non-rate-limit result is still 'settled').
+    const raceStartedAt = Date.now();
+    const racerResult = (label: string, outcome: 'settled' | 'rate-limited') => ({ label, outcome, timedOut: false });
+    const racerTimedOut = (label: string) => ({ label, outcome: 'settled' as const, timedOut: true });
+    const winner = await Promise.race([
       this.page
         .waitForResponse(responsePredicate, { timeout: boundedTimeout() })
-        .then(() => 'settled' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('list response', 'settled'))
+        .catch(() => racerTimedOut('list response')),
       tableLocator
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
-        .then(() => 'settled' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('list table visible', 'settled'))
+        .catch(() => racerTimedOut('list table visible')),
       this.page
         .getByText(RATE_LIMIT_PAGE_PATTERN)
         .first()
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
-        .then(() => 'rate-limited' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('rate-limit page', 'rate-limited'))
+        .catch(() => racerTimedOut('rate-limit page')),
     ]);
+    const firstSignal = winner.outcome;
+    logger.info(
+      `${description} list ready-wait: ${winner.label}${winner.timedOut ? ' TIMED OUT' : ''} after ${Date.now() - raceStartedAt}ms`
+    );
     if (firstSignal === 'rate-limited') {
       logger.warn(
         `${description} list showed the app's rate-limit page ("Too many requests at once") — recovering now instead of waiting out the navigation timeout`

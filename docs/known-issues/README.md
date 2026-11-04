@@ -5,7 +5,7 @@
 > **Size budget:** 6k chars (hard cap 60k)
 > **Last verified:** 2026-10-27 @ a9f5372
 
-Open problems are NOT here — see [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md). Each topic file uses the incident template in [../CONTRIBUTING_TESTS.md](../CONTRIBUTING_TESTS.md#size-policy) (symptom, root cause, fix, revert, commit) and rotates by period at 70% of its budget.
+Open problems are NOT here — see [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md); the one exception is [watch-items.md](./watch-items.md), open items moved there verbatim to keep the active list small. Each topic file uses the incident template in [../CONTRIBUTING_TESTS.md](../CONTRIBUTING_TESTS.md#size-policy) (symptom, root cause, fix, revert, commit) and rotates by period at 70% of its budget.
 
 | Topic file | Covers | Read when |
 |---|---|---|
