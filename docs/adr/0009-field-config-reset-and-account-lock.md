@@ -6,7 +6,7 @@
 > **Last verified:** 2026-10-27 @ a9f5372
 
 ## Status
-Accepted — 2026-10-06. Implemented. The script has been run once against a real app as a local dry-run (2026-10-23, Lead `cfFormFieldLimitText`; see the comment above `confirmAuthenticated` in `scripts/reset-field-config.ts`); no real reset and no real CI run is evidenced in the code. See the open items in [KI-34](../KNOWN_ISSUES_ACTIVE.md#ki-34--field-config-reset-job-and-concurrency-groups-never-run-github-behaviours-unconfirmed).
+Accepted — 2026-10-06. Implemented. The script has been run once against a real app as a local dry-run (2026-10-23, Lead `cfFormFieldLimitText`; see the comment above `confirmAuthenticated` in `scripts/reset-field-config.ts`); no real reset and no real CI run is evidenced in the code. See the open items in [KI-34](../known-issues/watch-items.md#ki-34--field-config-reset-job-and-concurrency-groups-never-run-github-behaviours-unconfirmed).
 
 ## Context
 - formFields tests mutate account-wide field config. A killed/cancelled run or a failed `afterAll` can leave limits on the dedicated fields (`cfFormFieldLimit{Text,Number,Paragraph}` x 6 entities = 18 fields). Stale limits break the *next* formFields run ([RUNBOOK](../RUNBOOK.md) row "no create request was observed").
