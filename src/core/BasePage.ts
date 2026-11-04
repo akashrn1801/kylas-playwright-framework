@@ -17,7 +17,7 @@ import {
 import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
-import { trackFailedWrites, recentFailedWrite } from '../utils/failedWriteTracker';
+import { trackFailedWrites, recentFailedWrite, recentFailedRead } from '../utils/failedWriteTracker';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
@@ -427,6 +427,72 @@ export class BasePage {
     }
   }
 
+  // ── Fail-fast waits (2026-11-04, sandbox run of 2026-11-03: 5 of 14 flaky tests were unbounded waits) ──────────────
+  // Evidence (traces of that run): `playwright.config.ts` had no actionTimeout, so a raw click/waitFor/scrollIntoView
+  // waited for the whole 480 s test timeout whenever the app showed its error screen or a form never rendered:
+  //  - FFRTK6: `<div class="app-error something-is-broken">` intercepted the pointer for 657 click retries;
+  //  - the Edit Deal / Edit Contact modals stayed grey skeletons after `GET /v1/deals/{id}` and `GET /v1/contacts/{id}`
+  //    answered 429; Add Deal's "Product or Services" after `GET /v1/products/layout` answered 500;
+  //  - the Reports create form after `GET /v1/reports/config/leads` answered 400 after 27 s.
+  // None of these can heal by waiting. These helpers name the real cause and stop within seconds.
+
+  /**
+   * If the page is showing the app's own rate-limit page or its "Something is broken" error screen, an Error that says
+   * so (original message kept); otherwise the original error unchanged. Always returns, so callers `throw await ...`.
+   */
+  protected async explainAppErrorPage(description: string, error: unknown): Promise<unknown> {
+    const original = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    if (await isRateLimitedPage(this.page).catch(() => false)) {
+      return new Error(`${description}: the app is showing its rate-limit page ("Too many requests at once"), not the expected UI — backend 429. Original: ${original}`);
+    }
+    if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+      return new Error(`${description}: the app is showing its error screen ("Something is broken") over the page — an app/backend failure, not a missing element. Original: ${original}`);
+    }
+    return error;
+  }
+
+  /**
+   * Waits for `locator` to be visible for up to `timeout` (default: the navigation timeout, as the plain waitFor it
+   * replaces), but gives up early with the real reason when the control can never appear: the page shows the rate-limit
+   * page or the "Something is broken" screen, or a page-critical API read failed (HTTP 400/429/5xx, see
+   * failedWriteTracker.recentFailedRead) and the control is still missing 15 s later. The final fallback is the same
+   * TimeoutError the plain waitFor threw, so nothing that passes today changes.
+   */
+  protected async waitForRendered(locator: Locator, description: string, timeout = config.timeouts.navigation): Promise<void> {
+    const SLICE_MS = 5000;
+    const FAILED_READ_GRACE_MS = 15000;
+    const startedAt = Date.now();
+    for (;;) {
+      const left = timeout - (Date.now() - startedAt);
+      try {
+        await locator.waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) });
+        return;
+      } catch (error) {
+        if (left <= SLICE_MS) throw error;
+        const explained = await this.explainAppErrorPage(description, error);
+        if (explained !== error) throw explained;
+        const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
+        if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
+          throw new Error(
+            `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
+              `the backend failed a request the page needs (${failedRead.summary}); waiting longer cannot help. Original: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * One reload, only when the page is the app's own 429 rate-limit page (ADR 0014); true if it reloaded. The "Something
+   * is broken" error screen and every other state are NOT recovered here: they fail fast and name the cause
+   * (explainAppErrorPage / waitForRendered).
+   */
+  protected async recoverIfRateLimitPage(): Promise<boolean> {
+    if (!(await isRateLimitedPage(this.page).catch(() => false))) return false;
+    await tryRecoverFromRateLimit(this.page);
+    return true;
+  }
+
   async reloadPage(): Promise<void> {
     logger.info('Reloading page');
     await this.page.reload({ waitUntil: 'domcontentloaded' });
@@ -453,7 +519,7 @@ export class BasePage {
       // WHY: Explicit timeout prevents silent infinite hang when an element never renders.
       // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
       // then hangs until Playwright teardown instead of failing with an actionable error.
-      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.waitForRendered(locator, description);
       await locator.click({ timeout: 15000, force });
     } catch (error) {
       // WHY: mid-test session recovery (2026-07-09) — confirmed live and via
@@ -479,7 +545,7 @@ export class BasePage {
       // expected signIn state. See isPageRegisteredForRecovery()'s own
       // comment for the full explanation.
       if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
-        throw error;
+        throw await this.explainAppErrorPage(description, error);
       }
       logger.warn(
         `"${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
@@ -596,7 +662,7 @@ export class BasePage {
     // HTTP 400) held the test until the 480000ms test timeout. Bounded by the
     // same config.timeouts.navigation the Add Quotation waitFor uses.
     try {
-      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.waitForRendered(locator, description);
       await locator.clear();
       await locator.fill(value);
     } catch (error) {
@@ -605,7 +671,7 @@ export class BasePage {
       // non-recursive retry of the exact same calls. Same registration
       // check as click() too — see isPageRegisteredForRecovery()'s comment.
       if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
-        throw error;
+        throw await this.explainAppErrorPage(description, error);
       }
       logger.warn(
         `Filling "${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`

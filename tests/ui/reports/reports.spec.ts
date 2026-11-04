@@ -1027,12 +1027,20 @@ test.describe('Reports', () => {
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
+    // WHY not `afterTotal < beforeTotal` any more (2026-11-04): this window has no filter, so concurrent tests' leads
+    // move the total too and made it fail twice in the 2026-11-03 sandbox run; see waitForReportTotalToMatchApi().
+    // The report must equal the live API count of the same window, which excludes the deleted lead.
+    const { reportTotal: afterTotal, apiTotal: afterApi } = await reportsPage.waitForReportTotalToMatchApi(
+      reportId,
+      'Lead',
+      windowStart,
+      windowEnd
+    );
     expect(
       afterTotal,
       'Report total should reflect the deleted lead no longer counting, using the narrow window alone (no filters)'
-    ).toBeLessThan(beforeTotal);
-    logger.success('R65 passed');
+    ).toBe(afterApi);
+    logger.success(`R65 passed (before ${beforeTotal}, after ${afterTotal} = API ${afterApi})`);
   });
 
   // WHY this test exists at all: found missing during a final numbering

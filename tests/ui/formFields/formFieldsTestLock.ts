@@ -3,6 +3,7 @@ import * as path from 'path';
 import { test as base } from '../../../src/fixtures/index';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
+import { LOCK_WAIT_FIXTURE_TIMEOUT_MS } from './formFieldLockFactory';
 
 // WHY this file exists at all, and why it is NOT a page-object method
 // (real, confirmed CI risk, 2026-09-21 — full worker-count evidence in the
@@ -604,7 +605,8 @@ export const test = base.extend<{ leadFormFieldLock: void }>({
         await use();
       });
     },
-    { auto: true, scope: 'test' },
+    // Own budget for waiting on the lock: see LOCK_WAIT_FIXTURE_TIMEOUT_MS in formFieldLockFactory.ts for why.
+    { auto: true, scope: 'test', timeout: LOCK_WAIT_FIXTURE_TIMEOUT_MS },
   ],
 });
 

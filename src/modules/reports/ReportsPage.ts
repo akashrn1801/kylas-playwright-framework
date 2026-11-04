@@ -867,7 +867,10 @@ export class ReportsPage extends BasePage {
     logger.info('Opening Create Report form');
     await this.goToReportsList();
     await this.click(this.createReportButton(), 'Create New Report button');
-    await this.categoryControl().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    // WHY waitForRendered (2026-11-04, reports.spec.ts:594, 2026-11-03 sandbox run): `GET /v1/reports/config/leads`
+    // answered HTTP 400 after 27 s and the app replaced the form with its "Something is broken" screen; the plain
+    // waitFor then sat 120 s on a control that could not appear.
+    await this.waitForRendered(this.categoryControl(), 'Create Report form (Category)');
     logger.success('Create Report form opened');
   }
 
@@ -1720,6 +1723,47 @@ export class ReportsPage extends BasePage {
       total = await dataPromise;
     }
     return total;
+  }
+
+  // WHY this exists next to waitForReportTotalBelow() (2026-11-04, reports.spec.ts R65 "narrow time-scoped window (no
+  // filters)", failed on BOTH attempts of the 2026-11-03 sandbox run and passed only on the rerun): that test's report
+  // window is the ±5-minute narrowWindow around the test's own lead and has no filter, so it counts EVERY lead any other
+  // test creates or deletes in those ~10 minutes. The trace shows the report total moving by itself (6, then 5, then 5
+  // before this test deleted anything) and, after this test's DELETE (HTTP 200), reading 5, 5, 5 and 6, 6, 6 again: other
+  // workers' new leads offset the one deletion, so `after < before` cannot hold under concurrency. It is NOT report-engine
+  // lag: on QA and staging with nothing else running the total dropped on the very first re-read (+2 s) in 3 of 3 runs.
+  // The sound unfiltered check is report == live truth over the SAME window: the API (`/v1/search/*`, which already
+  // excludes the deleted lead) is read right after each report read, and a report that still counted the deleted lead
+  // would stay above the API count. Bounded by the navigation timeout, re-navigating (no sleep) like the other loops.
+  async waitForReportTotalToMatchApi(
+    reportId: string,
+    entityType: ReportEntityType,
+    windowStart: Date,
+    windowEnd: Date
+  ): Promise<{ reportTotal: number; apiTotal: number }> {
+    const paddedStart = new Date(windowStart);
+    const paddedEnd = new Date(windowEnd);
+    paddedStart.setMinutes(paddedStart.getMinutes() - this.NARROW_WINDOW_PADDING_MINUTES);
+    paddedEnd.setMinutes(paddedEnd.getMinutes() + this.NARROW_WINDOW_PADDING_MINUTES);
+    const deadline = Date.now() + config.timeouts.navigation;
+    for (let attempt = 1; ; attempt++) {
+      const dataPromise = this.armReportDataResponseCapture(entityType);
+      await this.goToReportDetails(reportId);
+      const reportTotal = await dataPromise;
+      const apiTotal = await this.getApiCountForWindow(entityType, paddedStart, paddedEnd);
+      if (reportTotal === apiTotal) {
+        logger.success(`waitForReportTotalToMatchApi(${entityType}): report=${reportTotal}, api=${apiTotal} on attempt ${attempt}`);
+        return { reportTotal, apiTotal };
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `waitForReportTotalToMatchApi(${entityType}): report still shows ${reportTotal} but the API shows ${apiTotal} ` +
+            `for window [${paddedStart.toISOString()}, ${paddedEnd.toISOString()}] after ${attempt} read(s) over ` +
+            `${Math.round(config.timeouts.navigation / 1000)} s`
+        );
+      }
+      logger.info(`waitForReportTotalToMatchApi: report=${reportTotal} api=${apiTotal} on attempt ${attempt} — re-reading`);
+    }
   }
 
   async assertMetricTotal(expectedTotal: number): Promise<void> {

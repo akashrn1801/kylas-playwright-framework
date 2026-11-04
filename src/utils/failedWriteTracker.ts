@@ -17,6 +17,11 @@ interface FailedWrite {
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const API_PATH = /^\/v\d+\//;
 const lastFailedWrite = new WeakMap<Page, FailedWrite>();
+// Reads the page needs to render (layouts, record GETs): see recentFailedRead().
+const lastFailedRead = new WeakMap<Page, FailedWrite>();
+// 400 (the backend's "Connection prematurely closed" shape), 429 (rate limit) and 5xx. 401/403/404 are normal
+// answers on this app (permission checks, a deal with no pipeline) and never count.
+const isServerSideReadFailure = (status: number): boolean => status === 400 || status === 429 || status >= 500;
 const tracked = new WeakSet<Page>();
 
 // Ids and long numbers become {id} so the line reads like a route, not a record.
@@ -40,6 +45,16 @@ export function trackFailedWrites(page: Page): void {
   tracked.add(page);
   page.on('response', (response) => {
     const method = response.request().method().toUpperCase();
+    if (READ_METHODS.has(method) && isServerSideReadFailure(response.status())) {
+      try {
+        const readPath = new URL(response.url()).pathname;
+        if (API_PATH.test(readPath)) {
+          lastFailedRead.set(page, { summary: `${method} ${normalizePath(readPath)} -> ${response.status()}`, at: Date.now() });
+        }
+      } catch {
+        /* unparsable url: not an API call we can name */
+      }
+    }
     if (READ_METHODS.has(method) || response.status() < 400) return;
     let pathname: string;
     try {
@@ -63,4 +78,16 @@ export function trackFailedWrites(page: Page): void {
 export function recentFailedWrite(page: Page, withinMs = 20000): string | null {
   const entry = lastFailedWrite.get(page);
   return entry && Date.now() - entry.at <= withinMs ? entry.summary : null;
+}
+
+/**
+ * The last failed API READ (HTTP 400/429/5xx on a GET) seen on this page, with when it happened, or null if none in
+ * the last `withinMs`. WHY (2026-11-04, sandbox run of 2026-11-03): a form whose data GET answered 429/500/400 stays
+ * a grey skeleton forever (deal edit modal after `GET /v1/deals/{id}` 429, Add Deal "Product or Services" after
+ * `GET /v1/products/layout` 500), and the tests then waited 120 s (or the whole 480 s test timeout) for a control
+ * that could never appear. BasePage.waitForRendered() uses this to fail within seconds and name the request.
+ */
+export function recentFailedRead(page: Page, withinMs: number): { summary: string; at: number } | null {
+  const entry = lastFailedRead.get(page);
+  return entry && Date.now() - entry.at <= withinMs ? entry : null;
 }
