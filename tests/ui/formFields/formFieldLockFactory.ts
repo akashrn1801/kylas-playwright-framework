@@ -47,6 +47,15 @@ function randomHolderId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
+// WHY a fixture timeout for the lock wait (2026-11-04, taskFieldLimits.rbac FFRTK9/FFRTK21 in the 2026-11-03 sandbox
+// run): the lock is taken in a test-scoped fixture, and by default fixture setup counts against the test's own
+// timeout. A test that hung while holding the lock (FFRTK6 and FFRTK16 each held it for their full 480 s) left the
+// next test of the file waiting for the lock for ~7.5 minutes, so it got only 32-41 s of its own 480 s budget and
+// "timed out" without having done anything. With 2 workers a test waits for at most ONE holder, which can legitimately
+// hold the lock for at most its own test timeout (480 s), so the wait gets that plus a margin as its own budget, and
+// the test then has its full test timeout. A wait beyond this fails with "while setting up formFieldLock".
+export const LOCK_WAIT_FIXTURE_TIMEOUT_MS = 600000;
+
 export interface FormFieldLock {
   /** Runs `fn()` while holding this entity's exclusive form-field-config lock. */
   withLock<T>(fn: () => Promise<T>): Promise<T>;
@@ -262,7 +271,7 @@ export function createFormFieldLock(entityKey: string): FormFieldLock {
           await use();
         });
       },
-      { auto: true, scope: 'test' },
+      { auto: true, scope: 'test', timeout: LOCK_WAIT_FIXTURE_TIMEOUT_MS },
     ],
   });
 

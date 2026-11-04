@@ -34,7 +34,7 @@ Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). B
 
 ## Key commands
 
-`npx tsc --noEmit` · `npm run lint` · `npm run check:conventions` · `npm run check:rerun` · `npm run check:test-counts` (baseline: `npm run generate:test-counts`) · `npm run docs:refresh` · `npm run check:docs` · `ENV=qa npx playwright test <path> --project=chromium --workers=1` · `npm run new:module`. Use `npx playwright test <paths> <flags>` — not `npm run test:<module> -- <flags>` (args attach to the trailing `npm run notify`).
+`npx tsc --noEmit` · `npm run lint` · `npm run check:conventions` · `npm run check:rerun` · `npm run check:fail-fast` · `npm run check:test-counts` (baseline: `npm run generate:test-counts`) · `npm run docs:refresh` · `npm run check:docs` · `ENV=qa npx playwright test <path> --project=chromium --workers=1` · `npm run new:module`. Use `npx playwright test <paths> <flags>` — not `npm run test:<module> -- <flags>` (args attach to the trailing `npm run notify`).
 
 ## Conventions
 

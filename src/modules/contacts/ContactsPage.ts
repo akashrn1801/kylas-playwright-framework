@@ -929,7 +929,9 @@ export class ContactsPage extends BasePage {
       expect(this.editModal()).toBeVisible({ timeout: config.timeouts.navigation })
     );
     // WHY: Wait for firstName input — modal animation on GHA is slow
-    await this.firstNameInput().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    // WHY waitForRendered (2026-11-04, contactFieldLimits.spec.ts:502, 2026-11-03 sandbox run): the modal frame opens
+    // before its data; `GET /v1/contacts/{id}` answered 429 and the form stayed a skeleton for the whole 120 s wait.
+    await this.waitForRendered(this.firstNameInput(), 'Edit Contact form (First Name)');
     logger.success('Edit modal opened');
   }
 

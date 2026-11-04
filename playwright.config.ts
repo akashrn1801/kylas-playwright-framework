@@ -54,6 +54,12 @@ export default defineConfig({
   use: {
     baseURL: config.appUrl,
     navigationTimeout: isCI ? 90000 : config.timeouts.navigation,
+    // WHY (2026-11-04): with no actionTimeout every bare click/fill/waitFor/scrollIntoViewIfNeeded waits for the whole
+    // test timeout (480 s) when its target never becomes actionable: 5 of the 14 flaky tests of the 2026-11-03 sandbox
+    // run were exactly that (an error screen covering the page, a form that never rendered, a list that never showed
+    // the row), and each hung test then starved the next test queued on the form-field lock. Same bound as navigation,
+    // so nothing that completes today is affected; an action that cannot complete now fails with its call log instead.
+    actionTimeout: isCI ? 90000 : config.timeouts.navigation,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

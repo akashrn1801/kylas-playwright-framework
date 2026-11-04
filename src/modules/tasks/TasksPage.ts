@@ -258,7 +258,11 @@ export class TasksPage extends BasePage {
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
     await control.waitFor({ state: 'visible', timeout: 10000 });
-    await control.click();
+    // WHY this.click() instead of the bare control.click() (2026-11-04, FFRTK6, 2026-11-03 sandbox run): the bare click
+    // had no timeout, so `<div class="app-error something-is-broken">` intercepting the pointer made it retry 657 times
+    // until the 480 s test timeout (and the next test of the file, queued on the form-field lock, died of the same
+    // budget). this.click() is bounded (15 s) and names the error screen.
+    await this.click(control, `${inputId} dropdown`);
     await this.page.waitForTimeout(300);
     const menu = this.page.locator('.is-invalid__menu');
     const option = menu.locator('.is-invalid__option', { hasText: optionText }).first();
@@ -923,19 +927,27 @@ export class TasksPage extends BasePage {
       logger.info(`Attempting to navigate to task by ID: ${taskId}`);
       await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${taskId}`);
       await this.waitForListReady();
-      const found = await this.taskListItemById(taskId)
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .then(() => true)
-        .catch(() => false);
+      // WHY waitForRendered + one recovery (2026-11-04, FFRTK16, 2026-11-03 sandbox run): the list answered with the
+      // app's "Too many requests at once" page; the old 120 s wait ended in the name-search fallback below, whose bare
+      // click() then waited for the full 480 s test timeout. Now the rate-limit page is recognised within seconds,
+      // the page is reloaded once (the app's own advice), and the fallback click is bounded.
+      const listItem = this.taskListItemById(taskId);
+      const seen = async (): Promise<boolean> =>
+        this.waitForRendered(listItem, `Task ${taskId} list item`).then(() => true).catch(() => false);
+      let found = await seen();
+      if (!found && (await this.recoverIfRateLimitPage())) {
+        await this.waitForListReady();
+        found = await seen();
+      }
       if (found) {
-        await this.click(this.taskListItemById(taskId), `Task ${taskId} list item`);
+        await this.click(listItem, `Task ${taskId} list item`);
         logger.success(`Task ${taskId} opened via ID navigation`);
         return;
       }
       logger.warn(`Task ID ${taskId} not found via URL filter — falling back to name search`);
     }
     // Fallback to name search
-    await this.taskListItemByName(name).click();
+    await this.click(this.taskListItemByName(name), `task "${name}" list item`);
     logger.success(`Task "${name}" opened`);
   }
 

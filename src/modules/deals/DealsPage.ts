@@ -1108,6 +1108,10 @@ export class DealsPage extends BasePage {
 
     // WHY: Button is inside overflow-scroll container — must scroll into view
     const addNewBtn = this.addNewProductButton();
+    // WHY waitForRendered first (2026-11-04, deals.spec.ts:541 in the 2026-11-03 sandbox run): the bare
+    // scrollIntoViewIfNeeded() waited the whole 480 s test timeout for a button that never rendered, because the form's
+    // "Product or Services" section stayed a grey skeleton after `GET /v1/products/layout?view=edit` answered HTTP 500.
+    await this.waitForRendered(addNewBtn, 'Add New product button (Product or Services section)');
     await addNewBtn.scrollIntoViewIfNeeded();
     await addNewBtn.click();
     logger.info('Clicked Add New product button');
