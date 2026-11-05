@@ -59,6 +59,12 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
+### KI-61 — QA deal search stopped indexing new deals (2026-11-04): "Related Deals (0)", deal tests fail
+- **Status:** open, environment (QA backend) · **Since:** 2026-11-04
+- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`, status OPEN, company set) were still absent from `POST /v1/search/deal` at 14:58 UTC (3.5 h). Company and contact search were current (newest 12:43 / 12:45), leads 11:45. The company page's Related Deals card (`POST /v1/search/deal`, rule company = id AND forecastingType in OPEN) therefore answered `totalElements: 0` after every create.
+- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2 with and without B1 (ADR 0016): the create answers 201, the card shows "Related Deals (0)". Not a wait problem: no bounded wait on the search can pass while the index is stalled. `companies.spec.ts:248` and `contacts.spec.ts:244` (quotation from the panel, same deal search returning 0) pass about half the time: not yet attributed.
+- **Next check:** repeat the query below when QA's indexer is restored (`search by ids` returning the deals); if the lag is seconds again, add a bounded re-issue of the app's own search (post-save refresh, plan batch B3) instead of one read. [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md) for the 429 side.
+
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
 - **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).

@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, Response, expect, test } from '@playwright/test';
+import { Page, Locator, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -476,18 +476,37 @@ export class BasePage {
         await locator.waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) });
         return;
       } catch (error) {
-        if (left <= SLICE_MS) throw error;
-        const explained = await this.explainAppErrorPage(description, error);
-        if (explained !== error) throw explained;
+        // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
+        // or context) cannot change by waiting and used to spin here until the budget ran out.
+        if (!(error instanceof errors.TimeoutError)) throw error;
+        // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
+        // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
+        // wait has run out (below).
+        if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
+        if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
+        if (left <= SLICE_MS) {
+          if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+            throw new Error(
+              `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`
+            );
+          }
+          throw new Error(`${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s. Original: ${error.message.split('\n')[0]}`);
+        }
         const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
         if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
           throw new Error(
             `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
-              `the backend failed a request the page needs (${failedRead.summary}); waiting longer cannot help. Original: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`
+              `a read the page makes failed and has not been answered successfully since (${failedRead.summary}), so the control may never render. Original: ${error.message.split('\n')[0]}`
           );
         }
       }
     }
+  }
+
+  // The app's root-scoped error fallback (`<div class="app-error something-is-broken">`, plan evidence FFRTK6), as opposed
+  // to the same message inside one card (`span.error-msg`).
+  private async isAppWideErrorScreen(): Promise<boolean> {
+    return this.page.locator('.app-error, .something-is-broken').first().isVisible().catch(() => false);
   }
 
   /**
@@ -1206,9 +1225,12 @@ export class BasePage {
     // should mean here — this floor guarantees a real, small, still-
     // meaningful wait is attempted (and can still fail fast on its own
     // terms) rather than silently becoming an unbounded wait.
-    const MIN_STEP_BUDGET_MS = 5000;
-    const boundedTimeout = (): number =>
-      Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    // ADR 0016 (B1): no 5 s floor — a step never waits longer than the budget that is really left (1 ms is the
+    // smallest bound, because 0 would mean "wait forever"). An already spent budget fails by name, here.
+    const boundedTimeout = (): number => Math.max(1, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    if (Number.isFinite(deadline) && deadline - Date.now() <= 0) {
+      throw new Error(`${description} list: this test's own time budget is already spent before the list could be waited for`);
+    }
 
     await this.page.waitForLoadState('domcontentloaded');
     // WHY a third racer for the app's own 429 page (2026-10-16, sandbox run
