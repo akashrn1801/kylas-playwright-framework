@@ -1,12 +1,12 @@
-# ADR 0017 — Check before retry, never double-submit (hardening batch B4)
+# ADR 0017 — Check before retry, never double-submit; shared session state (hardening batches B4, B5)
 
-> **Purpose:** Records the B4 decisions of the 2026-11 hardening work: where the framework repeats a create or a click, and what it must check first. Extends [ADR 0014](0014-definitive-errors-and-ready-signals.md) and [ADR 0016](0016-first-attempt-hardening-framework-wide.md).
-> **Read when:** Adding or changing a retry, a re-click, or an error-page recovery.
+> **Purpose:** Records the B4 and B5 decisions of the 2026-11 hardening work: where the framework repeats a create or a click and what it checks first (B4), and how the shared login state is cleared and re-created (B5). Extends [ADR 0014](0014-definitive-errors-and-ready-signals.md) and [ADR 0016](0016-first-attempt-hardening-framework-wide.md).
+> **Read when:** Adding or changing a retry, a re-click, an error-page recovery, or anything that clears or rewrites the saved login state.
 > **Size budget:** 12k chars (hard cap 60k)
-> **Last verified:** 2026-11-05 @ 072b6b2
+> **Last verified:** 2026-11-05 @ 8cac9c9
 
 ## Status
-Accepted — 2026-11-05 (owner approved the B4 proposals). In the code, proven on QA only for the deals.rbac call-log path; the sandbox run on staging is the proof of the rest.
+Accepted — 2026-11-05 (owner approved the B4 and B5 proposals). In the code; B4 proven on QA only for the deals.rbac call-log path, B5 offline (lock, login reuse, verify-before-clear) and on QA for two fixture setups; the sandbox run on staging is the proof of the rest.
 
 ## Rule
 A retry is allowed only for a read, an idempotent call, or a create that a CHECK shows was not written. The check is made first, from a source that answers at once (the database, not the search index) or by a bounded poll when only the index can answer. When the check cannot be made and no response was seen, the step fails by name. Nothing is clicked twice to "see if it works".
@@ -21,3 +21,11 @@ A retry is allowed only for a read, an idempotent call, or a create that a CHECK
 
 ## Not changed
 `CallLogsPage.saveCallLog` permission retry, `TasksPage` inaccessible-relation retry and the quotation inaccessible-entity retry (a 029003 refusal writes nothing), login retries (ADR 0016 S2), `withSessionExpiryRetry` (sign-out, nothing written).
+
+## Decisions (B5: shared login state, 2026-11-05)
+- **The saved session is cleared only when the backend rejects it.** A 401 on one `/v1/` call, or a page going to sign-in, used to delete the shared `<role>.json` for every worker, and each then logged in again. `AuthManager.clearStorageStateIfRejected(role, trigger)` asks the API (`src/auth/sessionCheck.ts`, the S1 check moved out of globalSetup) with the saved token: rejected (401/403) -> cleared; accepted, or the check cannot be made -> kept. One check per role at a time. The fixture's own "landed on sign-in" path uses it too; it then logs in, which overwrites the file atomically.
+- **The login lock goes stale by the holder's age (5 min), not the waiter's wait (was 30 s).** A holder legitimately queues for a login slot (up to 3 min) and then logs in, so a 30 s steal let a second login run beside it. The lock directory holds `holder.txt` (pid, since) and waiters log it.
+- **Logins are reused in CI.** After taking the lock, a state file written after this caller began waiting is reused (another worker logged in or recovered): 11 jobs x 2 roles no longer log in one after the other. Locally the 1 h rule stays.
+- **Fixture setup navigates to `/sales/home` first** (was the bare origin, which the app redirects to the last visited section, e.g. `/setup`; plan data: 24-45 s of setup). The forced retry target and the 85 % deadline logic are unchanged.
+- **"Headless re-auth did not stick" is NOT fixed, only instrumented.** On QA it does not reproduce: a fresh headless token and a token-only restore after `localStorage.clear()` both reach `/sales/leads/list` (the app keeps `token`, `userId`, `tenantId`, `userName`, `slingApp`; a login returns the SAME token and expiry until near expiry). Hypothesis for staging: the app's own sign-out (KI-16) revokes the token server-side and login re-issues it. The recovery now logs whether the backend accepts the token just issued and the localStorage keys left, so the next occurrence names the cause; to be checked on staging after the sandbox run.
+- **Not changed:** S3 job stagger (no login 429/400 in the data); `reauthenticatePage` and the UI-login escalation themselves.

@@ -7,6 +7,7 @@ import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isRetryableHttpStatus } from '../utils/retryableStatus';
 import { storedSessionNeedsRefresh } from './sessionLifetime';
+import { tokenAcceptedByApi } from './sessionCheck';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -436,42 +437,6 @@ async function createOneProductFixture(
 // 401/403 means the session is not usable; any other 4xx is reported with status and body.
 async function sessionAcceptedByApi(role: 'admin' | 'restricted'): Promise<boolean> {
   return tokenAcceptedByApi(role, await getAccessTokenForRole(role));
-}
-
-export async function tokenAcceptedByApi(role: string, token: string): Promise<boolean> {
-  const url = buildApiUrl('/products/layout?view=create');
-  const apiContext = await apiRequest.newContext();
-  try {
-    const attempts = 3;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      let status: number | null = null;
-      let body = '';
-      try {
-        const response = await apiContext.get(url, {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        });
-        status = response.status();
-        body = (await response.text()).slice(0, 300);
-      } catch (error) {
-        if (attempt === attempts) {
-          throw new Error(`[globalSetup] Session check for ${role}: no response from ${url} after ${attempts} attempts (${String(error)})`);
-        }
-        console.warn(`[globalSetup] Session check for ${role}: no response (${String(error)}) — retry ${attempt}/${attempts - 1}`);
-        continue;
-      }
-      if (status >= 200 && status < 300) return true;
-      if (status === 401 || status === 403) return false;
-      if (isRetryableHttpStatus(status) && attempt < attempts) {
-        console.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
-        continue;
-      }
-      throw new Error(`[globalSetup] Session check for ${role}: HTTP ${status} from ${url}. Response: ${body}`);
-    }
-    return false;
-  } finally {
-    await apiContext.dispose();
-  }
 }
 
 async function setupRole(
