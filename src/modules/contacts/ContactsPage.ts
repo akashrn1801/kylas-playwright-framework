@@ -1016,7 +1016,14 @@ export class ContactsPage extends BasePage {
 
   async saveEditedContact(): Promise<void> {
     logger.info('Saving updated contact');
-    await this.click(this.saveButton(), 'save button');
+    // ADR 0016 (B3, KI-22 / plan section 11 #2): the modal closes only after the update is answered, so
+    // wait for that answer first (status checked) and only then for the modal; the 15 s no longer
+    // includes a slow save.
+    await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
+      method: ['PUT', 'PATCH'],
+      urlRe: /\/v1\/contacts\/\d+$/,
+      description: 'Contact update (PUT /v1/contacts/{id})',
+    });
     await this.assertNoFormErrors('contact edit form');
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeHidden({ timeout: 15000 })
@@ -1028,8 +1035,12 @@ export class ContactsPage extends BasePage {
     logger.info('Deleting contact via ellipsis menu');
     await this.clickEllipsisOption('Delete');
     await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
-    await this.deleteConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    // ADR 0016 (B3): the delete's own answer replaces a 1 s sleep (status checked)
+    await this.saveAndAwait(() => this.deleteConfirmButton().click(), {
+      method: 'DELETE',
+      urlRe: /\/v1\/contacts\/\d+\/?$/,
+      description: 'Contact delete (DELETE /v1/contacts/{id})',
+    });
     logger.success('Contact deleted');
   }
 

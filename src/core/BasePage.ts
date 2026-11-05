@@ -213,6 +213,39 @@ export class BasePage {
     });
   }
 
+  // ADR 0016 (B3): the one way to click a save-like control and know what the backend answered.
+  // Arms the strict response wait BEFORE the click (method + path pattern, so an unrelated request
+  // cannot satisfy it), runs the click, awaits the answer and fails with status/code/message when it
+  // is not 2xx. The caller then waits for the app's own follow-up (modal hidden, list/detail refetch).
+  protected async saveAndAwait(
+    click: () => Promise<void>,
+    expected: { method: string | string[]; urlRe: RegExp; description: string; timeout?: number }
+  ): Promise<Response> {
+    const methods = (Array.isArray(expected.method) ? expected.method : [expected.method]).map((m) => m.toUpperCase());
+    const waiting = this.armResponseWaitWithRecovery(
+      (response) => methods.includes(response.request().method()) && expected.urlRe.test(new URL(response.url()).pathname),
+      expected.description,
+      expected.timeout ?? 30000
+    );
+    // a failing click must not leave this rejection unhandled
+    waiting.catch(() => undefined);
+    await click();
+    const response = await waiting;
+    if (!response.ok()) {
+      throw new Error(`${expected.description}: ${await this.describeMatchedResponse(response)}`);
+    }
+    return response;
+  }
+
+  // ADR 0016 (B3): click only once the control is visible and enabled, with a labelled failure.
+  // Playwright's click() then still checks stable/not-covered; the labelled expects make a
+  // stuck control fail by name instead of as an anonymous "locator.click: Timeout".
+  protected async clickWhenReady(locator: Locator, description: string, timeout = 15000): Promise<void> {
+    await expect(locator, `${description} should be visible before clicking`).toBeVisible({ timeout });
+    await expect(locator, `${description} should be enabled before clicking`).toBeEnabled({ timeout });
+    await locator.click({ timeout });
+  }
+
   // WHY these two exist (2026-10-28, qa run 40477938102): every create flow
   // threw the same generic "ID not captured after save (save likely failed
   // silently)" for failures whose real cause was already in hand: a 400 with

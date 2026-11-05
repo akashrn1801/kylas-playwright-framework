@@ -699,10 +699,44 @@ export class QuotationsPage extends BasePage {
     return parseFloat(raw.replace(/[^0-9.-]/g, '')) || 0;
   }
 
+  // ADR 0016 (B3, plan section 11 #5/#6): the deal picker's two real signals, from a QA trace:
+  // typing fires GET /v1/search/deal/lookup (the options come from it) and picking a deal fires
+  // GET /v1/deals/{id} (the product row enables only after it and the products load). Both waits are
+  // armed before the action that triggers them, checked for status, and name the request.
+  private armDealLookup(term: string): Promise<Response> {
+    return this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.request().method() === 'GET' &&
+        new URL(res.url()).pathname === '/v1/search/deal/lookup' &&
+        (new URL(res.url()).searchParams.get('q') ?? '').includes(term),
+      `Deal lookup for "${term}" (GET /v1/search/deal/lookup)`,
+      30000
+    );
+  }
+
+  private armDealDetailLoad(): Promise<Response> {
+    return this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.request().method() === 'GET' && /^\/v1\/deals\/\d+\/?$/.test(new URL(res.url()).pathname),
+      'Selected deal details (GET /v1/deals/{id})',
+      30000
+    );
+  }
+
+  private async assertAnswered(response: Promise<Response>, description: string): Promise<void> {
+    const answered = await response;
+    if (!answered.ok()) {
+      throw new Error(`${description}: ${await this.describeMatchedResponse(answered)}`);
+    }
+  }
+
   private async selectRandomDeal(): Promise<string> {
     logger.info('Selecting random deal');
     await this.dealControl().click();
+    const lookup = this.armDealLookup('dea');
+    lookup.catch(() => undefined);
     await this.dealInput().fill('dea');
+    await this.assertAnswered(lookup, 'Deal lookup for "dea"');
     await this.page
       .locator('.is-invalid__option')
       .first()
@@ -711,7 +745,10 @@ export class QuotationsPage extends BasePage {
     const count = await options.count();
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const dealName = (await options.nth(randomIndex).innerText()).trim();
+    const dealLoaded = this.armDealDetailLoad();
+    dealLoaded.catch(() => undefined);
     await options.nth(randomIndex).click();
+    await this.assertAnswered(dealLoaded, 'Selected deal details');
     await this.ensureReactSelectMenuClosed('random deal');
     logger.success(`Selected deal: ${dealName}`);
     return dealName;
@@ -720,13 +757,19 @@ export class QuotationsPage extends BasePage {
   private async selectSpecificDeal(dealName: string): Promise<string> {
     logger.info(`Selecting specific deal: ${dealName}`);
     await this.dealControl().click();
+    const lookup = this.armDealLookup(dealName);
+    lookup.catch(() => undefined);
     await this.dealInput().fill(dealName);
+    await this.assertAnswered(lookup, `Deal lookup for "${dealName}"`);
     await this.page
       .locator('.is-invalid__option')
       .filter({ hasText: dealName })
       .first()
       .waitFor({ state: 'visible', timeout: 10000 });
+    const dealLoaded = this.armDealDetailLoad();
+    dealLoaded.catch(() => undefined);
     await this.page.locator('.is-invalid__option').filter({ hasText: dealName }).first().click();
+    await this.assertAnswered(dealLoaded, `Selected deal "${dealName}" details`);
     await this.ensureReactSelectMenuClosed(`deal "${dealName}"`);
     logger.success(`Selected specific deal: ${dealName}`);
     return dealName;
@@ -804,7 +847,6 @@ export class QuotationsPage extends BasePage {
       if (!dealValue) {
         logger.info('Product row disabled with no deal linked — selecting a deal to enable it');
         await this.selectRandomDeal();
-        await this.page.waitForTimeout(1000);
         // WHY re-check price first, same as ensureProductRowExists(): the
         // selected deal may auto-populate its own product line item, same
         // behavior already confirmed for the standalone create form.
@@ -2117,10 +2159,14 @@ export class QuotationsPage extends BasePage {
       logger.success(`Status confirmed via locator: ${expectedStatus}`);
     } catch {
       // Fallback: check body text in case badge selector doesn't match
-      const detailText = await this.page.locator('body').innerText();
-      if (!detailText.includes(expectedStatus)) {
-        throw new Error(`Expected status "${expectedStatus}" not found on detail page`);
-      }
+      // ADR 0016 (B3, plan section 11 #3): a retrying assertion, not a one-shot innerText snapshot
+      // (the CI failure read the body once, before the detail refetch had rendered the new status).
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page.locator('body'),
+          `Expected status "${expectedStatus}" not found on detail page`
+        ).toContainText(expectedStatus, { timeout: 15000 })
+      );
       logger.success(`Status confirmed via body text: ${expectedStatus}`);
     }
   }

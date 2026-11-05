@@ -1,4 +1,5 @@
 import { Page, Locator, Response, expect, ConsoleMessage, test } from '@playwright/test';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import * as fs from 'fs';
 import { BasePage } from '../../core/BasePage';
 import { config, buildApiUrl } from '../../../config/config';
@@ -706,10 +707,13 @@ export class ReportsPage extends BasePage {
   // POST carrying a `jsonRule` filter body (confirmed live — see
   // REPORT_VERIFICATION_API_CONFIG's own comment). Mirrors the exact same
   // token-extraction technique, just with `method`/`body` added.
-  private async postAuthenticatedApiData(
+  private async postAuthenticatedApiDataOnce(
     url: string,
     body: Record<string, unknown>
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<
+    | { ok: true; data: Record<string, unknown> | null }
+    | { ok: false; retryable: boolean; detail: string }
+  > {
     const result = await this.page.evaluate(
       async ({ fetchUrl, fetchBody }) => {
         try {
@@ -751,12 +755,34 @@ export class ReportsPage extends BasePage {
         result.reason === 'http-error'
           ? `HTTP ${result.status}${result.body ? ` — ${result.body}` : ''}`
           : result.reason === 'exception'
-            ? result.message
+            ? (result.message ?? 'exception')
             : result.reason;
-      logger.warn(`postAuthenticatedApiData: POST ${url} did not return usable data (${detail})`);
-      return null;
+      // ADR 0014 section 1: only a transport error, 429 or 5xx is retryable; a 400/401/403/404 is final
+      const retryable =
+        result.reason === 'exception' || (result.reason === 'http-error' && isRetryableHttpStatus(result.status ?? 0));
+      return { ok: false, retryable, detail };
     }
-    return result.data;
+    return { ok: true, data: result.data };
+  }
+
+  // ADR 0016 (B3, plan section 11 #8): this POST is a read (a search with a filter body), so it is safe
+  // to repeat; it is retried only for transport errors, 429 and 5xx (ADR 0014 section 1), logged each
+  // time, and the final error carries the status and body instead of a bare null.
+  private async postAuthenticatedApiData(
+    url: string,
+    body: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    const maxAttempts = 3;
+    let lastDetail = '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const outcome = await this.postAuthenticatedApiDataOnce(url, body);
+      if (outcome.ok) return outcome.data;
+      lastDetail = outcome.detail;
+      logger.warn(`postAuthenticatedApiData: POST ${url} attempt ${attempt}/${maxAttempts} failed (${outcome.detail})`);
+      if (!outcome.retryable || attempt === maxAttempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+    throw new Error(`POST ${url} did not return usable data: ${lastDetail}`);
   }
 
   private async getApiCountForWindow(

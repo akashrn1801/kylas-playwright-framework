@@ -215,13 +215,16 @@ export class TasksPage extends BasePage {
           // which masked that the primary response-based path was still
           // vulnerable to silently capturing a WRONG id from an unrelated
           // /v1/tasks-containing POST, not just falling through to null).
-          res.url().includes('/v1/tasks') &&
-          !res.url().includes('/reports/') &&
-          res.request().method() === 'POST' &&
-          (res.status() === 200 || res.status() === 201),
+          // ADR 0016 (B3): exactly the create request (POST /v1/tasks), whatever its status: a 4xx/5xx
+          // answer used to match nothing, so the wait ran its full 60 s before falling to the toast.
+          /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
         'captureIdFromResponse (task create)',
         config.timeouts.navigation
       );
+      if (!response.ok()) {
+        logger.warn(`Task create answered ${await this.describeMatchedResponse(response)}`);
+        return await this.captureIdFromToast();
+      }
       const body = await response.json();
       const id = body?.id ?? body?.data?.id ?? null;
       if (id) logger.success(`Captured task ID from POST response: ${id}`);
@@ -845,14 +848,23 @@ export class TasksPage extends BasePage {
 
   async saveDetailedTask(): Promise<number | null> {
     logger.info('Saving Detailed Task');
-    const idPromise = this.captureIdFromResponse();
+    // ADR 0016 (B3, plan section 11 #4): ONE strict create wait armed before the click serves both the
+    // error classification and the id (it used to be two listeners, one capped at 20 s and one that
+    // ignored non-2xx answers); a missing id now names the create request's status/body or why no
+    // answer was seen.
+    const armedAt = Date.now();
     const responsePromise = this.armResponseWaitWithRecovery(
       (res) => /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
       'saveDetailedTask (task create POST)',
-      20000
-    ).catch(() => null);
+      config.timeouts.navigation
+    );
+    let missedResponse: unknown = null;
+    const settledResponse = responsePromise.catch((error: unknown) => {
+      missedResponse = error;
+      return null;
+    });
     await this.click(this.detailedTaskSaveButton(), 'save button');
-    const response = await responsePromise;
+    const response = await settledResponse;
 
     if (response && response.status() >= 400) {
       const body = (await response.json().catch(() => ({}))) as TaskSaveErrorBody;
@@ -899,9 +911,24 @@ export class TasksPage extends BasePage {
       }
       throw err;
     }
-    const id = await idPromise;
+    let id: number | null = null;
+    if (response?.ok()) {
+      const created = (await response.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+      id = created?.id ?? created?.data?.id ?? null;
+      if (id) logger.success(`Captured task ID from POST response: ${id}`);
+    }
     if (!id) {
-      throw new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)');
+      logger.warn('Could not capture task ID from POST response — trying toast');
+      id = await this.captureIdFromToast();
+    }
+    if (!id) {
+      const detail = response
+        ? await this.describeMatchedResponse(response)
+        : this.describeMissedResponse(missedResponse, Date.now() - armedAt);
+      throw this.appendCreateDetail(
+        new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)'),
+        detail
+      );
     }
     await this.detailedTaskModal()
       .waitFor({ state: 'hidden', timeout: 15000 })
@@ -1466,7 +1493,12 @@ export class TasksPage extends BasePage {
     await this.clickEllipsisOption(taskId, 'Change Due Date');
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.fillDueDate(daysFromNow);
-    await this.click(this.detailedTaskSaveButton(), 'save button');
+    // ADR 0016 (B3, plan section 11 #7): await the update's answer, then the modal closing.
+    await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
+      method: ['PUT', 'PATCH'],
+      urlRe: new RegExp(`/v1/tasks/${taskId}$`),
+      description: `Task due-date update (PUT /v1/tasks/${taskId})`,
+    });
     await this.assertNoFormErrors('change due date form');
     await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Due date changed via ellipsis');

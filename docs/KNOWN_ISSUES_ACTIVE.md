@@ -59,6 +59,11 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
+### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
+- **Status:** open, deliberate leftover (ADR 0016, B3; sleeps go to B6) · **Since:** 2026-11-04 plan RC4
+- **What:** `BasePage.assertNoFormErrors` sleeps 1.5 s, then reads errors once; ~230 `waitForTimeout` remain in page objects. A save-aware replacement needs each caller's own signal (`saveAndAwait` adopted at B3 call sites only).
+- **Next check:** B6 per module; never raise the 1.5 s.
+
 ### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B2) · **Since:** 2026-11-04 plan RC1
 - **What:** render wait (60 s) + click (15 s) + recovery render wait (60 s) + click (15 s) can exceed the 120 s CI test budget; the test then fails as "Test timeout" without the named step. Not merged into one deadline because that would cut a slow-but-healthy recovery.
