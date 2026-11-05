@@ -1,7 +1,7 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
-import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import { withLoginSlot } from './loginGate';
 import { accessTokenFromStoredToken, readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
 import * as fs from 'fs';
@@ -547,8 +547,8 @@ export class AuthManager {
     // given environment's config happens to have, instead of re-relying on a
     // convention that has already silently drifted once between local and CI.
     // ADR 0016 / ADR 0014 §1: only a transport error, 429 or 5xx is retried (bounded, 3 tries);
-    // any 4xx (incl. 400 {"code":"000004","message":"Database error"}) is definitive and fails
-    // naming status, code and message. Fewer parallel logins is the answer to those, not retries.
+    // any other 4xx is definitive and fails naming status, code and message. The one exception is the
+    // exact login 400 {"code":"000004","message":"Database error"} (ADR 0017: idempotent, 2 extra tries).
     const loginAttempts = 3;
     let token: string | undefined;
     for (let attempt = 1; attempt <= loginAttempts; attempt++) {
@@ -579,8 +579,11 @@ export class AuthManager {
       }
       if (token) break;
       const failedStatus = status as number | null;
-      if (failedStatus !== null && isRetryableHttpStatus(failedStatus) && attempt < loginAttempts) {
+      const databaseError = failedStatus !== null && isLoginDatabaseError(failedStatus, bodyText);
+      if (failedStatus !== null && (isRetryableHttpStatus(failedStatus) || databaseError) && attempt < loginAttempts) {
         logger.warn(`Headless login for role ${role}: HTTP ${failedStatus} — retry ${attempt}/${loginAttempts - 1}`);
+        // ADR 0017: the 000004 "Database error" is a burst answer; a short pause lets the other logins finish
+        if (databaseError) await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
         continue;
       }
       throw new Error(

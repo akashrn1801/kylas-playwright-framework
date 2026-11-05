@@ -381,6 +381,17 @@ jobs:
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
+      # WHY (ADR 0017, S3): every shard logs in from globalSetup at the same second, and the staging login answers
+      # 400 {"code":"000004","message":"Database error"} under such a burst (run 42034935606 lost a whole job to it).
+      # A fixed 20 s offset per shard id spreads the logins; it never decides pass or fail.
+      - name: Stagger login start (shard ${{ matrix.shard.shardId }})
+        env:
+          SHARD_ID: ${{ matrix.shard.shardId }}
+        run: |
+          DELAY=$(( (SHARD_ID % 8) * 20 ))
+          echo "Waiting ${DELAY}s so parallel jobs do not log in at the same moment"
+          sleep "$DELAY"
+
       - name: Run selective tests (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
         env:
           ENV: staging
@@ -731,6 +742,18 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      # WHY (ADR 0017, S3): same login burst as the core shards. The entity name maps to a fixed 0-7 slot
+      # (cksum), 20 s apart; two entities may share a slot, which only means they start together as before.
+      - name: Stagger login start (${{ matrix.entity }})
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ENTITY: ${{ matrix.entity }}
+        run: |
+          SLOT=$(( $(printf '%s' "$ENTITY" | cksum | cut -d' ' -f1) % 8 ))
+          DELAY=$(( SLOT * 20 ))
+          echo "Waiting ${DELAY}s so parallel jobs do not log in at the same moment"
+          sleep "$DELAY"
 
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
         if: steps.gate.outputs.skip != 'true'

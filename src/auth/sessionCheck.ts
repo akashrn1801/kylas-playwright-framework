@@ -2,6 +2,7 @@ import { request as apiRequest } from '@playwright/test';
 import * as fs from 'fs';
 import { buildApiUrl } from '../../config/config';
 import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { logger } from '../utils/logger';
 
 // ADR 0016 (S1) / ADR 0017 (B5): the one way to ask the backend whether an access token is still accepted,
 // shared by globalSetup (validation once per role) and AuthManager (before a 401 clears the shared state).
@@ -55,13 +56,13 @@ export async function tokenAcceptedByApi(role: string, token: string): Promise<b
         if (attempt === attempts) {
           throw new Error(`[globalSetup] Session check for ${role}: no response from ${url} after ${attempts} attempts (${String(error)})`);
         }
-        console.warn(`[globalSetup] Session check for ${role}: no response (${String(error)}) — retry ${attempt}/${attempts - 1}`);
+        logger.warn(`[globalSetup] Session check for ${role}: no response (${String(error)}) — retry ${attempt}/${attempts - 1}`);
         continue;
       }
       if (status >= 200 && status < 300) return true;
       if (status === 401 || status === 403) return false;
       if (isRetryableHttpStatus(status) && attempt < attempts) {
-        console.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
+        logger.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
         await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
         continue;
       }
