@@ -5,7 +5,11 @@
 > **Size budget:** 4k chars (hard cap 60k)
 > **Last verified:** 2026-10-29 @ 9e60850
 
-Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part is from 2026-10-28. Git facts come from the maintainer's statements and the session-start log; they decay: re-check before trusting.
+Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part is from 2026-10-28. Git facts come from the maintainer's statements and the session-start log; re-check before trusting.
+
+## `feature/framework-hardening-20261104` (first-attempt hardening, [ADR 0016](./adr/0016-first-attempt-hardening-framework-wide.md))
+
+- B-1 to the session-expiry batch and CO12 are committed; B2 onward and the sandbox proof are open. **Follow-up (seen 2026-11-05, not investigated):** after a forced sign-out during `navigateTo` on staging, "headless re-auth did not stick" and the escalation to a UI login then ran ~3 min of failed navigations (same message as the sandbox expiry incident). Find why the swapped token is rejected.
 
 ## `feature/ci-rerun-shard-20261103` (cut from `dev`, nothing committed, nothing run on GitHub)
 
@@ -15,8 +19,8 @@ Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part i
 ## `feature/leads-coverage-gaps-20261030` (PR #684, merged into `dev`)
 
 - Four commits pushed (last `3373bfe`). Sandbox run 41066366856 on staging: all passed except two new lead tests: duplicate e-mail (staging uniqueness was NONE, now EMAIL_PHONE; the test checks the setting first) and attach-pipeline (not reproducible; removed 2026-11-02, KI-56 closed in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), root cause not confirmed).
-- **Uncommitted at the 2026-10-31 snapshot:** `uniqueValues.ts` (unique e-mail/phone for lead, contact, company factories, clone flows, `LeadApi`) and the lead `has-duplicates` pre-check (a duplicate fails loudly, a non-OK endpoint is skipped with a warning, no `@prodSafe` test creates a lead).
-- **Live 2026-10-31 (one run each; sandbox CI is the proof):** QA 6/6 pass. Staging 1/6: company create passes; lead and contact creates fail 400 `000000`. Probe: name only 200; e-mail only, phone only, both 400, so unique values did not fix it: [KI-58](./KNOWN_ISSUES_ACTIVE.md), backend/config suspected.
+- **Uncommitted at the 2026-10-31 snapshot:** `uniqueValues.ts` (unique e-mail/phone for lead, contact, company factories, clone flows, `LeadApi`) and the lead `has-duplicates` pre-check (a duplicate fails loudly, a non-OK endpoint is skipped with a warning).
+- **Live 2026-10-31:** QA 6/6; staging 1/6 (lead and contact creates 400 `000000`, unique e-mail/phone did not fix it): [KI-58](./KNOWN_ISSUES_ACTIVE.md).
 - **Next:** have staging's lead/contact create checked (backend log, uniqueness config); sandbox CI after that.
 
 ## Still open

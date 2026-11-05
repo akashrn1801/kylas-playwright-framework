@@ -394,8 +394,28 @@ function refreshTicket(ticketId: string): void {
   }
 }
 
+// ADR 0016 (B2): same named failure as formFieldLockFactory.ts, a little before the fixture timeout.
+function describeLeadLockHolder(): string {
+  let marker = 'marker unreadable';
+  try {
+    marker = fs.readFileSync(LOCK_MARKER_PATH, 'utf8').trim();
+  } catch {
+    /* the holder released between the failed acquire and this read */
+  }
+  const heartbeatAtMs = readLockHeartbeatAtMs();
+  const heartbeat = heartbeatAtMs === null ? 'no heartbeat recorded' : `last heartbeat ${Math.round((Date.now() - heartbeatAtMs) / 1000)}s ago`;
+  return `${marker} (${heartbeat})`;
+}
+
 async function acquireLeadFormFieldLockInner(holderId: string, ticketId: string): Promise<LockAcquisition> {
+  const waitStartedAtMs = Date.now();
   while (true) {
+    if (Date.now() - waitStartedAtMs > LOCK_WAIT_FIXTURE_TIMEOUT_MS - 15000) {
+      throw new Error(
+        `[formFieldLock:leads] ${holderId} waited ${Math.round((Date.now() - waitStartedAtMs) / 1000)}s for the lock and gave up; ` +
+          `current holder: ${describeLeadLockHolder()}. The holder is another test still running (it keeps heartbeating), not a stale lock.`
+      );
+    }
     refreshTicket(ticketId);
     if (!isMyTicketAtFront(ticketId)) {
       await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));

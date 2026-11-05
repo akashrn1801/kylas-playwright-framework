@@ -40,6 +40,12 @@ Proposed — 2026-11-04. B0 (measurement) and S1/S2 are in the code; S3 and the 
 - **afterAll cleanup hooks** (6 formFields UI specs, same bug class) get their context from `AuthManager.getContextWithUsableSession('admin')` inside the try: logs in when the state file is missing or near expiry.
 - Proof: see CHANGELOG 2026-11-05. Not proven: the app's own refresh-400 sign-out on demand (the app did not call refresh when the token expiry was shortened in the page), so the racer is proven with a stub app and with a real staging sign-out (storage cleared during the list load), not with the exact refresh trigger.
 
+## Decisions (B2: lock and action budgets, 2026-11-05)
+- **The lock wait names its cause.** `formFieldLockFactory.ts` and `formFieldsTestLock.ts` (leads) stop waiting 15 s before the fixture's own 600 s timeout and fail with the holder id, pid, and its last heartbeat age, instead of the anonymous "while setting up formFieldLock". Proof: two lock instances, the waiter given a 17 s budget, failed after 2.0 s naming the holder (heartbeat 3 s ago); a free lock is acquired as before. The default budget is unchanged (600 s).
+- **Lock scope needed no change.** Every lock-holding test mutates the entity's field configuration; the read-only Navigation tests already run on the unlocked `baseTest`. The fixture wait (max holder 480 s + margin) was set in d8363d5.
+- **`click()` keeps its legs** (render wait, 15 s click, one recovery with its own render wait). A single shared deadline would shorten the recovery leg of a slow-but-healthy recovery, which the owner's rule forbids; the stacking (about 150 s worst case) is bounded instead by the sign-out racer (recovery starts in seconds) and by `actionTimeout` (CI 90 s lowered to 60 s, owner-approved 2026-11-05: `playwright.config.ts`; the plan suggested 30-45 s, 60 s leaves room for a slow staging under load). Recorded as KI-63.
+- The workflows' `--timeout=90000` (main, prod, dev) stays above the new `actionTimeout`, so no workflow change is needed.
+
 ## Planned (decided in the plan, not yet implemented; each moves to Decisions when done)
 - S3 staggered formFields/core job starts (workflow change; the diff is shown to the owner first).
 - New retries only for reads/idempotent calls and only per ADR 0014 §1 (transport, 429, 5xx; never 400); the three existing create retries stay.

@@ -59,6 +59,12 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
+### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
+- **Status:** open, deliberate leftover (ADR 0016, B2) · **Since:** 2026-11-04 plan RC1
+- **What:** render wait (60 s) + click (15 s) + recovery render wait (60 s) + click (15 s) can exceed the 120 s CI test budget; the test then fails as "Test timeout" without the named step. Not merged into one deadline because that would cut a slow-but-healthy recovery.
+- **Mitigation:** the sign-out racer starts recovery within seconds, so the second leg normally has its full budget; CI `actionTimeout` is now 60 s (was 90 s).
+- **Next check:** after the sandbox 10-worker run, grep for "Test timeout of 120000ms" whose last step is a `click`.
+
 ### KI-62 — App crash `QuotationApprovalStateFieldValue` on a freshly loaded company page with quotations (2026-11-05)
 - **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** seen 2026-11-04
 - **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')` (pageError, bundle `index.*.bundle.js`); the Quotations card never renders. The quotation search answered 200 with a normal `approvalState`. Staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8. Rendering the card in place after the save never crashed.

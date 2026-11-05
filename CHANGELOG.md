@@ -9,6 +9,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-11-05 — fix: B2 form-field lock wait fails with the holder and its heartbeat age 15 s before the fixture timeout (both lock implementations); CI `actionTimeout` 90 s -> 60 s so a stuck action fails by name inside the 120 s test budget (pending)
 - 2026-11-05 — fix: session-expiry class (P&S sandbox failure) — refresh buffer from the token's lifetime (20 min for a 47 min token), sign-out racer in `waitForEntityListPage`/`waitForRendered` (recovery in seconds, was 2 x 120 s), formFields afterAll hooks via `AuthManager` (no ENOENT) (pending)
 - 2026-11-05 — fix: CO12 company quotation card — verify in place after the card's own refresh instead of reloading by URL (the reload rendered the app's `QuotationApprovalStateFieldValue` crash), armed card-list wait replaces a 2 s sleep, `pageErrorTracker` fails the wait 2 s after an uncaught page error with its text; staging 15 of 15 (pending)
 - 2026-11-04 — docs: KI-61, QA deal search stopped indexing new deals (18 deals created after 11:25 UTC not searchable 3.5 h later); three companies/contacts deal tests fail because of it (pending)

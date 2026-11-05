@@ -72,7 +72,9 @@ export interface FormFieldLock {
 // dependency on FormFieldsConfigPage at all — keeping it decoupled means a
 // future caller can key the lock however makes sense for its own file
 // layout without this factory needing to know about entity config shapes.
-export function createFormFieldLock(entityKey: string): FormFieldLock {
+export function createFormFieldLock(entityKey: string, options: { waitBudgetMs?: number } = {}): FormFieldLock {
+  // Default is the fixture's own budget; a shorter one exists only so the named wait failure can be proven offline.
+  const waitBudgetMs = options.waitBudgetMs ?? LOCK_WAIT_FIXTURE_TIMEOUT_MS;
   const LOCK_DIR = path.join(__dirname, '../../../.locks', config.env);
   const LOCK_PATH = path.join(LOCK_DIR, `${entityKey}-form-fields.lock`);
   const LOCK_MARKER_PATH = path.join(LOCK_PATH, 'holder.txt');
@@ -155,8 +157,30 @@ export function createFormFieldLock(entityKey: string): FormFieldLock {
     acquiredAtMs: number;
   }
 
+  // ADR 0016 (B2): the wait ends with a message naming the holder and how long it has held the lock, a little before
+  // the fixture's own timeout would end it with the anonymous "while setting up formFieldLock".
+  const LOCK_WAIT_NAMED_FAILURE_MARGIN_MS = 15000;
+  function describeLockHolder(): string {
+    let marker = 'marker unreadable';
+    try {
+      marker = fs.readFileSync(LOCK_MARKER_PATH, 'utf8').trim();
+    } catch {
+      /* the holder released between the failed acquire and this read */
+    }
+    const heartbeatAtMs = readLockHeartbeatAtMs();
+    const heartbeat = heartbeatAtMs === null ? 'no heartbeat recorded' : `last heartbeat ${Math.round((Date.now() - heartbeatAtMs) / 1000)}s ago`;
+    return `${marker} (${heartbeat})`;
+  }
+
   async function acquireLockInner(holderId: string, ticketId: string): Promise<LockAcquisition> {
+    const waitStartedAtMs = Date.now();
     while (true) {
+      if (Date.now() - waitStartedAtMs > waitBudgetMs - LOCK_WAIT_NAMED_FAILURE_MARGIN_MS) {
+        throw new Error(
+          `[formFieldLock:${entityKey}] ${holderId} waited ${Math.round((Date.now() - waitStartedAtMs) / 1000)}s for the lock and gave up; ` +
+            `current holder: ${describeLockHolder()}. The holder is another test still running (it keeps heartbeating), not a stale lock.`
+        );
+      }
       refreshTicket(ticketId);
       if (!isMyTicketAtFront(ticketId)) {
         await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
