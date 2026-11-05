@@ -13,7 +13,6 @@ import {
   RATE_LIMIT_PAGE_PATTERN,
   tryRecoverFromRateLimit,
   isAppErrorBoundaryPage,
-  tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
@@ -472,23 +471,26 @@ export class BasePage {
       if (!rateLimited && !appErrorBoundary) {
         throw error;
       }
-      if (rateLimited) {
-        logger.warn(
-          'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+      if (appErrorBoundary) {
+        // ADR 0017 (B4): no blind reload on the app's "Something is broken" page. A reload hides the cause
+        // and can repeat a write; the page is the app's answer to a failed request or an uncaught render
+        // error, so fail now and name both. (Only the 429 page is reload-fixable: the app asks to retry.)
+        const failedRequest = recentFailedWrite(this.page, 60000) ?? recentFailedRead(this.page, 60000)?.summary;
+        throw new Error(
+          `The app showed its error page ("Something is broken") while: ${String(error).split('\n')[0]}. ` +
+            `Last failed request: ${failedRequest ?? 'none seen'}. Not reloading (a reload would hide the cause).`
         );
-        await tryRecoverFromRateLimit(this.page);
-      } else {
-        logger.warn(
-          'A wrapped call failed while the app showed its own generic error-boundary ("Something is broken") state — attempting one-time recovery'
-        );
-        await tryRecoverFromAppErrorBoundary(this.page);
       }
+      logger.warn(
+        'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+      );
+      await tryRecoverFromRateLimit(this.page);
       // WHY the retry is wrapped only to RECORD the outcome (2026-10-06, load
       // measurement — see ErrorCollector.recordRecoveryEvent): the same fn() is
       // still awaited exactly once, and any error it throws is rethrown
       // unchanged, so this method's return/throw behavior is identical to
       // before. recordRecoveryEvent() itself can never throw.
-      const kind = rateLimited ? 'rate-limit-page' : 'error-boundary-page';
+      const kind = 'rate-limit-page';
       try {
         const result = await fn();
         ErrorCollector.recordRecoveryEvent({ kind, outcome: 'recovered' });
