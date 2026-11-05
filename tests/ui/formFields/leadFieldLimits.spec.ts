@@ -7,7 +7,7 @@ import { test, expect, withLeadFormFieldLock } from './formFieldsTestLock';
 // READS field config, never calls configureFieldLimit()/
 // configureFieldRegex()/clearAllFieldConfigurations().
 import { test as baseTest } from '../../../src/fixtures/index';
-import { Page } from '@playwright/test';
+import { BrowserContext, Page } from '@playwright/test';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import {
   FormFieldsConfigPage,
@@ -32,8 +32,7 @@ import {
 } from '../../../src/data/factories/leadFactory';
 import { faker } from '@faker-js/faker';
 import { logger } from '../../../src/utils/logger';
-import { config } from '../../../config/config';
-import * as path from 'path';
+import { AuthManager } from '../../../src/auth/authManager';
 
 // WHY this file's 6 field-mutating sub-blocks each carry their own
 // test.describe.configure({ mode: 'serial' }) (restored 2026-09-29 — removed
@@ -638,15 +637,12 @@ test.describe('Lead Field Limits', () => {
     // FFL52 both failing under --workers=2 with "expected an inline
     // validation error, found none" (the field's regex/min/max had been
     // cleared out from under them mid-test).
-    const adminStorageStatePath = path.join(
-      __dirname,
-      '../../../src/auth/storageStates',
-      config.env,
-      'admin.json'
-    );
-    const context = await browser.newContext({ storageState: adminStorageStatePath });
-    const page = await context.newPage();
+    // ADR 0016: the context comes from AuthManager, inside the try. The old raw read of the state file threw ENOENT
+    // outside the try (sandbox run 41825279669, P&S) when a session recovery had cleared it, failing the hook.
+    let context: BrowserContext | null = null;
     try {
+      context = await new AuthManager(browser).getContextWithUsableSession('admin');
+      const page = await context.newPage();
       await withLeadFormFieldLock(() => clearAllFieldConfigurations(page));
       logger.success('afterAll safety-net cleanup completed');
     } catch (error) {
@@ -654,13 +650,12 @@ test.describe('Lead Field Limits', () => {
       // mask or override the real pass/fail signal of the tests that
       // already ran above it. If FFL54/FFL55 already ran and passed, this
       // is a pure no-op re-confirmation; if this session's storage state
-      // has since gone stale (this hook deliberately does NOT use
-      // AuthManager's session-refresh machinery — that's the adminPage
-      // fixture's job, not a worker-scoped hook's), this is a best-effort
+      // has since gone stale (the context now comes from AuthManager, ADR 0016,
+      // which logs in first when the saved session is missing or close to expiry), this is a best-effort
       // second attempt, not the primary cleanup guarantee.
       logger.warn(`afterAll safety-net cleanup failed (non-fatal): ${String(error)}`);
     } finally {
-      await context.close();
+      await context?.close();
     }
   });
 

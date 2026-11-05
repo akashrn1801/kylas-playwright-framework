@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, Response, expect, test } from '@playwright/test';
+import { Page, Locator, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -8,6 +8,7 @@ import {
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
+  isSignInUrl,
   isRateLimitedPage,
   RATE_LIMIT_PAGE_PATTERN,
   tryRecoverFromRateLimit,
@@ -18,6 +19,7 @@ import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 import { trackFailedWrites, recentFailedWrite, recentFailedRead } from '../utils/failedWriteTracker';
+import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
@@ -29,6 +31,36 @@ export class BasePage {
   constructor(page: Page) {
     this.page = page;
     trackFailedWrites(page);
+    trackPageErrors(page);
+  }
+
+  /**
+   * expect(locator).toBeVisible() that stops early when the app throws an uncaught page error and the element
+   * still has not rendered PAGE_ERROR_GRACE_MS later, failing with that error instead of waiting the whole
+   * timeout for a page that crashed. The grace keeps an unrelated, harmless page error (third-party widget)
+   * from failing a page that is merely slow: it only ends the wait when the element is really not coming.
+   */
+  protected async expectVisibleFailingOnPageError(locator: Locator, message: string, timeout: number): Promise<void> {
+    const PAGE_ERROR_GRACE_MS = 2000;
+    const crash = pageErrorSignal(this.page);
+    const visible = expect(locator, message).toBeVisible({ timeout });
+    visible.catch(() => undefined);
+    const crashed = crash.promise.then(async (error) => {
+      const rendered = await locator
+        .waitFor({ state: 'visible', timeout: PAGE_ERROR_GRACE_MS })
+        .then(() => true, () => false);
+      return rendered ? new Promise<never>(() => undefined) : error;
+    });
+    try {
+      const outcome = await Promise.race([visible.then(() => null), crashed]);
+      if (outcome) {
+        throw new Error(
+          `${message}: the app threw an uncaught page error and the element did not render within ${PAGE_ERROR_GRACE_MS}ms of it. ${outcome.name}: ${outcome.message}`
+        );
+      }
+    } finally {
+      crash.stop();
+    }
   }
 
   // WHY a public getter, not just leaving `page` protected (added
@@ -179,6 +211,39 @@ export class BasePage {
       // inline `signal.cancel()` calls above.
       signal.cancel();
     });
+  }
+
+  // ADR 0016 (B3): the one way to click a save-like control and know what the backend answered.
+  // Arms the strict response wait BEFORE the click (method + path pattern, so an unrelated request
+  // cannot satisfy it), runs the click, awaits the answer and fails with status/code/message when it
+  // is not 2xx. The caller then waits for the app's own follow-up (modal hidden, list/detail refetch).
+  protected async saveAndAwait(
+    click: () => Promise<void>,
+    expected: { method: string | string[]; urlRe: RegExp; description: string; timeout?: number }
+  ): Promise<Response> {
+    const methods = (Array.isArray(expected.method) ? expected.method : [expected.method]).map((m) => m.toUpperCase());
+    const waiting = this.armResponseWaitWithRecovery(
+      (response) => methods.includes(response.request().method()) && expected.urlRe.test(new URL(response.url()).pathname),
+      expected.description,
+      expected.timeout ?? 30000
+    );
+    // a failing click must not leave this rejection unhandled
+    waiting.catch(() => undefined);
+    await click();
+    const response = await waiting;
+    if (!response.ok()) {
+      throw new Error(`${expected.description}: ${await this.describeMatchedResponse(response)}`);
+    }
+    return response;
+  }
+
+  // ADR 0016 (B3): click only once the control is visible and enabled, with a labelled failure.
+  // Playwright's click() then still checks stable/not-covered; the labelled expects make a
+  // stuck control fail by name instead of as an anonymous "locator.click: Timeout".
+  protected async clickWhenReady(locator: Locator, description: string, timeout = 15000): Promise<void> {
+    await expect(locator, `${description} should be visible before clicking`).toBeVisible({ timeout });
+    await expect(locator, `${description} should be enabled before clicking`).toBeEnabled({ timeout });
+    await locator.click({ timeout });
   }
 
   // WHY these two exist (2026-10-28, qa run 40477938102): every create flow
@@ -470,24 +535,68 @@ export class BasePage {
     const SLICE_MS = 5000;
     const FAILED_READ_GRACE_MS = 15000;
     const startedAt = Date.now();
-    for (;;) {
-      const left = timeout - (Date.now() - startedAt);
-      try {
-        await locator.waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) });
-        return;
-      } catch (error) {
-        if (left <= SLICE_MS) throw error;
-        const explained = await this.explainAppErrorPage(description, error);
-        if (explained !== error) throw explained;
-        const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
-        if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
-          throw new Error(
-            `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
-              `the backend failed a request the page needs (${failedRead.summary}); waiting longer cannot help. Original: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`
-          );
+    // ADR 0016 (session-expiry batch): a sign-out (the app navigating to /signIn, or a 401 on an API read: the same signal armResponseWaitWithRecovery uses) ends the wait at once and runs the
+    // existing session recovery, instead of the locator waiting out its slices on the sign-in page. One recovery per
+    // call; a second sign-out in the same wait is reported by name.
+    const urlBeforeWait = this.page.url();
+    const recoverable = isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeWait);
+    let signOut = recoverable ? armSessionExpirySignal(this.page) : null;
+    let recovered = false;
+    try {
+      for (;;) {
+        const left = timeout - (Date.now() - startedAt);
+        try {
+          const outcome = await Promise.race([
+            locator
+              .waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) })
+              .then(() => 'visible' as const),
+            signOut ? signOut.promise.then(() => 'signed-out' as const) : new Promise<never>(() => undefined),
+          ]);
+          if (outcome === 'visible') return;
+          signOut?.cancel();
+          if (recovered) {
+            throw new Error(`${description}: the app signed the user out again right after the session was recovered`);
+          }
+          logger.warn(`${description}: the app signed out (sign-in page or 401) while waiting — recovering the session now`);
+          await tryRecoverSessionForPage(this.page, urlBeforeWait);
+          recovered = true;
+          signOut = armSessionExpirySignal(this.page);
+          continue;
+        } catch (error) {
+          // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
+          // or context) cannot change by waiting and used to spin here until the budget ran out.
+          if (!(error instanceof errors.TimeoutError)) throw error;
+          // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
+          // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
+          // wait has run out (below).
+          if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
+          if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
+          if (left <= SLICE_MS) {
+            if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+              throw new Error(
+                `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`
+              );
+            }
+            throw new Error(`${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s. Original: ${error.message.split('\n')[0]}`);
+          }
+          const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
+          if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
+            throw new Error(
+              `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
+                `a read the page makes failed and has not been answered successfully since (${failedRead.summary}), so the control may never render. Original: ${error.message.split('\n')[0]}`
+            );
+          }
         }
       }
+    } finally {
+      signOut?.cancel();
     }
+  }
+
+  // The app's root-scoped error fallback (`<div class="app-error something-is-broken">`, plan evidence FFRTK6), as opposed
+  // to the same message inside one card (`span.error-msg`).
+  private async isAppWideErrorScreen(): Promise<boolean> {
+    return this.page.locator('.app-error, .something-is-broken').first().isVisible().catch(() => false);
   }
 
   /**
@@ -1206,9 +1315,12 @@ export class BasePage {
     // should mean here — this floor guarantees a real, small, still-
     // meaningful wait is attempted (and can still fail fast on its own
     // terms) rather than silently becoming an unbounded wait.
-    const MIN_STEP_BUDGET_MS = 5000;
-    const boundedTimeout = (): number =>
-      Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    // ADR 0016 (B1): no 5 s floor — a step never waits longer than the budget that is really left (1 ms is the
+    // smallest bound, because 0 would mean "wait forever"). An already spent budget fails by name, here.
+    const boundedTimeout = (): number => Math.max(1, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    if (Number.isFinite(deadline) && deadline - Date.now() <= 0) {
+      throw new Error(`${description} list: this test's own time budget is already spent before the list could be waited for`);
+    }
 
     await this.page.waitForLoadState('domcontentloaded');
     // WHY a third racer for the app's own 429 page (2026-10-16, sandbox run
@@ -1230,8 +1342,18 @@ export class BasePage {
     // long. 'timed-out' = that racer hit its bound; the outcome handling below is
     // unchanged (every non-rate-limit result is still 'settled').
     const raceStartedAt = Date.now();
-    const racerResult = (label: string, outcome: 'settled' | 'rate-limited') => ({ label, outcome, timedOut: false });
+    const racerResult = (label: string, outcome: 'settled' | 'rate-limited' | 'signed-out') => ({ label, outcome, timedOut: false });
     const racerTimedOut = (label: string) => ({ label, outcome: 'settled' as const, timedOut: true });
+    // ADR 0016 (session-expiry batch): a fourth racer for the app signing the user out (sandbox run 41825279669: the
+    // list wait sat on the /signIn page for 2 x 120 s before the existing recovery ran). The signal is the existing one
+    // (navigation to sign-in or a 401 on /v1/), only for pages that can recover (registered role); the recovery below is the existing one.
+    // The signal is cancelled the moment the race settles, so it cannot become the zombie listener that this
+    // method's top comment (2026-10, three concurrent recoveries) removed an earlier signal for.
+    const urlBeforeRace = this.page.url();
+    const signOut =
+      isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeRace)
+        ? armSessionExpirySignal(this.page)
+        : null;
     const winner = await Promise.race([
       this.page
         .waitForResponse(responsePredicate, { timeout: boundedTimeout() })
@@ -1247,11 +1369,17 @@ export class BasePage {
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
         .then(() => racerResult('rate-limit page', 'rate-limited'))
         .catch(() => racerTimedOut('rate-limit page')),
+      ...(signOut ? [signOut.promise.then(() => racerResult('signed out (navigated to sign-in)', 'signed-out'))] : []),
     ]);
+    signOut?.cancel();
     const firstSignal = winner.outcome;
     logger.info(
       `${description} list ready-wait: ${winner.label}${winner.timedOut ? ' TIMED OUT' : ''} after ${Date.now() - raceStartedAt}ms`
     );
+    if (firstSignal === 'signed-out') {
+      logger.warn(`${description} list: the app signed out (sign-in page or 401) while the list loaded — recovering the session now`);
+      await tryRecoverSessionForPage(this.page, urlBeforeRace);
+    }
     if (firstSignal === 'rate-limited') {
       logger.warn(
         `${description} list showed the app's rate-limit page ("Too many requests at once") — recovering now instead of waiting out the navigation timeout`

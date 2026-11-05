@@ -1366,11 +1366,36 @@ export class CallLogsPage extends BasePage {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // WHY: Register toast capture BEFORE clicking save — toast appears immediately after save
       const idPromise = this.captureIdFromToast();
+      // ADR 0016 (B3, plan section 11 #9): also arm the create request itself before the click, so a
+      // missing toast is explained by the request's own answer (status/body, or no answer) and the
+      // response body can supply the id when the toast is late.
+      const armedAt = Date.now();
+      const createSettled = this.armResponseWaitWithRecovery(
+        (res: Response) =>
+          /^\/v1\/call-logs\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+        'saveCallLog (call log create POST)',
+        config.timeouts.navigation
+      ).then(
+        (response) => ({ response, error: null as unknown }),
+        (error: unknown) => ({ response: null, error })
+      );
       await this.saveButton().scrollIntoViewIfNeeded();
       await this.click(this.saveButton(), 'Save button');
       try {
         await this.assertNoFormErrors('call log create form');
-        const callLogId = await idPromise;
+        let callLogId = await idPromise;
+        if (!callLogId) {
+          const created = await createSettled;
+          if (created.response) {
+            const body = (await created.response.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+            callLogId = created.response.ok() ? (body?.id ?? body?.data?.id ?? null) : null;
+            if (!callLogId) {
+              logger.warn(`Call log id not captured: ${await this.describeMatchedResponse(created.response)}`);
+            }
+          } else {
+            logger.warn(`Call log id not captured: ${this.describeMissedResponse(created.error, Date.now() - armedAt)}`);
+          }
+        }
         logger.success(`Call log saved (ID: ${callLogId})`);
         return callLogId;
       } catch (error) {

@@ -264,32 +264,11 @@ test.describe('Companies', () => {
     // WHY: Navigate back to company detail after deal creation
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     // WHY: Add quotation from the Quotations productivity icon panel
-    const quotationId = await companiesPage.addQuotationFromPanel();
+    const quotationId = await companiesPage.addQuotationFromPanel(undefined, false, true);
     expect(quotationId).not.toBeNull();
     logger.success(`Quotation created: ${quotationId}`);
-    // WHY: Verify quotation appears in Quotations card on company detail
-    await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
-    const quotationsCard = adminPage.locator('.card').filter({ has: adminPage.locator('h2').filter({ hasText: 'Quotations' }) }).first();
-    // WHY: Confirmed live (2026-07-06) — the Quotations card refetches its own
-    // related-quotations list independently of the main company GET that
-    // waitForCompanyDetailsPage() already waits for. Calling
-    // scrollIntoViewIfNeeded() right after re-navigation can grab a reference
-    // to a card mid-refetch that React then replaces, throwing "Element is
-    // not attached to the DOM" (seen live) or hanging until Playwright's own
-    // action-stability wait exhausts the full test timeout, surfacing as
-    // "Target page ... closed" (also seen live, on retry) — a symptom of the
-    // timeout kill, not a separate bug. An auto-retrying expect() re-queries
-    // the locator on every poll instead of holding one DOM snapshot, and a
-    // pure visibility check doesn't require the element to stop reflowing
-    // the way scrollIntoViewIfNeeded's stability wait does. No manual scroll
-    // needed for a visibility assertion.
-    await expect(quotationsCard, 'Quotations card should be visible after refetch').toBeVisible({
-      timeout: 15000,
-    });
-    const quotationEntry = quotationsCard.locator('ul.card-list li, .list-item, a').first();
-    await expect(quotationEntry, 'Newly created quotation should appear in the Quotations card').toBeVisible({
-      timeout: 15000,
-    });
+    // WHY: Verify in place — the app refreshes the Quotations card itself after the save (plan §8, CO12)
+    await companiesPage.assertQuotationListedInCard();
     logger.success(`CO12 passed — quotation created and verified: ${quotationId}`);
   });
 

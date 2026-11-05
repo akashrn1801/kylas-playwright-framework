@@ -944,6 +944,16 @@ test.describe('Leads', () => {
       await leadsPage.assertFieldInlineError('emails[0].value', 'Lead with this email already exists');
       await leadsPage.assertFormErrorSummary('Emails Lead with email already exists');
       await leadsPage.assertViewLeadLinkTargets(existing.email);
+      // ADR 0016 (B3, plan section 11 #1): the list is read from the search index, which trails the write.
+      // First ask the same index through the API (cheap, no tab), so a lagging index fails here naming the
+      // request and the lead, instead of as an opaque "list lacks the lead" after opening tabs.
+      await expect
+        .poll(async () => (await api.searchLeads(LeadApi.rule('firstName', 'equal', existing.firstName))).content.map((l) => l.id), {
+          timeout: 60000,
+          intervals: [1000, 2000, 3000, 5000],
+          message: `POST /v1/search/lead should return the lead ${created.id} created for the duplicate check (search index lag, not the form)`,
+        })
+        .toContain(created.id);
       // The link opens the Leads list for that e-mail: the existing lead is listed
       await expect
         .poll(async () => leadsPage.getLeadIdsListedByViewLeadLink(), {

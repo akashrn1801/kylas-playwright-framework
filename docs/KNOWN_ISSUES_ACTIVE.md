@@ -55,9 +55,32 @@
 - **What:** HTTP 400 `000000` "Failed to resolve '…' and search domain query" / "Connection prematurely closed BEFORE response" on `POST /v1/contacts/`, `GET /v1/quotations/layout/{list,create}` and (staging) `POST /v1/quotations/`. Detail: [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ### KI-51 — Sandbox 40821683680: cross-shard admin session storm
-- **Status:** open; "a login invalidates older tokens" NOT verified · **Since:** 2026-10-29
+- **Status:** open; measured 2026-11-04 on QA and staging: a new login does NOT invalidate other access tokens; the mid-run refresh path (`GET /v1/tokens/refresh/`) is untested; per-worker re-login storm addressed by ADR 0016 S1/S2 (code on this branch, not yet proven under the 10-worker sandbox load) · **Since:** 2026-10-29
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+
+### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
+- **Status:** open, deliberate leftover (ADR 0016, B3; sleeps go to B6) · **Since:** 2026-11-04 plan RC4
+- **What:** `BasePage.assertNoFormErrors` sleeps 1.5 s, then reads errors once; ~230 `waitForTimeout` remain in page objects. A save-aware replacement needs each caller's own signal (`saveAndAwait` adopted at B3 call sites only).
+- **Next check:** B6 per module; never raise the 1.5 s.
+
+### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
+- **Status:** open, deliberate leftover (ADR 0016, B2) · **Since:** 2026-11-04 plan RC1
+- **What:** render wait (60 s) + click (15 s) + recovery render wait (60 s) + click (15 s) can exceed the 120 s CI test budget; the test then fails as "Test timeout" without the named step. Not merged into one deadline because that would cut a slow-but-healthy recovery.
+- **Mitigation:** the sign-out racer starts recovery within seconds, so the second leg normally has its full budget; CI `actionTimeout` is now 60 s (was 90 s).
+- **Next check:** after the sandbox 10-worker run, grep for "Test timeout of 120000ms" whose last step is a `click`.
+
+### KI-62 — App crash `QuotationApprovalStateFieldValue` on a freshly loaded company page with quotations (2026-11-05)
+- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** seen 2026-11-04
+- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')` (pageError, bundle `index.*.bundle.js`); the Quotations card never renders. The quotation search answered 200 with a normal `approvalState`. Staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8. Rendering the card in place after the save never crashed.
+- **Test side:** CO12 verifies in place and fails 2 s after an uncaught page error with its text (ADR 0016). Other tests that load a company with quotations by URL could meet it; none seen.
+- **Next check:** reload a company with a quotation 10x; if the crash persists, give Kylas the stack.
+
+### KI-61 — QA deal search stopped indexing new deals (2026-11-04): "Related Deals (0)", deal tests fail
+- **Status:** open, environment (QA backend) · **Since:** 2026-11-04
+- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`, status OPEN, company set) were still absent from `POST /v1/search/deal` at 14:58 UTC (3.5 h). Company and contact search were current (newest 12:43 / 12:45), leads 11:45. The company page's Related Deals card (`POST /v1/search/deal`, rule company = id AND forecastingType in OPEN) therefore answered `totalElements: 0` after every create.
+- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2 with and without B1 (ADR 0016): the create answers 201, the card shows "Related Deals (0)". Not a wait problem: no bounded wait on the search can pass while the index is stalled. `companies.spec.ts:248` and `contacts.spec.ts:244` (quotation from the panel, same deal search returning 0) pass about half the time: not yet attributed.
+- **Next check:** repeat the query below when QA's indexer is restored (`search by ids` returning the deals); if the lag is seconds again, add a bounded re-issue of the app's own search (post-save refresh, plan batch B3) instead of one read. [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md) for the 429 side.
 
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
@@ -99,7 +122,8 @@
 ### KI-16 — JWT lifetime is not a stable constant; `ensureFreshSession()` margin is unsized
 - **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
 - **What:** measured token lifetimes differ between investigations (~10.4 h documented, ~20 min once, ~101 min later, 4/4 reproducible). `AuthManager.ensureFreshSession()` refreshes at <10 min remaining, sized against the wrong assumption. A ~40-minute-old storage state landing on sign-in is likewise unexplained.
-- **Next check:** dedicated investigation into *why* the lifetime varies before changing shared `AuthManager` code. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **2026-11-05 (ADR 0016):** the margin is now sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when its own `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669, P&S: a ~47 min token). Why the lifetime varies (10.2 h on a fresh staging login the same day) is still unexplained.
+- **Next check:** dedicated investigation into *why* the lifetime varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
 - **Status:** inconclusive · **Since:** 2026-08-07

@@ -1363,12 +1363,21 @@ export class CompaniesPage extends BasePage {
   // stays here since it's genuinely Company-specific.
   async addQuotationFromPanel(
     customFields?: QuotationCustomFieldData,
-    checkCustomFieldsAbsent = false
+    checkCustomFieldsAbsent = false,
+    awaitCardRefresh = false
   ): Promise<string | null> {
     logger.info('Adding quotation from company productivity panel');
-    // WHY: Click Quotations right panel icon to open quotations section
+    // WHY the armed search wait replaces a fixed 2 s sleep (CO12, ADR 0016): opening the panel makes the
+    // Quotations card load its own list (POST /v1/quotations/search, seen in the trace right after the icon
+    // click). That response is the card's ready signal; armed before the click so a fast answer is not missed.
+    const cardListLoaded = this.armResponseWaitWithRecovery(
+      (res) => res.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(res.url()).pathname),
+      'Quotations card list (POST /v1/quotations/search) after opening the panel',
+      30000
+    );
+    cardListLoaded.catch(() => undefined);
     await this.clickRightPanelIcon('Quotations');
-    await this.page.waitForTimeout(2000);
+    await cardListLoaded;
     const quotationsCard = this.page
       .locator('.card')
       .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
@@ -1394,7 +1403,24 @@ export class CompaniesPage extends BasePage {
     logger.success('Add Quotation modal opened');
 
     const quotationsPage = new QuotationsPage(this.page);
-    return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent);
+    return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent, awaitCardRefresh);
+  }
+
+  // WHY in place, no reload (CO12, plan §8): after the save the app refreshes the Quotations card itself
+  // (POST /v1/quotations/search, awaited by fillAndSaveQuotationFromPanel when awaitCardRefresh is set). A user
+  // reads the card where they are; reloading the company by URL is what rendered the card on a fresh page and
+  // triggered the app's uncaught render error. If that error happens anyway the wait stops and names it.
+  async assertQuotationListedInCard(): Promise<void> {
+    const quotationsCard = this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
+      .first();
+    await this.expectVisibleFailingOnPageError(quotationsCard, 'Quotations card should be visible after the save refresh', 15000);
+    await this.expectVisibleFailingOnPageError(
+      quotationsCard.locator('ul.card-list li, .list-item, a').first(),
+      'Newly created quotation should appear in the Quotations card',
+      15000
+    );
   }
 
   async addNoteFromPanel(noteText: string): Promise<void> {

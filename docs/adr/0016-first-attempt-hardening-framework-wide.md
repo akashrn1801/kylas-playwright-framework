@@ -6,7 +6,7 @@
 > **Last verified:** 2026-11-04 @ 4c10d24
 
 ## Status
-Proposed — 2026-11-04. Batch B0 (measurement) done locally; the rest are listed in "Planned" and not implemented.
+Proposed — 2026-11-04. B0 (measurement) and S1/S2 are in the code; S3 and the later batches are listed in "Planned" and not implemented. Nothing here is proven under the 10-worker sandbox load yet.
 
 ## Decisions (B0)
 - **A test that passes on retry or on the rerun shard is a framework/test problem** until a network log proves a backend error on the exact request; even then the load is reduced, the failure is not hidden.
@@ -14,7 +14,48 @@ Proposed — 2026-11-04. Batch B0 (measurement) done locally; the rest are liste
 - **Waits name themselves.** A response-wait timeout in `armResponseWaitWithRecovery` now says what it awaited, how long it waited and the limit; `waitForListReady` logs which signal ended the wait (`list response`, `list table visible`, `rate-limit page`) and after how many ms. Messages and logs only: no timeout, retry or outcome changed.
 - **The staging baseline is the sandbox run** (10 workers, `--retries=0`). QA did not reproduce the failures (37 of 37 first-attempt passes before the local run was stopped), so no local staging or throttle run is made.
 
+## Decisions (S1/S2, 2026-11-04)
+- **S1: one session check, in globalSetup only.** Each role's saved state is validated once by `GET /v1/products/layout?view=create` with its bearer token (`tokenAcceptedByApi`; 2xx = usable, 401/403 = not usable, transport/429/5xx retried up to 3 tries per ADR 0014 §1, any other status fails with status and body). Workers no longer open the app to "validate" (the removed `AuthManager.isSessionValid` reported all workers as expired within one second of a fresh login and sent them all to re-login). A real expiry still works: a 401 or a `/signIn` redirect clears the state file (`fixtures/index.ts`) and the next `getContextForRole` logs in.
+- **S2: login slots.** At most 2 logins at once per machine, across worker processes (`src/auth/loginGate.ts`, atomic mkdir slots, stale after 4 min, wait bounded at 3 min and failing with the holders). It replaces the random 0-3 s sleep before the restricted login in `fixtures/index.ts`. It limits one machine only; cross-job pacing is S3.
+- **Login errors are named and 4xx is definitive.** `loginHeadless` and the globalSetup UI login retry only a transport error, 429 or 5xx (3 tries); a 400 such as `{"code":"000004","message":"Database error"}` fails at once with status, code and message. Fewer parallel logins is the fix, not another attempt.
+- Proof so far: offline fake API (200, 401, 429-then-200, 500-then-200, 429 x3, 400); 6 processes never held more than 2 slots; QA `--repeat-each=3 --workers=3` 18 of 18 first attempt. Not yet measured: 10-worker staging.
+
+## Decisions (B1: waitForRendered / waitForListReady, 2026-11-04)
+- **Only a timeout is retried inside `waitForRendered`.** A strict-mode violation or a closed page is rethrown at once (it used to spin until the budget ran out).
+- **A failed read counts only while it is the latest answer for its path.** `failedWriteTracker` keeps one entry per normalized read path; a later 2xx/3xx for the same path clears it. A slow but healthy page with an earlier 429 that was re-read successfully no longer fails after 15 s. The message now says "failed and has not been answered successfully since", not "waiting longer cannot help".
+- **The error screen is scoped.** Fail-fast per 5 s slice for the app-wide fallback (`.app-error` / `.something-is-broken`) and the rate-limit page. The same message inside one card (`span.error-msg`) is only named when the wait has run out, so one broken unrelated widget cannot fail a control that lives elsewhere. A plain timeout now says "not rendered within N s" (was "Timeout 1979ms", the last slice).
+- **`waitForListReady` has no 5 s floor.** A step waits for the budget really left (1 ms is the smallest bound, as 0 would mean forever); an already spent budget fails by name. The losing racers still run to their own bound: Playwright has no cancel for `waitFor`/`waitForResponse`, they only hold timers.
+- Proof: stub-page scenarios behave as above; QA `--repeat-each=3 --workers=3` list navigation across RBAC specs 15 of 15 first attempt. Six failures in a companies+contacts run failed the same without B1 (stalled QA deal index, KI-61). Not yet proven: `companies.spec.ts:248`, `contacts.spec.ts:244`, `:59`.
+
+## Decisions (CO12: company quotation card, 2026-11-05)
+- **Cause:** after the quotation save the test re-opened the company by direct URL. On that fresh page the app threw an uncaught `TypeError: Cannot read properties of undefined (reading 'find')` in `QuotationApprovalStateFieldValue` (pageError in the trace, search response 200 with a normal `approvalState`), the card never rendered and the test waited 15 s for "element(s) not found". Staging 3 of 5 and QA 3 of 8 before B1. In-app rendering right after the save (the app's own `POST /v1/quotations/search`) never crashed in the traces. Not reported to Kylas (owner decision, plan section 8); not worked around by reload or retry.
+- **Fix:** CO12 verifies the card in place (as a user does) after awaiting the card's refresh response, which is armed before Save (`fillAndSaveQuotationFromPanel(..., awaitCardRefresh)`, opt-in, other callers unchanged); the 2 s sleep in `CompaniesPage.addQuotationFromPanel` is the armed card-list response instead.
+- **Fail fast:** `pageErrorTracker` (attached by `BasePage`, reset on navigation) lets `expectVisibleFailingOnPageError` end the wait 2 s after an uncaught page error when the element still has not rendered, naming the error. The grace keeps a harmless third-party error from failing a slow page. Used only by `assertQuotationListedInCard` so far.
+- Proof: staging `--retries=0` CO12 10 of 10 and 5 of 5 (3 workers); the other callers of the changed method (companies.rbac :266 and :354, quotations :498) 9 of 9; offline scenarios: crash fails in 2.5 s with the error, healthy and slow-render-with-benign-error pass, plain timeout unchanged.
+
+## Decisions (session expiry, 2026-11-05)
+- **Cause (sandbox run 41825279669, P&S):** the app calls `GET /v1/tokens/refresh/` about 10 min before the token expires and signs the user out when it answers 400 (KI-16). `ensureFreshSession` kept a 10 min buffer, saw 604 s left at test start and lost the race by seconds; `waitForListReady` then sat on /signIn for 2 x 120 s; the P&S `afterAll` read `admin.json` by path (outside its try) and failed with ENOENT after the state file was cleared.
+- **Refresh buffer from the token's own lifetime** (`src/auth/sessionLifetime.ts`): `app trigger (10 min) + longest test (8 min) + margin (2 min)` = 20 min, capped at half the token's lifetime (`data.expiresIn`) and never below trigger + margin. A 47 min token is refreshed below 20 min left, a 10 h token behaves as before. globalSetup's local reuse path also re-logs in when the saved token has too little lifetime left.
+- **Sign-out racer** in `waitForEntityListPage` and `waitForRendered`: the existing `armSessionExpirySignal` (sign-in navigation or 401 on `/v1/`), registered pages only, cancelled when the wait ends (no zombie listener, see that method's 2026-10 comment). A sign-out runs the existing `tryRecoverSessionForPage` at once; one recovery per `waitForRendered` call, a second sign-out is named. Limit: a page that is ALREADY on /signIn when the wait starts is not covered (no return URL is known there); that case is the old path.
+- **afterAll cleanup hooks** (6 formFields UI specs, same bug class) get their context from `AuthManager.getContextWithUsableSession('admin')` inside the try: logs in when the state file is missing or near expiry.
+- Proof: see CHANGELOG 2026-11-05. Not proven: the app's own refresh-400 sign-out on demand (the app did not call refresh when the token expiry was shortened in the page), so the racer is proven with a stub app and with a real staging sign-out (storage cleared during the list load), not with the exact refresh trigger.
+
+## Decisions (B2: lock and action budgets, 2026-11-05)
+- **The lock wait names its cause.** `formFieldLockFactory.ts` and `formFieldsTestLock.ts` (leads) stop waiting 15 s before the fixture's own 600 s timeout and fail with the holder id, pid, and its last heartbeat age, instead of the anonymous "while setting up formFieldLock". Proof: two lock instances, the waiter given a 17 s budget, failed after 2.0 s naming the holder (heartbeat 3 s ago); a free lock is acquired as before. The default budget is unchanged (600 s).
+- **Lock scope needed no change.** Every lock-holding test mutates the entity's field configuration; the read-only Navigation tests already run on the unlocked `baseTest`. The fixture wait (max holder 480 s + margin) was set in d8363d5.
+- **`click()` keeps its legs** (render wait, 15 s click, one recovery with its own render wait). A single shared deadline would shorten the recovery leg of a slow-but-healthy recovery, which the owner's rule forbids; the stacking (about 150 s worst case) is bounded instead by the sign-out racer (recovery starts in seconds) and by `actionTimeout` (CI 90 s lowered to 60 s, owner-approved 2026-11-05: `playwright.config.ts`; the plan suggested 30-45 s, 60 s leaves room for a slow staging under load). Recorded as KI-63.
+- The workflows' `--timeout=90000` (main, prod, dev) stays above the new `actionTimeout`, so no workflow change is needed.
+
+## Decisions (B3: response predicates and armed waits, 2026-11-05)
+- **`BasePage.saveAndAwait(click, {method, urlRe, description})`** arms a strict response wait before the click and fails with status/code/message when it is not 2xx; `clickWhenReady` checks visible + enabled with labelled expects. Used by contact edit/delete (the modal check follows the answer, KI-22) and task due date.
+- **Task create has one strict wait** (`POST /v1/tasks`, any status). The shared `captureIdFromResponse` (quick task, detail quick task, clone) no longer matches any URL containing `/v1/tasks` (e.g. `/search`) and no longer ignores a 4xx/5xx (it waited 60 s).
+- **Call-log create** also arms `POST /v1/call-logs`: its answer names why a toast is missing and can supply the id. Null still returns null (`deals.rbac` retries whole creations on a throw).
+- **Quotation deal picker:** a QA trace shows `GET /v1/search/deal/lookup` on typing and `GET /v1/deals/{id}` on picking. Both are armed before their trigger (matched on the `q` parameter) and replace a 1 s sleep; `assertStatusOnDetailPage`'s fallback retries.
+- **Reports `postAuthenticatedApiData`** (a search POST): 3 attempts, only transport/429/5xx (ADR 0014 section 1), logged; the error carries status and body.
+- **leads duplicate-email test** polls `POST /v1/search/lead` for the created id before opening the "View Lead" tab, so index lag fails naming the request.
+- **Not changed (KI-64):** `assertNoFormErrors`'s 1.5 s grace and the other per-module sleeps (B6): no sleep-free signal separates "no error" from "toast not rendered yet" without knowing a write was sent.
+
 ## Planned (decided in the plan, not yet implemented; each moves to Decisions when done)
-- S1 session validated by one API call per role in globalSetup only; S2 login semaphore (≤2 per env), a login 400 "Database error" is definitive; S3 staggered formFields/core starts (workflow change, needs the owner's OK).
+- S3 staggered formFields/core job starts (workflow change; the diff is shown to the owner first).
 - New retries only for reads/idempotent calls and only per ADR 0014 §1 (transport, 429, 5xx; never 400); the three existing create retries stay.
-- `saveAndAwait` and `clickWhenReady` helpers; fixed sleeps replaced by the app's own signal; CO12 as in the plan (no reload workaround, fail fast with the app error).
+- Sleeps replaced by the app's own signal per module (B6); wider `saveAndAwait` use.
