@@ -1,4 +1,5 @@
 import { Page, Locator, Response, expect } from '@playwright/test';
+import { QuotationApi } from '../../utils/quotationApi';
 import { BasePage } from '../../core/BasePage';
 import {
   QuotationData,
@@ -221,6 +222,8 @@ export class QuotationsPage extends BasePage {
   // stays disabled when the deal or product data never loads).
   private readonly failedDealProductLoads: string[] = [];
   private saveToastShown = false;
+  // ADR 0017 (B4): the last save request's own answer (2xx), the evidence assertSuccessToast() falls back on
+  private lastSaveAnsweredOk = false;
 
   constructor(page: Page) {
     super(page);
@@ -1435,6 +1438,7 @@ export class QuotationsPage extends BasePage {
     // caller's assertSuccessToast() looks, so a slow runner can miss a toast that did appear.
     // Record it from the click on; assertSuccessToast() accepts "shown since this save".
     this.saveToastShown = false;
+    this.lastSaveAnsweredOk = false;
     void this.successToast()
       .first()
       .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
@@ -1446,6 +1450,7 @@ export class QuotationsPage extends BasePage {
       );
     await this.click(this.modalSaveButton(), 'quotation save (attempt)');
     const response = await responsePromise;
+    this.lastSaveAnsweredOk = response?.ok() ?? false;
     if (!response || response.ok()) {
       // Either a real success, or no matching response was captured at all
       // (e.g. a client-side validation error that never reached the
@@ -1457,10 +1462,50 @@ export class QuotationsPage extends BasePage {
     return response.status() === 500 ? 'confirmedTransientServerError' : 'done';
   }
 
+  // ADR 0017 (B4): check first, then decide. An HTTP 500 on the create does not prove nothing was
+  // written, and a retry would then double-create. Ask the search API for the quotation number for a
+  // bounded time (the index trails the write): found -> fail by name, no retry. Not found, or no number
+  // to ask about -> retry once as before (a 5xx is retryable under ADR 0014 section 1).
+  private async assertQuotationNotWrittenBeforeRetry(quotationNumber: string): Promise<void> {
+    if (!quotationNumber) {
+      logger.warn('Quotation create answered 500 and the quotation number could not be read — cannot check, retrying once');
+      return;
+    }
+    let ids: number[] = [];
+    try {
+      const api = await QuotationApi.forPage(this.page);
+      try {
+        await expect
+          .poll(async () => (ids = await api.findIdsByNumber(quotationNumber)).length, {
+            timeout: 15000,
+            intervals: [1000, 2000, 3000],
+          })
+          .toBeGreaterThan(0)
+          .catch(() => undefined);
+      } finally {
+        await api.dispose();
+      }
+    } catch (error) {
+      logger.warn(`Quotation existence check unavailable: ${String(error).split('\n')[0]} — retrying once`);
+      return;
+    }
+    if (ids.length > 0) {
+      throw new Error(
+        `Quotation create answered HTTP 500 but quotation ${quotationNumber} exists (id ${ids.join(', ')}), ` +
+          'so it was written; not retrying (a retry would create a duplicate).'
+      );
+    }
+    logger.info(`Quotation ${quotationNumber} not found after the 500 (15 s) — retrying the create once`);
+  }
+
   async saveQuotation(): Promise<void> {
     logger.info('Saving quotation');
+    const quotationNumber = await this.quotationNumberInput()
+      .inputValue({ timeout: 2000 })
+      .catch(() => '');
     const primaryOutcome = await this.attemptQuotationSaveOnceAndClassify();
     if (primaryOutcome === 'confirmedTransientServerError') {
+      await this.assertQuotationNotWrittenBeforeRetry(quotationNumber);
       logger.warn(
         'saveQuotation: POST /v1/quotations/ returned HTTP 500 (PROD Build #4, Cluster 2.2 — ' +
           'confirmed live via manual PROD reproduction to be a transient condition, not a ' +
@@ -1686,10 +1731,24 @@ export class QuotationsPage extends BasePage {
     // to the existing classification logic unchanged.
     const maxConnectionResetRetries = 2;
     let connectionResetRetries = 0;
+    const quotationNumber = await this.quotationNumberInput()
+      .inputValue({ timeout: 2000 })
+      .catch(() => '');
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       logger.info(`Saving quotation — attempt ${attempt}/3`);
       this.saveToastShown = false; // a toast from an earlier save must not satisfy this one
+      this.lastSaveAnsweredOk = false;
+      // the toast lives ~2.8 s, shorter than the response wait below: record it from the click on
+      void this.successToast()
+        .first()
+        .waitFor({ state: 'visible', timeout: 20000 })
+        .then(
+          () => {
+            this.saveToastShown = true;
+          },
+          () => undefined
+        );
       // WHY: Register the response wait BEFORE clicking — same convention as
       // captureQuotationIdFromResponse() elsewhere in this file. Match on
       // parsed pathname (not the raw URL string) so an edit's query string,
@@ -1709,6 +1768,7 @@ export class QuotationsPage extends BasePage {
       const response = await responsePromise;
 
       if (response && response.status() < 400) {
+        this.lastSaveAnsweredOk = true;
         logger.success(
           removedEntities.length
             ? `Quotation saved after removing: ${removedEntities.join(', ')}`
@@ -1723,19 +1783,15 @@ export class QuotationsPage extends BasePage {
         // bug in this method and hid a real 422 behind a false "succeeded".
         // Fall back to the same page-state signal assertSuccessToast() uses
         // elsewhere in this file before concluding anything.
-        const success = await this.successToast()
-          .isVisible()
-          .catch(() => false);
-        const url = this.page.url();
-        const onListOrDetail =
-          url.includes('/quotations/list') || url.includes('/quotations/details/');
-        if (success || onListOrDetail) {
-          logger.warn('Save response not captured, but page state confirms success');
+        // ADR 0017 (B4): no URL inference (an in-place modal save never changes the URL). The app's own
+        // success toast, recorded from the click, is the evidence when the response was not captured.
+        if (this.saveToastShown) {
+          logger.warn('Save response not captured, but the success toast was shown after the click');
           return { succeeded: true, removedEntities, lastErrorMessage };
         }
         throw new Error(
-          'Could not confirm save outcome — no matching API response captured and page shows ' +
-            `neither a success toast nor navigation away from the form (still on: ${url})`
+          'Could not confirm save outcome — no matching API response captured within 20 s and no ' +
+            `success toast was shown after the click (still on: ${this.page.url()})`
         );
       }
 
@@ -1748,6 +1804,11 @@ export class QuotationsPage extends BasePage {
       if (this.isTransientConnectionResetError(body)) {
         lastErrorMessage = body?.message || '';
         if (connectionResetRetries < maxConnectionResetRetries) {
+          // ADR 0017 (B4): a create (POST) is checked before it is repeated; an update (PATCH/PUT) is
+          // idempotent and its number exists already, so it is simply repeated
+          if (response.request().method() === 'POST') {
+            await this.assertQuotationNotWrittenBeforeRetry(quotationNumber);
+          }
           connectionResetRetries++;
           logger.warn(
             `Save hit a transient connection reset ("${lastErrorMessage}") — retrying save ` +
@@ -2009,14 +2070,15 @@ export class QuotationsPage extends BasePage {
       await this.successToast().waitFor({ state: 'visible', timeout: 8000 });
       logger.success('Success toast visible');
     } catch {
-      // Toast may have already appeared and auto-dismissed — check if we are on list page
-      // which confirms save was successful
-      const url = this.page.url();
-      if (url.includes('/quotations/list') || url.includes('/quotations/details/')) {
-        logger.warn('Toast not caught in time but navigation confirms save succeeded');
+      // ADR 0017 (B4): the toast may have auto-dismissed; the evidence is then the save request's own 2xx
+      // answer (recorded by the save), not the URL (which an in-place modal save never changes)
+      if (this.lastSaveAnsweredOk) {
+        logger.warn('Toast not caught in time but the save request was answered 2xx');
         return;
       }
-      throw new Error('Save toast not visible and not redirected — save may have failed');
+      throw new Error(
+        `Save toast not seen and no 2xx save answer recorded — save may have failed (page: ${this.page.url()})`
+      );
     }
   }
 

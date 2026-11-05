@@ -21,7 +21,11 @@ import { logger } from '../../utils/logger';
 // 2026-07-22 after leads.rbac.spec.ts:38 hit the identical class live (see
 // captureLeadCreateOutcome()/createLead() for the classify+retry).
 class TransientLeadSaveError extends Error {
-  constructor(message: string) {
+  // ADR 0017 (B4): whether any create response was seen decides how the retry check treats an unknown answer
+  constructor(
+    message: string,
+    readonly noResponseObserved = false
+  ) {
     super(message);
     this.name = 'TransientLeadSaveError';
   }
@@ -1656,133 +1660,48 @@ export class LeadsPage extends BasePage {
     logger.success(`Pipeline stage changed to: ${newStage}`);
   }
 
-  // WHY this exists at all — real, DIRECTLY CAUGHT root cause, 2026-09-22,
-  // superseding the "genuinely unexplained real-environment condition"
-  // conclusion this codebase's own history had previously settled on for
-  // FFL36 (see leadFieldLimits.spec.ts's own extensive WHY comment on
-  // saveAndCaptureLeadId()'s maxAttempts — that conclusion is now known to
-  // be incomplete, not wrong about the SYMPTOM, but wrong about WHERE the
-  // problem lives): a fresh diagnostic pass (captureNetworkDuringSave(),
-  // instrumenting every request/response/requestfailed event around the
-  // exact save-button click) caught this live, 4 times in a row in one
-  // single run, with byte-for-byte identical evidence every time — a
-  // COMPLETE ABSENCE of any request to `/v1/leads` for the full 60-second
-  // wait, not a slow or failed one. Only third-party background noise
-  // (headway/stripe/viasocket) appears in the captured window. Combined
-  // with zero captured `pageerror`/`console-error` events in the same
-  // window (ruling out an uncaught client-side exception inside the click
-  // handler) and Playwright's own click() resolving cleanly (ruling out a
-  // stuck/covered/disabled element at click time, which Playwright's own
-  // actionability checks would have thrown on) — the only evidence-
-  // consistent explanation left is that the click event itself is being
-  // intercepted/swallowed SOMEWHERE between the browser dispatching it and
-  // React's own bubble-phase delegated handler ever seeing it. This is the
-  // exact same failure family already confirmed and fixed once in this
-  // codebase for a different element (a react-select menu) — see
-  // `docs/PATTERNS.md` P13: the `viasocket.com` chatbot
-  // widget, embedded on every page, is confirmed to perform its own async
-  // DOM/event work shortly after page interactions; the captured evidence
-  // here directly shows its own `embedfrontend.viasocket.com/cdn-cgi/
-  // zaraz/t` tracking call firing within ~1s of the Save click on one of
-  // the four captured occurrences. §18's own fix for the react-select case
-  // was a "verify the effect actually landed, retry if not" pattern rather
-  // than a longer wait — this applies the identical shape to the Save
-  // button: verify a real network EFFECT of the click (a REQUEST being
-  // initiated, not a response — the response is what the existing 60s
-  // wait already covers) within a short window, and retry the click itself
-  // (not a full form reset) if it didn't.
-  //
-  // WHY this is purely additive, never a new failure mode: the caller's
-  // own captureLeadCreateOutcome() response-wait is armed BEFORE this is
-  // called and keeps running throughout — if every click-verify attempt
-  // here is exhausted with no request ever observed, this simply returns
-  // and the pre-existing 60s response-wait/TransientLeadSaveError
-  // classification takes over exactly as it did before this fix existed.
-  // WHY a 4-second verify window: real successful saves are directly
-  // evidenced elsewhere in this same investigation to complete in as
-  // little as 239ms — 4s is generous margin above genuine success timing
-  // while being 15x faster than waiting out the old 60s-per-attempt cost
-  // on a click that, per the evidence above, was never going to produce a
-  // request at all. WHY retrying the SAME still-open form rather than
-  // resetting: the click itself is the suspected failure point, not the
-  // form's own state — re-clicking the same button is the minimal,
-  // targeted remedy; a full reset is already the existing, proven fallback
-  // one layer up (saveAndCaptureLeadId()/createLead()) if this exhausts.
+  // Clicks Save once and waits for the app's own answer to it. See the comment inside for why there is no re-click (ADR 0017, B4).
   private async clickSaveButtonAndVerifyRequestFires(): Promise<void> {
-    const CLICK_VERIFY_WINDOW_MS = 4000;
-    const MAX_CLICK_ATTEMPTS = 3;
+    // ADR 0017 (B4): ONE click. The old loop re-clicked Save up to 3 times when no create request
+    // showed within 4 s; a re-click after a slow (not lost) first click is a double submit. The click is
+    // now followed by a wait for ANY of the app's own answers: the create request, Save disabled or gone
+    // (the form is submitting or closed), or an inline validation error. If none can be seen, nothing is
+    // clicked again: the caller's response wait (60 s) and its named classification take over.
+    const EFFECT_WINDOW_MS = config.timeouts.expect;
     const isCreateLeadRequest = (req: Request): boolean =>
       req.url().includes('/v1/leads') &&
       !req.url().includes('/reports/') &&
       req.method() === 'POST';
 
-    for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
-      // WHY a flag set by a listener instead of waitForRequest({timeout}) (2026-11-02, call-logs:721
-      // on sandbox staging; reproduced with 6x CPU throttling): the 4 s window used to start BEFORE
-      // the unobstructed wait and the click, so a loaded runner burned it before the click had even
-      // dispatched. The window now starts when the click has resolved.
-      let requestFired = false;
-      const onRequest = (req: Request): void => {
-        if (isCreateLeadRequest(req)) requestFired = true;
-      };
-      this.page.on('request', onRequest);
-      // WHY this wait (added 2026-09-22, real live evidence): the exact
-      // `css-1dsbpcp` overlay already root-caused and fixed for the Multi
-      // Pick List reopen-click (BasePage.ts's waitForClickTargetUnobstructed())
-      // was independently observed live blocking THIS Save button click too —
-      // `TimeoutError: locator.click: Timeout 15000ms exceeded... <div
-      // class="css-1dsbpcp"></div> from <div class="css-qh6yz6">…</div>
-      // subtree intercepts pointer events`, confirmed via a real FFL15
-      // failure. Proof this overlay is not scoped to one widget — see that
-      // method's own updated WHY comment.
-      try {
-        await this.waitForClickTargetUnobstructed(this.saveButton());
-        await this.click(
-          this.saveButton(),
-          `save button (click-verify attempt ${attempt}/${MAX_CLICK_ATTEMPTS})`
-        );
-        // WHY the click also counts as effective once Save is disabled or gone: the form disables
-        // Save while it submits (validation of a long form can outlast the window under load) and
-        // closes it on success. Re-clicking then waits 15 s on a disabled button and fails on a
-        // lead that was in fact created.
-        const submitStarted = (): Promise<boolean> =>
-          expect
-            .poll(
-              async () => requestFired || (await this.page.locator('button[type="submit"].save-button:enabled').count()) === 0,
-              { timeout: CLICK_VERIFY_WINDOW_MS }
-            )
-            .toBe(true)
-            .then(() => true)
-            .catch(() => false);
-        if (await submitStarted()) return;
-      } finally {
-        this.page.off('request', onRequest);
-      }
-      // WHY this message's cause is now stated as confirmed, not open
-      // (root-caused 2026-09-22 via direct log evidence — see
-      // fillLeadCustomFields()'s WHY comment): the app's real onClick
-      // handler fires (confirmed via prior live React fiber instrumentation)
-      // but correctly declines to submit because a real, genuine inline
-      // validation error is present — most commonly a custom field's value
-      // (typically a leftover, unrelated-to-this-test-case random default
-      // from generateLeadData()) violating an account-wide min/max/regex
-      // constraint some earlier or concurrent test configured on that field.
-      // This is the app behaving correctly, not a click race or a backend
-      // flake — see saveLead()'s own updated formError-priority handling
-      // immediately below, which now surfaces this real error directly
-      // instead of letting it be misclassified as transient.
-      logger.warn(
-        `Save button click resolved but no create-lead request was observed within ` +
-          `${CLICK_VERIFY_WINDOW_MS}ms (attempt ${attempt}/${MAX_CLICK_ATTEMPTS}) — most likely a real, ` +
-          'genuine inline validation error is blocking submission (see the form-error check right ' +
-          'after this exhausts)' +
-          (attempt < MAX_CLICK_ATTEMPTS ? ' — retrying the click on the same, still-open form' : '')
-      );
+    let requestFired = false;
+    const onRequest = (req: Request): void => {
+      if (isCreateLeadRequest(req)) requestFired = true;
+    };
+    this.page.on('request', onRequest);
+    try {
+      // the css-1dsbpcp overlay was seen blocking this Save click (FFL15), see
+      // waitForClickTargetUnobstructed()
+      await this.waitForClickTargetUnobstructed(this.saveButton());
+      await this.click(this.saveButton(), 'save button');
+      const decided = await expect
+        .poll(
+          async () =>
+            requestFired ||
+            (await this.page.locator('button[type="submit"].save-button:enabled').count()) === 0 ||
+            (await this.page.locator('input.is-invalid:visible, .invalid-feedback:visible').count()) > 0,
+          { timeout: EFFECT_WINDOW_MS }
+        )
+        .toBe(true)
+        .then(() => true)
+        .catch(() => false);
+      if (decided) return;
+    } finally {
+      this.page.off('request', onRequest);
     }
     logger.warn(
-      `Save button click-verify exhausted ${MAX_CLICK_ATTEMPTS} attempts with no create-lead request ` +
-        'observed — falling through to the existing response-wait, which will classify this as transient ' +
-        'if it times out'
+      `Save was clicked once; within ${EFFECT_WINDOW_MS}ms no create-lead request, no disabled/closed Save and ` +
+        'no inline validation error was seen. Not clicking again (double-submit risk): the response wait ' +
+        'below classifies the outcome.'
     );
   }
 
@@ -1844,7 +1763,8 @@ export class LeadsPage extends BasePage {
     // for a transient is itself just a generic message.
     if (outcome.transient) {
       throw new TransientLeadSaveError(
-        `Lead create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`
+        `Lead create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`,
+        outcome.noResponseObserved
       );
     }
 
@@ -2112,6 +2032,40 @@ export class LeadsPage extends BasePage {
     }
   }
 
+  // ADR 0017 (B4): check first, then decide. A create whose answer was missed or was a 5xx may still
+  // have written the lead, and retrying would double-create it. `has-duplicates` is answered from the
+  // database at once (not the search index), so it tells whether the attempt's e-mail/phone is used now.
+  // Used -> fail by name, no retry. Unknown (no value to ask about, or the endpoint does not answer) ->
+  // retry only when the backend ANSWERED with a retryable status (ADR 0014 section 1); a create with no
+  // answer at all cannot be told apart from a written lead, so it fails by name instead of guessing.
+  private async assertLeadNotCreatedBeforeRetry(data: LeadData, cause: TransientLeadSaveError): Promise<void> {
+    let used: boolean | null = null;
+    try {
+      const api = await LeadApi.forPage(this.page);
+      try {
+        const emailUsed = data.email ? await api.hasDuplicate('emails', data.email) : null;
+        const phoneUsed = data.phone ? await api.hasDuplicate('phoneNumbers', data.phone) : null;
+        used = emailUsed === true || phoneUsed === true ? true : emailUsed === false || phoneUsed === false ? false : null;
+      } finally {
+        await api.dispose();
+      }
+    } catch (error) {
+      logger.warn(`Lead existence check unavailable: ${String(error).split('\n')[0]}`);
+    }
+    if (used === true) {
+      throw new Error(
+        `Lead create did not give a usable answer, but a lead with e-mail ${data.email} / phone ${data.phone} ` +
+          `already exists, so the create went through; not retrying (a retry would create a duplicate). ${cause.message}`
+      );
+    }
+    if (used === null && cause.noResponseObserved) {
+      throw new Error(
+        `Lead create got no response and whether the lead was written cannot be checked (has-duplicates ` +
+          `unavailable); not retrying blind. ${cause.message}`
+      );
+    }
+  }
+
   async createLead(
     data: LeadData,
     options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
@@ -2134,6 +2088,7 @@ export class LeadsPage extends BasePage {
           return await this.saveLead();
         } catch (error) {
           if (error instanceof TransientLeadSaveError && attempt < maxAttempts) {
+            await this.assertLeadNotCreatedBeforeRetry(attemptData, error);
             logger.warn(
               `Lead create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
                 're-navigating and retrying the whole create'

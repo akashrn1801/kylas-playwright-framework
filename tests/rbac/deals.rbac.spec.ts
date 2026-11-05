@@ -27,135 +27,116 @@ import { config } from '../../config/config';
 // among multiple dropdown options by name.
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// WHY: Retrying the whole flow (not just the save) also guards against any
-// residual real propagation lag on top of the exact-match fix above.
-async function logCallWithRetry(
+// ADR 0017 (B4): ONE attempt. This used to repeat the whole flow up to 3 times on any error, which could
+// log the call twice (an attempt can fail after the call log was saved) and hid the real failure behind
+// the last attempt's. A share-permission error on the save is still retried inside
+// CallLogsPage.saveCallLog(), the one place that knows it is safe (the save was refused).
+async function logCallFromDealPanel(
   restrictedPage: ConstructorParameters<typeof DealsPage>[0],
   restrictedDealsPage: DealsPage,
   dealId: number,
   associatedContactName: string | null
 ): Promise<number | null> {
-  const maxAttempts = 3;
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await restrictedDealsPage.goToDealDetailsById(dealId);
-      await restrictedDealsPage.assertRightPanelIconVisible('Call Logs');
-      await restrictedDealsPage.clickRightPanelIcon('Call Logs');
-      // WHY: Reload ensures the "Log a call" button is fully loaded — wait for
-      // the deal's own GET API response after reload, a real readiness signal.
-      await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
-      await restrictedDealsPage.waitForDealDetailsPage();
-      const logACallButton = restrictedPage.locator('button.btn.btn-primary', {
-        hasText: 'Log a call',
-      });
-      await logACallButton.waitFor({ state: 'visible', timeout: 10000 });
-      const callLogModal = restrictedPage.locator('#callLogModal');
-      // WHY a bounded inner retry on the click itself (2026-07-30, found via
-      // a real CI failure — TimeoutError waiting for #callLogModal after
-      // this exact click, both on the first attempt and the automatic
-      // retry): matches the same "click registers but nothing visibly
-      // happens" React-timing race already root-caused elsewhere in this
-      // codebase (DealsPage.cloneDeal()) — re-clicking once if the modal
-      // doesn't open within a short window recovers fast instead of always
-      // paying the full reload-and-retry cost of the outer loop.
-      await logACallButton.click();
-      let modalOpened = await callLogModal
-        .waitFor({ state: 'visible', timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-      if (!modalOpened) {
-        await logACallButton.click({ timeout: 5000 }).catch(() => {});
-        modalOpened = await callLogModal
-          .waitFor({ state: 'visible', timeout: 10000 })
-          .then(() => true)
-          .catch(() => false);
-      }
-      if (!modalOpened) {
-        throw new Error(
-          'Log a Call modal did not open after 2 click attempts on this outer attempt'
-        );
-      }
-      await restrictedPage.evaluate(
-        'document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")'
-      );
-      // WHY: Right after the modal becomes visible its content is still
-      // skeleton placeholders — wait for those to clear before interacting.
-      await expect(callLogModal.locator('.react-loading-skeleton')).toHaveCount(0, {
-        timeout: 15000,
-      });
-
-      const callLogsPage = new CallLogsPage(restrictedPage);
-      const callLogData = generateCallLogData({ outcome: 'Connected', entityType: 'Deal' });
-      const callTypeMenu = restrictedPage.locator('.is-invalid__menu');
-      const callTypeMenuVisible = await callTypeMenu.isVisible().catch(() => false);
-      if (callTypeMenuVisible) {
-        await callTypeMenu.locator('.is-invalid__option').first().click({ force: true });
-      } else {
-        await callLogsPage.fillCallType(callLogData.callType);
-      }
-
-      // WHY: Deal-flow call logs have a mandatory "Associated Contact" field
-      // that Phone Number depends on. Click the control wrapper, not the bare
-      // input — the input renders 2px wide with a placeholder div physically
-      // overlapping it, which intercepts a direct click on the input.
-      const associatedContactControl = restrictedPage
-        .locator('#associatedEntity')
-        .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-      await associatedContactControl.waitFor({ state: 'visible', timeout: 10000 });
-      await associatedContactControl.click();
-      // WHY: Matches a documented known issue — CallLogsPage's entity search
-      // silently falls back to unfiltered options when the filtered pool is
-      // empty. Search explicitly for the SAME contact we just shared.
-      if (associatedContactName) {
-        const words = associatedContactName.trim().split(' ');
-        const validWord =
-          words.find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
-        await restrictedPage.locator('#associatedEntity').fill(validWord);
-      }
-      const contactOptions = restrictedPage.locator('.is-invalid__option');
-      // WHY: Exact match via anchored regex — a substring match against
-      // "<name> Copy" clones from earlier tests can select the wrong,
-      // inaccessible contact (confirmed live root cause of a "necessary
-      // permission" save failure).
-      const matchingContactOption = associatedContactName
-        ? contactOptions.filter({
-            hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`),
-          })
-        : contactOptions;
-      let selectedContactOption = matchingContactOption.first();
-      let contactOptionFound = await selectedContactOption.isVisible().catch(() => false);
-      if (!contactOptionFound) {
-        selectedContactOption = contactOptions.first();
-        contactOptionFound = await selectedContactOption
-          .waitFor({ state: 'visible', timeout: 10000 })
-          .then(() => true)
-          .catch(() => false);
-      }
-      if (!contactOptionFound) {
-        throw new Error('Associated Contact options never appeared on the call log form');
-      }
-      await selectedContactOption.click();
-
-      await callLogsPage.fillOutcome('Connected');
-      await callLogsPage.fillPhoneNumber();
-      await callLogsPage.fillCallSummary(callLogData.callSummary);
-      if (callLogData.duration) {
-        await callLogsPage.fillDurationDirect(
-          callLogData.duration.value,
-          callLogData.duration.type
-        );
-      }
-      return await callLogsPage.saveCallLog();
-    } catch (error) {
-      lastError = error;
-      logger.warn(
-        `Call log creation attempt ${attempt}/${maxAttempts} failed (possible share-permission ` +
-          `propagation lag): ${String(error).slice(0, 200)}`
-      );
-    }
+  await restrictedDealsPage.goToDealDetailsById(dealId);
+  await restrictedDealsPage.assertRightPanelIconVisible('Call Logs');
+  await restrictedDealsPage.clickRightPanelIcon('Call Logs');
+  // WHY: Reload ensures the "Log a call" button is fully loaded — wait for
+  // the deal's own GET API response after reload, a real readiness signal.
+  await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
+  await restrictedDealsPage.waitForDealDetailsPage();
+  const logACallButton = restrictedPage.locator('button.btn.btn-primary', {
+    hasText: 'Log a call',
+  });
+  await logACallButton.waitFor({ state: 'visible', timeout: 10000 });
+  const callLogModal = restrictedPage.locator('#callLogModal');
+  // WHY one re-click of this button (2026-07-30, a real CI failure: TimeoutError waiting for
+  // #callLogModal after this click): the same "click registers but nothing visibly happens" React race
+  // as DealsPage.cloneDeal(). Opening a modal is not a submit, so a second click cannot double-create.
+  await logACallButton.click();
+  let modalOpened = await callLogModal
+    .waitFor({ state: 'visible', timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!modalOpened) {
+    await logACallButton.click({ timeout: 5000 }).catch(() => {});
+    modalOpened = await callLogModal
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  if (!modalOpened) {
+    throw new Error(
+      'Log a Call modal (#callLogModal) did not open after 2 clicks on the "Log a call" button'
+    );
+  }
+  // WHY: Right after the modal becomes visible its content is still
+  // skeleton placeholders — wait for those to clear before interacting.
+  await expect(callLogModal.locator('.react-loading-skeleton')).toHaveCount(0, {
+    timeout: 15000,
+  });
+
+  const callLogsPage = new CallLogsPage(restrictedPage);
+  const callLogData = generateCallLogData({ outcome: 'Connected', entityType: 'Deal' });
+  const callTypeMenu = restrictedPage.locator('.is-invalid__menu');
+  const callTypeMenuVisible = await callTypeMenu.isVisible().catch(() => false);
+  if (callTypeMenuVisible) {
+    await callTypeMenu.locator('.is-invalid__option').first().click({ force: true });
+  } else {
+    await callLogsPage.fillCallType(callLogData.callType);
+  }
+
+  // WHY: Deal-flow call logs have a mandatory "Associated Contact" field
+  // that Phone Number depends on. Click the control wrapper, not the bare
+  // input — the input renders 2px wide with a placeholder div physically
+  // overlapping it, which intercepts a direct click on the input.
+  const associatedContactControl = restrictedPage
+    .locator('#associatedEntity')
+    .locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
+  await associatedContactControl.waitFor({ state: 'visible', timeout: 10000 });
+  await associatedContactControl.click();
+  // WHY: Matches a documented known issue — CallLogsPage's entity search
+  // silently falls back to unfiltered options when the filtered pool is
+  // empty. Search explicitly for the SAME contact we just shared.
+  if (associatedContactName) {
+    const words = associatedContactName.trim().split(' ');
+    const validWord =
+      words.find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
+    await restrictedPage.locator('#associatedEntity').fill(validWord);
+  }
+  const contactOptions = restrictedPage.locator('.is-invalid__option');
+  // WHY: Exact match via anchored regex — a substring match against
+  // "<name> Copy" clones from earlier tests can select the wrong,
+  // inaccessible contact (confirmed live root cause of a "necessary
+  // permission" save failure).
+  const matchingContactOption = associatedContactName
+    ? contactOptions.filter({
+        hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`),
+      })
+    : contactOptions;
+  let selectedContactOption = matchingContactOption.first();
+  let contactOptionFound = await selectedContactOption.isVisible().catch(() => false);
+  if (!contactOptionFound) {
+    selectedContactOption = contactOptions.first();
+    contactOptionFound = await selectedContactOption
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+  }
+  if (!contactOptionFound) {
+    throw new Error('Associated Contact options never appeared on the call log form');
+  }
+  await selectedContactOption.click();
+
+  await callLogsPage.fillOutcome('Connected');
+  await callLogsPage.fillPhoneNumber();
+  await callLogsPage.fillCallSummary(callLogData.callSummary);
+  if (callLogData.duration) {
+    await callLogsPage.fillDurationDirect(
+      callLogData.duration.value,
+      callLogData.duration.type
+    );
+  }
+  return await callLogsPage.saveCallLog();
 }
 
 // WHY: Each of D18-D22/D24a/D26 needs its deal to reference a KNOWN,
@@ -730,7 +711,7 @@ test.describe('Deals RBAC', () => {
     await adminDealsPage.shareDeal(restrictedUserName, ['call']);
 
     const restrictedDealsPage = new DealsPage(restrictedPage);
-    const callLogId = await logCallWithRetry(
+    const callLogId = await logCallFromDealPanel(
       restrictedPage,
       restrictedDealsPage,
       dealId,

@@ -1,8 +1,9 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
-import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import { withLoginSlot } from './loginGate';
+import { accessTokenFromStoredToken, readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -189,14 +190,20 @@ export class AuthManager {
       return;
     }
 
+    const requestedAt = Date.now();
     const loginPromise = this.withFileLock(role, async () => {
       // WHY: Re-check under the cross-process lock — another worker may have
       // completed login (and written a fresh state file) while we were
       // waiting to acquire the lock, making our own login redundant.
       const stateFile = this.getStorageStateFile(role);
-      if (fs.existsSync(stateFile) && !process.env.CI) {
+      if (fs.existsSync(stateFile)) {
         const stats = fs.statSync(stateFile);
-        if (Date.now() - stats.mtimeMs < 60 * 60 * 1000) {
+        // ADR 0017 (B5): in CI too, a state file written AFTER this caller started waiting was made by another
+        // worker's login or recovery, so this login would only repeat it (11 jobs x 2 roles used to log in one
+        // after the other). Locally the older 1 h freshness rule still applies.
+        const writtenWhileWaiting = stats.mtimeMs >= requestedAt;
+        const freshLocally = !process.env.CI && Date.now() - stats.mtimeMs < 60 * 60 * 1000;
+        if (writtenWhileWaiting || freshLocally) {
           logger.info(`Login skipped — fresh state file found under lock for: ${role}`);
           return;
         }
@@ -224,45 +231,60 @@ export class AuthManager {
   // same admin.json/restricted.json file. fs.mkdirSync is atomic on POSIX
   // (it either creates the directory or throws EEXIST), making it the
   // simplest cross-process mutex available without adding a dependency.
+  // ADR 0017 (B5): the lock is stale by the HOLDER's age, never by how long a waiter has waited. It used to be
+  // removed after 30 s of waiting although a holder legitimately spends longer (it queues for a login slot, up
+  // to 3 min, then logs in), which let a second login run next to the first. A holder older than the
+  // longest legitimate hold (slot wait + login) belongs to a crashed process.
   private async withFileLock<T>(role: UserRole, fn: () => Promise<T>): Promise<T> {
     const lockPath = this.getLockPath(role);
-    const maxWait = 30000; // 30s max wait for another process to release the lock
+    const holderFile = path.join(lockPath, 'holder.txt');
+    const staleAfterMs = 5 * 60 * 1000;
     const interval = 500;
-    let waited = 0;
+    let loggedWait = false;
 
     while (true) {
       try {
         fs.mkdirSync(lockPath);
+        try {
+          fs.writeFileSync(holderFile, `pid=${process.pid} role=${role} since=${new Date().toISOString()}`);
+        } catch {
+          /* the holder note is informational */
+        }
         break; // Lock acquired
       } catch (e: unknown) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
 
-        if (waited >= maxWait) {
-          // WHY: Stale lock from a crashed process — remove and give it one
-          // more full wait cycle before considering it stale again.
-          logger.warn(`Stale lock detected for role: ${role} — removing and retrying`);
-          try {
-            fs.rmdirSync(lockPath);
-          } catch {
-            /* another process already removed it */
-          }
-          waited = 0;
+        let ageMs = 0;
+        try {
+          ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+        } catch {
+          continue; // released meanwhile
+        }
+        if (ageMs > staleAfterMs) {
+          logger.warn(`Stale lock for role ${role}: held ${Math.round(ageMs / 1000)}s (${this.describeLockHolder(holderFile)}) — removing it`);
+          fs.rmSync(lockPath, { recursive: true, force: true });
           continue;
         }
-
+        if (!loggedWait) {
+          logger.info(`Waiting for the ${role} login lock (${this.describeLockHolder(holderFile)})`);
+          loggedWait = true;
+        }
         await new Promise((resolve) => setTimeout(resolve, interval));
-        waited += interval;
       }
     }
 
     try {
       return await fn();
     } finally {
-      try {
-        fs.rmdirSync(lockPath);
-      } catch {
-        /* already removed or never created */
-      }
+      fs.rmSync(lockPath, { recursive: true, force: true });
+    }
+  }
+
+  private describeLockHolder(holderFile: string): string {
+    try {
+      return fs.readFileSync(holderFile, 'utf8').trim();
+    } catch {
+      return 'holder unknown';
     }
   }
 
@@ -410,6 +432,38 @@ export class AuthManager {
     return await this.browser.newContext({ storageState: stateFile, viewport: { width: 1920, height: 1080 } });
   }
 
+  // ADR 0017 (B5): the shared state file is cleared only when the BACKEND rejects the stored token. A single 401
+  // (one endpoint refusing, a permission answer) or one page's sign-out used to delete the file for every worker,
+  // and each of them then logged in again. One check per role at a time; if the check cannot be made, the file
+  // stays (a page that really is signed out recovers through its own fixture/recovery path).
+  private static readonly rejectionChecks = new Map<UserRole, Promise<boolean>>();
+
+  async clearStorageStateIfRejected(role: UserRole, trigger: string): Promise<boolean> {
+    const running = AuthManager.rejectionChecks.get(role);
+    if (running) return running;
+    const check = (async (): Promise<boolean> => {
+      const token = readAccessTokenFromStateFile(this.getStorageStateFile(role));
+      if (!token) return false; // nothing saved to clear
+      let accepted = true;
+      try {
+        accepted = await tokenAcceptedByApi(role, token);
+      } catch (error) {
+        logger.warn(`Session check for ${role} after ${trigger} could not be made (${String(error).split('\n')[0]}) — keeping the saved session`);
+        return false;
+      }
+      if (accepted) {
+        logger.info(`${trigger} for ${role}, but the API still accepts the saved token — keeping the saved session`);
+        return false;
+      }
+      logger.warn(`${trigger} for ${role} and the API rejects the saved token — clearing the saved session`);
+      await this.clearStorageState(role);
+      AuthManager.lastValidated.delete(role);
+      return true;
+    })().finally(() => AuthManager.rejectionChecks.delete(role));
+    AuthManager.rejectionChecks.set(role, check);
+    return check;
+  }
+
   async clearStorageState(role: UserRole): Promise<void> {
     const stateFile = this.getStorageStateFile(role);
 
@@ -493,8 +547,8 @@ export class AuthManager {
     // given environment's config happens to have, instead of re-relying on a
     // convention that has already silently drifted once between local and CI.
     // ADR 0016 / ADR 0014 §1: only a transport error, 429 or 5xx is retried (bounded, 3 tries);
-    // any 4xx (incl. 400 {"code":"000004","message":"Database error"}) is definitive and fails
-    // naming status, code and message. Fewer parallel logins is the answer to those, not retries.
+    // any other 4xx is definitive and fails naming status, code and message. The one exception is the
+    // exact login 400 {"code":"000004","message":"Database error"} (ADR 0017: idempotent, 2 extra tries).
     const loginAttempts = 3;
     let token: string | undefined;
     for (let attempt = 1; attempt <= loginAttempts; attempt++) {
@@ -525,8 +579,11 @@ export class AuthManager {
       }
       if (token) break;
       const failedStatus = status as number | null;
-      if (failedStatus !== null && isRetryableHttpStatus(failedStatus) && attempt < loginAttempts) {
+      const databaseError = failedStatus !== null && isLoginDatabaseError(failedStatus, bodyText);
+      if (failedStatus !== null && (isRetryableHttpStatus(failedStatus) || databaseError) && attempt < loginAttempts) {
         logger.warn(`Headless login for role ${role}: HTTP ${failedStatus} — retry ${attempt}/${loginAttempts - 1}`);
+        // ADR 0017: the 000004 "Database error" is a burst answer; a short pause lets the other logins finish
+        if (databaseError) await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
         continue;
       }
       throw new Error(
@@ -557,7 +614,7 @@ export class AuthManager {
   // same file _doLogin() does and is just as exposed to the same concurrent-
   // worker race) so the NEXT test's fixture setup doesn't redundantly
   // re-login for a session that's already fresh.
-  async reauthenticatePage(page: Page, role: UserRole): Promise<void> {
+  async reauthenticatePage(page: Page, role: UserRole): Promise<string> {
     logger.warn(`Mid-test session expiry for role ${role} — re-authenticating headlessly (no UI navigation)`);
 
     const token = await this.loginHeadless(role, page);
@@ -572,6 +629,7 @@ export class AuthManager {
     AuthManager.lastValidated.set(role, Date.now());
 
     logger.info(`Headless re-authentication complete for role: ${role}`);
+    return token;
   }
 
   // WHY this exists (2026-07-30, defensive hardening — root cause NOT fully
@@ -986,7 +1044,7 @@ export async function tryRecoverSessionForPage(page: Page, returnUrl: string): P
   }
   const { authManager, role } = ctx;
 
-  await authManager.reauthenticatePage(page, role);
+  const swappedToken = await authManager.reauthenticatePage(page, role);
 
   // WHY this retry exists (2026-07-20, found via deliberate reproduction of
   // Gap 2's fix, not a guess): when expiry is detected mid-interaction
@@ -1026,9 +1084,18 @@ export async function tryRecoverSessionForPage(page: Page, returnUrl: string): P
     // headless recovery above report success while the app still redirects
     // back to signIn moments later. Try a qualitatively different recovery
     // — a real, full UI-driven login — exactly once before giving up.
+    // ADR 0017 (B5), diagnostic for the open "did not stick" follow-up (not reproduced on QA: a fresh token, and
+    // a token-only restore after a sign-out clear, both stuck): say whether the backend accepts the token that was
+    // just issued and what the app left in localStorage, so the next occurrence names its cause.
+    const swappedAccess = accessTokenFromStoredToken(swappedToken);
+    const accepted = swappedAccess
+      ? await tokenAcceptedByApi(role, swappedAccess).then(String, (e: unknown) => `check failed: ${String(e).split('\n')[0]}`)
+      : 'no access token in the login response';
+    const keysLeft = await page.evaluate(() => Object.keys(window.localStorage).join(',')).catch(() => 'unreadable');
     logger.warn(
       `Session recovery for role ${role} via headless re-auth did not stick — still on ` +
         `${page.url()} after re-authenticating and navigating back to ${returnUrl}. ` +
+        `Backend accepts the token just issued: ${accepted}; localStorage keys now: ${keysLeft}. ` +
         `Escalating to a full UI-driven re-login before giving up.`
     );
     await authManager.reauthenticatePageViaUI(page, role);

@@ -5,8 +5,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
-import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import { storedSessionNeedsRefresh } from './sessionLifetime';
+import { tokenAcceptedByApi } from './sessionCheck';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -438,42 +439,6 @@ async function sessionAcceptedByApi(role: 'admin' | 'restricted'): Promise<boole
   return tokenAcceptedByApi(role, await getAccessTokenForRole(role));
 }
 
-export async function tokenAcceptedByApi(role: string, token: string): Promise<boolean> {
-  const url = buildApiUrl('/products/layout?view=create');
-  const apiContext = await apiRequest.newContext();
-  try {
-    const attempts = 3;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      let status: number | null = null;
-      let body = '';
-      try {
-        const response = await apiContext.get(url, {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        });
-        status = response.status();
-        body = (await response.text()).slice(0, 300);
-      } catch (error) {
-        if (attempt === attempts) {
-          throw new Error(`[globalSetup] Session check for ${role}: no response from ${url} after ${attempts} attempts (${String(error)})`);
-        }
-        console.warn(`[globalSetup] Session check for ${role}: no response (${String(error)}) — retry ${attempt}/${attempts - 1}`);
-        continue;
-      }
-      if (status >= 200 && status < 300) return true;
-      if (status === 401 || status === 403) return false;
-      if (isRetryableHttpStatus(status) && attempt < attempts) {
-        console.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
-        continue;
-      }
-      throw new Error(`[globalSetup] Session check for ${role}: HTTP ${status} from ${url}. Response: ${body}`);
-    }
-    return false;
-  } finally {
-    await apiContext.dispose();
-  }
-}
-
 async function setupRole(
   role: 'admin' | 'restricted',
   browser: import('@playwright/test').Browser
@@ -512,8 +477,9 @@ async function setupRole(
     const releaseLoginSlot = await acquireLoginSlot(STORAGE_STATE_DIR, `globalSetup login ${role}`);
     const context = await browser.newContext();
     // ADR 0016 / ADR 0014 §1: the login request's own answer decides whether another attempt is
-    // allowed. 429/5xx or no answer: retry as before; any other 4xx (e.g. 400 "Database error")
-    // is definitive and fails naming status, code and message.
+    // allowed. 429/5xx or no answer: retry as before; the exact login 400 000004 "Database error" is
+    // retried too (ADR 0017, login is idempotent); any other 4xx is definitive and fails naming
+    // status, code and message.
     let loginRejection: { status: number; body: string } | null = null;
     // WHY: retain-on-failure, same convention as playwright.config.ts's own
     // test-level tracing — start unconditionally (cheap), only save the
@@ -651,10 +617,11 @@ async function setupRole(
         `[globalSetup] Login attempt ${attempt}/${maxAttempts} failed for ${role}: ${String(error)}`
       );
       const rejection = loginRejection as { status: number; body: string } | null;
-      if (rejection && !isRetryableHttpStatus(rejection.status)) {
+      const databaseError = rejection !== null && isLoginDatabaseError(rejection.status, rejection.body);
+      if (rejection && !isRetryableHttpStatus(rejection.status) && !(databaseError && attempt < maxAttempts)) {
         throw new Error(
           `[globalSetup] Login for ${role} (ENV=${config.env}) was rejected with HTTP ${rejection.status}: ${rejection.body}. ` +
-            `Not retried (ADR 0014 §1): fewer parallel logins is the fix, not another attempt.`
+            `Not retried (ADR 0014 §1; ADR 0017 allows only the 000004 "Database error" answer, ${maxAttempts - 1} extra attempts).`
         );
       }
       if (attempt < maxAttempts) {

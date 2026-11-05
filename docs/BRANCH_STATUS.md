@@ -9,7 +9,7 @@ Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part i
 
 ## `feature/framework-hardening-20261104` (first-attempt hardening, [ADR 0016](./adr/0016-first-attempt-hardening-framework-wide.md))
 
-- B-1 to the session-expiry batch and CO12 are committed; B2 onward and the sandbox proof are open. **Follow-up (seen 2026-11-05, not investigated):** after a forced sign-out during `navigateTo` on staging, "headless re-auth did not stick" and the escalation to a UI login then ran ~3 min of failed navigations (same message as the sandbox expiry incident). Find why the swapped token is rejected.
+- B-1 to B5 committed. B3 sandbox: all green but company formFields (staging login 400 `000004`; now retried + job stagger, ADR 0017). Watch `reports.spec:866` (flaky; get its trace). B4/B5 proof open. **Follow-up:** on staging, "headless re-auth did not stick" and the UI-login escalation ran ~3 min. Not on QA; now logs whether the API accepts the new token. Check on staging after the sandbox run.
 
 ## `feature/ci-rerun-shard-20261103` (cut from `dev`, nothing committed, nothing run on GitHub)
 

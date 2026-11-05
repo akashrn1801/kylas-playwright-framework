@@ -1,0 +1,37 @@
+# ADR 0017 — Check before retry, never double-submit; shared session state (hardening batches B4, B5)
+
+> **Purpose:** Records the B4 and B5 decisions of the 2026-11 hardening work: where the framework repeats a create or a click and what it checks first (B4), and how the shared login state is cleared and re-created (B5). Extends [ADR 0014](0014-definitive-errors-and-ready-signals.md) and [ADR 0016](0016-first-attempt-hardening-framework-wide.md).
+> **Read when:** Adding or changing a retry, a re-click, an error-page recovery, or anything that clears or rewrites the saved login state.
+> **Size budget:** 12k chars (hard cap 60k)
+> **Last verified:** 2026-11-05 @ 8cac9c9
+
+## Status
+Accepted — 2026-11-05 (owner approved the B4 and B5 proposals). In the code; B4 proven on QA only for the deals.rbac call-log path, B5 offline (lock, login reuse, verify-before-clear) and on QA for two fixture setups; the sandbox run on staging is the proof of the rest.
+
+## Rule
+A retry is allowed only for a read, an idempotent call, or a create that a CHECK shows was not written. The check is made first, from a source that answers at once (the database, not the search index) or by a bounded poll when only the index can answer. When the check cannot be made and no response was seen, the step fails by name. Nothing is clicked twice to "see if it works".
+
+## Decisions
+- **Leads Save is clicked once** (`clickSaveButtonAndVerifyRequestFires`). The loop that re-clicked up to 3 times after 4 s without a request is gone: a slow first click would be submitted twice. After the click it waits (10 s) for any of the app's answers: the create request, Save disabled or gone, or an inline error. If none is seen it does not click again; the response wait (60 s) classifies the outcome. Removed recovery: a click the app really lost now costs that wait and then the create check below, not a re-click; watch for it in the sandbox run.
+- **`createLead` checks before it retries.** On a transient outcome it asks `GET /leads/has-duplicates` (answered from the database) whether the attempt's e-mail or phone now exists. Exists -> fails by name, no retry (the create went through). Unknown -> retries only if the backend answered with a retryable status (429/5xx, ADR 0014 section 1); no response at all and no way to check -> fails by name.
+- **Quotation create 500** (and the "connection closed before response" reset, creates only): before the single retry it polls `POST /v1/quotations/search` for the quotation number (15 s, the index trails the write). Found -> fails by name, no retry. Not found, or no number readable -> one retry, as before (residual risk: an index lag beyond 15 s). Updates (PATCH/PUT) are idempotent and are repeated without the check. New `src/utils/quotationApi.ts`.
+- **No success inferred from the URL.** `assertSuccessToast` and the inaccessible-entity save loop no longer treat "still on the list/detail URL" as success (an in-place modal save never changes the URL). The evidence is the success toast recorded from the click, or the save request's own 2xx (`lastSaveAnsweredOk`); otherwise the step fails naming the page.
+- **deals.rbac `logCallFromDealPanel`** (was `logCallWithRetry`): one attempt. The 3x whole-flow retry could log the call twice and hid the first failure; the `aria-hidden` removal on `#callLogModal` is deleted: D21 passed on QA without it, and nothing shows the app leaves it set. The one re-click of "Log a call" stays (opening a modal is not a submit). The share-permission retry inside `CallLogsPage.saveCallLog()` stays (the save was refused, nothing written).
+- **`withRateLimitRecovery` reloads only the 429 page.** On "Something is broken" it throws at once with the last failed request (`recentFailedWrite`/`recentFailedRead`), instead of reloading. `tryRecoverFromAppErrorBoundary` is no longer called.
+
+## Not changed
+`CallLogsPage.saveCallLog` permission retry, `TasksPage` inaccessible-relation retry and the quotation inaccessible-entity retry (a 029003 refusal writes nothing), login retries (ADR 0016 S2), `withSessionExpiryRetry` (sign-out, nothing written).
+
+## Decisions (B5: shared login state, 2026-11-05)
+- **The saved session is cleared only when the backend rejects it.** A 401 on one `/v1/` call, or a page going to sign-in, used to delete the shared `<role>.json` for every worker, and each then logged in again. `AuthManager.clearStorageStateIfRejected(role, trigger)` asks the API (`src/auth/sessionCheck.ts`, the S1 check moved out of globalSetup) with the saved token: rejected (401/403) -> cleared; accepted, or the check cannot be made -> kept. One check per role at a time. The fixture's own "landed on sign-in" path uses it too; it then logs in, which overwrites the file atomically.
+- **The login lock goes stale by the holder's age (5 min), not the waiter's wait (was 30 s).** A holder legitimately queues for a login slot (up to 3 min) and then logs in, so a 30 s steal let a second login run beside it. The lock directory holds `holder.txt` (pid, since) and waiters log it.
+- **Logins are reused in CI.** After taking the lock, a state file written after this caller began waiting is reused (another worker logged in or recovered): 11 jobs x 2 roles no longer log in one after the other. Locally the 1 h rule stays.
+- **Fixture setup navigates to `/sales/home` first** (was the bare origin, which the app redirects to the last visited section, e.g. `/setup`; plan data: 24-45 s of setup). The forced retry target and the 85 % deadline logic are unchanged.
+- **"Headless re-auth did not stick" is NOT fixed, only instrumented.** On QA it does not reproduce: a fresh headless token and a token-only restore after `localStorage.clear()` both reach `/sales/leads/list` (the app keeps `token`, `userId`, `tenantId`, `userName`, `slingApp`; a login returns the SAME token and expiry until near expiry). Hypothesis for staging: the app's own sign-out (KI-16) revokes the token server-side and login re-issues it. The recovery now logs whether the backend accepts the token just issued and the localStorage keys left, so the next occurrence names the cause; to be checked on staging after the sandbox run.
+- **Not changed:** `reauthenticatePage` and the UI-login escalation themselves.
+
+## Login "Database error" (exception to ADR 0014 §1) and S3 stagger
+
+- **Evidence:** sandbox run 42034935606 (staging): the company formFields job died in 3m32s in globalSetup: `PUT /users/login` for `restricted` answered `400 {"code":"000004","message":"Database error"}` while 10 jobs logged in at once; S1/S2 treated every 4xx as definitive, so one burst answer cost a 70-test job (it was also seen at 4 parallel logins).
+- **Decision:** only that exact answer (400, code `000004`, message `Database error`, on the login request) is retried: at most 2 extra attempts, with a pause (globalSetup 5 s, headless login 5 s then 10 s). Login re-issues a token and writes nothing, so no attempt can double-submit. Any other 4xx stays definitive; `isLoginDatabaseError` (`retryableStatus.ts`) is the only definition. Exhaustion fails naming status, code and message.
+- **S3:** `sandbox.yml` core shards and formFields entities wait a fixed 20 s x slot (shard id or entity name mod 8, 0-140 s) before the test step, so the jobs do not log in in the same second. The wait never decides pass or fail. Not applied to `qa.yml`/`stage.yml`.

@@ -32,16 +32,15 @@ const stateFor = (role: string) =>
 // ── Session expiry detection ─────────────────────────────────────────────────
 
 function attachSessionExpiryListener(page: Page, role: 'admin' | 'restricted', authManager: AuthManager): void {
-  // WHY: Watch for 401 responses during tests — these indicate session expiry
-  // When detected, clear the storage state so the NEXT test gets a fresh login
+  // WHY: a 401 or a sign-out redirect says THIS page lost its session; the saved file is shared by every worker,
+  // so it is cleared only when the backend rejects the saved token (ADR 0017, B5). One 401 on one endpoint, or
+  // an app-side sign-out while the token is still accepted, no longer makes every worker log in again.
   page.on('response', async (response) => {
     if (response.status() === 401) {
       const url = response.url();
       if (url.includes('/v1/') || url.includes('/api/')) {
-        logger.warn(`Session expiry detected for ${role} — 401 on ${url} — clearing storage state`);
-        await authManager.clearStorageState(role).catch(() => {});
-        // WHY: Reset validation cache so next test re-validates immediately
-        AuthManager['lastValidated'].delete(role);
+        logger.warn(`Session expiry suspected for ${role} — 401 on ${url}`);
+        await authManager.clearStorageStateIfRejected(role, `401 on ${new URL(url).pathname}`).catch(() => false);
       }
     }
   });
@@ -51,9 +50,8 @@ function attachSessionExpiryListener(page: Page, role: 'admin' | 'restricted', a
     if (frame === page.mainFrame()) {
       const url = frame.url();
       if (url.includes('/signIn') || url.includes('/login')) {
-        logger.warn(`Session expiry detected for ${role} — redirected to ${url}`);
-        authManager.clearStorageState(role).catch(() => {});
-        AuthManager['lastValidated'].delete(role);
+        logger.warn(`Session expiry suspected for ${role} — redirected to ${url}`);
+        authManager.clearStorageStateIfRejected(role, 'redirect to sign-in').catch(() => false);
       }
     }
   });
@@ -421,7 +419,10 @@ async function createRolePage(
   // relogin) intentionally goes back to the generic entry point, since a
   // full relogin already addresses a different failure class entirely and
   // has no reason to assume the same "resume last section" state applies.
-  let navigationTargetUrl = config.appUrl;
+  // ADR 0017 (B5): go straight to /sales/home. The bare origin made the app "resume the last visited section"
+  // (/setup), which cost a full race timeout plus a second navigation (24-45 s of setup in the sandbox data);
+  // the forced /sales/home retry already proved this target.
+  let navigationTargetUrl = `${config.appUrl.replace(/\/+$/, '')}/sales/home`;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const outcome = await navigateAndConfirmLoggedIn(
       page,
@@ -501,7 +502,9 @@ async function createRolePage(
       `${role} page did not land on /sales/ (outcome: ${outcome}, url: ${page.url()}) — ` +
         `forcing a fresh login and retrying (attempt ${attempt}/${maxAttempts})`
     );
-    await authManager.clearStorageState(role).catch(() => {});
+    // ADR 0017 (B5): this page's own landing is the evidence that ITS session is bad; the shared file is
+    // removed only if the backend rejects its token, and the login below overwrites it atomically anyway.
+    await authManager.clearStorageStateIfRejected(role, `${role} page landed on ${outcome}`).catch(() => false);
     AuthManager['lastValidated'].delete(role);
     try {
       await authManager.loginAndSaveState(role);
