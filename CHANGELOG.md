@@ -9,6 +9,7 @@ Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history 
 
 ## Unreleased
 
+- 2026-11-05 — fix: CO12 company quotation card — verify in place after the card's own refresh instead of reloading by URL (the reload rendered the app's `QuotationApprovalStateFieldValue` crash), armed card-list wait replaces a 2 s sleep, `pageErrorTracker` fails the wait 2 s after an uncaught page error with its text; staging 15 of 15 (pending)
 - 2026-11-04 — docs: KI-61, QA deal search stopped indexing new deals (18 deals created after 11:25 UTC not searchable 3.5 h later); three companies/contacts deal tests fail because of it (pending)
 - 2026-11-04 — fix: `waitForRendered` rethrows non-timeout errors at once, a failed read is cleared by a later 2xx for the same path, widget-scoped "Something is broken" no longer fails other controls, timeout says elapsed seconds; `waitForListReady` loses its 5 s floor; ADR 0016 (pending)
 - 2026-11-04 — fix: sessions validated once per role by one API call in globalSetup (workers trust the state; a 401/signIn still clears it), at most 2 concurrent logins per machine (`src/auth/loginGate.ts`, replaces the random pre-login sleep), login retries only for no-response/429/5xx and a 400 fails naming status+code+message; ADR 0016, KI-51 updated; QA 18/18 first attempt, staging proof pending (pending)

@@ -59,6 +59,12 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
+### KI-62 — App crash `QuotationApprovalStateFieldValue` on a freshly loaded company page with quotations (2026-11-05)
+- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** seen 2026-11-04
+- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')` (pageError, bundle `index.*.bundle.js`); the Quotations card never renders. The quotation search answered 200 with a normal `approvalState`. Staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8. Rendering the card in place after the save never crashed.
+- **Test side:** CO12 verifies in place and fails 2 s after an uncaught page error with its text (ADR 0016). Other tests that load a company with quotations by URL could meet it; none seen.
+- **Next check:** reload a company with a quotation 10x; if the crash persists, give Kylas the stack.
+
 ### KI-61 — QA deal search stopped indexing new deals (2026-11-04): "Related Deals (0)", deal tests fail
 - **Status:** open, environment (QA backend) · **Since:** 2026-11-04
 - **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`, status OPEN, company set) were still absent from `POST /v1/search/deal` at 14:58 UTC (3.5 h). Company and contact search were current (newest 12:43 / 12:45), leads 11:45. The company page's Related Deals card (`POST /v1/search/deal`, rule company = id AND forecastingType in OPEN) therefore answered `totalElements: 0` after every create.

@@ -18,6 +18,7 @@ import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
 import { trackFailedWrites, recentFailedWrite, recentFailedRead } from '../utils/failedWriteTracker';
+import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
@@ -29,6 +30,36 @@ export class BasePage {
   constructor(page: Page) {
     this.page = page;
     trackFailedWrites(page);
+    trackPageErrors(page);
+  }
+
+  /**
+   * expect(locator).toBeVisible() that stops early when the app throws an uncaught page error and the element
+   * still has not rendered PAGE_ERROR_GRACE_MS later, failing with that error instead of waiting the whole
+   * timeout for a page that crashed. The grace keeps an unrelated, harmless page error (third-party widget)
+   * from failing a page that is merely slow: it only ends the wait when the element is really not coming.
+   */
+  protected async expectVisibleFailingOnPageError(locator: Locator, message: string, timeout: number): Promise<void> {
+    const PAGE_ERROR_GRACE_MS = 2000;
+    const crash = pageErrorSignal(this.page);
+    const visible = expect(locator, message).toBeVisible({ timeout });
+    visible.catch(() => undefined);
+    const crashed = crash.promise.then(async (error) => {
+      const rendered = await locator
+        .waitFor({ state: 'visible', timeout: PAGE_ERROR_GRACE_MS })
+        .then(() => true, () => false);
+      return rendered ? new Promise<never>(() => undefined) : error;
+    });
+    try {
+      const outcome = await Promise.race([visible.then(() => null), crashed]);
+      if (outcome) {
+        throw new Error(
+          `${message}: the app threw an uncaught page error and the element did not render within ${PAGE_ERROR_GRACE_MS}ms of it. ${outcome.name}: ${outcome.message}`
+        );
+      }
+    } finally {
+      crash.stop();
+    }
   }
 
   // WHY a public getter, not just leaving `page` protected (added

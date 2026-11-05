@@ -1495,7 +1495,8 @@ export class QuotationsPage extends BasePage {
   // place to check, right before any field gets filled.
   async fillAndSaveQuotationFromPanel(
     customFields?: QuotationCustomFieldData,
-    checkCustomFieldsAbsent = false
+    checkCustomFieldsAbsent = false,
+    awaitCardRefresh = false
   ): Promise<string> {
     if (checkCustomFieldsAbsent) {
       await this.skipIfCustomFieldsAbsent();
@@ -1522,6 +1523,18 @@ export class QuotationsPage extends BasePage {
       })
       .catch(() => null);
 
+    // Opt-in (CO12): the app refreshes the Quotations card with POST /v1/quotations/search after the create.
+    // Armed before the fill/save steps; awaited after the modal closes so the test continues only once the
+    // card's own refresh is answered.
+    const cardRefresh = awaitCardRefresh
+      ? this.armResponseWaitWithRecovery(
+          (res) => res.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(res.url()).pathname),
+          'Quotations card refresh (POST /v1/quotations/search) after the save',
+          30000
+        )
+      : null;
+    cardRefresh?.catch(() => undefined);
+
     await this.fill(this.quotationNumberInput(), quotationNumber, 'quotation number');
     await this.fill(this.summaryInput(), summary, 'summary');
     await this.ensureProductRowExistsFromPanel();
@@ -1530,6 +1543,7 @@ export class QuotationsPage extends BasePage {
     }
 
     await this.saveQuotation();
+    if (cardRefresh) await cardRefresh;
 
     let quotationId = await idPromise;
     // WHY toast-text fallback: the network capture can still miss a genuine
