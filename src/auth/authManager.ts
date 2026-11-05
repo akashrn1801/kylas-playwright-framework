@@ -5,6 +5,15 @@ import { isRetryableHttpStatus } from '../utils/retryableStatus';
 import { withLoginSlot } from './loginGate';
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  APP_REFRESH_TRIGGER_MS,
+  getTokenLifetimeMs,
+  getTokenRemainingMs,
+  proactiveRefreshBufferMs,
+  storedSessionNeedsRefresh,
+} from './sessionLifetime';
+
+export { getTokenRemainingMs };
 
 export type UserRole = 'admin' | 'restricted';
 
@@ -385,6 +394,22 @@ export class AuthManager {
     });
   }
 
+  /**
+   * A context whose saved session exists and still has enough lifetime for a short job, logging in first when the
+   * file is missing (another worker or a recovery cleared it) or the token is close to expiry. For worker-scoped
+   * hooks (afterAll cleanup) that used to read the state file by path and failed with ENOENT.
+   */
+  async getContextWithUsableSession(role: UserRole): Promise<BrowserContext> {
+    this.validateAppUrl();
+    const stateFile = this.getStorageStateFile(role);
+    if (storedSessionNeedsRefresh(stateFile)) {
+      logger.warn(`Saved session for role ${role} is missing or close to expiry — logging in before creating the context`);
+      await this.loginAndSaveState(role);
+      AuthManager.lastValidated.set(role, Date.now());
+    }
+    return await this.browser.newContext({ storageState: stateFile, viewport: { width: 1920, height: 1080 } });
+  }
+
   async clearStorageState(role: UserRole): Promise<void> {
     const stateFile = this.getStorageStateFile(role);
 
@@ -652,52 +677,21 @@ export class AuthManager {
       );
       return;
     }
-    if (remainingMs > PROACTIVE_REFRESH_BUFFER_MS) {
+    const bufferMs = proactiveRefreshBufferMs(getTokenLifetimeMs(rawToken));
+    if (remainingMs > bufferMs) {
       logger.debug(
-        `ensureFreshSession: token for role ${role} has ${Math.round(remainingMs / 1000)}s remaining — no proactive refresh needed`
+        `ensureFreshSession: token for role ${role} has ${Math.round(remainingMs / 1000)}s remaining (needs more than ${Math.round(bufferMs / 1000)}s) — no proactive refresh needed`
       );
       return;
     }
     logger.info(
-      `ensureFreshSession: token for role ${role} has only ${Math.round(remainingMs / 1000)}s remaining — proactively refreshing before the test starts`
+      `ensureFreshSession: token for role ${role} has only ${Math.round(remainingMs / 1000)}s remaining (needs more than ${Math.round(bufferMs / 1000)}s: the app signs out ~${APP_REFRESH_TRIGGER_MS / 60000} min before expiry) — proactively refreshing before the test starts`
     );
     await this.reauthenticatePage(page, role);
   }
 }
 
-// WHY this exists (2026-07-23, for AuthManager.ensureFreshSession() above):
-// confirmed live via real network capture that the JWT stored in
-// localStorage.token embeds its own absolute expiry as a ms-epoch timestamp
-// at payload.data.expiry (decoded from a real token: expiresIn 37569s
-// [~10.4h], expiry a concrete ms-epoch value) — reading it costs nothing (no
-// network call), which is what makes a cheap, unconditional proactive check
-// at the start of every test practical.
-export function getTokenRemainingMs(rawToken: string): number | null {
-  try {
-    const payloadSegment = rawToken.split('.')[1];
-    if (!payloadSegment) return null;
-    const payload = JSON.parse(Buffer.from(payloadSegment, 'base64').toString('utf-8')) as {
-      data?: { expiry?: number };
-    };
-    const expiry = payload.data?.expiry;
-    if (typeof expiry !== 'number') return null;
-    return expiry - Date.now();
-  } catch {
-    return null;
-  }
-}
 
-// WHY 10 minutes, not an arbitrary small number: this session's own full-
-// suite heartbeat/timing data (both the live stage run and historical logs
-// inspected while building the heartbeat tooling) shows individual test
-// durations up to ~2.1 minutes for the heaviest NORMAL (non-failure) flows
-// — failure-inflated durations (a test waiting out a session-expiry timeout)
-// don't count, since those are exactly what this mechanism prevents. 10
-// minutes gives comfortable (~5x) margin over the heaviest observed normal
-// test, while remaining a tiny fraction (~1.6%) of the token's own ~10.4h
-// lifetime — refreshing early costs one extra ~300ms-1s headless login
-// call, negligible next to the cost of a mid-test expiry.
-const PROACTIVE_REFRESH_BUFFER_MS = 10 * 60 * 1000;
 
 // ── Mid-test session recovery ────────────────────────────────────────────────
 // WHY a module-level registry, not a constructor param on BasePage: every

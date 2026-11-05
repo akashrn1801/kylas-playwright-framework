@@ -8,6 +8,7 @@ import {
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
+  isSignInUrl,
   isRateLimitedPage,
   RATE_LIMIT_PAGE_PATTERN,
   tryRecoverFromRateLimit,
@@ -501,36 +502,61 @@ export class BasePage {
     const SLICE_MS = 5000;
     const FAILED_READ_GRACE_MS = 15000;
     const startedAt = Date.now();
-    for (;;) {
-      const left = timeout - (Date.now() - startedAt);
-      try {
-        await locator.waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) });
-        return;
-      } catch (error) {
-        // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
-        // or context) cannot change by waiting and used to spin here until the budget ran out.
-        if (!(error instanceof errors.TimeoutError)) throw error;
-        // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
-        // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
-        // wait has run out (below).
-        if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
-        if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
-        if (left <= SLICE_MS) {
-          if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+    // ADR 0016 (session-expiry batch): a sign-out (the app navigating to /signIn, or a 401 on an API read: the same signal armResponseWaitWithRecovery uses) ends the wait at once and runs the
+    // existing session recovery, instead of the locator waiting out its slices on the sign-in page. One recovery per
+    // call; a second sign-out in the same wait is reported by name.
+    const urlBeforeWait = this.page.url();
+    const recoverable = isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeWait);
+    let signOut = recoverable ? armSessionExpirySignal(this.page) : null;
+    let recovered = false;
+    try {
+      for (;;) {
+        const left = timeout - (Date.now() - startedAt);
+        try {
+          const outcome = await Promise.race([
+            locator
+              .waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) })
+              .then(() => 'visible' as const),
+            signOut ? signOut.promise.then(() => 'signed-out' as const) : new Promise<never>(() => undefined),
+          ]);
+          if (outcome === 'visible') return;
+          signOut?.cancel();
+          if (recovered) {
+            throw new Error(`${description}: the app signed the user out again right after the session was recovered`);
+          }
+          logger.warn(`${description}: the app signed out (sign-in page or 401) while waiting — recovering the session now`);
+          await tryRecoverSessionForPage(this.page, urlBeforeWait);
+          recovered = true;
+          signOut = armSessionExpirySignal(this.page);
+          continue;
+        } catch (error) {
+          // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
+          // or context) cannot change by waiting and used to spin here until the budget ran out.
+          if (!(error instanceof errors.TimeoutError)) throw error;
+          // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
+          // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
+          // wait has run out (below).
+          if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
+          if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
+          if (left <= SLICE_MS) {
+            if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+              throw new Error(
+                `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`
+              );
+            }
+            throw new Error(`${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s. Original: ${error.message.split('\n')[0]}`);
+          }
+          const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
+          if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
             throw new Error(
-              `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`
+              `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
+                `a read the page makes failed and has not been answered successfully since (${failedRead.summary}), so the control may never render. Original: ${error.message.split('\n')[0]}`
             );
           }
-          throw new Error(`${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s. Original: ${error.message.split('\n')[0]}`);
-        }
-        const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
-        if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
-          throw new Error(
-            `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
-              `a read the page makes failed and has not been answered successfully since (${failedRead.summary}), so the control may never render. Original: ${error.message.split('\n')[0]}`
-          );
         }
       }
+    } finally {
+      signOut?.cancel();
     }
   }
 
@@ -1283,8 +1309,18 @@ export class BasePage {
     // long. 'timed-out' = that racer hit its bound; the outcome handling below is
     // unchanged (every non-rate-limit result is still 'settled').
     const raceStartedAt = Date.now();
-    const racerResult = (label: string, outcome: 'settled' | 'rate-limited') => ({ label, outcome, timedOut: false });
+    const racerResult = (label: string, outcome: 'settled' | 'rate-limited' | 'signed-out') => ({ label, outcome, timedOut: false });
     const racerTimedOut = (label: string) => ({ label, outcome: 'settled' as const, timedOut: true });
+    // ADR 0016 (session-expiry batch): a fourth racer for the app signing the user out (sandbox run 41825279669: the
+    // list wait sat on the /signIn page for 2 x 120 s before the existing recovery ran). The signal is the existing one
+    // (navigation to sign-in or a 401 on /v1/), only for pages that can recover (registered role); the recovery below is the existing one.
+    // The signal is cancelled the moment the race settles, so it cannot become the zombie listener that this
+    // method's top comment (2026-10, three concurrent recoveries) removed an earlier signal for.
+    const urlBeforeRace = this.page.url();
+    const signOut =
+      isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeRace)
+        ? armSessionExpirySignal(this.page)
+        : null;
     const winner = await Promise.race([
       this.page
         .waitForResponse(responsePredicate, { timeout: boundedTimeout() })
@@ -1300,11 +1336,17 @@ export class BasePage {
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
         .then(() => racerResult('rate-limit page', 'rate-limited'))
         .catch(() => racerTimedOut('rate-limit page')),
+      ...(signOut ? [signOut.promise.then(() => racerResult('signed out (navigated to sign-in)', 'signed-out'))] : []),
     ]);
+    signOut?.cancel();
     const firstSignal = winner.outcome;
     logger.info(
       `${description} list ready-wait: ${winner.label}${winner.timedOut ? ' TIMED OUT' : ''} after ${Date.now() - raceStartedAt}ms`
     );
+    if (firstSignal === 'signed-out') {
+      logger.warn(`${description} list: the app signed out (sign-in page or 401) while the list loaded — recovering the session now`);
+      await tryRecoverSessionForPage(this.page, urlBeforeRace);
+    }
     if (firstSignal === 'rate-limited') {
       logger.warn(
         `${description} list showed the app's rate-limit page ("Too many requests at once") — recovering now instead of waiting out the navigation timeout`

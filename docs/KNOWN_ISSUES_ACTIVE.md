@@ -111,7 +111,8 @@
 ### KI-16 — JWT lifetime is not a stable constant; `ensureFreshSession()` margin is unsized
 - **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
 - **What:** measured token lifetimes differ between investigations (~10.4 h documented, ~20 min once, ~101 min later, 4/4 reproducible). `AuthManager.ensureFreshSession()` refreshes at <10 min remaining, sized against the wrong assumption. A ~40-minute-old storage state landing on sign-in is likewise unexplained.
-- **Next check:** dedicated investigation into *why* the lifetime varies before changing shared `AuthManager` code. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **2026-11-05 (ADR 0016):** the margin is now sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when its own `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669, P&S: a ~47 min token). Why the lifetime varies (10.2 h on a fresh staging login the same day) is still unexplained.
+- **Next check:** dedicated investigation into *why* the lifetime varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
 - **Status:** inconclusive · **Since:** 2026-08-07

@@ -6,6 +6,7 @@ import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isRetryableHttpStatus } from '../utils/retryableStatus';
+import { storedSessionNeedsRefresh } from './sessionLifetime';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -484,7 +485,9 @@ async function setupRole(
   // builds may be expired or from a different environment
   if (fs.existsSync(stateFile) && !process.env.CI) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
-    if (age < 1 * 60 * 60 * 1000) {
+    if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile)) {
+      console.log(`[globalSetup] Saved state for ${role} has too little lifetime left for a run (ADR 0016) — logging in again`);
+    } else if (age < 1 * 60 * 60 * 1000) {
       const accepted = await sessionAcceptedByApi(role).catch((error) => {
         console.warn(`[globalSetup] Session check for ${role} could not be completed: ${String(error)}`);
         return false;
