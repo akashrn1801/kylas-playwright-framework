@@ -3515,12 +3515,18 @@ export class BasePage {
     searchInput: Locator,
     optionList: Locator,
     name: string,
-    expectFound: boolean
+    expectFound: boolean,
+    beforeSearch?: (rowControl: Locator) => Promise<void>
   ): Promise<void> {
     await this.click(addRowTrigger, 'Add New product row');
     const control = searchInput.locator(
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
+    if (beforeSearch) {
+      // opt-in guard only (Quotations); existing callers' behaviour is unchanged
+      await control.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await beforeSearch(control);
+    }
     // WHY click the control div, not the input: the "Search ..." placeholder
     // overlays the input and intercepts pointer events on first open — the
     // same confirmed race as selectLookupCustomField() and this app's own

@@ -269,7 +269,7 @@ export class QuotationsPage extends BasePage {
   // never requested (cached) or times out resolves quietly and the render
   // wait below decides, exactly as before. A session expiry rethrows, like
   // every other armResponseWaitWithRecovery() caller.
-  private armLayoutLoadCheck(kind: 'list' | 'create'): Promise<void> {
+  private armLayoutLoadCheck(kind: 'list' | 'create' | 'edit'): Promise<void> {
     const layoutUrl = new RegExp(`/v1/quotations/layout/${kind}(?:\\?|$)`);
     const check = this.armResponseWaitWithRecovery(
       (res) => layoutUrl.test(res.url()) && res.request().method() === 'GET',
@@ -1024,7 +1024,18 @@ export class QuotationsPage extends BasePage {
       this.productIdInput(newRowIndex),
       this.page.locator('.is-invalid__menu .is-invalid__option'),
       name,
-      expectFound
+      expectFound,
+      async (rowControl) => {
+        // WHY: never overwrite a filled row (see waitForEditFormReady()); a stale count must fail loudly
+        const filledValue = await rowControl.locator('[class*="__single-value"]').count();
+        if (filledValue > 0) {
+          const current = await rowControl.locator('[class*="__single-value"]').first().innerText();
+          throw new Error(
+            `addFreshProductByName: product row ${newRowIndex} (products.${newRowIndex}.id) already holds ` +
+              `"${current.trim()}" after Add New (counted ${existingRowCount} rows before) — refusing to overwrite it`
+          );
+        }
+      }
     );
   }
 
@@ -1936,17 +1947,37 @@ export class QuotationsPage extends BasePage {
 
   // ─── 8. Edit actions ─────────────────────────────────────────────────────────
 
+  // WHY the ready gate (2026-11-16, sandbox run 42064754304, PS15/P&S rbac): the edit drawer opens
+  // at once but its fields and the quotation's product rows render only after GET
+  // /v1/quotations/layout/edit and GET /v1/quotations/<id>. addFreshProductByName() counted rows 17 ms
+  // after the modal appeared, read 0, and overwrote row 0 while the new row 1 stayed empty, so the
+  // form's own "required field" validation blocked Save and no request was sent. Same shape as
+  // openCreateForm(): arm the layout check before the click, fail at once on a 4xx/5xx layout, then
+  // wait for the quotation number to hold its value (set from the loaded quotation).
+  private async waitForEditFormReady(layoutCheck: Promise<void>): Promise<void> {
+    await this.modal().waitFor({ state: 'visible', timeout: 15000 });
+    await this.waitForRenderOrLayoutFailure(layoutCheck, [this.quotationNumberInput()]);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.quotationNumberInput(),
+        'Quotation edit form did not load the quotation (number input stayed empty)'
+      ).not.toHaveValue('', { timeout: config.timeouts.navigation })
+    );
+  }
+
   async clickEditButton(): Promise<void> {
     await this.editActionBtn().waitFor({ state: 'visible', timeout: 15000 });
+    const layoutCheck = this.armLayoutLoadCheck('edit');
     await this.editActionBtn().click();
-    await this.modal().waitFor({ state: 'visible', timeout: 15000 });
+    await this.waitForEditFormReady(layoutCheck);
     logger.info('Opened edit modal via edit button');
   }
 
   async clickEllipsisEdit(quotationNumber: string): Promise<void> {
+    const layoutCheck = this.armLayoutLoadCheck('edit');
     await this.listRowEllipsis(quotationNumber).click();
     await this.ellipsisMenuItem('Edit').click();
-    await this.modal().waitFor({ state: 'visible', timeout: 15000 });
+    await this.waitForEditFormReady(layoutCheck);
     logger.info(`Opened edit modal via ellipsis for: ${quotationNumber}`);
   }
 

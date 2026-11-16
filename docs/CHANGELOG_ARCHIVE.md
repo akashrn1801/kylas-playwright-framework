@@ -35,3 +35,16 @@ Newest first, same format as [../CHANGELOG.md](../CHANGELOG.md). Entries that na
 - 2026-10-06 — docs: restructure into router CLAUDE.md + docs/ set, retire .claude/{known-issues,reference-patterns,architecture}.md, add docs:refresh/check:docs
 - 2026-10-06 — fix: email "Related history" index reads docs/KNOWN_ISSUES_ACTIVE.md + docs/known-issues/*.md and deep-links per file (KnownIssuesIndex, NotificationService, EmailTemplate)
 - 2026-10-06 — chore: add scripts/check-docs.ts (`npm run check:docs`) and generated-figure blocks (`npm run docs:refresh`); repoint ~250 code/CI comments to the new doc locations (comment-only)
+
+## Rotated from docs/BRANCH_STATUS.md on 2026-11-16 (verbatim)
+
+### Section: `feature/leads-coverage-gaps-20261030`
+
+- Four commits pushed (last `3373bfe`). Sandbox run 41066366856 on staging: all passed except two new lead tests: duplicate e-mail (staging uniqueness was NONE, now EMAIL_PHONE; the test checks the setting first) and attach-pipeline (not reproducible; removed 2026-11-02, KI-56 closed in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), root cause not confirmed).
+- **Uncommitted at the 2026-10-31 snapshot:** `uniqueValues.ts` (unique e-mail/phone for lead, contact, company factories, clone flows, `LeadApi`) and the lead `has-duplicates` pre-check (a duplicate fails loudly, a non-OK endpoint is skipped with a warning).
+- **Live 2026-10-31:** QA 6/6; staging 1/6 (lead and contact creates 400 `000000`, unique e-mail/phone did not fix it): [KI-58](./KNOWN_ISSUES_ACTIVE.md).
+- **Next:** have staging's lead/contact create checked (backend log, uniqueness config); sandbox CI after that.
+
+### Bullet: `feature/ci-rerun-shard-20261103` follow-ups
+
+- **Follow-ups (seen, deliberately not changed):** JobStats lists only the latest attempt's jobs, so a re-run's job-minutes exclude the earlier attempt; the email's "Artifacts:" line shows a runner path, not a link; a manual rerun's email shows the original build number but links to the manual run; the merged HTML report stays the first run (only `results.json` is combined); rerun misc errors are uploaded but not aggregated; the manual workflow needs `run-meta-*` (sandbox runs only); qa/stage/main are not wired; Jenkins is not covered. `withRateLimitRecovery` reloads on the 'Something is broken' screen too; review whether that should fail fast (ADR 0014).
