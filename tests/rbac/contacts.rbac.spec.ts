@@ -12,6 +12,7 @@ import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { generateTaskData } from '../../src/data/factories/taskFactory';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
+import { waitForRecordAction } from '../../src/utils/recordActionsApi';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
 import { generateCompanyData, generateSharedCompanyData } from '../../src/data/factories/companyFactory';
@@ -394,6 +395,8 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['call']);
+    // B6: the share must have applied for the restricted user before Log a call opens
+    await waitForRecordAction(restrictedPage, 'contacts', contactId!, 'call');
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
@@ -502,6 +505,10 @@ test.describe('Contacts RBAC', () => {
     // a bare/empty-permissions share.
     await adminCompaniesPage.goToCompanyDetailsById(companyId!);
     await adminCompaniesPage.shareCompany(restrictedUserName, ['meeting']);
+    // B6: the shares must have applied for the restricted user before the call (and the other three) are
+    // used: the contact needs `call`, its company needs read
+    await waitForRecordAction(restrictedPage, 'contacts', contactId!, 'call');
+    await waitForRecordAction(restrictedPage, 'companies', Number(companyId), 'read');
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Verify all 4 icons visible (Notes, Tasks, Meetings, Call Logs)
     await restrictedContactsPage.assertRightPanelIconVisible('Notes');

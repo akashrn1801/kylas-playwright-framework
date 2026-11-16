@@ -25,6 +25,7 @@ import { reportCreatedRecord } from '../../src/utils/createdRecords';
 import { LeadApi } from '../../src/utils/leadApi';
 import { redactTokens } from '../../src/utils/apiClient';
 import { ShareRuleApi } from '../../src/utils/shareRuleApi';
+import { pollRecordActions } from '../../src/utils/recordActionsApi';
 import { ShareRulesPage } from '../../src/modules/shareRules/ShareRulesPage';
 import { SharePermission, SharePermissionSet, permissionSet } from '../../src/core/sharePermissions';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
@@ -81,24 +82,13 @@ async function orInconclusive<T>(call: () => Promise<T>): Promise<T> {
 }
 
 async function waitForRestrictedRights(api: LeadApi, leadId: number, expected: SharePermissionSet): Promise<number> {
-  const started = Date.now();
-  await expect
-    .poll(
-      async () => {
-        const { status, actions } = await restrictedRights(api, leadId);
-        if (status !== 200) return `HTTP ${status}`;
-        return (['update', 'note', 'task', 'meeting', 'call', 'email', 'sms', 'document'] as SharePermission[])
-          .filter((permission) => (actions[permission] === true) !== expected[permission])
-          .join(',');
-      },
-      {
-        timeout: 60000,
-        intervals: [500, 1000, 1000, 2000],
-        message: "The restricted user's rights should match the edited share rule",
-      }
-    )
-    .toBe('');
-  return Date.now() - started;
+  // the polling itself is the shared core (also used by waitForRecordAction for the call log flows)
+  const actions = ['update', 'note', 'task', 'meeting', 'call', 'email', 'sms', 'document'] as SharePermission[];
+  return pollRecordActions(
+    () => restrictedRights(api, leadId),
+    Object.fromEntries(actions.map((permission) => [permission, expected[permission]])),
+    "The restricted user's rights should match the edited share rule"
+  );
 }
 
 // API: allowed actions succeed and removed ones are refused with the right code. Uses the SAME session

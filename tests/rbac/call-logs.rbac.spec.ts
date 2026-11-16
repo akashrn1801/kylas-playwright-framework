@@ -389,10 +389,9 @@ test.describe('Call Logs — RBAC', () => {
       const absoluteUrl = adminEntityUrl.startsWith('http')
         ? adminEntityUrl
         : `${config.appUrl}${adminEntityUrl}`;
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
+      // B6: no pause: the admin's call log and its entity were just read back by the admin (detail + entity
+      // link above), and the restricted user's page below must reach a terminal state before anything is
+      // asserted absent
       // WHY: Instrumentation checkpoint — CI timeout investigation (2026-07-05).
       logger.info(`CL31c: navigating restricted user to admin entity URL: ${absoluteUrl}`);
       const restrictedCallLogs = new CallLogsPage(restrictedPage);
@@ -411,10 +410,14 @@ test.describe('Call Logs — RBAC', () => {
       // context or browser has been closed" (the timeout kill), not the real cause.
       // Race two genuine terminal states instead of guessing a fixed delay.
       const notFoundLocator = restrictedPage.getByText('Not Found', { exact: true });
-      await Promise.race([
-        callLogsBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
-        notFoundLocator.waitFor({ state: 'visible', timeout: 10000 }).catch(() => null),
+      const settled = await Promise.race([
+        callLogsBtn.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false),
+        notFoundLocator.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false),
       ]);
+      // positive control (B6): neither terminal state means the page never settled, so "button not visible"
+      // below would prove nothing
+      expect(settled || (await callLogsBtn.isVisible()) || (await notFoundLocator.isVisible()),
+        'CL31c: the restricted user page should reach the entity page or Not Found').toBe(true);
       const isNotFound = await notFoundLocator.isVisible().catch(() => false);
       if (isNotFound) {
         logger.info('CL31c: restricted user redirected to Not Found — correct RBAC behaviour (no access to admin entity)');
@@ -436,7 +439,8 @@ test.describe('Call Logs — RBAC', () => {
             );
           } else {
             logger.info('CL31c: Call Logs button clicked');
-            await restrictedPage.waitForTimeout(1000);
+            // B6: the Call Logs panel has loaded once the page's loading skeleton is gone
+            await restrictedCallLogs.waitForNoLoadingSkeleton();
             const adminCallLogVisible = await restrictedPage
               .locator('ul.list-unstyled.mb-0.card-list li.media')
               .isVisible()
@@ -484,10 +488,8 @@ test.describe('Call Logs — RBAC', () => {
       });
       expect(adminCallLogId).not.toBeNull();
       logger.info(`Admin created call log ID ${adminCallLogId} on restricted user's lead: ${restrictedEntityName}`);
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
+      // B6: no pause: goToCallLogById waits for the detail GET and then for the detail heading, which is
+      // the restricted user seeing the admin's call log
       await restrictedCallLogs.goToCallLogById(adminCallLogId!);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);
@@ -525,10 +527,11 @@ test.describe('Call Logs — RBAC', () => {
       const { callLogId } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
       logger.info(`Admin call log ID: ${callLogId}`);
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
+      // B6: positive controls instead of a pause: the call log exists (admin reads it back by ID) and the
+      // restricted session has loaded (permissions + list); assertCallLogNotInList then waits for the page
+      // data before it asserts the detail panel is absent
+      await adminCallLogs.goToCallLogById(callLogId!);
+      await restrictedCallLogs.goToCallLogsList();
       await restrictedCallLogs.assertCallLogNotInList(callLogId!);
       logger.success('CL32 passed');
     }
@@ -546,12 +549,10 @@ test.describe('Call Logs — RBAC', () => {
       await adminCallLogs.goToCallLogsList();
       const { callLogId } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
-      await restrictedCallLogs.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
-      await restrictedPage.waitForTimeout(1000);
+      // B6: positive controls instead of pauses: the call log exists (admin reads it back by ID) and the
+      // restricted page has its data (list search answered, skeleton gone) before the heading is checked
+      await adminCallLogs.goToCallLogById(callLogId!);
+      await restrictedCallLogs.navigateAndAwaitCallLogsData(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);
       if (detailVisible) {
@@ -577,10 +578,9 @@ test.describe('Call Logs — RBAC', () => {
       const { callLogId, selectedPhone } = await adminCallLogs.createCallLog(adminData);
       expect(callLogId).not.toBeNull();
       logger.info(`Admin call log phone: ${selectedPhone}`);
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
+      // B6: positive controls instead of a pause: the call log exists (admin reads it back by ID) and the
+      // restricted session has loaded (permissions + list); the search then waits for its results to render
+      await adminCallLogs.goToCallLogById(callLogId!);
       await restrictedCallLogs.goToCallLogsList();
       if (selectedPhone && selectedPhone.trim() !== '') {
         await restrictedCallLogs.searchByPhoneNumber(selectedPhone.trim());
@@ -626,10 +626,8 @@ test.describe('Call Logs — RBAC', () => {
       });
       expect(adminCallLogId).not.toBeNull();
       logger.info(`Admin created call log ID ${adminCallLogId} on restricted user's lead`);
-      // WHY: Wait for server-side write to propagate before restricted user reads
-      // The admin's write (create/share/assign) may not be immediately visible
-      // to the restricted user's session without a brief propagation wait
-      await adminPage.waitForTimeout(3000);
+      // B6: no pause: goToCallLogById waits for the detail GET and then for the detail heading, which is
+      // the restricted user seeing the admin's call log
       await restrictedCallLogs.goToCallLogById(adminCallLogId!);
       const detailVisible = await restrictedCallLogs['detailEntityHeading']()
         .isVisible().catch(() => false);

@@ -218,23 +218,37 @@ test.describe('Call Logs', () => {
     const callLogsPage = new CallLogsPage(adminPage);
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage['calendarIcon']().click({ force: true });
-    await adminPage.waitForTimeout(500);
+    // The Date field is disabled until the form's earlier steps are done (CL10 screenshot and traces, B6: still
+    // disabled after the entity type, and after the entity), so a click on the calendar icon before that opens
+    // nothing and the old checks passed without checking anything. Same steps 1-6 as fillCreateForm(), which
+    // selects the date right after the outcome.
+    const clData = generateCallLogData({ entityType: 'Lead', outcome: 'Busy' });
+    await callLogsPage.fillEntityType(clData.entityType);
+    await callLogsPage['searchAndSelectEntity'](callLogsPage['associatedEntityInput'](), clData.entityType);
+    await callLogsPage.fillPhoneNumber();
+    await callLogsPage.fillCallType(clData.callType);
+    await callLogsPage.fillOutcome(clData.outcome);
+    await expect(callLogsPage['calendarIcon'](), 'Date picker icon should be enabled once the outcome is selected').toBeEnabled();
+    await callLogsPage['calendarIcon']().click();
+    await callLogsPage['calendarForwardButton']().waitFor({ state: 'visible', timeout: 10000 });
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowLabel = formatDateForCalendarLabel(tomorrow);
-    const tomorrowCell = adminPage.locator(`.SingleDatePicker td[aria-label="${tomorrowLabel}"]`);
-    const cellExists = await tomorrowCell.isVisible().catch(() => false);
-    if (cellExists) {
-      const isBlocked = await adminPage.evaluate((label: string) => {
-        const cell = document.querySelector(`.SingleDatePicker td[aria-label="${label}"]`);
-        if (!cell) return true;
-        return cell.classList.contains('CalendarDay__blocked_out_of_range') ||
-          cell.classList.contains('CalendarDay__blocked_calendar') ||
-          cell.getAttribute('aria-disabled') === 'true';
-      }, tomorrowLabel);
-      if (!isBlocked) throw new Error('Tomorrow date should be blocked but is selectable');
+    // suffix match: a blocked day's aria-label has a prefix before the date (the exact match never found it)
+    const tomorrowCell = adminPage.locator(`.SingleDatePicker td[aria-label$="${tomorrowLabel}"]`);
+    // tomorrow is on the next month's page when today is the last day of the month
+    if (!(await tomorrowCell.isVisible())) {
+      await callLogsPage['calendarForwardButton']().click();
     }
+    await expect(tomorrowCell, 'Tomorrow should be shown in the calendar').toBeVisible({ timeout: 10000 });
+    const isBlocked = await adminPage.evaluate((label: string) => {
+      const cell = document.querySelector(`.SingleDatePicker td[aria-label$="${label}"]`);
+      if (!cell) return false;
+      return cell.classList.contains('CalendarDay__blocked_out_of_range') ||
+        cell.classList.contains('CalendarDay__blocked_calendar') ||
+        cell.getAttribute('aria-disabled') === 'true';
+    }, tomorrowLabel);
+    if (!isBlocked) throw new Error('Tomorrow date should be blocked but is selectable');
     await adminPage.keyboard.press('Escape');
     logger.info('Future date correctly blocked in calendar');
     logger.success('CL10 passed');

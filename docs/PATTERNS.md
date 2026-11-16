@@ -153,3 +153,20 @@ The standing rules themselves are one-liners in [CLAUDE.md](../CLAUDE.md). This 
 **P59. Lead `fillEditForm()` is intentionally narrower than Contact's.** Lead edit does not re-fill Timezone/Country/Professional; extending it is an open maintainer decision.
 
 **P60. Quotations.** `assertQuotationInList()` search is fuzzy OR-matching capped at 10 — can false-positive on the never-cleaned dataset (open). Quotation report entity type may not exist on stage/prod — presence-check.
+
+## Sleep removal checklist (B6 lessons)
+
+Check each item before replacing a `waitForTimeout`. Each lesson comes from CallLogs (55 sleeps to 0, 2026-11-16).
+
+1. Wait on DATA, not a visible button: list response + skeleton gone + rows rendered (`CallLogsPage.navigateAndAwaitCallLogsData()`, `waitForNoLoadingSkeleton()`).
+2. Never count rows/fields before the form is ready (layout + entity GET + a key field has its value), e.g. `QuotationsPage.waitForEditFormReady()`.
+3. Wait for a control to be ENABLED before clicking; dependent fields enable after the previous pick (`CallLogsPage.openDropdownById()`).
+4. react-select: wait for the menu to be closed before reopening; never toggle an open menu (a re-open is a mousedown that closes an open menu).
+5. Multi-select: pick only unselected options; assert checked count = pre-selected + new (`selectRandomFromMultiReactSelect()`).
+6. Negative checks: assert a positive control first (the page/data is loaded), then the absence.
+7. Eventual consistency (search index, permissions): bounded poll on the real API condition, never fixed wait + retry; put the precondition in the flow that changes access (`waitForRecordAction()` / `pollRecordActions()` in `src/utils/recordActionsApi.ts`).
+8. A toast disappearing is a timer, not a signal.
+9. Confirm the signal in a trace before using it (right element, right request).
+10. When removing a sleep, check the step still really acts/asserts (no vacuous test, no silent skip); report any found (CL10 never opened its calendar; custom-field helpers skip a missing field).
+11. Retry only transport/429/5xx (ADR 0014), never on message text.
+12. Small groups, `--max-failures=1 --retries=0`, root cause from the trace before any change.
