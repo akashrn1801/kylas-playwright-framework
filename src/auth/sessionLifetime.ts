@@ -60,23 +60,8 @@ export function proactiveRefreshBufferMs(lifetimeMs: number | null): number {
   return Math.max(floor, Math.min(wanted, Math.floor(lifetimeMs * MAX_BUFFER_SHARE_OF_LIFETIME)));
 }
 
-/**
- * How much lifetime a session needs at the START of a run so that the app never reaches its own refresh call
- * (which revokes every other token of the user) while the run is going: the configured run window, capped at 80%
- * of the token's own lifetime (a short-lived token cannot promise more; a fresh token always has ~100%), and never
- * below the per-test buffer.
- */
-export function runWindowBufferMs(lifetimeMs: number | null, configuredWindowMs: number): number {
-  const perTest = proactiveRefreshBufferMs(lifetimeMs);
-  const capped = lifetimeMs === null ? configuredWindowMs : Math.min(configuredWindowMs, Math.floor(lifetimeMs * 0.8));
-  return Math.max(perTest, capped);
-}
-
-/**
- * True when the saved session for `stateFile` is missing or has less lifetime left than a test needs. With
- * `runWindowMs` (globalSetup passes config.auth.minRemainingForRunMs) it needs a whole run's window instead.
- */
-export function storedSessionNeedsRefresh(stateFile: string, runWindowMs?: number): boolean {
+/** True when the saved session for `stateFile` is missing or has less lifetime left than a test needs. */
+export function storedSessionNeedsRefresh(stateFile: string): boolean {
   try {
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
       origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
@@ -86,11 +71,36 @@ export function storedSessionNeedsRefresh(stateFile: string, runWindowMs?: numbe
       if (!raw) continue;
       const remaining = getTokenRemainingMs(raw);
       if (remaining === null) return false;
-      const lifetime = getTokenLifetimeMs(raw);
-      return remaining <= (runWindowMs === undefined ? proactiveRefreshBufferMs(lifetime) : runWindowBufferMs(lifetime, runWindowMs));
+      return remaining <= proactiveRefreshBufferMs(getTokenLifetimeMs(raw));
     }
     return true;
   } catch {
     return true;
   }
+}
+
+/** The stored `token` value of a saved storage-state file, or null. */
+export function readStoredTokenFromStateFile(stateFile: string): string | null {
+  try {
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
+      origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
+    };
+    for (const origin of state.origins ?? []) {
+      const raw = origin.localStorage?.find((item) => item.name === 'token')?.value;
+      if (raw) return raw;
+    }
+  } catch {
+    /* missing or unreadable file */
+  }
+  return null;
+}
+
+/**
+ * When the session behind a stored token ends. The token's own `expiry` is the SESSION's absolute end (a login
+ * inside a live session returns the same one, ADR 0017), so this is also the end of every login made today.
+ */
+export function describeSessionEnd(rawToken: string): { endIso: string; minutesLeft: number } | null {
+  const remaining = getTokenRemainingMs(rawToken);
+  if (remaining === null) return null;
+  return { endIso: new Date(Date.now() + remaining).toISOString(), minutesLeft: Math.floor(remaining / 60000) };
 }

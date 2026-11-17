@@ -36,6 +36,14 @@ export function readAccessTokenFromStateFile(stateFile: string): string | null {
   return null;
 }
 
+function isRevokedTokenBody(body: string): boolean {
+  try {
+    return (JSON.parse(body) as { code?: string }).code === '001002';
+  } catch {
+    return false;
+  }
+}
+
 // One authenticated, read-only API call per role. Only a transport error, 429 or 5xx is retried (ADR 0014 §1,
 // bounded, 3 tries); 401/403 means the session is not usable; any other 4xx is reported with status and body.
 export async function tokenAcceptedByApi(role: string, token: string): Promise<boolean> {
@@ -61,6 +69,9 @@ export async function tokenAcceptedByApi(role: string, token: string): Promise<b
       }
       if (status >= 200 && status < 300) return true;
       if (status === 401 || status === 403) return false;
+      // ADR 0017: 400 001002 "not able to recognize you" is how the backend answers a REVOKED token (tokens/refresh
+      // or logout by any holder of the account): the session is not usable, not an unexpected error.
+      if (status === 400 && isRevokedTokenBody(body)) return false;
       if (isRetryableHttpStatus(status) && attempt < attempts) {
         logger.warn(`[globalSetup] Session check for ${role}: HTTP ${status} — retry ${attempt}/${attempts - 1}`);
         await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));

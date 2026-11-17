@@ -6,9 +6,10 @@ import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
-import { storedSessionNeedsRefresh } from './sessionLifetime';
+import { describeSessionEnd, readStoredTokenFromStateFile, storedSessionNeedsRefresh } from './sessionLifetime';
+import { recordSessionInfo } from './sessionInfo';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
-import { tokenAcceptedByApi } from './sessionCheck';
+import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
 import {
   generateProductFixtureDefinitions,
   ProductFixtureKey,
@@ -440,23 +441,103 @@ async function sessionAcceptedByApi(role: 'admin' | 'restricted'): Promise<boole
   return tokenAcceptedByApi(role, await getAccessTokenForRole(role));
 }
 
-async function setupRole(
-  role: 'admin' | 'restricted',
-  browser: import('@playwright/test').Browser
-): Promise<void> {
+type Role = 'admin' | 'restricted';
+type PwBrowser = import('@playwright/test').Browser;
+
+async function setupRole(role: Role, browser: PwBrowser): Promise<void> {
+  await establishRole(role, browser, false);
+  await enforceSessionLife(role, browser);
+}
+
+// ADR 0017: a login inside a live session returns the SAME token and expiry, so logging in again cannot give a
+// run more time. Every run reports when each session ends; a session with less than the run window left fails by
+// name locally, only warns in CI (CI shards share the account: a logout there would revoke every other job's
+// token), and is renewed only on request (SESSION_RENEW=1, local), which logs out and starts a fresh session.
+async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void> {
+  const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
+  const windowMs = config.auth.minRemainingForRunMs;
+  const windowMin = Math.round(windowMs / 60000);
+  const read = (): { endIso: string; minutesLeft: number } | null => {
+    const raw = readStoredTokenFromStateFile(stateFile);
+    return raw ? describeSessionEnd(raw) : null;
+  };
+  let end = read();
+  if (!end) {
+    console.warn(`[globalSetup] Session end for ${role} could not be read from the saved state`);
+    return;
+  }
+  const record = (e: { endIso: string; minutesLeft: number }): boolean => {
+    const below = e.minutesLeft * 60000 < windowMs;
+    recordSessionInfo(config.env, { role, endIso: e.endIso, minutesLeft: e.minutesLeft, belowRunWindow: below });
+    console.log(`[globalSetup] ${role} session ends at ${e.endIso} (${e.minutesLeft} min left; run window ${windowMin} min)`);
+    return below;
+  };
+  if (!record(end)) return;
+
+  if (process.env.CI) {
+    console.warn(
+      `[globalSetup] WARNING: the ${role} session ends at ${end.endIso} (${end.minutesLeft} min left), less than the ${windowMin} min run window. ` +
+        'CI never renews a session; a failure near that time may be the app\'s token-refresh cascade (ADR 0017).'
+    );
+    return;
+  }
+  if (!config.auth.renewSession) {
+    throw new Error(
+      `[globalSetup] The ${role} session ends at ${end.endIso} (${end.minutesLeft} min left), less than the ${windowMin} min run window. ` +
+        'A login inside a live session returns the same token, so logging in again cannot help. ' +
+        `Start the run after ${end.endIso}, or set SESSION_RENEW=1 to log out and start a fresh 12 h session ` +
+        `(this revokes the token of EVERY holder of the ${role} account, including CI and other laptops).`
+    );
+  }
+  console.warn(
+    `[globalSetup] SESSION_RENEW=1: logging out the ${role} session (DELETE /v1/tokens/logout) and starting a fresh one. ` +
+      `RISK: this kills the token for every holder of the ${role} account, including CI and other laptops.`
+  );
+  await logoutSession(role, stateFile);
+  await establishRole(role, browser, true);
+  end = read();
+  if (!end || record(end)) {
+    throw new Error(
+      `[globalSetup] The ${role} session still has less than the ${windowMin} min run window after logout and a fresh login` +
+        (end ? ` (ends ${end.endIso}, ${end.minutesLeft} min left)` : '') +
+        '. Is SESSION_MIN_REMAINING_FOR_RUN_MS longer than a whole session?'
+    );
+  }
+}
+
+// The app's own "Logout": DELETE /v1/tokens/logout with the ACCESS token in the body (live test 2026-11-17: no body
+// answers 400 000004; 200 revokes the token for every holder). Never /tokens/force-logout: that logs out ALL users.
+async function logoutSession(role: Role, stateFile: string): Promise<void> {
+  const accessToken = readAccessTokenFromStateFile(stateFile);
+  if (!accessToken) throw new Error(`[globalSetup] Cannot log out the ${role} session: no access token in ${path.basename(stateFile)}`);
+  const context = await apiRequest.newContext();
+  try {
+    const response = await context.delete(buildApiUrl('/tokens/logout'), { data: { token: accessToken } });
+    if (!response.ok()) {
+      throw new Error(
+        `[globalSetup] Logout of the ${role} session failed: HTTP ${response.status()} ${(await response.text()).slice(0, 200)}`
+      );
+    }
+    console.log(`[globalSetup] ${role} session logged out (HTTP ${response.status()})`);
+  } finally {
+    await context.dispose();
+  }
+}
+
+async function establishRole(role: Role, browser: PwBrowser, forceLogin: boolean): Promise<void> {
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
   const credentials = config.users[role];
 
   // WHY: in CI always force fresh login — cached state from previous
   // builds may be expired or from a different environment
-  if (fs.existsSync(stateFile) && !process.env.CI) {
+  if (fs.existsSync(stateFile) && !process.env.CI && !forceLogin) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
     const missingKeys = missingKeysInStateFile(stateFile);
     if (missingKeys.length > 0) {
       // ADR 0017: a token the API accepts is not enough, the app's own user keys must be there too
       console.log(`[globalSetup] Saved state for ${role} lacks the session keys ${missingKeys.join(', ')} — logging in again`);
-    } else if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile, config.auth.minRemainingForRunMs)) {
-      console.log(`[globalSetup] Saved state for ${role} has less than the run window left (ADR 0016/0017: the app must not need tokens/refresh during a run) — logging in again`);
+    } else if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile)) {
+      console.log(`[globalSetup] Saved state for ${role} has too little lifetime left for a test (ADR 0016) — logging in again`);
     } else if (age < 1 * 60 * 60 * 1000) {
       const accepted = await sessionAcceptedByApi(role).catch((error) => {
         console.warn(`[globalSetup] Session check for ${role} could not be completed: ${String(error)}`);
