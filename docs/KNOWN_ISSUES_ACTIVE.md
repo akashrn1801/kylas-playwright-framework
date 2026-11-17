@@ -59,14 +59,27 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
-### KI-66 — Deal edit: "Distribute Equally" banner and Actual Value sometimes not recalculated after a product attach (2026-11-16)
-- **Status:** open, intermittent, root cause in the app's client not confirmed; the test fix is NOT applied · **Since:** 2026-10-09 (QA run 37733648349, passed on retry) and 2026-11-16 (staging, `productsAndServices.rbac.spec.ts:161`, 1 of 6 runs)
-- **What:** failing run: Estimated 17,308 -> 42,308 but Actual stayed 17,308, no `button.distribute-unallocated-btn` in 10 s, `PUT /v1/deals/107666` -> 400 `01001091` "Sum of all payment amounts must equal the deal's actual value" (payload: estimated 42308, actual 17308, 10 installments summing 17308, installment 1 RECEIVED). Passing runs (10/10 traced, admin 2 installments and restricted 2-11): banner in 10-40 ms and Actual = Estimated at the same moment as the product pick. Role and installment count do not separate them; server traffic up to the banner window is identical; DOM snapshot right after the pick: passing = Estimated and Actual columns both freshly re-rendered with the new total (70278/70278); failing = Estimated re-rendered (42308), the Actual column only a back-reference to a snapshot taken before the Received click (not re-rendered, so the stale 17,308 stayed). The Actual column existed in the form; it was not recomputed. Offline trace analysis only (resolver of snapshot references is hand-written; the final screenshot and PUT payload independently show 17,308).
-- **Next check:** repeat until a second failing trace; if Actual never follows, it is app behavior (report, do not make the test accept it). Proposed (not applied): race "Estimated changed" vs banner in `handleDistributeUnallocatedAmountIfPresent`; if only Estimated moved, fail by name before Save.
+### KI-69 — Restricted owner's lead menu without "Delete" (2026-11-16)
+- **Status:** open, cause found, fix awaiting verification · **Since:** staging `leads.rbac.spec.ts:762` (12/12 fail), 698
+- **What:** own lead's ellipsis menu had only "Clone" and "Trigger Sequence" although the API said `recordActions.delete: true`. Cause: `restricted.json` (re-auth of a signed-out page, 17:04Z) lacked `userId/tenantId/userName/slingApp`; rebuilt: both pass 2/2. Fix: state guard + globalSetup key check (ADR 0017); close after the next full runs.
 
+### KI-68 — App shell stuck on "Loading" after a direct-URL navigation (2026-11-16)
+- **Status:** open, intermittent, backend/network side proven by the network log · **Since:** staging `leads.rbac.spec.ts:744` x24 (2 of 24)
+- **What:** after `goto /sales/leads/details/<id>` the page stayed on the splash: `GET /v1/entities/label` and `/v1/tenants` were never answered (HAR -1), so no lead GET followed; `waitForLeadDetailsPage()` failed by name.
+
+### KI-67 — Clone lead form: Last Name sometimes never gets the "Copy" pre-fill (2026-11-16)
+- **Status:** open, intermittent, cause NOT found (owner: no app bug; unexplained) · **Since:** sandbox 38855451748 (2026-10-16); staging `leads.rbac.spec.ts` clone test: 2 of 24, and 3 of 24 after the auth fix (no session events: not auth) at 4 workers
+- **What:** the field's FIRST render already holds the final value (`"<name> Copy"` in every pass, `"<name>"` in every failure), so the values are decided before render; waiting cannot help.
+- **Ruled out (traces):** wrong menu item, route, request set (identical), console errors, fields touched earlier, click vs detail settle, lead data, form GET latency. Products (2026-11-17): all 45 products of the 24 leads (13 in the 3 failing) are 200 + active for the restricted user; "Copy" is in no other field.
+- **Next (needs approval):** `--workers=1` vs 4.
+
+### KI-66 — Deal edit: "Distribute Equally" banner and Actual Value sometimes not recalculated after a product attach (2026-11-16)
+- **Status:** open, intermittent, app client cause not confirmed; test fix NOT applied · **Since:** 2026-10-09 (QA 37733648349, passed on retry); 2026-11-16 (staging `productsAndServices.rbac.spec.ts:161`, 1 of 6)
+- **What:** failing run: Estimated 17,308 -> 42,308 but Actual stayed 17,308, no `button.distribute-unallocated-btn` in 10 s, `PUT /v1/deals/107666` -> 400 `01001091` (payload: estimated 42308, actual 17308, 10 installments summing 17308, #1 RECEIVED). 10/10 traced passes (admin 2 installments, restricted 2-11): banner in 10-40 ms, Actual = Estimated at the pick. Role, installment count and server traffic do not separate them; after the pick a passing run re-renders both columns, a failing one only Estimated.
+- **Next check:** a second failing trace; if Actual never follows it is app behavior (report it). Designed fix (not applied): race "Estimated changed" vs banner in `handleDistributeUnallocatedAmountIfPresent`, fail by name before Save.
 ### KI-65 — `productFixtureNeed` skips product fixtures when a file filter carries a `:line` suffix (2026-11-16)
 - **Status:** open, not fixed (workaround below) · **Since:** found 2026-11-16 reproducing sandbox run 42064754304
-- **What:** `ENV=staging npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 tests/rbac/productsAndServices.rbac.spec.ts:189 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...:189] match none of 16 fixture-needing specs`, then both tests fail `getProductFixture: no fixture file found for ENV=staging`. `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path, and it is not flagged ambiguous (the token contains `.spec.`). This is the unsafe "wrong skip" direction the file's own header warns about.
+- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`. `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path and is not flagged ambiguous. This is the unsafe "wrong skip" direction the file's own header warns about.
 - **Next check:** strip a trailing `:\d+` (and `:\d+:\d+`) from each filter in `extractFileFilters`; add a case to its unit check. Workaround: file path + `--grep`.
 
 ### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
@@ -107,7 +120,7 @@
 
 ### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
 - **Status:** open, watch · **Since:** 2026-11-02
-- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers; lead page size/sort/Kanban are shared per-user state. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **Occurred 2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban (20:04:31-37) while L65 (`leads.spec.ts:1409`) was sorting; its 2nd sort reloaded the board, no `.rt-tr` rows for 60 s. Not fixed (owner decision). Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
 - **Status:** open · **Since:** 2026-11-03 (sandbox, staging)

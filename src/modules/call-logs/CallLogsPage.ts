@@ -258,10 +258,10 @@ export class CallLogsPage extends BasePage {
   // WHY: This form is highly reactive — every field changes the DOM.
   // Use JS mousedown on value-container to open ANY React Select in this form.
   // Works regardless of DOM re-renders because we anchor on stable input IDs.
-  private async openDropdownById(inputId: string): Promise<void> {
-    // B6 (full run 1, ui:131: Type step started 211 ms after the contact pick, passing runs 299-386 ms, and the
-    // form was still pre-selection 5 s later): a mousedown on a DISABLED control is ignored, so wait until the
-    // control is enabled before dispatching it. Hardened, root cause of the late/reverted update not confirmed.
+  // B6 (full run 1, ui:131: Type step started 211 ms after the contact pick, passing runs 299-386 ms, and the
+  // form was still pre-selection 5 s later): a mousedown on a DISABLED control is ignored, so wait until the
+  // control is enabled before using it. Hardened, root cause of the late/reverted update not confirmed.
+  private async waitForControlEnabled(inputId: string): Promise<void> {
     await this.page.waitForFunction(
       (id: string) => {
         const input = document.querySelector('#callLogModal')?.querySelector(`[id="${id}"]`);
@@ -277,6 +277,26 @@ export class CallLogsPage extends BasePage {
       inputId,
       { timeout: config.timeouts.expect }
     );
+  }
+
+  // B6 (Leads B6, leads.rbac L19/L20): when Log a call is opened from an entity panel the entity type is
+  // pre-selected and the Type menu opens together with its control (traces: the first DOM snapshot that has the
+  // control already has the menu open), so fillCallType()'s mousedown would TOGGLE it shut. Wait for the
+  // control to be enabled (the form is ready), then pick from the open menu, or open it the normal way.
+  async fillCallTypeFromPanel(callType: string): Promise<void> {
+    await this.waitForControlEnabled('1_31_input_callType');
+    const menu = this.page.locator('.is-invalid__menu').first();
+    if (await menu.isVisible()) {
+      await menu.locator('.is-invalid__option').first().click({ force: true });
+      await menu.waitFor({ state: 'hidden', timeout: 5000 });
+      logger.info('Call type picked from the menu that opened with the form');
+    } else {
+      await this.fillCallType(callType);
+    }
+  }
+
+  private async openDropdownById(inputId: string): Promise<void> {
+    await this.waitForControlEnabled(inputId);
     // WHY: Modal has aria-hidden="true" which blocks Playwright clicks
     // Remove aria-hidden before interaction using page.evaluate (runs in browser)
      
