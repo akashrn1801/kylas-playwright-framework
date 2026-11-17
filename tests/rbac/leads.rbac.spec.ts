@@ -406,6 +406,7 @@ test.describe('Leads RBAC', () => {
     // WHY the positive anchor: "icon not visible" passes instantly when nothing has rendered yet, so
     // first prove the lead detail page is rendered (Clone is offered to a read-only share)
     await restrictedLeadsPage.assertEllipsisOptionVisible('Clone');
+    // UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
     // WHY: Read only — productivity icons should NOT be visible
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Tasks');
@@ -768,8 +769,9 @@ test.describe('Leads RBAC', () => {
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
-    const clonedId = await leadsPage.cloneLead();
+    const clonedId = await leadsPage.cloneLead({ firstName: leadData.firstName });
     expect(clonedId).not.toBeNull();
+    expect(clonedId, 'Saving the clone should create a NEW lead').not.toBe(leadId);
     await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
     logger.success('L23 passed');
   });
@@ -1763,12 +1765,12 @@ test.describe('Leads RBAC', () => {
   //   token belongs to the shared user (not the admin), the user's rights are read only — and a second
   //   brand-new lead shared WITH Note is the control, where the same requests succeed. Only then is the
   //   test marked as an expected failure and the refusals asserted with the restricted user's own token.
-  //   The UI half (no Notes icon) is proved by the read-only share test above (L14).
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
   // KNOWN KYLAS BUG — SD-32157: the server accepts adding a note and deleting the admin's note. The
   //   test.fail() below keeps the run green while that is true and turns it red ("expected to fail but
   //   passed") the day Kylas fixes it: then delete the marker and close KI-52. The assertions state the
   //   CORRECT behaviour and must not be weakened.
-  test('@regression restricted user cannot add or delete notes on an admin lead shared read only', async ({
+  test('@regression (API) restricted user cannot add or delete notes on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
     leadCleanup,
@@ -1840,10 +1842,11 @@ test.describe('Leads RBAC', () => {
   // HOW: same set-up and control as the notes test, with the Task right. After the set-up is asserted
   //   the test is marked as an expected failure and the refusal is asserted with the restricted
   //   user's own token.
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
   // KNOWN KYLAS BUG — SD-32158: the server accepts the task. test.fail() keeps the run green while
   //   that is true and turns it red the day Kylas fixes it: then delete the marker and close KI-52.
   //   The assertion states the CORRECT behaviour and must not be weakened.
-  test('@regression restricted user cannot add tasks on an admin lead shared read only', async ({
+  test('@regression (API) restricted user cannot add tasks on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
     leadCleanup,

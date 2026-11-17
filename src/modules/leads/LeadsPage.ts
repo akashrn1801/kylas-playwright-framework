@@ -9,6 +9,7 @@ import {
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { reportCreatedRecord } from '../../utils/createdRecords';
+import { recordKnownIssue } from '../../utils/knownIssue';
 import { LeadApi } from '../../utils/leadApi';
 import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { logger } from '../../utils/logger';
@@ -2322,7 +2323,7 @@ export class LeadsPage extends BasePage {
   // Clone
   // ──────────────────────────────────────────────────────────
 
-  async cloneLead(): Promise<number | null> {
+  async cloneLead(original?: { firstName: string }): Promise<number | null> {
     logger.info('Cloning lead via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     // WHY the prior claim below was WRONG, disproven live (2026-09-07): this
@@ -2336,28 +2337,37 @@ export class LeadsPage extends BasePage {
     // Email exists" backend rejection. saveButton() becoming visible is NOT
     // a reliable proxy for the email field's own pre-fill having committed.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    // WHY the Last Name pre-fill is awaited before anything is edited or saved
-    // (2026-10-16, sandbox run 38855451748 shard 3/5, leads.spec.ts:175 attempt
-    // 1): the failed attempt's clone (ID captured from the save response, and
-    // its detail page shows the clone's own `clone<ts>@testkylas.com` email)
-    // was saved with the UNCHANGED last name — the detail page header read
-    // "Miss. Levi Kutch(#169947)", no "Copy" — and 25 re-reads over 15s never
-    // saw it change. saveButton() becoming visible is not proof the form's
-    // "<lastName> Copy" pre-fill has committed (the same class as the email
-    // pre-fill race documented above, and as DealsPage.cloneDeal()'s Name wait,
-    // docs/PATTERNS.md P5). Mechanism for THIS failure is inferred from that
-    // analogy plus the saved result, not observed directly (trace not pulled).
-    // Fails loudly here if "Copy" never appears — both callers (L35, L23)
-    // assert "Copy" in the saved last name anyway, so saving without it can
-    // only fail later and less clearly.
-    const cloneFormT0 = Date.now();
+    // Main checks (must pass): the Clone form is open and carries the original lead's data. The form is a modal on
+    // the lead's detail page (the URL does not change), headed "Clone Lead".
     await this.withSessionExpiryRecovery(() =>
       expect(
-        this.lastNameInput(),
-        'Clone lead form Last Name should be pre-filled with "Copy" before Save is clicked'
-      ).toHaveValue(/Copy/, { timeout: 20000 })
+        // WHY not getByRole: the app's modal heading has no accessible name (snapshot: `heading [level=2]: Clone Lead`)
+        this.page.locator('h2').filter({ hasText: /^\s*Clone Lead\s*$/ }),
+        'The Clone Lead form should open'
+      ).toBeVisible({ timeout: 15000 })
     );
-    logger.debug(`Clone lead form Last Name pre-filled ("Copy") at +${Date.now() - cloneFormT0}ms`);
+    if (original) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.firstNameInput(), 'Clone form should carry the original lead\'s first name').toHaveValue(
+          original.firstName,
+          { timeout: 20000 }
+        )
+      );
+    }
+    // KI-67 (owner decision 2026-11-17): the " Copy" suffix on Last Name is OBSERVED, never a failure. The app sets
+    // it in the form's own change and sometimes loses it to its form reinitialize (probe: INITIALIZE(42 keys) landing
+    // after CHANGE lastName, 1 of 39 traced opens); the form's first render already holds the final value, so a
+    // short grace is enough. Last Name must have a value before the form is used.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.lastNameInput(), 'Clone form Last Name should be filled').not.toHaveValue('', { timeout: 20000 })
+    );
+    const copyPrefilled = await expect(this.lastNameInput())
+      .toHaveValue(/ Copy$/, { timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!copyPrefilled) {
+      recordKnownIssue('KI-67', "clone Copy prefill lost to the app's form reinitialize race (Last Name has no \" Copy\")");
+    }
     // WHY: Change email to unique value — same email as original causes
     // duplicate error. WHY waitFor('visible') instead of a one-shot
     // isVisible() (the bug fixed here): isVisible() returns an instant,
@@ -2502,8 +2512,18 @@ export class LeadsPage extends BasePage {
       // network response is observed, not once React has re-rendered the DOM
       // with it. A one-shot body.innerText() read right after can race ahead
       // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-      await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
-      logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      // Main check: the clone's own detail page shows the original lead's last name. The " Copy" suffix is
+      // observed only (KI-67, see cloneLead): without it the clone keeps the original last name.
+      await expect(this.page.locator('body')).toContainText(originalLastName, { timeout: 15000 });
+      const hasCopy = await expect(this.page.locator('body'))
+        .toContainText(clonedLastName, { timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
+      if (hasCopy) {
+        logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      } else {
+        recordKnownIssue('KI-67', `cloned lead ${clonedId} was saved without " Copy" in its Last Name`);
+      }
       return;
     }
     logger.warn('Cloned lead ID not available — falling back to list search');

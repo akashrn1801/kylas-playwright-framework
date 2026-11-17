@@ -67,11 +67,10 @@
 - **Status:** open, intermittent, backend/network side proven by the network log · **Since:** staging `leads.rbac.spec.ts:744` x24 (2 of 24)
 - **What:** after `goto /sales/leads/details/<id>` the page stayed on the splash: `GET /v1/entities/label` and `/v1/tenants` were never answered (HAR -1), so no lead GET followed; `waitForLeadDetailsPage()` failed by name.
 
-### KI-67 — Clone lead form: Last Name sometimes never gets the "Copy" pre-fill (2026-11-16)
-- **Status:** open, intermittent, cause NOT found (owner: no app bug; unexplained) · **Since:** sandbox 38855451748 (2026-10-16); staging `leads.rbac.spec.ts` clone test: 2 of 24, and 3 of 24 after the auth fix (no session events: not auth) at 4 workers
-- **What:** the field's FIRST render already holds the final value (`"<name> Copy"` in every pass, `"<name>"` in every failure), so the values are decided before render; waiting cannot help.
-- **Ruled out (traces):** wrong menu item, route, request set (identical), console errors, fields touched earlier, click vs detail settle, lead data, form GET latency. Products (2026-11-17): all 45 products of the 24 leads (13 in the 3 failing) are 200 + active for the restricted user; "Copy" is in no other field.
-- **Next (needs approval):** `--workers=1` vs 4.
+### KI-67 — Clone lead form: Last Name sometimes loses the " Copy" pre-fill (2026-11-16)
+- **Status:** open, tracked; tests do not fail on it (owner 2026-11-17: not an app bug) · **Since:** sandbox 38855451748 (2026-10-16); staging 2/24, 3/24 at 4 workers
+- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone. The Copy branch runs once per mount (`hasCloneValuesSet`); `enableReinitialize` shares the payload.
+- **Test:** `cloneLead(original)` must pass: "Clone Lead" form open, original first name in it, save gives a NEW id. A missing " Copy" only adds a `known-issue` annotation + warning.
 
 ### KI-66 — Deal edit: "Distribute Equally" banner and Actual Value sometimes not recalculated after a product attach (2026-11-16)
 - **Status:** open, intermittent, app client cause not confirmed; test fix NOT applied · **Since:** 2026-10-09 (QA 37733648349, passed on retry); 2026-11-16 (staging `productsAndServices.rbac.spec.ts:161`, 1 of 6)
@@ -108,7 +107,7 @@
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
 - **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
-- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
+- **Tests:** `leads.rbac.spec.ts` L77 (API, notes), L79 (API, tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14 (passes).
 
 ### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
