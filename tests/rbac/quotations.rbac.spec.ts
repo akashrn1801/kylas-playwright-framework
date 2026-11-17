@@ -410,7 +410,7 @@ test.describe('Quotations — RBAC', () => {
     // response — the extra waits below are a staging safety net for slower renders
     await restrictedPage.waitForLoadState('domcontentloaded');
     await qp.waitForVisible(restrictedPage.locator('h1.h1, .page-title h1').first(), 30000);
-    await restrictedPage.waitForTimeout(3000);
+    // B6: no pause: assertStatusOnDetailPage() below is a retrying assertion
     // WHY: Summary update not asserted — field is disabled in edit mode on this CRM version
     logger.warn('Summary update skipped — field is disabled in edit mode on this CRM version');
     await qp.assertStatusOnDetailPage(QuotationStatus.Negotiation);
@@ -443,33 +443,20 @@ test.describe('Quotations — RBAC', () => {
 
     // Restricted user should see the quotation in their list
     // WHY: Retry search — prod indexing lag can delay visibility after ownership assignment
-    let found = false;
-    const maxRetries = 5;
-    const retryWait = 3000;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${maxRetries} for: ${adminData.summary}`);
+    // B6: the hand-written 5-attempt loop (2 s + 3 s fixed pauses) is a bounded toPass on the real search
+    // request (POST /v1/quotations/search, checked inside performSearch): a fresh list + search, then a
+    // non-empty row. Same budget as before (5 x (5 s + 3 s)). The owner is set at create time, so there is no
+    // later share/reassign whose rights could be polled (the record-rights API covers leads, contacts,
+    // deals and companies only); the index lag is the one condition left and it is polled directly.
+    await expect(async () => {
+      logger.info(`Searching quotation: ${adminData.summary}`);
       await restrictedQP.goToQuotationsList();
       await restrictedQP.searchQuotation(adminData.summary);
-      await restrictedPage.waitForTimeout(2000);
-      const allRows = restrictedPage.locator('.rt-tr-group');
-      const rowCount = await allRows.count();
-      for (let i = 0; i < rowCount; i++) {
-        const text = (
-          await allRows
-            .nth(i)
-            .innerText()
-            .catch(() => '')
-        ).trim();
-        if (text.length > 0) {
-          found = true;
-          break;
-        }
-      }
-      if (found) break;
-      logger.warn(`Quotation not found yet — waiting ${retryWait}ms before retry`);
-      await restrictedPage.waitForTimeout(retryWait);
-    }
-    expect(found).toBe(true);
+      await expect(
+        restrictedPage.locator('.rt-tr-group').filter({ hasText: /\S/ }).first(),
+        `Quotation "${adminData.summary}" should be listed for the restricted owner`
+      ).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout: 5 * (5000 + 3000) });
     logger.info('Restricted user can see quotation set as owner by admin');
 
     // Open the quotation detail page
@@ -482,13 +469,8 @@ test.describe('Quotations — RBAC', () => {
     // WHY: Modal fetches /v1/quotations/layout/edit — fields disabled until complete
     const summaryInput = restrictedPage.locator('[id="0_21_input_summary"]');
     await summaryInput.waitFor({ state: 'visible', timeout: 10000 });
-    let isDisabled = true;
-    for (let i = 0; i < 30; i++) {
-      isDisabled = await summaryInput.isDisabled();
-      if (!isDisabled) break;
-      await restrictedPage.waitForTimeout(500);
-    }
-    expect(isDisabled, 'Summary field still disabled — deal may be inaccessible').toBe(false);
+    // B6: a retrying enabled check, same 15 s budget as the old 30 x 500 ms poll
+    await expect(summaryInput, 'Summary field still disabled — deal may be inaccessible').toBeEnabled({ timeout: 15000 });
 
     await restrictedQP.fillEditForm({ summary: updatedSummary });
     await restrictedQP.saveQuotation();
@@ -496,9 +478,11 @@ test.describe('Quotations — RBAC', () => {
 
     // Navigate to detail to verify update
     await restrictedQP.goToQuotationDetail(id!);
-    await restrictedPage.waitForTimeout(2000);
-    const bodyText = await restrictedPage.locator('body').innerText();
-    expect(bodyText.toLowerCase()).toContain(updatedSummary.toLowerCase());
+    // B6: a retrying assertion instead of a 2 s pause and a one-shot innerText read
+    await expect(restrictedPage.locator('body'), 'Detail page should show the updated summary').toContainText(
+      updatedSummary,
+      { ignoreCase: true, timeout: 15000 }
+    );
     logger.success('Q10 passed — restricted user saw and edited quotation as owner');
   });
 
@@ -689,15 +673,8 @@ test.describe('Quotations — RBAC', () => {
     const summaryInput = restrictedPage.locator('[id="0_21_input_summary"]');
     await summaryInput.waitFor({ state: 'visible', timeout: 10000 });
 
-    let isDisabled = true;
-    for (let i = 0; i < 30; i++) {
-      isDisabled = await summaryInput.isDisabled();
-      if (!isDisabled) break;
-      await restrictedPage.waitForTimeout(500);
-    }
-    expect(isDisabled, 'Summary field is disabled after 15s — deal may be inaccessible').toBe(
-      false
-    );
+    // B6: a retrying enabled check, same 15 s budget as the old 30 x 500 ms poll
+    await expect(summaryInput, 'Summary field is disabled after 15s — deal may be inaccessible').toBeEnabled({ timeout: 15000 });
     logger.info('Fields are editable');
 
     // Step 7 — edit and save
@@ -708,9 +685,11 @@ test.describe('Quotations — RBAC', () => {
 
     // Navigate to detail page to verify the updated summary is visible
     await restrictedQP.goToQuotationDetail(id!);
-    await restrictedPage.waitForTimeout(2000);
-    const updatedBody = await restrictedPage.locator('body').innerText();
-    expect(updatedBody).toContain(updatedSummary);
+    // B6: a retrying assertion instead of a 2 s pause and a one-shot innerText read
+    await expect(restrictedPage.locator('body'), 'Detail page should show the updated summary').toContainText(
+      updatedSummary,
+      { timeout: 15000 }
+    );
     logger.success('Q26 passed — restricted user edited shared quotation with accessible deal');
   });
 
