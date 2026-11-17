@@ -214,7 +214,6 @@ test.describe('Companies', () => {
     await companiesPage.addTaskFromPanel(taskName);
     // WHY: Click Tasks icon again to refresh the task list and verify task appears
     await companiesPage.clickRightPanelIcon('Tasks');
-    await adminPage.waitForTimeout(1000);
     const taskLocator = adminPage.locator('.task-details-wrapper').getByText(taskName).first();
     await expect(taskLocator).toBeVisible({ timeout: 10000 });
     logger.success(`CO10 passed — task added: ${taskName}`);
@@ -237,7 +236,6 @@ test.describe('Companies', () => {
     // WHY: Navigate back and verify meeting appears in Meetings section
     await companiesPage.searchAndOpenCompany(companyData.name, companyId ?? undefined);
     await companiesPage.clickRightPanelIcon('Meetings');
-    await adminPage.waitForTimeout(1000);
     const meetingEntry = adminPage.locator('.meeting__title').filter({ hasText: meetingTitle });
     await expect(meetingEntry).toBeVisible({ timeout: 10000 });
     logger.success(`CO11 passed — meeting added: ${meetingTitle}`);
@@ -407,7 +405,6 @@ test.describe('Companies', () => {
     logger.success(`Task created from pending activity: ID=${taskId}`);
     // WHY: Verify task appears in Tasks panel on company detail
     await companiesPage.clickRightPanelIcon('Tasks');
-    await adminPage.waitForTimeout(1000);
     const taskLocator = adminPage.locator('.task-details-wrapper').getByText(taskName).first();
     await expect(taskLocator).toBeVisible({ timeout: 10000 });
     logger.success(`CO17 passed — task from pending activity verified: ${taskName}`);

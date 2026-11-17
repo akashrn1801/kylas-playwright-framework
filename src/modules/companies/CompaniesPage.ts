@@ -461,29 +461,27 @@ export class CompaniesPage extends BasePage {
   }
 
   private async retryFindCompany(name: string): Promise<boolean> {
-    const currentConfig = this.retryConfig;
-
-    for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${currentConfig.retries}`);
-
-      await this.goToCompaniesList();
-
-      await this.performSearch(name);
-
-      const found = await this.waitForSearchResults(name);
-
-      if (found) {
-        logger.success('Company found');
-
-        return true;
-      }
-
-      if (attempt < currentConfig.retries) {
-        await this.page.waitForTimeout(currentConfig.wait);
-      }
+    const { retries, wait } = this.retryConfig;
+    // B6: the real condition is the company's row in the search results after a fresh list + search (a new
+    // company can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // fixed retries x (5 s results wait + pause) took, instead of a fixed pause between attempts. Same shape
+    // as LeadsPage.retryFindLead().
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching company: ${name}`);
+          await this.goToCompaniesList();
+          await this.performSearch(name);
+          if (!(await this.waitForSearchResults(name))) {
+            throw new Error(`Company "${name}" is not in the search results yet`);
+          }
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success('Company found');
+      return true;
+    } catch {
+      return false;
     }
-
-    return false;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1120,8 +1118,13 @@ export class CompaniesPage extends BasePage {
     logger.info('Deleting company via ellipsis menu');
     await this.clickEllipsisOption('Delete');
     await this.deleteConfirmButton().waitFor({ state: 'visible', timeout: 10000 });
-    await this.deleteConfirmButton().click();
-    await this.page.waitForTimeout(1000);
+    // B6 (ADR 0017 save confirmation): the DELETE's own answer, armed before the click; it replaces a bare
+    // 1 s pause and fails by name when the answer is missing or not 2xx.
+    await this.saveAndAwait(() => this.deleteConfirmButton().click(), {
+      method: 'DELETE',
+      urlRe: /^\/v1\/companies\/\d+\/?$/,
+      description: 'Company delete (DELETE /v1/companies/{id})',
+    });
     logger.success('Company deleted');
   }
 
@@ -1194,62 +1197,53 @@ export class CompaniesPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
-  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
-  // stalled a full-suite regression run across many share-based RBAC tests):
-  // see LeadsPage.openUserShareTypeSearch() for the full explanation — same
-  // "click registers, handler race" class as clickAddCompany itself, applied
-  // to the Share modal's type-dropdown selection. If userOption.click() (User)
-  // didn't register, shareToUserInput() never mounts and the following raw
-  // `.fill()` hangs until the outer test timeout. Fixed identically here.
+  // WHY one bounded pass and no retry loop (B6, owner decision 2026-11-17): the missed click is prevented by waiting
+  // (menu open, option visible and enabled, one click, then the control must show "User"), not retried. The earlier loop (root-caused
+  // 2026-07-22 from ~9 min hangs: a "User" pick whose click did not register left shareToUserInput() unmounted
+  // and a raw fill() hung to the test timeout) is replaced by labelled, bounded waits that fail by name if the
+  // pick does not take, and by ensureReactSelectMenuClosed() so no menu is open when the search input is used.
   private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
-            'closing any stuck menu and retrying'
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    await shareTypeControl.click({ timeout: config.timeouts.expect });
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await expect(userOption, 'Share dialog: the "User" share-type option should be visible (menu open)').toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await expect(userOption, 'Share dialog: the "User" share-type option should be enabled').toBeEnabled({
+      timeout: config.timeouts.expect,
+    });
+    await userOption.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
+    await expect(
+      shareTypeControl.locator('.is-invalid__single-value'),
+      'Share dialog: the share-type control should show "User" after the pick'
+    ).toHaveText('User', { timeout: config.timeouts.expect });
+    await expect(
+      this.shareToUserInput(),
+      'Share dialog: the user search input should appear after picking "User"'
+    ).toBeVisible({ timeout: config.timeouts.expect });
   }
 
   async shareCompany(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing company with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
-    await this.page.waitForTimeout(1000);
-    // WHY: Click the Share To type dropdown control — opens User/Team options
+    // WHY: Click the Share To type dropdown control (waited for just below) — opens User/Team options
     const shareTypeControl = this.page.locator('.modal.show').locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
     await this.openUserShareTypeSearch(shareTypeControl);
-    await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
     await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() waits for the matching user option
     // WHY selectUserOptionWithRetry(), not a bare fill+wait (2026-07-30,
     // found via a real CI failure — see BasePage's own comment on this
     // method for the full evidence): retries the search up to 3x for a
     // genuinely-just-created user's search-index propagation lag.
     await this.selectUserOptionWithRetry(this.shareToUserInput(), validWord, restrictedUserName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
       const toggle = this.sharePermissionToggle(permission);
@@ -1261,53 +1255,61 @@ export class CompaniesPage extends BasePage {
           const label = input?.parentElement?.querySelector('label') as HTMLElement;
           label?.click();
         }, permission);
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, `Share: permission "${permission}" should be on`).toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the share-API response wait BEFORE clicking — confirms the
-    // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/companies\/\d+\/share$/) !== null && res.request().method() === 'POST',
-      'company share response',
-      15000
-    ).catch(() => null);
-    await this.shareConfirmButton().click();
-    await shareResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the share's own answer, armed before the click. It used to end in
+    // `.catch(() => null)`, so a missed or refused share carried on and broke the RBAC steps that follow;
+    // now it fails by name when the answer is missing or not 2xx. Then the share dialog must close.
+    await this.saveAndAwait(() => this.shareConfirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/companies\/\d+\/share\/?$/,
+      description: 'Company share (POST /v1/companies/{id}/share)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The share dialog should close after Share').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Company shared with: ${restrictedUserName}`);
   }
 
   async reassignCompany(userName: string): Promise<void> {
     logger.info(`Reassigning company to: ${userName}`);
     await this.clickEllipsisOption('Reassign');
-    await this.page.waitForTimeout(500);
-    // WHY: Search requires minimum 3 characters
+    // WHY: Search requires minimum 3 characters (the dialog input is waited for just below)
     const words = userName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? userName.trim().substring(0, 3);
     logger.debug(`Reassign search term: "${validWord}" (from: "${userName}")`);
     const reassignUserInput = this.page.locator('[id="undefined_undefinedundefined_input_entitySelection"]');
     await reassignUserInput.waitFor({ state: 'visible', timeout: 5000 });
     await reassignUserInput.fill(validWord);
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() waits for the matching user option
     // WHY selectUserOptionWithRetry() — see shareCompany()'s identical
     // comment for the full evidence (2026-07-30).
     await this.selectUserOptionWithRetry(reassignUserInput, validWord, userName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     const reassignConfirmButton = this.page.locator('.modal.show button.btn-primary.ml-auto').first();
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the reassign-API (owner change) response wait BEFORE
-    // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/companies\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-      'company reassign response',
-      15000
-    ).catch(() => null);
-    await reassignConfirmButton.click();
-    await reassignResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the owner change's own answer (PUT /v1/companies/{id}/owner), armed
+    // before the click; it used to be awaited with its result ignored (`.catch(() => null)`). Fails by name
+    // when missing or not 2xx; then the dialog must close.
+    await this.saveAndAwait(() => reassignConfirmButton.click(), {
+      method: 'PUT',
+      urlRe: /^\/v1\/companies\/\d+\/owner\/?$/,
+      description: 'Company reassign (PUT /v1/companies/{id}/owner)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The reassign dialog should close after Reassign').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Company reassigned to: ${userName}`);
   }
 
@@ -1316,7 +1318,7 @@ export class CompaniesPage extends BasePage {
     const icon = this.rightPanelIcon(title);
     await icon.waitFor({ state: 'visible', timeout: 10000 });
     await icon.click();
-    await this.page.waitForTimeout(500);
+    // B6: no pause: every caller goes on with an auto-waiting step for its own panel content
     logger.success(`Right panel icon clicked: ${title}`);
   }
 
@@ -1406,6 +1408,29 @@ export class CompaniesPage extends BasePage {
     return await quotationsPage.fillAndSaveQuotationFromPanel(customFields, checkCustomFieldsAbsent, awaitCardRefresh);
   }
 
+  // B6: re-open the Quotations panel and require the card's own list answer (POST /v1/quotations/search) to
+  // contain the created quotation by id, then the card to be visible. The response is armed before the click.
+  async assertQuotationInPanelById(quotationId: string | number): Promise<void> {
+    const listed = this.armResponseWaitWithRecovery(
+      (res) => res.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(res.url()).pathname),
+      'Quotations card list (POST /v1/quotations/search) after re-opening the panel',
+      30000
+    );
+    listed.catch(() => undefined);
+    await this.clickRightPanelIcon('Quotations');
+    const response = await listed;
+    const body = (await response.json().catch(() => null)) as { content?: { id?: number | string }[] } | null;
+    const ids = (body?.content ?? []).map((q) => String(q.id));
+    expect(ids, `Quotations card list (HTTP ${response.status()}) should contain quotation ${quotationId}`).toContain(
+      String(quotationId)
+    );
+    const quotationsCard = this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: 'Quotations' }) })
+      .first();
+    await this.expectVisibleFailingOnPageError(quotationsCard, 'Quotations card should be visible', 15000);
+  }
+
   // WHY in place, no reload (CO12, plan §8): after the save the app refreshes the Quotations card itself
   // (POST /v1/quotations/search, awaited by fillAndSaveQuotationFromPanel when awaitCardRefresh is set). A user
   // reads the card where they are; reloading the company by URL is what rendered the card on a fresh page and
@@ -1423,17 +1448,46 @@ export class CompaniesPage extends BasePage {
     );
   }
 
+  // B6: baseline from the settled Notes card, then add, then the card must hold exactly one more note. The
+  // fixed pauses (CKEditor init, text entering the editor, the add) are replaced by the editor being visible
+  // and by that count; the Add button is scoped to the Notes card.
   async addNoteFromPanel(noteText: string): Promise<void> {
     logger.info(`Adding note from company panel: "${noteText}"`);
     await this.clickRightPanelIcon('Notes');
+    const { card, rows, waitForSettled } = this.notesPanel();
+    await waitForSettled();
+    const baseline = await rows.count();
     // WHY: Click textarea first to activate CKEditor initialisation
-    await this.page.locator('textarea.notes-textarea').click();
-    await this.page.waitForTimeout(1000);
-    await this.page.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill(noteText);
-    await this.page.waitForTimeout(500);
-    await this.page.getByText('Add', { exact: true }).click();
-    await this.page.waitForTimeout(1500);
+    await this.click(card.locator('textarea.notes-textarea'), 'notes textarea');
+    const editor = card.getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await editor.fill(noteText, { timeout: config.timeouts.expect });
+    await this.click(card.getByText('Add', { exact: true }), 'add note');
+    await this.withSessionExpiryRecovery(() =>
+      expect(rows, 'Note count after adding').toHaveCount(baseline + 1, { timeout: config.timeouts.navigation })
+    );
     logger.success(`Note added: "${noteText}"`);
+  }
+
+  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
+  async assertNoteTextPresent(text: string): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate((expected) => {
+            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
+              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
+              try {
+                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
+              } catch {
+                /* cross-origin iframe — not a note */
+              }
+            }
+            return false;
+          }, text),
+        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
+      )
+      .toBe(true);
   }
 
   async addTaskFromPanel(taskName: string): Promise<void> {
@@ -1448,31 +1502,96 @@ export class CompaniesPage extends BasePage {
     logger.success(`Task added from panel: "${taskName}"`);
   }
 
-  async addMeetingFromPanel(meetingTitle: string): Promise<void> {
+  async addMeetingFromPanel(meetingTitle: string): Promise<number> {
     logger.info(`Adding meeting from company panel: "${meetingTitle}"`);
     const companyUrl = this.page.url();
     await this.clickRightPanelIcon('Meetings');
     // WHY: #addMeeting button opens the meeting creation form from entity detail panel
-    await this.page.locator('#addMeeting').waitFor({ state: 'visible', timeout: 10000 });
-    await this.page.locator('#addMeeting').click();
     const meetingsPage = new MeetingsPage(this.page);
+    await meetingsPage.openAddFormFromEntityDetailPanel();
     await meetingsPage.fillTitleOnly(meetingTitle);
     // WHY: Save directly without using saveMeeting() — that method clicks a post-save
     // popup which navigates AWAY to the meeting's own detail page. When adding from a
     // parent entity's panel, we need to stay on (or return to) the parent's detail page
     // so subsequent panel actions (e.g. quotation, task) can continue on the same page.
-    const idPromise = (meetingsPage as unknown as { captureIdFromResponse: () => Promise<number | null> }).captureIdFromResponse();
-    await this.page.locator('button.save-button, #editEntityModal button[type="submit"]').first().click();
-    await this.assertNoFormErrors('meeting create form (from company panel)');
-    await idPromise;
-    await this.page.waitForTimeout(1500);
+    // B6: the created meeting's id is required (fails by name when not captured) and the form must close.
+    const meetingId = await meetingsPage.saveMeetingFromEntityPanel();
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The meeting form should close after Save').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
     // WHY: Ensure we are back on the company detail page — meeting save may show a popup
     // toast/modal that auto-redirects; force navigation back if URL changed
     if (!this.page.url().includes(companyUrl.split('/details/')[1] ?? '___never___')) {
       await this.navigateTo(companyUrl);
       await this.waitForCompanyDetailsPage();
     }
-    logger.success(`Meeting added from panel: "${meetingTitle}"`);
+    logger.success(`Meeting added from panel: "${meetingTitle}" (ID: ${meetingId})`);
+    return meetingId;
+  }
+
+  // B6: the one fill for the "Add Contact" modal opened from a company (direct button and ellipsis). Staging
+  // trace 2026-11-17: after the "Show Required & Important Fields" toggle the form shows the Add Email and Add
+  // Phone buttons; once the names are filled one click on each adds `1_11_input_email_0` / `1_12_input_phone_0`
+  // (a click made with nothing yet touched in the form did nothing, so the names are filled first, as here).
+  // Email and Phone are standard fields: a missing button or input FAILS by name instead of being skipped. The
+  // other revealed fields are presence-checked and a missing one is logged, never skipped silently.
+  private async fillContactFormInModal(contactData: ContactData): Promise<void> {
+    const modal = this.page.locator('#editEntityModal');
+    // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
+    const requiredToggle = modal
+      .locator('.custom-control-label')
+      .filter({ hasText: 'Show Required & Important Fields' })
+      .first();
+    if (await requiredToggle.isVisible().catch(() => false)) {
+      await requiredToggle.click();
+      logger.debug('Toggled off Show Required & Important Fields');
+    }
+    // the form is fully revealed when the address input (hidden while the toggle is on) is there
+    await expect(
+      modal.locator('input[name="address"]'),
+      'Add Contact form: the full field set (address) should be shown after the toggle'
+    ).toBeVisible({ timeout: config.timeouts.expect });
+    const firstNameInput = this.page.locator('[id="0_12_input_firstName"]');
+    await firstNameInput.waitFor({ state: 'visible', timeout: 10000 });
+    await firstNameInput.fill(contactData.firstName);
+    await this.page.locator('[id="0_13_input_lastName"]').fill(contactData.lastName);
+    // WHY: Add email/phone via the button, then fill by exact modal ID — avoids page-level ambiguity
+    const addAndFill = async (button: string, inputId: string, value: string): Promise<void> => {
+      const addButton = modal.locator('button').filter({ hasText: button }).first();
+      await expect(addButton, `Add Contact form: the "${button}" button should be visible`).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+      await addButton.click({ timeout: config.timeouts.expect });
+      const input = this.page.locator(`[id="${inputId}"]`);
+      await expect(input, `Add Contact form: ${inputId} should appear after "${button}"`).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+      await input.fill(value, { timeout: config.timeouts.expect });
+    };
+    await addAndFill('Add Email', '1_11_input_email_0', contactData.email);
+    await addAndFill('Add Phone', '1_12_input_phone_0', contactData.phone);
+    // WHY: Fill remaining fields revealed by the toggle — address, social, professional
+    const optionalFields: [string, string][] = [
+      ['address', contactData.address],
+      ['city', contactData.city],
+      ['state', contactData.state],
+      ['zipcode', contactData.zipcode],
+      ['facebook', contactData.facebook],
+      ['twitter', contactData.twitter],
+      ['linkedin', contactData.linkedin],
+      ['department', contactData.department],
+      ['designation', contactData.designation],
+    ];
+    for (const [name, value] of optionalFields) {
+      const input = modal.locator(`input[name="${name}"]`);
+      if (await input.isVisible().catch(() => false)) {
+        await input.fill(value);
+      } else {
+        logger.warn(`Add Contact form: field "${name}" is not shown on this environment — left empty`);
+      }
+    }
   }
 
   async addContactFromDirectButton(contactData: ContactData): Promise<number | null> {
@@ -1483,76 +1602,7 @@ export class CompaniesPage extends BasePage {
     await this.withSessionExpiryRecovery(() =>
       expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
     );
-    // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
-    const requiredToggle = this.page.locator('#editEntityModal').locator('.custom-control-label')
-      .filter({ hasText: 'Show Required & Important Fields' }).first();
-    if (await requiredToggle.isVisible().catch(() => false)) {
-      await requiredToggle.click();
-      await this.page.waitForTimeout(500);
-      logger.debug('Toggled off Show Required & Important Fields');
-    }
-    // WHY: Wait for form to fully initialise before filling fields
-    const firstNameInput = this.page.locator('[id="0_12_input_firstName"]');
-    await firstNameInput.waitFor({ state: 'visible', timeout: 10000 });
-    await firstNameInput.fill(contactData.firstName);
-    await this.page.locator('[id="0_13_input_lastName"]').fill(contactData.lastName);
-    // WHY: Add email via button then fill by exact modal ID — avoids page-level ambiguity
-    const modalAddEmailBtn = this.page.locator('#editEntityModal button').filter({ hasText: 'Add Email' }).first();
-    if (await modalAddEmailBtn.isVisible().catch(() => false)) {
-      await modalAddEmailBtn.click();
-      await this.page.waitForTimeout(500);
-    }
-    const emailModalInput = this.page.locator('[id="1_11_input_email_0"]');
-    if (await emailModalInput.isVisible().catch(() => false)) {
-      await emailModalInput.fill(contactData.email);
-    }
-    // WHY: Add phone via button then fill by exact modal ID
-    const modalAddPhoneBtn = this.page.locator('#editEntityModal button').filter({ hasText: 'Add Phone' }).first();
-    if (await modalAddPhoneBtn.isVisible().catch(() => false)) {
-      await modalAddPhoneBtn.click();
-      await this.page.waitForTimeout(500);
-    }
-    const phoneModalInput = this.page.locator('[id="1_12_input_phone_0"]');
-    if (await phoneModalInput.isVisible().catch(() => false)) {
-      await phoneModalInput.fill(contactData.phone);
-    }
-    // WHY: Fill remaining fields revealed by the toggle — address, social, professional
-    const addressInput = this.page.locator('#editEntityModal').locator('input[name="address"]');
-    if (await addressInput.isVisible().catch(() => false)) {
-      await addressInput.fill(contactData.address);
-    }
-    const cityInput = this.page.locator('#editEntityModal').locator('input[name="city"]');
-    if (await cityInput.isVisible().catch(() => false)) {
-      await cityInput.fill(contactData.city);
-    }
-    const stateInput = this.page.locator('#editEntityModal').locator('input[name="state"]');
-    if (await stateInput.isVisible().catch(() => false)) {
-      await stateInput.fill(contactData.state);
-    }
-    const zipcodeInput = this.page.locator('#editEntityModal').locator('input[name="zipcode"]');
-    if (await zipcodeInput.isVisible().catch(() => false)) {
-      await zipcodeInput.fill(contactData.zipcode);
-    }
-    const facebookInput = this.page.locator('#editEntityModal').locator('input[name="facebook"]');
-    if (await facebookInput.isVisible().catch(() => false)) {
-      await facebookInput.fill(contactData.facebook);
-    }
-    const twitterInput = this.page.locator('#editEntityModal').locator('input[name="twitter"]');
-    if (await twitterInput.isVisible().catch(() => false)) {
-      await twitterInput.fill(contactData.twitter);
-    }
-    const linkedinInput = this.page.locator('#editEntityModal').locator('input[name="linkedin"]');
-    if (await linkedinInput.isVisible().catch(() => false)) {
-      await linkedinInput.fill(contactData.linkedin);
-    }
-    const departmentInput = this.page.locator('#editEntityModal').locator('input[name="department"]');
-    if (await departmentInput.isVisible().catch(() => false)) {
-      await departmentInput.fill(contactData.department);
-    }
-    const designationInput = this.page.locator('#editEntityModal').locator('input[name="designation"]');
-    if (await designationInput.isVisible().catch(() => false)) {
-      await designationInput.fill(contactData.designation);
-    }
+    await this.fillContactFormInModal(contactData);
     // WHY: Set up response listener BEFORE clicking save — POST may arrive immediately
     // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
     // /reports/ exclusion, same bug class found across the codebase's other
@@ -1587,73 +1637,7 @@ export class CompaniesPage extends BasePage {
     await this.withSessionExpiryRecovery(() =>
       expect(this.page.locator('#editEntityModal .modal-title')).toHaveText('Add Contact', { timeout: 5000 })
     );
-    // WHY: Toggle off "Show Required & Important Fields" — reveals ALL fields, same as ContactsPage
-    const requiredToggleEllipsis = this.page.locator('#editEntityModal').locator('.custom-control-label')
-      .filter({ hasText: 'Show Required & Important Fields' }).first();
-    if (await requiredToggleEllipsis.isVisible().catch(() => false)) {
-      await requiredToggleEllipsis.click();
-      await this.page.waitForTimeout(500);
-      logger.debug('Toggled off Show Required & Important Fields');
-    }
-    const firstNameInput = this.page.locator('[id="0_12_input_firstName"]');
-    await firstNameInput.waitFor({ state: 'visible', timeout: 10000 });
-    await firstNameInput.fill(contactData.firstName);
-    await this.page.locator('[id="0_13_input_lastName"]').fill(contactData.lastName);
-    const modalAddEmailBtn = this.page.locator('#editEntityModal button').filter({ hasText: 'Add Email' }).first();
-    if (await modalAddEmailBtn.isVisible().catch(() => false)) {
-      await modalAddEmailBtn.click();
-      await this.page.waitForTimeout(500);
-    }
-    const emailModalInput = this.page.locator('[id="1_11_input_email_0"]');
-    if (await emailModalInput.isVisible().catch(() => false)) {
-      await emailModalInput.fill(contactData.email);
-    }
-    const modalAddPhoneBtn = this.page.locator('#editEntityModal button').filter({ hasText: 'Add Phone' }).first();
-    if (await modalAddPhoneBtn.isVisible().catch(() => false)) {
-      await modalAddPhoneBtn.click();
-      await this.page.waitForTimeout(500);
-    }
-    const phoneModalInput = this.page.locator('[id="1_12_input_phone_0"]');
-    if (await phoneModalInput.isVisible().catch(() => false)) {
-      await phoneModalInput.fill(contactData.phone);
-    }
-    // WHY: Fill remaining fields revealed by the toggle — address, social, professional
-    const addressInputE = this.page.locator('#editEntityModal').locator('input[name="address"]');
-    if (await addressInputE.isVisible().catch(() => false)) {
-      await addressInputE.fill(contactData.address);
-    }
-    const cityInputE = this.page.locator('#editEntityModal').locator('input[name="city"]');
-    if (await cityInputE.isVisible().catch(() => false)) {
-      await cityInputE.fill(contactData.city);
-    }
-    const stateInputE = this.page.locator('#editEntityModal').locator('input[name="state"]');
-    if (await stateInputE.isVisible().catch(() => false)) {
-      await stateInputE.fill(contactData.state);
-    }
-    const zipcodeInputE = this.page.locator('#editEntityModal').locator('input[name="zipcode"]');
-    if (await zipcodeInputE.isVisible().catch(() => false)) {
-      await zipcodeInputE.fill(contactData.zipcode);
-    }
-    const facebookInputE = this.page.locator('#editEntityModal').locator('input[name="facebook"]');
-    if (await facebookInputE.isVisible().catch(() => false)) {
-      await facebookInputE.fill(contactData.facebook);
-    }
-    const twitterInputE = this.page.locator('#editEntityModal').locator('input[name="twitter"]');
-    if (await twitterInputE.isVisible().catch(() => false)) {
-      await twitterInputE.fill(contactData.twitter);
-    }
-    const linkedinInputE = this.page.locator('#editEntityModal').locator('input[name="linkedin"]');
-    if (await linkedinInputE.isVisible().catch(() => false)) {
-      await linkedinInputE.fill(contactData.linkedin);
-    }
-    const departmentInputE = this.page.locator('#editEntityModal').locator('input[name="department"]');
-    if (await departmentInputE.isVisible().catch(() => false)) {
-      await departmentInputE.fill(contactData.department);
-    }
-    const designationInputE = this.page.locator('#editEntityModal').locator('input[name="designation"]');
-    if (await designationInputE.isVisible().catch(() => false)) {
-      await designationInputE.fill(contactData.designation);
-    }
+    await this.fillContactFormInModal(contactData);
     // WHY: hardened 2026-07-19 — bare '/v1/contacts' substring had no
     // /reports/ exclusion, same bug class found across the codebase's other
     // ID-capture methods; fixed as defense-in-depth.
@@ -1824,10 +1808,13 @@ export class CompaniesPage extends BasePage {
       return id ? String(id) : null;
     }).catch(() => null);
     await this.page.locator('button.add-task-button').click();
-    await this.page.locator('.quick-task-create-backdrop')
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    await this.page.waitForTimeout(1000);
+    // B6: the quick-task form must close after the save (it used to be `.catch(() => {})` plus a 1 s pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.page.locator('.quick-task-create-backdrop'),
+        'The quick-task form should close after Add Task'
+      ).toBeHidden({ timeout: config.timeouts.expect })
+    );
     const taskId = await taskIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveCompany() above.
     if (!taskId) {
@@ -1883,17 +1870,23 @@ export class CompaniesPage extends BasePage {
 
   async assertCompanyDeletedById(companyId: number): Promise<void> {
     logger.info(`Asserting company ${companyId} is deleted`);
-    // WHY: Navigate to detail URL — deleted company shows error toast or redirects to list
+    // B6: positive control first (the detail GET was answered), then the specific not-found state (staging trace 2026-11-17: the company GET answers 404 / code 02801002
+    // "the record doesn't seem to exist, or you don't have enough permissions"). The old
+    // check passed on ANY redirect or any error toast, after a fixed 2 s pause, even before the page loaded.
+    const companyGet = this.armResponseWaitWithRecovery(
+      (res) =>
+        new URL(res.url()).pathname === `/v1/companies/${companyId}` && res.request().method() === 'GET',
+      `assertCompanyDeletedById: company ${companyId} GET`,
+      config.timeouts.navigation
+    );
+    companyGet.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/companies/details/${companyId}`);
-    await this.page.waitForTimeout(2000);
-    const url = this.page.url();
-    // WHY: Check either URL redirected away OR company no longer accessible
-    const isRedirected = !url.includes(`/companies/details/${companyId}`);
-    const hasErrorToast = await this.page
-      .locator('.toastr.rrt-error, .alert-danger, [class*="error-toast"]')
-      .isVisible()
-      .catch(() => false);
-    expect(isRedirected || hasErrorToast).toBeTruthy();
+    const response = await companyGet;
+    const body = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
+    expect(
+      { status: response.status(), code: body.code, message: body.message },
+      `Company ${companyId} should answer 404 / code 02801002 (not found) after the delete`
+    ).toMatchObject({ status: 404, code: '02801002' });
     logger.success(`Company ${companyId} confirmed deleted`);
   }
 
@@ -1939,36 +1932,53 @@ export class CompaniesPage extends BasePage {
     logger.success(`Owner confirmed: ${expectedOwner}`);
   }
 
+  // B6: click a detail tab and know it is the active one (instead of pausing), same as LeadsPage.activateDetailTab():
+  // the tab strip renders after the detail layout, so the tab is awaited first, and the pane is read only once
+  // the tab carries the `active` class.
+  private async activateDetailTab(tab: Locator, name: string): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should appear on the detail page`).toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
+    await tab.click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should be active after the click`).toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
   async assertCompanyDetailFields(data: CompanyData): Promise<void> {
     logger.info('Asserting company detail fields');
     // WHY: Detail page renders field values as text inside .read-only-info containers
     await this.assertOnCompanyDetailPage();
     // Assert company name in page body
-    await expect(this.page.locator('body')).toContainText(data.name, { timeout: 10000 });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('body')).toContainText(data.name, { timeout: 10000 })
+    );
     // WHY: Same tab pattern as ContactsPage.assertContactDetailFields()
     const tabPane = this.page.locator('.tab-pane.active.show');
+    // B6: auto-retrying text checks on the active pane (the old code slept 800 ms, then read textContent once)
+    const assertPaneContains = async (tabId: string, name: string, values: string[]): Promise<void> => {
+      await this.activateDetailTab(this.page.locator(`#${tabId}`), name);
+      for (const value of values) {
+        await this.withSessionExpiryRecovery(() =>
+          expect(tabPane, `${name} tab should show "${value}"`).toContainText(value, {
+            ignoreCase: true,
+            timeout: config.timeouts.expect,
+          })
+        );
+      }
+    };
     // WHY: Verify Communication tab — email, phone
-    await this.page.locator('#nav-tab0-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab0Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab0Text).toContain(data.email.toLowerCase());
-    expect(tab0Text).toContain(data.phone);
+    await assertPaneContains('nav-tab0-tab', 'Communication', [data.email, data.phone]);
     logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone}`);
     // WHY: Verify Location tab — city, state, zipcode
-    await this.page.locator('#nav-tab1-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab1Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab1Text).toContain(data.city.toLowerCase());
-    expect(tab1Text).toContain(data.state.toLowerCase());
-    expect(tab1Text).toContain(data.zipcode.toLowerCase());
+    await assertPaneContains('nav-tab1-tab', 'Location', [data.city, data.state, data.zipcode]);
     logger.debug(`Location tab — city: ${data.city} | state: ${data.state} | zipcode: ${data.zipcode}`);
     // WHY: Verify Social tab — facebook, twitter, linkedIn
-    await this.page.locator('#nav-tab2-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab2Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab2Text).toContain(data.facebook.toLowerCase());
-    expect(tab2Text).toContain(data.twitter.toLowerCase());
-    expect(tab2Text).toContain(data.linkedIn.toLowerCase());
+    await assertPaneContains('nav-tab2-tab', 'Social', [data.facebook, data.twitter, data.linkedIn]);
     logger.debug(`Social tab — facebook: ${data.facebook} | twitter: ${data.twitter} | linkedin: ${data.linkedIn}`);
     // WHY: Company "Internals" tab (#nav-tab4-tab, confirmed live 2026-07-28 — shifted
     // from #nav-tab3-tab now that Company has its own "Other Details" custom-field tab
@@ -1977,14 +1987,21 @@ export class CompaniesPage extends BasePage {
     // website, uniqueText1, uniqueText2 are rendered in the RIGHT PANEL info section
     // (not inside any tab). Verify them via the full page body text which includes the
     // main panel.
-    await this.page.waitForTimeout(400);
-    const bodyText = (await this.page.locator('body').textContent() ?? '').toLowerCase();
-    expect(bodyText).toContain(data.numberOfEmployees.toLowerCase());
-    expect(bodyText).toContain(data.industry.toLowerCase());
-    expect(bodyText).toContain(data.businessType.toLowerCase());
-    expect(bodyText).toContain(data.website.toLowerCase());
-    expect(bodyText).toContain(data.uniqueText1.toLowerCase());
-    expect(bodyText).toContain(data.uniqueText2.toLowerCase());
+    for (const value of [
+      data.numberOfEmployees,
+      data.industry,
+      data.businessType,
+      data.website,
+      data.uniqueText1,
+      data.uniqueText2,
+    ]) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.page.locator('body'), `Company detail should show "${value}"`).toContainText(value, {
+          ignoreCase: true,
+          timeout: config.timeouts.expect,
+        })
+      );
+    }
     // TODO: annualRevenue assertion skipped — currency formatting varies (₹1,23,456 vs 123456)
     logger.debug(`Main panel — employees: ${data.numberOfEmployees} | industry: ${data.industry} | bizType: ${data.businessType}`);
     logger.success('Company detail fields verified');
@@ -2017,8 +2034,7 @@ export class CompaniesPage extends BasePage {
     // BasePage helper (see its own comment), so using it here means this new
     // method introduces zero raw Playwright calls that bypass that
     // protection, per the standing checklist (points 2/3).
-    await this.click(tab, 'Other Details tab');
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Other Details');
 
     const cf = data.customFields;
     await this.assertCustomFieldOnDetail(

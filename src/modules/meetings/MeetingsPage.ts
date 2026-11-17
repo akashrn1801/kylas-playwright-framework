@@ -698,6 +698,25 @@ export class MeetingsPage extends BasePage {
     logger.success('Add Meeting form opened from entity detail panel');
   }
 
+  // Save the title-only form opened from an entity's detail panel and STAY on the parent: unlike saveMeeting()
+  // it does not click the post-save popup (which navigates to the meeting's own page). Returns the created
+  // meeting's id, from the POST /v1/meetings answer; fails by name when that id is not captured. Additive:
+  // used by CompaniesPage.addMeetingFromPanel(); every existing caller keeps its own method.
+  async saveMeetingFromEntityPanel(): Promise<number> {
+    logger.info('Saving meeting from entity detail panel');
+    const idPromise = this.captureIdFromResponse();
+    await this.click(this.addMeetingSaveButton(), 'save meeting (from entity panel)');
+    await this.assertNoFormErrors('meeting create form (from entity panel)');
+    const id = await idPromise;
+    if (!id) {
+      throw new Error(
+        'Meeting ID not captured after save from the entity panel — cannot proceed (save likely failed silently)'
+      );
+    }
+    logger.success(`Meeting saved from entity panel (ID: ${id})`);
+    return id;
+  }
+
   async fillMeetingForm(
     data: MeetingData,
     createdBy = 'Admin',

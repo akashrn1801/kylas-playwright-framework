@@ -2785,51 +2785,29 @@ export class LeadsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
-  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
-  // stalled a full-suite regression run across many share-based RBAC tests):
-  // `shareTypeControl.click()` / `userOption.click()` (selecting "User") were
-  // raw, UNBOUNDED clicks — same "click registers, handler race" class as
-  // clickAddCompany/selectFromContactDropdown/selectFromIsInvalidControl. If
-  // userOption.click() didn't register, shareToUserInput()
-  // (`[id="undefined_undefinedundefined_input_toId"]`) never mounts, and the
-  // immediately-following `.fill()` (also unbounded) hangs until the outer
-  // test timeout — matching the observed pattern exactly ("Share search
-  // term" logged, then a multi-minute gap, then failure). Fixed with the
-  // same shape as the other 3 fixes: bound every click to
-  // config.timeouts.expect and retry the whole open-type-dropdown ->
-  // select-User -> wait-for-search-input sequence up to 3 times. Same fix
-  // applied identically to shareCompany/shareContact/shareDeal.
+  // B6 (owner decision 2026-11-17): one bounded pass, no retry loop. The missed "User" click (root-caused
+  // 2026-07-22: a pick that did not register left shareToUserInput() unmounted and a raw fill() hung ~9 min) is
+  // prevented by waiting (menu open, option visible and enabled, one click, then the control must show "User"),
+  // and fails by name if it did not take. Same shape as CompaniesPage.openUserShareTypeSearch().
   private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page
-          .locator('.is-invalid__option')
-          .filter({ hasText: 'User' })
-          .first();
-        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({
-          state: 'visible',
-          timeout: config.timeouts.expect,
-        });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
-            'closing any stuck menu and retrying'
-        );
-        // B6: no menu is open before the next attempt (fails by name when one cannot be closed)
-        await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
-      }
-    }
-    throw new Error(
-      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    await shareTypeControl.click({ timeout: config.timeouts.expect });
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await expect(userOption, 'Share dialog: the "User" share-type option should be visible (menu open)').toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await expect(userOption, 'Share dialog: the "User" share-type option should be enabled').toBeEnabled({
+      timeout: config.timeouts.expect,
+    });
+    await userOption.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
+    await expect(
+      shareTypeControl.locator('.is-invalid__single-value'),
+      'Share dialog: the share-type control should show "User" after the pick'
+    ).toHaveText('User', { timeout: config.timeouts.expect });
+    await expect(
+      this.shareToUserInput(),
+      'Share dialog: the user search input should appear after picking "User"'
+    ).toBeVisible({ timeout: config.timeouts.expect });
   }
 
   async shareLead(restrictedUserName: string, permissions: string[] = []): Promise<void> {
