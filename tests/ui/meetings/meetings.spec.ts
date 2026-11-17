@@ -167,63 +167,52 @@ test.describe('Meetings', () => {
     const gpsBtn = adminPage.getByText('Get GPS Address');
     await gpsBtn.waitFor({ state: 'visible', timeout: 10000 });
     await gpsBtn.click();
-    await adminPage.waitForTimeout(1500);
 
-    // Check if Field Sales addon trial modal appeared
-    const addonDialog =
-      (await adminPage
-        .locator('.trial-feature__title')
-        .isVisible()
-        .catch(() => false)) ||
-      (await adminPage
-        .locator('text=Field Sales is now available')
-        .isVisible()
-        .catch(() => false));
+    // B6: the click opens EITHER the Field Sales add-on trial dialog OR the GPS search input; wait for
+    // whichever appears (replaces a 1.5 s pause plus two instant isVisible() probes)
+    const addonTitle = adminPage.locator('.trial-feature__title');
+    const gpsSearchInput = adminPage.getByPlaceholder('Search for area, street name');
+    await expect(
+      addonTitle.or(gpsSearchInput).first(),
+      'Get GPS Address should open the add-on dialog or the GPS search input'
+    ).toBeVisible({ timeout: 10000 });
+    const addonDialog = await addonTitle.isVisible();
+    const locationInput = adminPage.locator('[id="1_81_input_location"]');
+
     if (addonDialog) {
       // Dismiss by clicking I'll do it later
       await adminPage.locator('button.btn.link-primary', { hasText: "I'll do it later" }).click();
-      await adminPage.waitForTimeout(500);
+      await expect(addonTitle, 'The Field Sales add-on dialog should close after dismissing').toBeHidden({
+        timeout: 10000,
+      });
       logger.warn('Field Sales addon trial modal dismissed');
-    }
-
-    if (addonDialog) {
       // Addon not available — verify manual address works instead
       logger.info('Field Sales addon not available — testing manual address input');
-      await adminPage.locator('[id="1_81_input_location"]').fill('123 Test Street, Mumbai, India');
-      const locationValue = await adminPage.locator('[id="1_81_input_location"]').inputValue();
-      if (!locationValue) throw new Error('Manual address input failed');
-      logger.success(`Manual address entered: ${locationValue}`);
+      await locationInput.fill('123 Test Street, Mumbai, India');
     } else {
       // GPS available — type to get predictions
-      const gpsSearchInput = adminPage.getByPlaceholder('Search for area, street name');
       await gpsSearchInput.fill('Pune');
-      await adminPage.waitForTimeout(1500);
-
-      const predictionsVisible = await adminPage
-        .locator('.autocomplete-prediction')
-        .first()
-        .isVisible()
+      const firstPrediction = adminPage.locator('.autocomplete-prediction').first();
+      const predictionsVisible = await firstPrediction
+        .waitFor({ state: 'visible', timeout: 10000 })
+        .then(() => true)
         .catch(() => false);
       if (predictionsVisible) {
-        await adminPage.locator('.autocomplete-prediction').first().click();
-        await adminPage.waitForTimeout(500);
-        // Verify location field has value
-        const locationValue = await adminPage
-          .locator('[id="1_81_input_location"]')
-          .inputValue()
-          .catch(() => '');
-        logger.success(`GPS address selected: ${locationValue}`);
+        await firstPrediction.click();
       } else {
         // No predictions — fall back to manual
         logger.warn('No GPS predictions — using manual address');
-        await adminPage.locator('[id="1_81_input_location"]').fill('Pune, Maharashtra, India');
-        logger.success('Manual address fallback used');
+        await locationInput.fill('Pune, Maharashtra, India');
       }
     }
+    // the location field holds a value in EVERY branch (it used to be only logged, or not read at all)
+    await expect(locationInput, 'The location field should hold an address').not.toHaveValue('', {
+      timeout: 10000,
+    });
+    logger.success(`Location set: ${await locationInput.inputValue()}`);
 
-    // Close form without saving
-    await adminPage.keyboard.press('Escape');
-    await adminPage.waitForTimeout(500);
+    // Close form without saving (the header close button: Escape does not close this form), and require it gone
+    await meetingsPage.closeAddForm();
     logger.success('GPS address test completed');
     logger.success('M7 passed');
   });
