@@ -7,6 +7,7 @@ import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import { storedSessionNeedsRefresh } from './sessionLifetime';
+import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { tokenAcceptedByApi } from './sessionCheck';
 import {
   generateProductFixtureDefinitions,
@@ -450,8 +451,12 @@ async function setupRole(
   // builds may be expired or from a different environment
   if (fs.existsSync(stateFile) && !process.env.CI) {
     const age = Date.now() - fs.statSync(stateFile).mtimeMs;
-    if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile)) {
-      console.log(`[globalSetup] Saved state for ${role} has too little lifetime left for a run (ADR 0016) — logging in again`);
+    const missingKeys = missingKeysInStateFile(stateFile);
+    if (missingKeys.length > 0) {
+      // ADR 0017: a token the API accepts is not enough, the app's own user keys must be there too
+      console.log(`[globalSetup] Saved state for ${role} lacks the session keys ${missingKeys.join(', ')} — logging in again`);
+    } else if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile, config.auth.minRemainingForRunMs)) {
+      console.log(`[globalSetup] Saved state for ${role} has less than the run window left (ADR 0016/0017: the app must not need tokens/refresh during a run) — logging in again`);
     } else if (age < 1 * 60 * 60 * 1000) {
       const accepted = await sessionAcceptedByApi(role).catch((error) => {
         console.warn(`[globalSetup] Session check for ${role} could not be completed: ${String(error)}`);
@@ -553,7 +558,7 @@ async function setupRole(
         // No popup — continue
       }
 
-      await context.storageState({ path: stateFile });
+      await saveGuardedStorageStateOrThrow(page, stateFile, `globalSetup ${role}`, 15000);
 
       // WHY this verify-and-retry loop (2026-09-28, real sandbox failure —
       // shard 4/8's globalSetup crashed entirely with "Could not extract an
@@ -587,7 +592,7 @@ async function setupRole(
               `(attempt ${i}/${tokenVerifyAttempts}) — re-capturing in 2s...`
           );
           await new Promise((resolve) => setTimeout(resolve, 2000));
-          await context.storageState({ path: stateFile });
+          await saveGuardedStorageStateOrThrow(page, stateFile, `globalSetup ${role}`, 15000);
         }
       }
       if (!(await sessionAcceptedByApi(role))) {

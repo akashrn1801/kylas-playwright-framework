@@ -51,6 +51,12 @@ export const config = {
     navigation: Number(process.env.NAVIGATION_TIMEOUT) || 60000,
     expect: Number(process.env.EXPECT_TIMEOUT) || 10000,
   },
+  // ADR 0017 (2026-11-16): a saved session with less than this left is replaced by a fresh login BEFORE the run
+  // (globalSetup), so the app never reaches its own tokens/refresh call (which revokes every other token of the
+  // user) during a run. Capped by the token's own lifetime in sessionLifetime.runWindowBufferMs().
+  auth: {
+    minRemainingForRunMs: Number(process.env.SESSION_MIN_REMAINING_FOR_RUN_MS) || 4 * 60 * 60 * 1000,
+  },
   browser: {
     name: process.env.BROWSER || 'chromium',
     headless: process.env.HEADLESS === 'true',

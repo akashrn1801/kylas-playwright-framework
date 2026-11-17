@@ -60,8 +60,23 @@ export function proactiveRefreshBufferMs(lifetimeMs: number | null): number {
   return Math.max(floor, Math.min(wanted, Math.floor(lifetimeMs * MAX_BUFFER_SHARE_OF_LIFETIME)));
 }
 
-/** True when the saved session for `stateFile` is missing or has less lifetime left than a test needs. */
-export function storedSessionNeedsRefresh(stateFile: string): boolean {
+/**
+ * How much lifetime a session needs at the START of a run so that the app never reaches its own refresh call
+ * (which revokes every other token of the user) while the run is going: the configured run window, capped at 80%
+ * of the token's own lifetime (a short-lived token cannot promise more; a fresh token always has ~100%), and never
+ * below the per-test buffer.
+ */
+export function runWindowBufferMs(lifetimeMs: number | null, configuredWindowMs: number): number {
+  const perTest = proactiveRefreshBufferMs(lifetimeMs);
+  const capped = lifetimeMs === null ? configuredWindowMs : Math.min(configuredWindowMs, Math.floor(lifetimeMs * 0.8));
+  return Math.max(perTest, capped);
+}
+
+/**
+ * True when the saved session for `stateFile` is missing or has less lifetime left than a test needs. With
+ * `runWindowMs` (globalSetup passes config.auth.minRemainingForRunMs) it needs a whole run's window instead.
+ */
+export function storedSessionNeedsRefresh(stateFile: string, runWindowMs?: number): boolean {
   try {
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
       origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
@@ -71,7 +86,8 @@ export function storedSessionNeedsRefresh(stateFile: string): boolean {
       if (!raw) continue;
       const remaining = getTokenRemainingMs(raw);
       if (remaining === null) return false;
-      return remaining <= proactiveRefreshBufferMs(getTokenLifetimeMs(raw));
+      const lifetime = getTokenLifetimeMs(raw);
+      return remaining <= (runWindowMs === undefined ? proactiveRefreshBufferMs(lifetime) : runWindowBufferMs(lifetime, runWindowMs));
     }
     return true;
   } catch {
