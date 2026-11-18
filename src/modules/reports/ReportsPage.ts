@@ -1346,19 +1346,15 @@ export class ReportsPage extends BasePage {
   async searchReportsList(term: string): Promise<void> {
     logger.info(`Searching reports list: ${term}`);
     await this.fill(this.searchInput(), term, 'Reports search input');
-    await this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v3\/reports\/search(?:\?.*)?$/) !== null && res.request().method() === 'POST',
-      'searchReportsList: search POST',
-      15000
-    ).catch(() => null);
-    await this.page.keyboard.press('Enter');
-    await this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v3\/reports\/search(?:\?.*)?$/) !== null && res.request().method() === 'POST',
-      'searchReportsList: search POST after Enter',
-      15000
-    ).catch(() => null);
+    // B6 (staging probe 2026-11-17): typing sends no request; only Enter fires `POST /v3/reports/search`. The old
+    // code waited for a request after the fill (always the full 15 s, swallowed), pressed Enter, then waited again
+    // (swallowed). One strict wait armed before Enter.
+    await this.saveAndAwait(() => this.page.keyboard.press('Enter'), {
+      method: 'POST',
+      urlRe: /^\/v3\/reports\/search\/?$/,
+      description: 'searchReportsList: POST /v3/reports/search',
+      timeout: 15000,
+    });
   }
 
   async openReportFromList(name: string): Promise<void> {

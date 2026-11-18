@@ -1,4 +1,4 @@
-import { Page, expect, Locator, Response, Request } from '@playwright/test';
+import { Page, expect, Locator, Request } from '@playwright/test';
 import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { BasePage } from '../../core/BasePage';
 import {
@@ -1081,24 +1081,18 @@ export class LeadsPage extends BasePage {
 
     await this.fill(this.searchInput(), searchText, 'search input');
 
-    await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/search/lead?...` -> 200. The old wait matched a
+    // `GET` on any URL containing "search", which never occurs: every search waited its full 15 s, its miss
+    // was swallowed and a failed search went unnoticed. Armed before the click and strict (status, code and
+    // message when the answer is not 2xx).
+    await this.saveAndAwait(() => this.click(this.searchIcon(), 'search icon'), {
+      method: 'POST',
+      urlRe: /^\/v1\/search\/lead\/?$/,
+      description: 'lead search (POST /v1/search/lead)',
+      timeout: 15000,
+    });
 
     await this.waitForLoaderToDisappear();
-  }
-
-  private async waitForSearchApi(): Promise<Response | null> {
-    try {
-      return await this.armResponseWaitWithRecovery(
-        (response) =>
-          response.url().includes('search') &&
-          response.request().method() === 'GET' &&
-          response.status() === 200,
-        'lead search API',
-        15000
-      );
-    } catch {
-      return null;
-    }
   }
 
   private async captureLeadIdFromResponse(): Promise<number | null> {
@@ -3748,26 +3742,6 @@ export class LeadsPage extends BasePage {
     logger.success('Note added');
   }
 
-  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
-  async assertNoteTextPresent(text: string): Promise<void> {
-    await expect
-      .poll(
-        () =>
-          this.page.evaluate((expected) => {
-            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
-              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
-              try {
-                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
-              } catch {
-                /* cross-origin iframe — not a note */
-              }
-            }
-            return false;
-          }, text),
-        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
-      )
-      .toBe(true);
-  }
   // ──────────────────────────────────────────────────────────
   // Create form: error summary and the duplicate "View Lead" link
   // ──────────────────────────────────────────────────────────

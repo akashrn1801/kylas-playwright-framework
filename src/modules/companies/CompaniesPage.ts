@@ -1,4 +1,4 @@
-import { Page, expect, Locator, Response } from '@playwright/test';
+import { Page, expect, Locator } from '@playwright/test';
 import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { BasePage } from '../../core/BasePage';
@@ -402,24 +402,18 @@ export class CompaniesPage extends BasePage {
 
     await this.fill(this.searchInput(), searchText, 'search input');
 
-    await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/search/company?...` -> 200. The old wait matched a
+    // `GET` on any URL containing "search", which never occurs: every search waited its full 15 s, its miss
+    // was swallowed and a failed search went unnoticed. Armed before the click and strict (status, code and
+    // message when the answer is not 2xx).
+    await this.saveAndAwait(() => this.click(this.searchIcon(), 'search icon'), {
+      method: 'POST',
+      urlRe: /^\/v1\/search\/company\/?$/,
+      description: 'company search (POST /v1/search/company)',
+      timeout: 15000,
+    });
 
     await this.waitForLoaderToDisappear();
-  }
-
-  private async waitForSearchApi(): Promise<Response | null> {
-    try {
-      return await this.armResponseWaitWithRecovery(
-        (response) =>
-          response.url().includes('search') &&
-          response.request().method() === 'GET' &&
-          response.status() === 200,
-        'company search API response',
-        15000
-      );
-    } catch {
-      return null;
-    }
   }
 
   private async captureCompanyIdFromResponse(): Promise<number | null> {
@@ -1448,46 +1442,10 @@ export class CompaniesPage extends BasePage {
     );
   }
 
-  // B6: baseline from the settled Notes card, then add, then the card must hold exactly one more note. The
-  // fixed pauses (CKEditor init, text entering the editor, the add) are replaced by the editor being visible
-  // and by that count; the Add button is scoped to the Notes card.
+  // Opens the Notes panel and adds the note with the shared BasePage flow (baseline + exactly one more note).
   async addNoteFromPanel(noteText: string): Promise<void> {
-    logger.info(`Adding note from company panel: "${noteText}"`);
     await this.clickRightPanelIcon('Notes');
-    const { card, rows, waitForSettled } = this.notesPanel();
-    await waitForSettled();
-    const baseline = await rows.count();
-    // WHY: Click textarea first to activate CKEditor initialisation
-    await this.click(card.locator('textarea.notes-textarea'), 'notes textarea');
-    const editor = card.getByRole('textbox', { name: 'Rich Text Editor, main' });
-    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    await editor.fill(noteText, { timeout: config.timeouts.expect });
-    await this.click(card.getByText('Add', { exact: true }), 'add note');
-    await this.withSessionExpiryRecovery(() =>
-      expect(rows, 'Note count after adding').toHaveCount(baseline + 1, { timeout: config.timeouts.navigation })
-    );
-    logger.success(`Note added: "${noteText}"`);
-  }
-
-  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
-  async assertNoteTextPresent(text: string): Promise<void> {
-    await expect
-      .poll(
-        () =>
-          this.page.evaluate((expected) => {
-            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
-              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
-              try {
-                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
-              } catch {
-                /* cross-origin iframe — not a note */
-              }
-            }
-            return false;
-          }, text),
-        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
-      )
-      .toBe(true);
+    await this.addNoteInOpenPanel(noteText);
   }
 
   async addTaskFromPanel(taskName: string): Promise<void> {

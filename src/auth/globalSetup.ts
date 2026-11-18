@@ -1,4 +1,10 @@
-import { chromium, FullConfig, request as apiRequest, APIRequestContext } from '@playwright/test';
+import {
+  chromium,
+  expect,
+  FullConfig,
+  request as apiRequest,
+  APIRequestContext,
+} from '@playwright/test';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
@@ -6,7 +12,11 @@ import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
-import { describeSessionEnd, readStoredTokenFromStateFile, storedSessionNeedsRefresh } from './sessionLifetime';
+import {
+  describeSessionEnd,
+  readStoredTokenFromStateFile,
+  storedSessionNeedsRefresh,
+} from './sessionLifetime';
 import { recordSessionInfo } from './sessionInfo';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
@@ -468,8 +478,15 @@ async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void>
   }
   const record = (e: { endIso: string; minutesLeft: number }): boolean => {
     const below = e.minutesLeft * 60000 < windowMs;
-    recordSessionInfo(config.env, { role, endIso: e.endIso, minutesLeft: e.minutesLeft, belowRunWindow: below });
-    console.log(`[globalSetup] ${role} session ends at ${e.endIso} (${e.minutesLeft} min left; run window ${windowMin} min)`);
+    recordSessionInfo(config.env, {
+      role,
+      endIso: e.endIso,
+      minutesLeft: e.minutesLeft,
+      belowRunWindow: below,
+    });
+    console.log(
+      `[globalSetup] ${role} session ends at ${e.endIso} (${e.minutesLeft} min left; run window ${windowMin} min)`
+    );
     return below;
   };
   if (!record(end)) return;
@@ -477,7 +494,7 @@ async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void>
   if (process.env.CI) {
     console.warn(
       `[globalSetup] WARNING: the ${role} session ends at ${end.endIso} (${end.minutesLeft} min left), less than the ${windowMin} min run window. ` +
-        'CI never renews a session; a failure near that time may be the app\'s token-refresh cascade (ADR 0017).'
+        "CI never renews a session; a failure near that time may be the app's token-refresh cascade (ADR 0017)."
     );
     return;
   }
@@ -509,10 +526,15 @@ async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void>
 // answers 400 000004; 200 revokes the token for every holder). Never /tokens/force-logout: that logs out ALL users.
 async function logoutSession(role: Role, stateFile: string): Promise<void> {
   const accessToken = readAccessTokenFromStateFile(stateFile);
-  if (!accessToken) throw new Error(`[globalSetup] Cannot log out the ${role} session: no access token in ${path.basename(stateFile)}`);
+  if (!accessToken)
+    throw new Error(
+      `[globalSetup] Cannot log out the ${role} session: no access token in ${path.basename(stateFile)}`
+    );
   const context = await apiRequest.newContext();
   try {
-    const response = await context.delete(buildApiUrl('/tokens/logout'), { data: { token: accessToken } });
+    const response = await context.delete(buildApiUrl('/tokens/logout'), {
+      data: { token: accessToken },
+    });
     if (!response.ok()) {
       throw new Error(
         `[globalSetup] Logout of the ${role} session failed: HTTP ${response.status()} ${(await response.text()).slice(0, 200)}`
@@ -535,19 +557,27 @@ async function establishRole(role: Role, browser: PwBrowser, forceLogin: boolean
     const missingKeys = missingKeysInStateFile(stateFile);
     if (missingKeys.length > 0) {
       // ADR 0017: a token the API accepts is not enough, the app's own user keys must be there too
-      console.log(`[globalSetup] Saved state for ${role} lacks the session keys ${missingKeys.join(', ')} — logging in again`);
+      console.log(
+        `[globalSetup] Saved state for ${role} lacks the session keys ${missingKeys.join(', ')} — logging in again`
+      );
     } else if (age < 1 * 60 * 60 * 1000 && storedSessionNeedsRefresh(stateFile)) {
-      console.log(`[globalSetup] Saved state for ${role} has too little lifetime left for a test (ADR 0016) — logging in again`);
+      console.log(
+        `[globalSetup] Saved state for ${role} has too little lifetime left for a test (ADR 0016) — logging in again`
+      );
     } else if (age < 1 * 60 * 60 * 1000) {
       const accepted = await sessionAcceptedByApi(role).catch((error) => {
-        console.warn(`[globalSetup] Session check for ${role} could not be completed: ${String(error)}`);
+        console.warn(
+          `[globalSetup] Session check for ${role} could not be completed: ${String(error)}`
+        );
         return false;
       });
       if (accepted) {
         console.log(`[globalSetup] Reusing fresh state for: ${role} (accepted by the API)`);
         return;
       }
-      console.log(`[globalSetup] Saved state for ${role} was not accepted by the API — logging in again`);
+      console.log(
+        `[globalSetup] Saved state for ${role} was not accepted by the API — logging in again`
+      );
     }
   }
 
@@ -578,7 +608,10 @@ async function establishRole(role: Role, browser: PwBrowser, forceLogin: boolean
 
     page.on('response', async (r) => {
       if (r.request().method() === 'PUT' && /\/users\/login(\?|$)/.test(r.url()) && !r.ok()) {
-        loginRejection = { status: r.status(), body: (await r.text().catch(() => '')).slice(0, 300) };
+        loginRejection = {
+          status: r.status(),
+          body: (await r.text().catch(() => '')).slice(0, 300),
+        };
       }
     });
 
@@ -639,50 +672,52 @@ async function establishRole(role: Role, browser: PwBrowser, forceLogin: boolean
         // No popup — continue
       }
 
-      await saveGuardedStorageStateOrThrow(page, stateFile, `globalSetup ${role}`, 15000);
-
-      // WHY this verify-and-retry loop (2026-09-28, real sandbox failure —
-      // shard 4/8's globalSetup crashed entirely with "Could not extract an
-      // access token from the saved storage state for role: restricted",
-      // thrown 4 seconds after this exact storageState() call, from inside
-      // ensureProductFixtures()'s own getAccessTokenForRole() read of the
-      // same file): under real concurrent load — 8 shards each logging in
-      // fresh as the SAME shared admin/restricted staging accounts within
-      // the same ~90s window — the app's own client-side write of
-      // localStorage.token can plausibly lag slightly behind the /sales/
-      // redirect this function already waits for above, or the account's
-      // session can be transiently disturbed by a concurrent login
-      // elsewhere. A bounded re-capture here is a real condition-based
-      // check (the existing getAccessTokenForRole() decode either succeeds
-      // or it doesn't), not a blind wait, and is far cheaper than falling
-      // through to this function's own full outer 3-attempt re-login retry
-      // for what is most plausibly a sub-second timing gap. Root cause not
-      // fully confirmed (a single occurrence, not yet reproduced on demand)
-      // — this is defensive hardening per CLAUDE.md rule 10, not a proven
-      // fix; if this loop's own warning log recurs, that's real evidence
-      // toward whichever mechanism is actually at play.
-      const tokenVerifyAttempts = 3;
-      for (let i = 1; i <= tokenVerifyAttempts; i++) {
-        try {
-          await getAccessTokenForRole(role);
-          break;
-        } catch (verifyError) {
-          if (i === tokenVerifyAttempts) throw verifyError;
-          console.warn(
-            `[globalSetup] Saved storage state for ${role} has no decodable token yet ` +
-              `(attempt ${i}/${tokenVerifyAttempts}) — re-capturing in 2s...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          await saveGuardedStorageStateOrThrow(page, stateFile, `globalSetup ${role}`, 15000);
-        }
+      // B6 (G6): the 2026-09-28 failure was a saved state whose `token` could not be decoded
+      // ("Could not extract an access token ... restricted", 4 s after storageState()). The old answer was a loop that
+      // slept 2 s and re-saved up to 3 times. The real condition is "the token in localStorage decodes to a JWT with
+      // data.accessToken", so it is awaited in the page BEFORE the state is saved (same decode as
+      // getAccessTokenForRole, url-safe base64 included). stateGuard already waits for the keys to exist; this adds
+      // that they are usable. Root cause of the 2026-09-28 occurrence is still not confirmed (never reproduced):
+      // this is hardening, labelled as such. A token that never decodes throws by name BEFORE the save (the previous
+      // state file stays) and the outer login attempt loop retries the whole login.
+      try {
+        await page.waitForFunction(
+          () => {
+            try {
+              const token = window.localStorage.getItem('token');
+              if (!token) return false;
+              const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+              return !!JSON.parse(window.atob(payload))?.data?.accessToken;
+            } catch {
+              return false;
+            }
+          },
+          undefined,
+          { timeout: 15000 }
+        );
+      } catch (error) {
+        // Thrown BEFORE the save: an undecodable token must never be written to the state file.
+        throw new Error(
+          `[globalSetup] The token in localStorage never decoded for ${role}; previous state file kept: ${String(error)}`
+        );
       }
+      await saveGuardedStorageStateOrThrow(page, stateFile, `globalSetup ${role}`, 15000);
+      await getAccessTokenForRole(role);
       if (!(await sessionAcceptedByApi(role))) {
-        throw new Error(`[globalSetup] The API rejected (401/403) the session just created for ${role}`);
+        throw new Error(
+          `[globalSetup] The API rejected (401/403) the session just created for ${role}`
+        );
       }
       console.log(`[globalSetup] State saved for: ${role}`);
 
       // Save captured display name to userNames.json
-      await page.waitForTimeout(2000);
+      // B6 (G6): the name comes from the GET /v1/users/me answer the listener above records. Wait for that capture
+      // (same 2 s bound the fixed pause had; ends as soon as the name is there). The `userName` localStorage key
+      // cannot stand in: it holds the login e-mail, not the display name.
+      await expect
+        .poll(() => capturedUserName, { timeout: 2000 })
+        .not.toBe('')
+        .catch(() => undefined);
       if (capturedUserName) {
         const namesFile = path.join(STORAGE_STATE_DIR, 'userNames.json');
         const existing = fs.existsSync(namesFile)
@@ -703,8 +738,13 @@ async function establishRole(role: Role, browser: PwBrowser, forceLogin: boolean
         `[globalSetup] Login attempt ${attempt}/${maxAttempts} failed for ${role}: ${String(error)}`
       );
       const rejection = loginRejection as { status: number; body: string } | null;
-      const databaseError = rejection !== null && isLoginDatabaseError(rejection.status, rejection.body);
-      if (rejection && !isRetryableHttpStatus(rejection.status) && !(databaseError && attempt < maxAttempts)) {
+      const databaseError =
+        rejection !== null && isLoginDatabaseError(rejection.status, rejection.body);
+      if (
+        rejection &&
+        !isRetryableHttpStatus(rejection.status) &&
+        !(databaseError && attempt < maxAttempts)
+      ) {
         throw new Error(
           `[globalSetup] Login for ${role} (ENV=${config.env}) was rejected with HTTP ${rejection.status}: ${rejection.body}. ` +
             `Not retried (ADR 0014 §1; ADR 0017 allows only the 000004 "Database error" answer, ${maxAttempts - 1} extra attempts).`

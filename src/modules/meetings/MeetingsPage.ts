@@ -840,7 +840,7 @@ export class MeetingsPage extends BasePage {
       await this.assertNoFormErrors('meeting create form');
       throw error;
     }
-    await this.assertNoFormErrors('meeting create form');
+    await this.assertNoFormErrors('meeting create form', response);
     const body = (await response.json().catch(() => ({}))) as { id?: number };
     const id = body?.id ?? null;
     if (id) logger.info(`Captured meeting ID: ${id}`);

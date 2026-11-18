@@ -988,12 +988,12 @@ export class ContactsPage extends BasePage {
     // ADR 0016 (B3, KI-22 / plan section 11 #2): the modal closes only after the update is answered, so
     // wait for that answer first (status checked) and only then for the modal; the 15 s no longer
     // includes a slow save.
-    await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
+    const saved = await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
       method: ['PUT', 'PATCH'],
       urlRe: /\/v1\/contacts\/\d+$/,
       description: 'Contact update (PUT /v1/contacts/{id})',
     });
-    await this.assertNoFormErrors('contact edit form');
+    await this.assertNoFormErrors('contact edit form', saved);
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeHidden({ timeout: 15000 })
     );
@@ -1235,45 +1235,10 @@ export class ContactsPage extends BasePage {
     return body.id;
   }
 
-  // B6: same as CompaniesPage.addNoteFromPanel(): opens the Notes panel, waits for it to settle (no skeleton
-  // rows), adds the note and waits for the Notes card count to go up by one.
+  // Opens the Notes panel and adds the note with the shared BasePage flow (baseline + exactly one more note).
   async addNoteFromPanel(noteText: string): Promise<void> {
-    logger.info(`Adding note from contact panel: "${noteText}"`);
     await this.clickRightPanelIcon('Notes');
-    const { card, rows, waitForSettled } = this.notesPanel();
-    await waitForSettled();
-    const baseline = await rows.count();
-    // WHY: Click textarea first to activate CKEditor initialisation
-    await this.click(card.locator('textarea.notes-textarea'), 'notes textarea');
-    const editor = card.getByRole('textbox', { name: 'Rich Text Editor, main' });
-    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-    await editor.fill(noteText, { timeout: config.timeouts.expect });
-    await this.click(card.getByText('Add', { exact: true }), 'add note');
-    await this.withSessionExpiryRecovery(() =>
-      expect(rows, 'Note count after adding').toHaveCount(baseline + 1, { timeout: config.timeouts.navigation })
-    );
-    logger.success(`Note added: "${noteText}"`);
-  }
-
-  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
-  async assertNoteTextPresent(text: string): Promise<void> {
-    await expect
-      .poll(
-        () =>
-          this.page.evaluate((expected) => {
-            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
-              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
-              try {
-                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
-              } catch {
-                /* cross-origin iframe — not a note */
-              }
-            }
-            return false;
-          }, text),
-        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
-      )
-      .toBe(true);
+    await this.addNoteInOpenPanel(noteText);
   }
 
   // WHY delegates to QuotationsPage.fillAndSaveQuotationFromPanel() (2026-07-29

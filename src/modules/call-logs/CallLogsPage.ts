@@ -827,16 +827,14 @@ export class CallLogsPage extends BasePage {
     const input = this.searchInput();
     await input.waitFor({ state: 'visible', timeout: 10000 });
     await input.fill(searchText);
-    await input.press('Enter');
-    await this.armResponseWaitWithRecovery(
-      (res: Response) =>
-        res.url().includes('/v1/call-logs') &&
-        res.request().method() === 'GET' &&
-        res.status() === 200,
-      'performSearch: call-logs GET',
-      15000
-    )
-      .catch(() => null);
+    // B6: the list search is `POST /v1/call-logs/search` (as navigateAndAwaitCallLogsData). The old wait matched a
+    // GET on /v1/call-logs, armed after Enter, and swallowed its miss. Armed before Enter and strict.
+    await this.saveAndAwait(() => input.press('Enter'), {
+      method: 'POST',
+      urlRe: /^\/v1\/call-logs\/search\/?$/,
+      description: 'performSearch: POST /v1/call-logs/search',
+      timeout: 15000,
+    });
     // B6: the list has re-rendered the results once its loading skeleton is gone
     await this.waitForNoLoadingSkeleton();
     logger.success(`Search triggered for: "${searchText}"`);
@@ -1708,7 +1706,7 @@ export class CallLogsPage extends BasePage {
         `Backend rejected the save: PUT /v1/call-logs/{id}/ -> ${response.status()} ${String(body?.code ?? 'no-code')}`
       );
     }
-    await this.assertNoFormErrors('call log edit form');
+    await this.assertNoFormErrors('call log edit form', response);
     await this.detailEntityHeading().waitFor({ state: 'visible', timeout: 15000 });
     logger.success('Call log updated');
   }

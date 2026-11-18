@@ -639,30 +639,11 @@ export class DealsPage extends BasePage {
     const indicator = control.locator('.is-invalid__dropdown-indicator');
     await indicator.waitFor({ state: 'visible', timeout: 10000 });
     await indicator.scrollIntoViewIfNeeded();
-    // WHY an explicit timeout here now (root-caused 2026-09-07, rule 2 sweep
-    // alongside the closeIsInvalidMenuRobustly() fix above): this click was
-    // previously unbounded — Playwright's own default action timeout is 0
-    // (unbounded) when neither this call nor a global `actionTimeout`
-    // specifies one, confirmed repo-wide convention per docs/known-issues/locators-and-timing.md.
-    // Bounding it turns a silent 8+ minute hang into a fast, diagnosable
-    // failure if a leftover backdrop (see above) or any other transient
-    // block ever exhausts the menu-close recovery above.
-    await indicator.click({ timeout: config.timeouts.expect });
-
-    // WHY: QA async API can take up to 22s — re-click every 5s if needed
-    const firstOption = this.page.locator('.is-invalid__option').first();
-    let found = false;
-    for (let i = 0; i < 8; i++) {
-      try {
-        await firstOption.waitFor({ state: 'visible', timeout: 5000 });
-        found = true;
-        break;
-      } catch {
-        logger.info(`${description} options not visible, re-clicking (attempt ${i + 1})`);
-        await indicator.click({ timeout: config.timeouts.expect }).catch(() => {});
-      }
-    }
-    if (!found) throw new Error(`${description} options did not appear after 40s`);
+    // B6 (ADR 0014 section 4): open through the shared helper. The old loop re-clicked the indicator every 5 s
+    // whether or not the menu was already open, and the indicator is a toggle (a click on an open, still
+    // loading menu closes it). The helper clicks only when NO menu is open and otherwise just waits; it is
+    // bounded (3 x expect timeout) and fails by name.
+    await this.openReactSelectAndWaitForOptions(indicator, description);
 
     // WHY: Deterministic path — for tests where the associated contact/
     // company's ownership matters (share/reassign/permission tests), picking
@@ -2781,23 +2762,10 @@ export class DealsPage extends BasePage {
     logger.success(`Right panel icon not visible: ${title}`);
   }
 
+  // Opens the Notes panel and adds the note with the shared BasePage flow (baseline + exactly one more note).
   async addNoteFromPanel(noteText: string): Promise<void> {
-    logger.info(`Adding note from deal panel: "${noteText}"`);
     await this.clickRightPanelIcon('Notes');
-    const notesTextarea = this.page.locator('textarea.notes-textarea');
-    await notesTextarea.waitFor({ state: 'visible', timeout: 10000 });
-    await notesTextarea.click();
-    const richTextEditor = this.page.getByRole('textbox', { name: 'Rich Text Editor, main' });
-    await richTextEditor.waitFor({ state: 'visible', timeout: 10000 });
-    await richTextEditor.fill(noteText);
-    const addButton = this.page.getByText('Add', { exact: true });
-    await addButton.waitFor({ state: 'visible', timeout: 5000 });
-    await addButton.click();
-    await this.page
-      .locator('div.row.pt-2.pl-2.pr-2')
-      .first()
-      .waitFor({ state: 'visible', timeout: 10000 });
-    logger.success(`Note added: "${noteText}"`);
+    await this.addNoteInOpenPanel(noteText);
   }
 
   async addTaskFromPanel(taskName: string): Promise<void> {

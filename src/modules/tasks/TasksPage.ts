@@ -1,4 +1,4 @@
-import { Page, Response, expect } from '@playwright/test';
+import { Page, Request, Response, Locator, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
@@ -397,6 +397,78 @@ export class TasksPage extends BasePage {
     logger.success('Quick Task form opened');
   }
 
+  // Hardened, root cause not confirmed (2026-11-18, KI-70): 2 of 7 full Companies runs (CO10, COR9) had the
+  // Assigned To click land and GET /v1/users/lookup return 200 with users, yet no menu rendered for 10 s and a
+  // second click fired no lookup; 0 of 56 probe/isolated repeats and 0 of 2 instrumented full runs failed. Same
+  // shape as ADR 0014 §4: click only when NO menu is open (a click on an open menu closes it), wait for the option,
+  // bounded. Failure-only diagnostics: a silent tracker (menu add/remove flag, lookup request/response timing) is
+  // read into the error message when the wait fails; nothing is logged on success.
+  private async openQuickTaskMenu(button: Locator, menu: Locator, option: Locator, description: string): Promise<void> {
+    const maxAttempts = 2;
+    const t0 = Date.now();
+    const lookups: string[] = [];
+    const onRequest = (r: Request): void => {
+      if (r.url().includes('/users/lookup')) lookups.push(`request +${Date.now() - t0}ms`);
+    };
+    const onResponse = (r: Response): void => {
+      if (r.url().includes('/users/lookup')) lookups.push(`response ${r.status()} +${Date.now() - t0}ms`);
+    };
+    this.page.on('request', onRequest);
+    this.page.on('response', onResponse);
+    try {
+      await this.page
+        .evaluate(() => {
+          const w = window as unknown as { __qtMenuSeen?: boolean };
+          w.__qtMenuSeen = false;
+          new MutationObserver(() => {
+            if (document.querySelector('.assigned-to-menu-list, .duedate-dropdown-options')) w.__qtMenuSeen = true;
+          }).observe(document.documentElement, { childList: true, subtree: true });
+        })
+        .catch(() => undefined);
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if ((await menu.count()) === 0) {
+          await this.click(button, `${description}: open button (${attempt}/${maxAttempts})`);
+        }
+        try {
+          await this.withSessionExpiryRecovery(() =>
+            expect(option, `${description} should appear`).toBeVisible({ timeout: config.timeouts.expect })
+          );
+          return;
+        } catch (error) {
+          if (attempt === maxAttempts) {
+            throw new Error(`${String(error)}\n${await this.describeQuickTaskMenuFailure(button, menu, lookups)}`);
+          }
+          logger.warn(
+            `${description}: not visible yet (attempt ${attempt}/${maxAttempts}), menu open: ${(await menu.count()) > 0}`
+          );
+        }
+      }
+    } finally {
+      this.page.off('request', onRequest);
+      this.page.off('response', onResponse);
+    }
+  }
+
+  private async describeQuickTaskMenuFailure(button: Locator, menu: Locator, lookups: string[]): Promise<string> {
+    const snap = await button
+      .evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const active = document.activeElement;
+        return {
+          activeElement: active ? `${active.tagName}.${String(active.className).slice(0, 40)}` : 'null',
+          coveringElement: top ? `${top.tagName}.${String(top.className).slice(0, 40)}` : 'null',
+          buttonReceivesClicks: !!top && (el === top || el.contains(top)),
+          documentHasFocus: document.hasFocus(),
+          menuEverAppeared: (window as unknown as { __qtMenuSeen?: boolean }).__qtMenuSeen === true,
+        };
+      }, { timeout: 2000 })
+      .catch((e: unknown) => ({ error: String(e).slice(0, 100) }));
+    return `Quick-task menu diagnostics (KI-70): ${JSON.stringify(snap)}; menu element now present: ${
+      (await menu.count()) > 0
+    }; users/lookup: ${lookups.length ? lookups.join(', ') : 'none seen'}`;
+  }
+
   async fillQuickTaskForm(data: TaskData): Promise<void> {
     logger.info(`Filling Quick Task form: "${data.name}"`);
 
@@ -406,14 +478,14 @@ export class TasksPage extends BasePage {
     // fails by name instead of saving the task with a default.
     // Due date — click calendar button, select "Tomorrow" from quick options
     logger.info('Setting due date to Tomorrow');
-    await this.click(this.quickTaskDateButton(), 'calendar button');
     const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', {
       hasText: 'Tomorrow',
     });
-    await this.withSessionExpiryRecovery(() =>
-      expect(tomorrowOption, 'Quick task: the "Tomorrow" due-date option should appear').toBeVisible({
-        timeout: config.timeouts.expect,
-      })
+    await this.openQuickTaskMenu(
+      this.quickTaskDateButton(),
+      this.page.locator('.duedate-dropdown-options'),
+      tomorrowOption,
+      'Quick task: the "Tomorrow" due-date option'
     );
     await tomorrowOption.click({ timeout: config.timeouts.expect });
     await this.withSessionExpiryRecovery(async () => {
@@ -430,13 +502,13 @@ export class TasksPage extends BasePage {
 
     // Assigned To — click button, wait for dropdown, pick random user
     logger.info('Setting Assigned To');
-    await this.click(this.quickTaskAssignedToButton(), 'assigned to button');
     // WHY: Assigned To uses .assigned-to-menu-list with .is-invalid__option items
     const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
-    await this.withSessionExpiryRecovery(() =>
-      expect(assignedToOptions.first(), 'Quick task: the Assigned To options should appear').toBeVisible({
-        timeout: config.timeouts.expect,
-      })
+    await this.openQuickTaskMenu(
+      this.quickTaskAssignedToButton(),
+      this.page.locator('.assigned-to-menu-list'),
+      assignedToOptions.first(),
+      'Quick task: the Assigned To options'
     );
     // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
     // textContent()+click() on a random option, same bug class.
@@ -1048,12 +1120,12 @@ export class TasksPage extends BasePage {
     // B6 (ADR 0017 save confirmation): the update's own answer (PUT/PATCH /v1/tasks/{id}), armed before the
     // click, fails by name when missing or not 2xx. It used to look only for form errors and the modal closing,
     // so a refused or never-sent save could pass. Then the modal must close.
-    await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
+    const saved = await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
       method: ['PUT', 'PATCH'],
       urlRe: /^\/v1\/tasks\/\d+\/?$/,
       description: 'Task update (PUT /v1/tasks/{id})',
     });
-    await this.assertNoFormErrors('task edit form');
+    await this.assertNoFormErrors('task edit form', saved);
     await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Task updated');
   }
@@ -1491,12 +1563,12 @@ export class TasksPage extends BasePage {
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.fillDueDate(daysFromNow);
     // ADR 0016 (B3, plan section 11 #7): await the update's answer, then the modal closing.
-    await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
+    const saved = await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
       method: ['PUT', 'PATCH'],
       urlRe: new RegExp(`/v1/tasks/${taskId}$`),
       description: `Task due-date update (PUT /v1/tasks/${taskId})`,
     });
-    await this.assertNoFormErrors('change due date form');
+    await this.assertNoFormErrors('change due date form', saved);
     await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Due date changed via ellipsis');
   }
