@@ -75,3 +75,10 @@ Entries are unchanged except relative links (rewritten for this folder). Closing
 - **Status:** open · **Since:** 2026-10-06
 - **What:** Sandbox Build #186 reported 916 tests, not the 898 `@regression` count: core shards apply `--grep @regression`, each formFields shard runs both its spec files with no grep (417 vs 399 tagged; 932 = 515 + 417, 916 = 499 + 417). Also: a manual re-run of failed jobs re-runs `merge-and-report` (Build #186: 7 attempts, 7 emails); "Verify all shards reported" counts zips, so a stale blob passes. Arithmetic: [sharding-and-locks.md](./sharding-and-locks.md).
 - **Next check:** decide whether formFields should honor the tag filter; the one skipped test is the known `call-logs.spec.ts:568` `test.skip`.
+
+## Accepted behavior / decisions needed (moved from the active list, 2026-11-18)
+
+- **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
+- **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
+- **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
+- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` comments disagree on stage/prod and nothing in the repo settles it); the two tests that need it self-skip via a live presence check — re-verify per environment ([ci-pipelines.md](./ci-pipelines.md), [reports-module.md](./reports-module.md)).

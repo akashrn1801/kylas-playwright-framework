@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, Response, errors, expect, test } from '@playwright/test';
+import { Page, Locator, Request, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -1911,6 +1911,125 @@ export class BasePage {
       }
     }
     throw new Error(`${description}: react-select did not open`);
+  }
+
+  // Opens a toggle-driven menu (Bootstrap dropdown, Assigned To, due-date options) and waits for one item of it.
+  // HARDENING, ROOT CAUSE NOT CONFIRMED (KI-70, 2026-11-18): the click lands and the menu never shows. Seen in full
+  // Companies runs (CO10, COR9), in sandbox 44258530411 (deals.rbac:574, Assigned To: lookup 200, the menu was probably
+  // rendered and removed within one poll, focus back on the button) and on the Tasks Add dropdown (tasks.rbac:273,
+  // "Detailed Task" option never visible). Shape (ADR 0014 section 4): click only when NO menu is open (a click on an
+  // open toggle closes it), wait for the item, bounded, at most 2 attempts, fail by name. The re-click behaviour is
+  // unchanged on purpose until the diagnostics below say what removes the menu.
+  // Diagnostics, failure only (nothing is logged on success): an ordered event buffer is kept silently in the page
+  // (`menuSelector` added/removed, focusin/focusout with relatedTarget) and in Node (clicks, `lookupUrlPart`
+  // request/response), and both are read into the error. The page and Node clocks start within a few ms of each other.
+  protected async openMenuAndWaitForItem(
+    toggle: Locator,
+    menuSelector: string,
+    item: Locator,
+    description: string,
+    options: { lookupUrlPart?: string } = {}
+  ): Promise<void> {
+    const maxAttempts = 2;
+    const menu = this.page.locator(menuSelector);
+    const t0 = Date.now();
+    const nodeEvents: string[] = [];
+    const at = (): string => `+${Date.now() - t0}ms`;
+    const onRequest = (r: Request): void => {
+      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) nodeEvents.push(`${at()} lookup request`);
+    };
+    const onResponse = (r: Response): void => {
+      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) {
+        nodeEvents.push(`${at()} lookup response ${r.status()}`);
+      }
+    };
+    this.page.on('request', onRequest);
+    this.page.on('response', onResponse);
+    const stopPageBuffer = async (): Promise<void> => {
+      await this.page.evaluate(() => (window as unknown as { __omwStop?: () => void }).__omwStop?.()).catch(() => undefined);
+    };
+    try {
+      await this.page
+        .evaluate((selector: string) => {
+          const w = window as unknown as { __omwStop?: () => void; __omwEvents?: string[] };
+          w.__omwStop?.();
+          const events: string[] = [];
+          w.__omwEvents = events;
+          const start = Date.now();
+          const push = (text: string): void => {
+            if (events.length < 80) events.push(`+${Date.now() - start}ms ${text}`);
+          };
+          const hits = (n: Node): boolean => n instanceof Element && (n.matches(selector) || !!n.querySelector(selector));
+          const describe = (n: EventTarget | null): string =>
+            n instanceof Element ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null';
+          const observer = new MutationObserver((records) => {
+            for (const record of records) {
+              record.addedNodes.forEach((n) => hits(n) && push('menu ADDED'));
+              record.removedNodes.forEach((n) => hits(n) && push(`menu REMOVED (active=${describe(document.activeElement)})`));
+            }
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+          const onFocusIn = (e: FocusEvent): void => push(`focusin ${describe(e.target)} from ${describe(e.relatedTarget)}`);
+          const onFocusOut = (e: FocusEvent): void => push(`focusout ${describe(e.target)} to ${describe(e.relatedTarget)}`);
+          document.addEventListener('focusin', onFocusIn, true);
+          document.addEventListener('focusout', onFocusOut, true);
+          w.__omwStop = () => {
+            observer.disconnect();
+            document.removeEventListener('focusin', onFocusIn, true);
+            document.removeEventListener('focusout', onFocusOut, true);
+          };
+        }, menuSelector)
+        .catch(() => undefined);
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if ((await menu.count()) === 0) {
+          nodeEvents.push(`${at()} click ${attempt}/${maxAttempts}`);
+          await this.click(toggle, `${description}: open toggle (${attempt}/${maxAttempts})`);
+        }
+        try {
+          await this.withSessionExpiryRecovery(() =>
+            expect(item, `${description} should appear`).toBeVisible({ timeout: config.timeouts.expect })
+          );
+          return;
+        } catch (error) {
+          if (attempt === maxAttempts) {
+            throw new Error(`${String(error)}\n${await this.describeMenuFailure(toggle, menu, nodeEvents)}`);
+          }
+          logger.warn(
+            `${description}: not visible yet (attempt ${attempt}/${maxAttempts}), menu open: ${(await menu.count()) > 0}`
+          );
+        }
+      }
+    } finally {
+      this.page.off('request', onRequest);
+      this.page.off('response', onResponse);
+      await stopPageBuffer();
+    }
+  }
+
+  private async describeMenuFailure(toggle: Locator, menu: Locator, nodeEvents: string[]): Promise<string> {
+    const snapshot = await toggle
+      .evaluate(
+        (el) => {
+          const rect = el.getBoundingClientRect();
+          const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          const active = document.activeElement;
+          const name = (n: Element | null): string => (n ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null');
+          return {
+            activeElement: name(active),
+            coveringElement: name(top),
+            toggleReceivesClicks: !!top && (el === top || el.contains(top)),
+            documentHasFocus: document.hasFocus(),
+            pageEvents: (window as unknown as { __omwEvents?: string[] }).__omwEvents ?? [],
+          };
+        },
+        undefined,
+        { timeout: 2000 }
+      )
+      .catch((e: unknown) => ({ error: String(e).slice(0, 100) }));
+    return (
+      `Menu diagnostics (KI-70, hardening, root cause not confirmed): ${JSON.stringify(snapshot)}; ` +
+      `menu element now present: ${(await menu.count()) > 0}; node events: ${nodeEvents.length ? nodeEvents.join(', ') : 'none'}`
+    );
   }
 
   // Picks the option whose whole text is `name`, then clicks it.

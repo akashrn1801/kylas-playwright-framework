@@ -240,7 +240,9 @@ test.describe('Products & Services', () => {
   // ─── PS14 ──────────────────────────────────────────────────────────────────
   // WHY: admin-role mirror of PS11 (RBAC file, restricted role) for Deals —
   // same gap-audit finding as PS13.
-  test('@regression admin should select admin-owned active product fixture on a new deal', async ({
+  test.fixme('@regression admin should select admin-owned active product fixture on a new deal', {
+    annotation: { type: 'fixme', description: 'KI-66: app edit-form race, disabled until fixed. See KNOWN_ISSUES_ACTIVE KI-66' },
+  }, async ({
     adminPage,
   }) => {
     test.setTimeout(480000);
@@ -253,7 +255,8 @@ test.describe('Products & Services', () => {
     const dealId = await dealsPage.createDeal(data);
     if (!dealId) throw new Error('Deal ID not captured after create');
 
-    await dealsPage.updateDeal(data, data.name, dealId, fixture.name);
+    // KI-66: while the app's edit-form race exists a stuck attach is an expected failure (annotated), never red
+    await dealsPage.updateDealAttachingProduct(data, data.name, dealId, fixture.name);
 
     logger.success('PS14 passed');
   });

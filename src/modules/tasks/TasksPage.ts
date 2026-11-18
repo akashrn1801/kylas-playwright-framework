@@ -1,4 +1,4 @@
-import { Page, Request, Response, Locator, expect } from '@playwright/test';
+import { Page, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
@@ -388,85 +388,17 @@ export class TasksPage extends BasePage {
 
   async openQuickTaskForm(): Promise<void> {
     logger.info('Opening Quick Task form via dropdown');
-    await this.click(this.addDropdownToggle(), 'add dropdown toggle');
-    await this.addQuickTaskOption().waitFor({ state: 'visible', timeout: 5000 });
+    await this.openMenuAndWaitForItem(
+      this.addDropdownToggle(),
+      '.dropdown-menu.show',
+      this.addQuickTaskOption(),
+      'Add dropdown: the "Quick Task" option'
+    );
     await this.addQuickTaskOption().click();
     await this.quickTaskCard().waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Wait for CKEditor to initialise before interacting with it
     await this.quickTaskDescriptionEditor().waitFor({ state: 'visible', timeout: 10000 });
     logger.success('Quick Task form opened');
-  }
-
-  // Hardened, root cause not confirmed (2026-11-18, KI-70): 2 of 7 full Companies runs (CO10, COR9) had the
-  // Assigned To click land and GET /v1/users/lookup return 200 with users, yet no menu rendered for 10 s and a
-  // second click fired no lookup; 0 of 56 probe/isolated repeats and 0 of 2 instrumented full runs failed. Same
-  // shape as ADR 0014 §4: click only when NO menu is open (a click on an open menu closes it), wait for the option,
-  // bounded. Failure-only diagnostics: a silent tracker (menu add/remove flag, lookup request/response timing) is
-  // read into the error message when the wait fails; nothing is logged on success.
-  private async openQuickTaskMenu(button: Locator, menu: Locator, option: Locator, description: string): Promise<void> {
-    const maxAttempts = 2;
-    const t0 = Date.now();
-    const lookups: string[] = [];
-    const onRequest = (r: Request): void => {
-      if (r.url().includes('/users/lookup')) lookups.push(`request +${Date.now() - t0}ms`);
-    };
-    const onResponse = (r: Response): void => {
-      if (r.url().includes('/users/lookup')) lookups.push(`response ${r.status()} +${Date.now() - t0}ms`);
-    };
-    this.page.on('request', onRequest);
-    this.page.on('response', onResponse);
-    try {
-      await this.page
-        .evaluate(() => {
-          const w = window as unknown as { __qtMenuSeen?: boolean };
-          w.__qtMenuSeen = false;
-          new MutationObserver(() => {
-            if (document.querySelector('.assigned-to-menu-list, .duedate-dropdown-options')) w.__qtMenuSeen = true;
-          }).observe(document.documentElement, { childList: true, subtree: true });
-        })
-        .catch(() => undefined);
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        if ((await menu.count()) === 0) {
-          await this.click(button, `${description}: open button (${attempt}/${maxAttempts})`);
-        }
-        try {
-          await this.withSessionExpiryRecovery(() =>
-            expect(option, `${description} should appear`).toBeVisible({ timeout: config.timeouts.expect })
-          );
-          return;
-        } catch (error) {
-          if (attempt === maxAttempts) {
-            throw new Error(`${String(error)}\n${await this.describeQuickTaskMenuFailure(button, menu, lookups)}`);
-          }
-          logger.warn(
-            `${description}: not visible yet (attempt ${attempt}/${maxAttempts}), menu open: ${(await menu.count()) > 0}`
-          );
-        }
-      }
-    } finally {
-      this.page.off('request', onRequest);
-      this.page.off('response', onResponse);
-    }
-  }
-
-  private async describeQuickTaskMenuFailure(button: Locator, menu: Locator, lookups: string[]): Promise<string> {
-    const snap = await button
-      .evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        const active = document.activeElement;
-        return {
-          activeElement: active ? `${active.tagName}.${String(active.className).slice(0, 40)}` : 'null',
-          coveringElement: top ? `${top.tagName}.${String(top.className).slice(0, 40)}` : 'null',
-          buttonReceivesClicks: !!top && (el === top || el.contains(top)),
-          documentHasFocus: document.hasFocus(),
-          menuEverAppeared: (window as unknown as { __qtMenuSeen?: boolean }).__qtMenuSeen === true,
-        };
-      }, { timeout: 2000 })
-      .catch((e: unknown) => ({ error: String(e).slice(0, 100) }));
-    return `Quick-task menu diagnostics (KI-70): ${JSON.stringify(snap)}; menu element now present: ${
-      (await menu.count()) > 0
-    }; users/lookup: ${lookups.length ? lookups.join(', ') : 'none seen'}`;
   }
 
   async fillQuickTaskForm(data: TaskData): Promise<void> {
@@ -481,9 +413,9 @@ export class TasksPage extends BasePage {
     const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', {
       hasText: 'Tomorrow',
     });
-    await this.openQuickTaskMenu(
+    await this.openMenuAndWaitForItem(
       this.quickTaskDateButton(),
-      this.page.locator('.duedate-dropdown-options'),
+      '.duedate-dropdown-options',
       tomorrowOption,
       'Quick task: the "Tomorrow" due-date option'
     );
@@ -504,11 +436,12 @@ export class TasksPage extends BasePage {
     logger.info('Setting Assigned To');
     // WHY: Assigned To uses .assigned-to-menu-list with .is-invalid__option items
     const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
-    await this.openQuickTaskMenu(
+    await this.openMenuAndWaitForItem(
       this.quickTaskAssignedToButton(),
-      this.page.locator('.assigned-to-menu-list'),
+      '.assigned-to-menu-list',
       assignedToOptions.first(),
-      'Quick task: the Assigned To options'
+      'Quick task: the Assigned To options',
+      { lookupUrlPart: '/users/lookup' }
     );
     // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
     // textContent()+click() on a random option, same bug class.
@@ -627,11 +560,11 @@ export class TasksPage extends BasePage {
     logger.info('Opening Detailed Task form via dropdown');
     // B6 (owner decision 2026-11-17): bounded waits, no retry loop (the old 3-attempt loop with 1 s pauses
     // swallowed every wait with `.catch(() => {})`). Each step waits for the thing it needs and fails by name.
-    await this.click(this.addDropdownToggle(), 'add dropdown toggle');
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.addDetailedTaskOption(), 'Add dropdown: the "Detailed Task" option should appear').toBeVisible({
-        timeout: config.timeouts.expect,
-      })
+    await this.openMenuAndWaitForItem(
+      this.addDropdownToggle(),
+      '.dropdown-menu.show',
+      this.addDetailedTaskOption(),
+      'Add dropdown: the "Detailed Task" option'
     );
     await this.addDetailedTaskOption().click({ timeout: config.timeouts.expect });
     await this.withSessionExpiryRecovery(() =>
