@@ -25,6 +25,7 @@ import { reportCreatedRecord } from '../../src/utils/createdRecords';
 import { LeadApi } from '../../src/utils/leadApi';
 import { redactTokens } from '../../src/utils/apiClient';
 import { ShareRuleApi } from '../../src/utils/shareRuleApi';
+import { pollRecordActions, RecordActionsRead, revokedTokenFatal, waitForRecordAction } from '../../src/utils/recordActionsApi';
 import { ShareRulesPage } from '../../src/modules/shareRules/ShareRulesPage';
 import { SharePermission, SharePermissionSet, permissionSet } from '../../src/core/sharePermissions';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
@@ -59,9 +60,13 @@ type PageArg = Parameters<typeof LeadApi.forPage>[0];
 async function restrictedRights(
   api: LeadApi,
   leadId: number
-): Promise<{ status: number; actions: Record<string, boolean> }> {
+): Promise<RecordActionsRead> {
   const result = await api.getLead(leadId);
-  return { status: result.status, actions: result.ok ? (result.body.recordActions ?? {}) : {} };
+  return {
+    status: result.status,
+    actions: result.ok ? (result.body.recordActions ?? {}) : {},
+    fatal: revokedTokenFatal(result.status, result.body),
+  };
 }
 
 // Poll the REAL access check (the lead's own rights for this user) until it shows the expected set.
@@ -80,25 +85,27 @@ async function orInconclusive<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-async function waitForRestrictedRights(api: LeadApi, leadId: number, expected: SharePermissionSet): Promise<number> {
-  const started = Date.now();
-  await expect
-    .poll(
-      async () => {
-        const { status, actions } = await restrictedRights(api, leadId);
-        if (status !== 200) return `HTTP ${status}`;
-        return (['update', 'note', 'task', 'meeting', 'call', 'email', 'sms', 'document'] as SharePermission[])
-          .filter((permission) => (actions[permission] === true) !== expected[permission])
-          .join(',');
-      },
-      {
-        timeout: 60000,
-        intervals: [500, 1000, 1000, 2000],
-        message: "The restricted user's rights should match the edited share rule",
+async function waitForRestrictedRights(
+  restrictedPage: PageArg,
+  leadId: number,
+  expected: SharePermissionSet
+): Promise<number> {
+  // the polling itself is the shared core (also used by waitForRecordAction for the call log flows)
+  const actions = ['update', 'note', 'task', 'meeting', 'call', 'email', 'sms', 'document'] as SharePermission[];
+  return pollRecordActions(
+    async () => {
+      // the token is read from the live page on EVERY attempt (ADR 0017): a token read once keeps answering
+      // 400 001002 for the whole timeout after another session has refreshed it
+      const api = await LeadApi.forPage(restrictedPage);
+      try {
+        return await restrictedRights(api, leadId);
+      } finally {
+        await api.dispose();
       }
-    )
-    .toBe('');
-  return Date.now() - started;
+    },
+    Object.fromEntries(actions.map((permission) => [permission, expected[permission]])),
+    "The restricted user's rights should match the edited share rule"
+  );
 }
 
 // API: allowed actions succeed and removed ones are refused with the right code. Uses the SAME session
@@ -349,9 +356,10 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['task']);
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    // B6: the share must have applied for the restricted user before the page opens (the right panel reads its
+    // permission snapshot once, at mount); then the detail page is loaded by its own GET, not a pause
+    await waitForRecordAction(restrictedPage, 'leads', leadId!, 'task');
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
     // WHY: Use TasksPage to create quick task from lead detail panel
@@ -365,7 +373,7 @@ test.describe('Leads RBAC', () => {
     logger.success(`Task created: ${taskId}`);
     // WHY: Click Tasks icon again to refresh task list and verify task appears
     await restrictedLeadsPage.clickRightPanelIcon('Tasks');
-    await restrictedPage.waitForTimeout(1000);
+    // B6: no pause: the assertion below waits for the task to show in the refreshed list
     const taskLocator = restrictedPage
       .locator('.task-details-wrapper')
       .getByText(taskData.name)
@@ -398,6 +406,7 @@ test.describe('Leads RBAC', () => {
     // WHY the positive anchor: "icon not visible" passes instantly when nothing has rendered yet, so
     // first prove the lead detail page is rendered (Clone is offered to a read-only share)
     await restrictedLeadsPage.assertEllipsisOptionVisible('Clone');
+    // UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
     // WHY: Read only — productivity icons should NOT be visible
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Tasks');
@@ -505,9 +514,9 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['meeting']);
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    // B6: see the Task flow above
+    await waitForRecordAction(restrictedPage, 'leads', leadId!, 'meeting');
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     await restrictedLeadsPage.assertRightPanelIconVisible('Meetings');
     await restrictedLeadsPage.clickRightPanelIcon('Meetings');
     // WHY: Use MeetingsPage to create meeting from lead detail panel
@@ -556,34 +565,28 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['call']);
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    // B6: see the Task flow above
+    await waitForRecordAction(restrictedPage, 'leads', leadId!, 'call');
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     await restrictedLeadsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedLeadsPage.clickRightPanelIcon('Call Logs');
+    const callLogsPage = new CallLogsPage(restrictedPage);
     // WHY: Reload page to ensure Log a call button is fully loaded
     await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(2000);
-    await restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' }).click();
-    await restrictedPage.waitForTimeout(1000);
+    // B6: the page has its data (skeleton gone) and the button is usable before it is clicked
+    await callLogsPage.waitForNoLoadingSkeleton();
+    const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    await expect(logACallButton).toBeEnabled({ timeout: config.timeouts.expect });
+    await logACallButton.click();
+    await restrictedPage.locator('#callLogModal').waitFor({ state: 'visible', timeout: config.timeouts.expect });
     // WHY: Remove aria-hidden so Playwright can interact with modal
     await restrictedPage.evaluate(
       'document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")'
     );
-    const callLogsPage = new CallLogsPage(restrictedPage);
     const callLogData = generateCallLogData({ outcome: 'Connected' });
     // WHY: Entity type pre-selected as Lead — no need to select entity
-    // WHY: Dropdown may auto-open — wait then select option directly
-    await restrictedPage.waitForTimeout(500);
-    const callTypeMenu = restrictedPage.locator('.is-invalid__menu');
-    const callTypeMenuVisible = await callTypeMenu.isVisible().catch(() => false);
-    if (callTypeMenuVisible) {
-      // WHY: Menu already open — click first option directly
-      await callTypeMenu.locator('.is-invalid__option').first().click({ force: true });
-      await restrictedPage.waitForTimeout(300);
-    } else {
-      await callLogsPage.fillCallType(callLogData.callType);
-    }
+    // B6: the Type menu opens together with the form (traces), so it is picked from there, never toggled shut
+    await callLogsPage.fillCallTypeFromPanel(callLogData.callType);
     // WHY: Use Connected outcome — duration field only enabled for Connected calls
     await callLogsPage.fillOutcome('Connected');
     await callLogsPage.fillPhoneNumber();
@@ -617,9 +620,11 @@ test.describe('Leads RBAC', () => {
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     // WHY: Share with all 4 permissions at once
     await adminLeadsPage.shareLead(restrictedUserName, ['note', 'task', 'meeting', 'call']);
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    // B6: see the Task flow above; all four rights must be in effect
+    for (const right of ['note', 'task', 'meeting', 'call']) {
+      await waitForRecordAction(restrictedPage, 'leads', leadId!, right);
+    }
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     await restrictedLeadsPage.assertRightPanelIconVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconVisible('Tasks');
     await restrictedLeadsPage.assertRightPanelIconVisible('Meetings');
@@ -641,8 +646,10 @@ test.describe('Leads RBAC', () => {
     expect(taskId2).not.toBeNull();
     logger.success(`Task created: ${taskId2}`);
     // WHY: Reload page after task creation before moving to next operation
+    const callLogsPage2 = new CallLogsPage(restrictedPage);
     await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(2000);
+    // B6: the reloaded page has its data (skeleton gone) before the next panel icon is used
+    await callLogsPage2.waitForNoLoadingSkeleton();
 
     // WHY: Verify Meeting — click Meetings icon, create meeting, verify ID
     await restrictedLeadsPage.clickRightPanelIcon('Meetings');
@@ -670,30 +677,22 @@ test.describe('Leads RBAC', () => {
     }
     logger.success(`Meeting created${meetingId2 ? `: ${meetingId2}` : ''}`);
     // WHY: Navigate back to lead detail page after meeting creation
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
 
     // WHY: Verify Call — click Call Logs icon first, then Log a call button
     await restrictedLeadsPage.clickRightPanelIcon('Call Logs');
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' }).click();
-    await restrictedPage.waitForTimeout(1000);
+    // B6: the panel has its data (skeleton gone) and the button is usable before it is clicked
+    await callLogsPage2.waitForNoLoadingSkeleton();
+    const logACallButton2 = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    await expect(logACallButton2).toBeEnabled({ timeout: config.timeouts.expect });
+    await logACallButton2.click();
+    await restrictedPage.locator('#callLogModal').waitFor({ state: 'visible', timeout: config.timeouts.expect });
     await restrictedPage.evaluate(
       'document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")'
     );
-    const callLogsPage2 = new CallLogsPage(restrictedPage);
     const callLogData2 = generateCallLogData({ outcome: 'Connected' });
-    await restrictedPage.waitForTimeout(800);
-    // WHY: Check if call type dropdown is already open — select first option if so
-    const callTypeMenu3 = restrictedPage.locator('.is-invalid__menu');
-    const callTypeMenuOpen = await callTypeMenu3.isVisible().catch(() => false);
-    if (callTypeMenuOpen) {
-      await callTypeMenu3.locator('.is-invalid__option').first().click({ force: true });
-      await restrictedPage.waitForTimeout(300);
-    } else {
-      await callLogsPage2.fillCallType(callLogData2.callType);
-    }
+    // B6: the Type menu opens together with the form (traces), so it is picked from there, never toggled shut
+    await callLogsPage2.fillCallTypeFromPanel(callLogData2.callType);
     // WHY: Use Connected outcome — duration field only enabled for Connected calls
     await callLogsPage2.fillOutcome('Connected');
     await callLogsPage2.fillPhoneNumber();
@@ -729,9 +728,9 @@ test.describe('Leads RBAC', () => {
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.reassignLead(restrictedUserName);
     // WHY: Restricted user now owns the lead — can edit and delete
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    // B6: the owner change must be in effect for the restricted user before the page opens
+    await waitForRecordAction(restrictedPage, 'leads', leadId!, 'update');
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     // WHY: Verify edit button visible — restricted user is now owner
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     // WHY: Verify restricted user can edit the lead
@@ -742,9 +741,7 @@ test.describe('Leads RBAC', () => {
     await restrictedLeadsPage.assertLeadUpdated(updatedData, leadId ?? undefined);
     logger.success('Restricted user edited reassigned lead successfully');
     // WHY: Navigate back to lead detail to verify delete option
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(2000);
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     // WHY: Delete lead — deleteLead() opens ellipsis and clicks Delete internally
     await restrictedLeadsPage.deleteLead();
     // WHY: Verify deletion by navigating to detail URL — deleted lead redirects away
@@ -772,8 +769,9 @@ test.describe('Leads RBAC', () => {
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
-    const clonedId = await leadsPage.cloneLead();
+    const clonedId = await leadsPage.cloneLead({ firstName: leadData.firstName });
     expect(clonedId).not.toBeNull();
+    expect(clonedId, 'Saving the clone should create a NEW lead').not.toBe(leadId);
     await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
     logger.success('L23 passed');
   });
@@ -842,7 +840,7 @@ test.describe('Leads RBAC', () => {
       .first();
     await readMoreLink.waitFor({ state: 'visible', timeout: 10000 });
     await readMoreLink.click();
-    await restrictedPage.waitForTimeout(500);
+    // B6: no pause: the reason section is asserted (auto-waiting) right below
     // WHY: Verify reason section shows the selected reason
     const reasonSection = restrictedPage
       .locator('.read-only-info')
@@ -877,7 +875,7 @@ test.describe('Leads RBAC', () => {
       .first();
     await readMoreLink.waitFor({ state: 'visible', timeout: 10000 });
     await readMoreLink.click();
-    await restrictedPage.waitForTimeout(500);
+    // B6: no pause: the reason section is asserted (auto-waiting) right below
     // WHY: Verify reason section shows the selected reason
     const reasonSection = restrictedPage
       .locator('.read-only-info')
@@ -906,9 +904,9 @@ test.describe('Leads RBAC', () => {
     await adminLeadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     const restrictedUserName = await adminLeadsPage.getLoggedInUserName('restricted');
     await adminLeadsPage.shareLead(restrictedUserName, ['note']);
-    await restrictedLeadsPage.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await safeWaitForURL(restrictedPage, /leads\/details\//, 20000);
-    await restrictedPage.waitForTimeout(3000);
+    // B6: see the Task flow above
+    await waitForRecordAction(restrictedPage, 'leads', leadId!, 'note');
+    await restrictedLeadsPage.goToLeadDetailsById(leadId!);
     // WHY (2026-09-07, PROD Build #4): this used to be a raw, unbounded
     // click with no timeout/retry/reload-fallback — under real PROD load
     // this exact right-panel-icon-visibility-can-lag-after-share race
@@ -942,13 +940,13 @@ test.describe('Leads RBAC', () => {
     await waitForSkeletonsToClear();
     // WHY: Capture baseline before adding notes — entity may have pre-existing notes from prior runs
     const baselineCount = await noteRow.count();
+    // B6: the editor appears once the textarea is clicked; wait for it, then fill and Add (same sequence as
+    // LeadsPage.addNote(), no pauses: fill and click wait for an editable, enabled target)
+    const noteEditor = restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' });
     // WHY: Add first note — this note will be kept
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage
-      .getByRole('textbox', { name: 'Rich Text Editor, main' })
-      .fill('Note to keep');
-    await restrictedPage.waitForTimeout(500);
+    await expect(noteEditor).toBeVisible({ timeout: config.timeouts.expect });
+    await noteEditor.fill('Note to keep');
     await restrictedPage.getByText('Add', { exact: true }).click();
     await waitForSkeletonsToClear();
     await expect(noteRow, 'Note count should be baseline + 1 after first add').toHaveCount(
@@ -957,11 +955,8 @@ test.describe('Leads RBAC', () => {
     );
     // WHY: Add second note — this note will be deleted
     await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage
-      .getByRole('textbox', { name: 'Rich Text Editor, main' })
-      .fill('Note to delete');
-    await restrictedPage.waitForTimeout(500);
+    await expect(noteEditor).toBeVisible({ timeout: config.timeouts.expect });
+    await noteEditor.fill('Note to delete');
     await restrictedPage.getByText('Add', { exact: true }).click();
     await waitForSkeletonsToClear();
     // WHY: Verify both new notes were added on top of baseline — auto-retrying
@@ -974,12 +969,11 @@ test.describe('Leads RBAC', () => {
     // WHY: Delete the first note (newest first display) — "Note to delete" was added last so appears first
     const lastNoteEllipsis = noteRow.first().locator('button[data-toggle="dropdown"]');
     await lastNoteEllipsis.click();
-    await restrictedPage.waitForTimeout(300);
+    // B6: no pauses: the menu item click waits for the item, the confirm button is waited for below
     await restrictedPage
       .locator('.dropdown-menu.show .dropdown-item')
       .filter({ hasText: 'Delete' })
       .click();
-    await restrictedPage.waitForTimeout(500);
     // WHY: Confirm delete in modal
     await restrictedPage
       .locator('button#confirm.btn-danger')
@@ -1577,7 +1571,7 @@ test.describe('Leads RBAC', () => {
     });
     try {
       // before: the rule grants Update, Note and Task
-      await waitForRestrictedRights(shared.restrictedApi, shared.leadId, permissionSet(['update', 'note', 'task']));
+      await waitForRestrictedRights(restrictedPage, shared.leadId, permissionSet(['update', 'note', 'task']));
 
       const rulesPage = await openLeadRuleOnShareDataPage(adminPage, shared.leadName);
       expect(await rulesPage.getPermissionStates()).toMatchObject({ update: true, note: true, task: true, meeting: false });
@@ -1585,7 +1579,7 @@ test.describe('Leads RBAC', () => {
       await rulesPage.saveRule();
 
       const expected = permissionSet(['note', 'task']);
-      const appliedInMs = await waitForRestrictedRights(shared.restrictedApi, shared.leadId, expected);
+      const appliedInMs = await waitForRestrictedRights(restrictedPage, shared.leadId, expected);
       test.info().annotations.push({ type: 'share rule change applied after (ms)', description: String(appliedInMs) });
       await assertRestrictedUiAccess(restrictedLeadsPage, restrictedPage, shared.leadId, expected);
       await assertRestrictedApiAccess(shared.restrictedApi, shared.leadId, expected);
@@ -1622,7 +1616,7 @@ test.describe('Leads RBAC', () => {
       rules: shareRuleCleanup,
     });
     try {
-      await waitForRestrictedRights(shared.restrictedApi, shared.leadId, permissionSet(['note']));
+      await waitForRestrictedRights(restrictedPage, shared.leadId, permissionSet(['note']));
 
       const rulesPage = await openLeadRuleOnShareDataPage(adminPage, shared.leadName);
       expect(await rulesPage.getPermissionStates()).toMatchObject({ note: true, task: false });
@@ -1630,7 +1624,7 @@ test.describe('Leads RBAC', () => {
       await rulesPage.saveRule();
 
       const expected = permissionSet(['note', 'task']);
-      const appliedInMs = await waitForRestrictedRights(shared.restrictedApi, shared.leadId, expected);
+      const appliedInMs = await waitForRestrictedRights(restrictedPage, shared.leadId, expected);
       test.info().annotations.push({ type: 'share rule change applied after (ms)', description: String(appliedInMs) });
       await assertRestrictedUiAccess(restrictedLeadsPage, restrictedPage, shared.leadId, expected);
       await assertRestrictedApiAccess(shared.restrictedApi, shared.leadId, expected);
@@ -1666,7 +1660,7 @@ test.describe('Leads RBAC', () => {
       rules: shareRuleCleanup,
     });
     try {
-      await waitForRestrictedRights(shared.restrictedApi, shared.leadId, permissionSet(['update', 'note']));
+      await waitForRestrictedRights(restrictedPage, shared.leadId, permissionSet(['update', 'note']));
 
       const rulesPage = await openLeadRuleOnShareDataPage(adminPage, shared.leadName);
       expect(await rulesPage.getPermissionStates()).toMatchObject({ update: true, note: true, meeting: false });
@@ -1675,7 +1669,7 @@ test.describe('Leads RBAC', () => {
       await rulesPage.saveRule();
 
       const expected = permissionSet(['note', 'meeting']);
-      const appliedInMs = await waitForRestrictedRights(shared.restrictedApi, shared.leadId, expected);
+      const appliedInMs = await waitForRestrictedRights(restrictedPage, shared.leadId, expected);
       test.info().annotations.push({ type: 'share rule change applied after (ms)', description: String(appliedInMs) });
       await assertRestrictedUiAccess(restrictedLeadsPage, restrictedPage, shared.leadId, expected);
       await assertRestrictedApiAccess(shared.restrictedApi, shared.leadId, expected);
@@ -1712,7 +1706,7 @@ test.describe('Leads RBAC', () => {
       rules: shareRuleCleanup,
     });
     try {
-      await waitForRestrictedRights(shared.restrictedApi, shared.leadId, permissionSet(['update', 'note']));
+      await waitForRestrictedRights(restrictedPage, shared.leadId, permissionSet(['update', 'note']));
 
       const rulesPage = await openLeadRuleOnShareDataPage(adminPage, shared.leadName);
       await rulesPage.deleteRule();
@@ -1771,12 +1765,12 @@ test.describe('Leads RBAC', () => {
   //   token belongs to the shared user (not the admin), the user's rights are read only — and a second
   //   brand-new lead shared WITH Note is the control, where the same requests succeed. Only then is the
   //   test marked as an expected failure and the refusals asserted with the restricted user's own token.
-  //   The UI half (no Notes icon) is proved by the read-only share test above (L14).
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
   // KNOWN KYLAS BUG — SD-32157: the server accepts adding a note and deleting the admin's note. The
   //   test.fail() below keeps the run green while that is true and turns it red ("expected to fail but
   //   passed") the day Kylas fixes it: then delete the marker and close KI-52. The assertions state the
   //   CORRECT behaviour and must not be weakened.
-  test('@regression restricted user cannot add or delete notes on an admin lead shared read only', async ({
+  test('@regression (API) restricted user cannot add or delete notes on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
     leadCleanup,
@@ -1803,8 +1797,8 @@ test.describe('Leads RBAC', () => {
       expect(rule.body.toId, 'Set-up: the rule is for the restricted user').toBe(restrictedId);
       expect(ShareRuleApi.permissionsOf(rule.body), 'Set-up: the saved rule grants only Read').toEqual(permissionSet([]));
       expect((await readOnly.adminApi.getLeadOrThrow(readOnly.leadId)).ownerId, 'Set-up: the admin owns the lead').toBe(adminId);
-      await waitForRestrictedRights(readOnly.restrictedApi, readOnly.leadId, permissionSet([]));
-      await waitForRestrictedRights(control.restrictedApi, control.leadId, permissionSet(['note']));
+      await waitForRestrictedRights(restrictedPage, readOnly.leadId, permissionSet([]));
+      await waitForRestrictedRights(restrictedPage, control.leadId, permissionSet(['note']));
       const adminNote = await readOnly.adminApi.addNote(readOnly.leadId, `Admin note ${Date.now()}`);
       expect(adminNote.status, 'Set-up: the admin can add a note').toBe(200);
       const adminNoteId = (adminNote.body as { id: number }).id;
@@ -1848,10 +1842,11 @@ test.describe('Leads RBAC', () => {
   // HOW: same set-up and control as the notes test, with the Task right. After the set-up is asserted
   //   the test is marked as an expected failure and the refusal is asserted with the restricted
   //   user's own token.
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
   // KNOWN KYLAS BUG — SD-32158: the server accepts the task. test.fail() keeps the run green while
   //   that is true and turns it red the day Kylas fixes it: then delete the marker and close KI-52.
   //   The assertion states the CORRECT behaviour and must not be weakened.
-  test('@regression restricted user cannot add tasks on an admin lead shared read only', async ({
+  test('@regression (API) restricted user cannot add tasks on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
     leadCleanup,
@@ -1877,8 +1872,8 @@ test.describe('Leads RBAC', () => {
       const rule = await readOnly.ruleApi.getRule(readOnly.ruleId);
       expect(rule.body.toId, 'Set-up: the rule is for the restricted user').toBe(restrictedId);
       expect(ShareRuleApi.permissionsOf(rule.body), 'Set-up: the saved rule grants only Read').toEqual(permissionSet([]));
-      await waitForRestrictedRights(readOnly.restrictedApi, readOnly.leadId, permissionSet([]));
-      await waitForRestrictedRights(control.restrictedApi, control.leadId, permissionSet(['task']));
+      await waitForRestrictedRights(restrictedPage, readOnly.leadId, permissionSet([]));
+      await waitForRestrictedRights(restrictedPage, control.leadId, permissionSet(['task']));
       const controlTask = await control.restrictedApi.createTaskOnLead(
         { id: control.leadId, name: control.leadName },
         restrictedId
@@ -1941,8 +1936,8 @@ test.describe('Leads RBAC', () => {
     try {
       expect(await readOnly.ruleApi.countRules('LEAD', readOnly.leadId), 'Rules on the read-only lead').toBe(1);
       expect(await control.ruleApi.countRules('LEAD', control.leadId), 'Rules on the control lead').toBe(1);
-      await waitForRestrictedRights(readOnly.restrictedApi, readOnly.leadId, permissionSet([]));
-      await waitForRestrictedRights(control.restrictedApi, control.leadId, permissionSet(['meeting', 'call']));
+      await waitForRestrictedRights(restrictedPage, readOnly.leadId, permissionSet([]));
+      await waitForRestrictedRights(restrictedPage, control.leadId, permissionSet(['meeting', 'call']));
 
       // control: with the rights granted, the same requests work
       const controlMeeting = await control.restrictedApi.createMeetingOnLead(

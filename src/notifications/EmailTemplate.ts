@@ -1,4 +1,5 @@
 import { ParsedReport, TestResult, deriveModuleFromFile } from './ReportParser';
+import { SessionInfoEntry } from '../auth/sessionInfo';
 import {
   RunDelta,
   RecurringIssue,
@@ -50,6 +51,8 @@ export interface EmailContext {
   buildUrl: string;
   gitCommit: string;
   triggeredBy: string;
+  // ADR 0017: when each role's session ended/ends (written by globalSetup); optional, absent = not shown
+  sessionInfo?: SessionInfoEntry[];
   runSource?: 'local' | 'github-actions' | 'jenkins';
   allureUrl?: string;
   miscErrors?: MiscErrorReport | null;
@@ -623,9 +626,21 @@ ${body}
       ${row('Ended', this.esc(endTime))}
       ${row('Triggered by', this.esc(ctx.triggeredBy))}
       ${row('Commit', this.mono(shortCommit))}
+      ${this.sessionRows(ctx, row)}
     </table>
   </div>
 </td></tr>`;
+  }
+
+  // ADR 0017: a failure close to a session end is probably the app's token-refresh cascade, not a product problem.
+  private sessionRows(ctx: EmailContext, row: (label: string, value: string) => string): string {
+    return (ctx.sessionInfo ?? [])
+      .map((entry) => {
+        const end = new Date(entry.endIso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' });
+        const note = entry.belowRunWindow ? ' (less than the run window left at start: failures near the end may be the session refresh)' : '';
+        return row(`${entry.role} session`, this.esc(`ends ${end}, ${entry.minutesLeft} min left at start${note}`));
+      })
+      .join('');
   }
 
   // ===================== KPI dashboard =====================

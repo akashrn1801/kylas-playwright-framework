@@ -16,6 +16,7 @@ import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { JobStats } from './JobStats';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
+import { loadSessionInfo } from '../auth/sessionInfo';
 import { loadKnownIssuesIndex } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
 import { assessCauses, summarizeCauses, CauseSummary } from './FailureClassifier';
@@ -365,6 +366,7 @@ export class NotificationService {
       buildUrl: input.buildUrl,
       gitCommit: input.gitCommit,
       triggeredBy: input.triggeredBy,
+      sessionInfo: loadSessionInfo(input.env),
       runSource: input.runSource,
       allureUrl: input.allureUrl,
       jobStats: input.jobStats,

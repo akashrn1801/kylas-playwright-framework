@@ -173,16 +173,11 @@ test.describe('Companies RBAC', () => {
     await adminCompaniesPage.shareCompany(restrictedUserName, ['note']);
     await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.assertRightPanelIconVisible('Notes');
-    await restrictedCompaniesPage.clickRightPanelIcon('Notes');
-    await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
     const noteText = `Test note from restricted user ${Date.now()}`;
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill(noteText);
-    await restrictedPage.waitForTimeout(500);
-    await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
-    const noteRow = restrictedPage.locator('div.row.pt-2.pl-2.pr-2').first();
-    await expect(noteRow).toBeVisible({ timeout: 10000 });
+    // B6: the shared helper adds the note and waits for the count; the note TEXT is then asserted (the old
+    // check only looked for the first note row, which any pre-existing note satisfies)
+    await restrictedCompaniesPage.addNoteFromPanel(noteText);
+    await restrictedCompaniesPage.assertNoteTextPresent(noteText);
     logger.success('COR8 passed');
   });
 
@@ -215,7 +210,6 @@ test.describe('Companies RBAC', () => {
     logger.success(`Task created: ${taskId}`);
     // WHY: Click Tasks icon again to refresh task list and verify task appears
     await restrictedCompaniesPage.clickRightPanelIcon('Tasks');
-    await restrictedPage.waitForTimeout(1000);
     const taskLocator = restrictedPage.locator('.task-details-wrapper').getByText(taskData.name).first();
     await expect(taskLocator).toBeVisible({ timeout: 10000 });
     logger.success('COR9 passed');
@@ -255,7 +249,6 @@ test.describe('Companies RBAC', () => {
     // WHY: Navigate back to company detail and verify meeting appears in Meetings section
     await restrictedCompaniesPage.goToCompanyDetailsById(companyId!);
     await restrictedCompaniesPage.clickRightPanelIcon('Meetings');
-    await restrictedPage.waitForTimeout(1000);
     const meetingEntry = restrictedPage.locator('.meeting__title').filter({ hasText: meetingTitle });
     await expect(meetingEntry).toBeVisible({ timeout: 10000 });
     logger.success(`COR10 passed — meeting verified: ${meetingTitle}`);
@@ -290,26 +283,9 @@ test.describe('Companies RBAC', () => {
     logger.success(`Deal created by restricted user: ${dealId}`);
     const quotationId = await restrictedCompaniesPage.addQuotationFromPanel();
     expect(quotationId).not.toBeNull();
-    // WHY: Verify quotation actually appears in the company's Quotations panel
-    await restrictedCompaniesPage.clickRightPanelIcon('Quotations');
-    await restrictedPage.waitForTimeout(1500);
-    const quotationsCard = restrictedPage
-      .locator('.card')
-      .filter({ has: restrictedPage.locator('h2').filter({ hasText: 'Quotations' }) })
-      .first();
-    // WHY: Confirmed live (2026-07-06/07) — the Quotations card refetches its
-    // own related-quotations list independently of the main entity GET.
-    // scrollIntoViewIfNeeded() right after the panel opens can grab a
-    // reference to a card mid-refetch that React replaces, hanging until the
-    // test timeout. Wait for the card itself with an auto-retrying expect()
-    // instead of a manual scroll.
-    await expect(quotationsCard, 'Quotations card should be visible').toBeVisible({ timeout: 15000 });
-    await expect(quotationsCard.locator(`text=${quotationId}`).first()).toBeVisible({ timeout: 10000 })
-      .catch(async () => {
-        // WHY: Fallback — quotation row may show quotationNumber not raw ID, check card has at least 1 entry
-        const rowCount = await quotationsCard.locator('a, .list__anchor, [class*="row"]').count();
-        expect(rowCount).toBeGreaterThan(0);
-      });
+    // B6: the Quotations card's own list answer must contain the created quotation's id; the old check fell
+    // back to "the card has any anchor/row", which passes on old content
+    await restrictedCompaniesPage.assertQuotationInPanelById(quotationId!);
     logger.success(`COR11 passed — quotation created and verified: ${quotationId}`);
   });
 
@@ -386,6 +362,7 @@ test.describe('Companies RBAC', () => {
     // WHY: Verify Note — actually create one, not just check icon
     const noteText = `Note-${Date.now()}`;
     await restrictedCompaniesPage.addNoteFromPanel(noteText);
+    await restrictedCompaniesPage.assertNoteTextPresent(noteText);
     logger.success('Note created via combined permissions');
 
     // WHY: Verify Task — actually create one

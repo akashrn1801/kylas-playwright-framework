@@ -78,3 +78,29 @@ export function storedSessionNeedsRefresh(stateFile: string): boolean {
     return true;
   }
 }
+
+/** The stored `token` value of a saved storage-state file, or null. */
+export function readStoredTokenFromStateFile(stateFile: string): string | null {
+  try {
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
+      origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
+    };
+    for (const origin of state.origins ?? []) {
+      const raw = origin.localStorage?.find((item) => item.name === 'token')?.value;
+      if (raw) return raw;
+    }
+  } catch {
+    /* missing or unreadable file */
+  }
+  return null;
+}
+
+/**
+ * When the session behind a stored token ends. The token's own `expiry` is the SESSION's absolute end (a login
+ * inside a live session returns the same one, ADR 0017), so this is also the end of every login made today.
+ */
+export function describeSessionEnd(rawToken: string): { endIso: string; minutesLeft: number } | null {
+  const remaining = getTokenRemainingMs(rawToken);
+  if (remaining === null) return null;
+  return { endIso: new Date(Date.now() + remaining).toISOString(), minutesLeft: Math.floor(remaining / 60000) };
+}

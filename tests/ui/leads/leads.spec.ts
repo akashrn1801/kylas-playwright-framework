@@ -261,8 +261,9 @@ test.describe('Leads', () => {
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
-    const clonedId = await leadsPage.cloneLead();
+    const clonedId = await leadsPage.cloneLead({ firstName: leadData.firstName });
     expect(clonedId).not.toBeNull();
+    expect(clonedId, 'Saving the clone should create a NEW lead').not.toBe(leadId);
     await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
     logger.success('L35 passed');
   });

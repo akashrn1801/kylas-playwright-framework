@@ -3,6 +3,7 @@ import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
 import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import { withLoginSlot } from './loginGate';
+import { putSessionIntoPage, saveGuardedStorageState, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { accessTokenFromStoredToken, readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -355,13 +356,9 @@ export class AuthManager {
       // multiple CI workers, writing directly to the shared stateFile risks
       // another worker reading it mid-write (truncated/corrupt JSON). Rename
       // is atomic on POSIX filesystems since both paths share the same directory.
-      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
-
-      await context.storageState({
-        path: tmpStateFile,
-      });
-
-      fs.renameSync(tmpStateFile, stateFile);
+      // ADR 0017 (2026-11-16): the guard writes the same temp-then-rename, and only for a page that is signed in
+      // and holds the app's user keys; otherwise it throws by name and the old file stays.
+      await saveGuardedStorageStateOrThrow(page, stateFile, `login ${role}`, 15000);
 
       logger.info(`Storage state saved: ${stateFile}`);
     } catch (error) {
@@ -615,21 +612,61 @@ export class AuthManager {
   // worker race) so the NEXT test's fixture setup doesn't redundantly
   // re-login for a session that's already fresh.
   async reauthenticatePage(page: Page, role: UserRole): Promise<string> {
-    logger.warn(`Mid-test session expiry for role ${role} — re-authenticating headlessly (no UI navigation)`);
+    const staleStored = await page.evaluate(() => window.localStorage.getItem('token')).catch(() => null);
 
-    const token = await this.loginHeadless(role, page);
-    await page.evaluate((t) => window.localStorage.setItem('token', t), token);
+    // ADR 0017 (2026-11-16): ONE refresher per role. Every login/refresh by this user must go through this lock,
+    // and the first thing done under it is to look at the saved state: a refresher that finished while we waited
+    // already produced a token the others only have to adopt (re-logging in is harmless for the backend, but a
+    // token/refresh call anywhere revokes the others, and four workers re-authenticating in one window were
+    // the 17:03Z cascade).
+    return this.withFileLock(role, async () => {
+      const adopted = await this.adoptNewerSavedToken(page, role, staleStored);
+      if (adopted) return adopted;
 
-    await this.withFileLock(role, async () => {
-      const stateFile = this.getStorageStateFile(role);
-      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
-      await page.context().storageState({ path: tmpStateFile });
-      fs.renameSync(tmpStateFile, stateFile);
+      logger.warn(`Mid-test session expiry for role ${role} — re-authenticating headlessly (no UI navigation)`);
+      const token = await this.loginHeadless(role, page);
+      await putSessionIntoPage(page, token, this.getStorageStateFile(role), `re-auth ${role}`);
+
+      const saved = await saveGuardedStorageState(page, this.getStorageStateFile(role), `re-auth ${role}`, 0);
+      if (saved.saved) {
+        logger.info(`Headless re-authentication complete for role: ${role}`);
+      } else {
+        // The new token works in this page, but this page is not a whole session (signed out): keep the old file
+        // so no worker adopts a state without the user keys; the next re-auth adopts or logs in again.
+        logger.warn(`Re-authentication for role ${role}: shared state NOT updated — ${saved.reason}`);
+      }
+      AuthManager.lastValidated.set(role, Date.now());
+      return token;
     });
-    AuthManager.lastValidated.set(role, Date.now());
+  }
 
-    logger.info(`Headless re-authentication complete for role: ${role}`);
-    return token;
+  /**
+   * Under the role lock: when the saved state holds a different, still-accepted token with enough life left than
+   * the one this page failed with, put that token into the page and return it (no login, no refresh). Null
+   * when there is nothing to adopt.
+   */
+  private async adoptNewerSavedToken(page: Page, role: UserRole, staleStored: string | null): Promise<string | null> {
+    try {
+      const stateFile = this.getStorageStateFile(role);
+      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
+        origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
+      };
+      const savedStored = state.origins
+        ?.flatMap((origin) => origin.localStorage ?? [])
+        .find((item) => item.name === 'token')?.value;
+      if (!savedStored || savedStored === staleStored) return null;
+      const remaining = getTokenRemainingMs(savedStored);
+      if (remaining === null || remaining <= proactiveRefreshBufferMs(getTokenLifetimeMs(savedStored))) return null;
+      const accessToken = accessTokenFromStoredToken(savedStored);
+      if (!accessToken || !(await tokenAcceptedByApi(role, accessToken))) return null;
+      await putSessionIntoPage(page, savedStored, stateFile, `adopt ${role}`);
+      AuthManager.lastValidated.set(role, Date.now());
+      logger.info(`Session for role ${role}: adopted the token another worker already refreshed (no login)`);
+      return savedStored;
+    } catch (error) {
+      logger.warn(`Session for role ${role}: could not adopt the saved token (${String(error).slice(0, 120)}) — logging in`);
+      return null;
+    }
   }
 
   // WHY this exists (2026-07-30, defensive hardening — root cause NOT fully
@@ -698,10 +735,7 @@ export class AuthManager {
     });
 
     await this.withFileLock(role, async () => {
-      const stateFile = this.getStorageStateFile(role);
-      const tmpStateFile = `${stateFile}.tmp.${process.pid}`;
-      await page.context().storageState({ path: tmpStateFile });
-      fs.renameSync(tmpStateFile, stateFile);
+      await saveGuardedStorageStateOrThrow(page, this.getStorageStateFile(role), `UI re-auth ${role}`, 15000);
     });
     AuthManager.lastValidated.set(role, Date.now());
 

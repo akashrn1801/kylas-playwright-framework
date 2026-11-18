@@ -1017,7 +1017,10 @@ export class BasePage {
       try {
         if (attempt > 1) {
           await searchInput.fill('');
-          await this.page.waitForTimeout(200);
+          // B6: the cleared input is the state the re-typed term replaces (no pause)
+          await expect(searchInput, `${description}: the search input should be empty before re-typing`).toHaveValue('', {
+            timeout: config.timeouts.expect,
+          });
         }
         await searchInput.fill(searchTerm);
         optionsAppeared = await options
@@ -1470,6 +1473,48 @@ export class BasePage {
     return { card, rows, waitForSettled };
   }
 
+  // B6: one Notes-panel add for Contacts, Companies and Deals (was three copies, Deals' without a baseline: any
+  // existing note row passed). The caller opens the Notes panel (`clickRightPanelIcon` is per module). Baseline
+  // from the settled Notes card, add, then the card must hold exactly one more note; the Add button is scoped to
+  // the Notes card. Leads keeps its own `addNote()` (it also reports the record).
+  protected async addNoteInOpenPanel(noteText: string): Promise<void> {
+    logger.info(`Adding note from the detail panel: "${noteText}"`);
+    const { card, rows, waitForSettled } = this.notesPanel();
+    await waitForSettled();
+    const baseline = await rows.count();
+    // WHY: Click textarea first to activate CKEditor initialisation
+    await this.click(card.locator('textarea.notes-textarea'), 'notes textarea');
+    const editor = card.getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await editor.fill(noteText, { timeout: config.timeouts.expect });
+    await this.click(card.getByText('Add', { exact: true }), 'add note');
+    await this.withSessionExpiryRecovery(() =>
+      expect(rows, 'Note count after adding').toHaveCount(baseline + 1, { timeout: config.timeouts.navigation })
+    );
+    logger.success(`Note added: "${noteText}"`);
+  }
+
+  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
+  async assertNoteTextPresent(text: string): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate((expected) => {
+            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
+              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
+              try {
+                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
+              } catch {
+                /* cross-origin iframe — not a note */
+              }
+            }
+            return false;
+          }, text),
+        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
+      )
+      .toBe(true);
+  }
+
   // ─── Assertion Helpers ────────────────────────────────────
 
   async assertVisible(locator: Locator, description = 'element', timeout = 30000): Promise<void> {
@@ -1529,12 +1574,28 @@ export class BasePage {
     await locator.waitFor({ state: 'visible' });
     return (await locator.textContent()) || '';
   }
-  async assertNoFormErrors(context = 'form'): Promise<void> {
+  // `confirmedSave` (B6, KI-64): the save's own answer, already awaited by the caller (saveAndAwait). With it the
+  // outcome is known, so a non-2xx fails by name and the 1.5 s grace is skipped (nothing is left to wait for).
+  // Without it the grace stays: no sleep-free signal separates "no error" from "toast not rendered yet".
+  async assertNoFormErrors(context = 'form', confirmedSave?: Response): Promise<void> {
     logger.info(`Checking for validation errors in ${context}`);
+
+    if (confirmedSave) {
+      if (!confirmedSave.ok()) {
+        throw new Error(`Save in ${context} was not accepted: ${await this.describeMatchedResponse(confirmedSave)}`);
+      }
+      await this.failOnVisibleFormErrors(context);
+      return;
+    }
 
     // WHY: Wait briefly for any error messages to appear after save action
     await this.page.waitForTimeout(1500);
 
+    await this.failOnVisibleFormErrors(context);
+  }
+
+  // The error read shared by both assertNoFormErrors paths (with and without a confirmed save response).
+  private async failOnVisibleFormErrors(context: string): Promise<void> {
     // Field level errors
     const fieldErrors = await this.page
       .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
@@ -2144,10 +2205,9 @@ export class BasePage {
       logger.warn(
         `User search: "${exactName}" not found on attempt ${attempt}/${maxAttempts} — retrying`
       );
+      // B6: no pauses: the next iteration's bounded wait for the exact option is the signal
       await userInput.fill('', { timeout: config.timeouts.expect }).catch(() => {});
-      await this.page.waitForTimeout(500);
       await userInput.fill(searchTerm, { timeout: config.timeouts.expect });
-      await this.page.waitForTimeout(800);
     }
     if (!found) {
       throw new Error(`User search: "${exactName}" did not appear after ${maxAttempts} attempts`);
@@ -2758,7 +2818,6 @@ export class BasePage {
         .filter({ hasText: optionText })
         .first();
       await option.click();
-      await this.page.waitForTimeout(200);
 
       // WHY: confirmed live (2026-07-08) — a click here can silently fail to
       // register a new chip (e.g. a stale menu reference during rapid
@@ -2767,12 +2826,15 @@ export class BasePage {
       // discrepancy previously only surfaced much later, confusingly, during
       // detail-page verification — confirm the chip actually landed before
       // trusting it, and retry once if it didn't.
+      // B6: a real bounded wait for the chip. `isVisible({ timeout })` ignores its timeout (it answers at once), so
+      // the 200 ms pause that used to precede it was the only thing giving the chip time to render.
       const chipLanded = (locator: string) =>
         control
           .locator('.is-invalid__multi-value__label')
           .filter({ hasText: locator })
           .first()
-          .isVisible({ timeout: 2000 })
+          .waitFor({ state: 'visible', timeout: 2000 })
+          .then(() => true)
           .catch(() => false);
 
       if (!(await chipLanded(optionText))) {
@@ -2796,7 +2858,6 @@ export class BasePage {
           .filter({ hasText: optionText })
           .first()
           .click();
-        await this.page.waitForTimeout(200);
         if (!(await chipLanded(optionText))) {
           throw new Error(
             `${description}: chip for "${optionText}" still did not appear after a retry — selection is unreliable`
@@ -3435,7 +3496,16 @@ export class BasePage {
     const gpsVisible = gpsCount === 1 && (await gpsButton.isVisible().catch(() => false));
     if (gpsVisible) {
       await this.click(gpsButton, `Get GPS Address button (${description})`);
-      await this.page.waitForTimeout(1500);
+      // B6: the click's consequence is the search box, or the add-on upsell dialog described below
+      await this.gpsAddressSearchInput()
+        .or(this.page.locator('text=purchase').first())
+        .first()
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .catch(() => {
+          throw new Error(
+            `${description}: neither the GPS address search box nor the add-on dialog appeared after clicking "Get GPS Address"`
+          );
+        });
       // WHY: Kylas gates this feature behind a paid "Field Sales" addon on
       // some accounts/environments — confirmed live (Meetings module) this
       // shows a purchase-upsell dialog instead of the search box. Detect it
@@ -3460,8 +3530,11 @@ export class BasePage {
           .catch(() => false);
         if (predictionsVisible) {
           await this.gpsAddressPrediction().click();
-          await this.page.waitForTimeout(500);
-          const gpsValue = await addressInput.inputValue().catch(() => '');
+          // B6: the picked prediction is committed when the address input holds a value
+          await expect(addressInput, `${description}: the GPS prediction should fill the address input`).not.toHaveValue('', {
+            timeout: config.timeouts.expect,
+          });
+          const gpsValue = await addressInput.inputValue();
           logger.success(`GPS ${description} selected: ${gpsValue}`);
           return gpsValue;
         }
@@ -3515,12 +3588,18 @@ export class BasePage {
     searchInput: Locator,
     optionList: Locator,
     name: string,
-    expectFound: boolean
+    expectFound: boolean,
+    beforeSearch?: (rowControl: Locator) => Promise<void>
   ): Promise<void> {
     await this.click(addRowTrigger, 'Add New product row');
     const control = searchInput.locator(
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
+    if (beforeSearch) {
+      // opt-in guard only (Quotations); existing callers' behaviour is unchanged
+      await control.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await beforeSearch(control);
+    }
     // WHY click the control div, not the input: the "Search ..." placeholder
     // overlays the input and intercepts pointer events on first open — the
     // same confirmed race as selectLookupCustomField() and this app's own

@@ -1,4 +1,4 @@
-import { Page, expect, Locator, Response, Request } from '@playwright/test';
+import { Page, expect, Locator, Request } from '@playwright/test';
 import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { BasePage } from '../../core/BasePage';
 import {
@@ -9,6 +9,7 @@ import {
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
 import { reportCreatedRecord } from '../../utils/createdRecords';
+import { recordKnownIssue } from '../../utils/knownIssue';
 import { LeadApi } from '../../utils/leadApi';
 import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { logger } from '../../utils/logger';
@@ -645,7 +646,14 @@ export class LeadsPage extends BasePage {
       return;
     }
     await nav.click();
-    await this.page.waitForTimeout(500);
+    // B6: the next steps need the custom-field inputs. The fill helpers skip a field that is not in the DOM
+    // (B8 defect, behaviour unchanged here), so wait for them instead of a pause; a tenant without custom
+    // fields falls through after the bound.
+    await this.page
+      .locator('[id*="_input_cf"]')
+      .first()
+      .waitFor({ state: 'attached', timeout: 5000 })
+      .catch(() => logger.warn('No custom-field inputs found after the Other Details click'));
   }
 
   // WHY: fills the Campaign Information section — Campaign and Source are
@@ -1037,29 +1045,34 @@ export class LeadsPage extends BasePage {
   ): Promise<void> {
     const tab = this.otherDetailsDetailPageTab();
     const valueLocator = this.page.locator(`[id="cf${fieldName}"] .title`);
-    const maxAttempts = 4;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        if (await tab.isVisible({ timeout: config.timeouts.navigation }).catch(() => false)) {
-          await tab.click();
-        }
-        await this.revealDetailCarouselSlideFor(`cf${fieldName}`);
-        await expect(
-          valueLocator,
-          `Lookup "${description}": expected "${expectedValue}" on the detail page`
-        ).toContainText(expectedValue, { timeout: config.timeouts.expect });
-        logger.success(`Lookup "${description}" verified on detail page: "${expectedValue}"`);
-        return;
-      } catch (error) {
-        lastError = error;
-        // Let the late post-load re-render (which resets the active tab)
-        // settle, then re-activate and re-verify on the next iteration.
-        await this.page.waitForTimeout(1500);
-      }
-    }
-    throw new Error(
-      `Lookup "${description}": value "${expectedValue}" was not verified on the detail page after ${maxAttempts} attempts — ${String(lastError)}`
+    // B6: ONE assertion (the 4x re-activate-and-retry loop on assertion failure is gone). activateDetailTab()
+    // waits for the tab strip, which renders with the detail layout (about 1.5 s after the lead itself).
+    await this.activateDetailTab(tab, 'Other Details');
+    await this.revealDetailCarouselSlideFor(`cf${fieldName}`);
+    await expect(
+      valueLocator,
+      `Lookup "${description}": expected "${expectedValue}" on the detail page`
+    ).toContainText(expectedValue, { timeout: config.timeouts.expect });
+    logger.success(`Lookup "${description}" verified on detail page: "${expectedValue}"`);
+  }
+
+  // B6: click a detail tab and know it is the active one (trace: the link goes from "nav-item nav-link" to
+  // "nav-item nav-link active" about 0.5 s after the click) instead of pausing.
+  private async activateDetailTab(tab: Locator, name: string): Promise<void> {
+    // the strip renders after the detail layout, about 1.5 s after the lead itself (restricted-user trace); an
+    // instant isVisible() saw no tab, nothing was clicked and the value container never appeared (rbac:1094).
+    // Waiting on the tab is the signal that works in every flow: a resource-timeline check of the layout
+    // request does not (the timeline buffer fills in a long single-page session, ui:636).
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should appear on the detail page`).toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
+    await tab.click();
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should be active after the click`).toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
     );
   }
 
@@ -1068,24 +1081,18 @@ export class LeadsPage extends BasePage {
 
     await this.fill(this.searchInput(), searchText, 'search input');
 
-    await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/search/lead?...` -> 200. The old wait matched a
+    // `GET` on any URL containing "search", which never occurs: every search waited its full 15 s, its miss
+    // was swallowed and a failed search went unnoticed. Armed before the click and strict (status, code and
+    // message when the answer is not 2xx).
+    await this.saveAndAwait(() => this.click(this.searchIcon(), 'search icon'), {
+      method: 'POST',
+      urlRe: /^\/v1\/search\/lead\/?$/,
+      description: 'lead search (POST /v1/search/lead)',
+      timeout: 15000,
+    });
 
     await this.waitForLoaderToDisappear();
-  }
-
-  private async waitForSearchApi(): Promise<Response | null> {
-    try {
-      return await this.armResponseWaitWithRecovery(
-        (response) =>
-          response.url().includes('search') &&
-          response.request().method() === 'GET' &&
-          response.status() === 200,
-        'lead search API',
-        15000
-      );
-    } catch {
-      return null;
-    }
   }
 
   private async captureLeadIdFromResponse(): Promise<number | null> {
@@ -1230,29 +1237,26 @@ export class LeadsPage extends BasePage {
   }
 
   private async retryFindLead(firstName: string): Promise<boolean> {
-    const currentConfig = this.retryConfig;
-
-    for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${currentConfig.retries}`);
-
-      await this.goToLeadsList();
-
-      await this.performSearch(firstName);
-
-      const found = await this.waitForSearchResults(firstName);
-
-      if (found) {
-        logger.success('Lead found');
-
-        return true;
-      }
-
-      if (attempt < currentConfig.retries) {
-        await this.page.waitForTimeout(currentConfig.wait);
-      }
+    const { retries, wait } = this.retryConfig;
+    // B6: the real condition is the lead's row in the search results after a fresh list + search (a new lead
+    // can lag in the search index); toPass repeats that with its own backoff inside the budget the fixed
+    // retries x (5 s results wait + pause) took, instead of a fixed pause between attempts
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching lead: ${firstName}`);
+          await this.goToLeadsList();
+          await this.performSearch(firstName);
+          if (!(await this.waitForSearchResults(firstName))) {
+            throw new Error(`Lead "${firstName}" is not in the search results yet`);
+          }
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success('Lead found');
+      return true;
+    } catch {
+      return false;
     }
-
-    return false;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -2280,25 +2284,32 @@ export class LeadsPage extends BasePage {
 
   async assertLeadDeletedById(leadId: number): Promise<void> {
     logger.info(`Asserting lead ${leadId} is deleted`);
-    // WHY: Navigate to detail URL — deleted lead shows error toast or redirects
+    // B6: positive control first, then the specific not-found state (staging trace of a deleted lead: the lead
+    // GET answers 404 with code 000010, the URL stays on details/<id>, the page shows "Not Found" and "the
+    // record doesn't seem to exists or you don't have enough permissions"). The old check passed on ANY
+    // redirect or any body text matching /exist|permission/, even before the page had loaded.
+    const leadGet = this.armResponseWaitWithRecovery(
+      (res) =>
+        new URL(res.url()).pathname === `/v1/leads/${leadId}` && res.request().method() === 'GET',
+      `assertLeadDeletedById: lead ${leadId} GET`,
+      config.timeouts.navigation
+    );
+    leadGet.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await this.page.waitForTimeout(2000);
-    const url = this.page.url();
-    // WHY: Check either URL redirected away OR error toast/message is visible
-    const urlRedirected = !url.includes(`/leads/details/${leadId}`);
-    const errorVisible = await this.page
-      .locator('.toast-error, .alert-danger, [class*="error"]')
-      .filter({ hasText: /doesn't|does not|exist|permission/i })
-      .first()
-      .isVisible()
-      .catch(() => false);
-    // WHY: Also check page content for error message
-    const pageText = await this.page
-      .locator('body')
-      .textContent()
-      .catch(() => '');
-    const hasErrorText = /doesn't|does not|exist|permission/i.test(pageText ?? '');
-    expect(urlRedirected || errorVisible || hasErrorText).toBeTruthy();
+    const response = await leadGet;
+    const body = (await response.json().catch(() => ({}))) as { code?: string };
+    expect(
+      { status: response.status(), code: body.code },
+      `Lead ${leadId} should answer 404 / code 000010 (not found) after the delete`
+    ).toEqual({ status: 404, code: '000010' });
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(this.page.getByText('Not Found', { exact: true }).first()).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+      await expect(this.page.getByText(/record doesn.t seem to exists?/i).first()).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+    });
     logger.success(`Lead ${leadId} confirmed deleted`);
   }
 
@@ -2306,7 +2317,7 @@ export class LeadsPage extends BasePage {
   // Clone
   // ──────────────────────────────────────────────────────────
 
-  async cloneLead(): Promise<number | null> {
+  async cloneLead(original?: { firstName: string }): Promise<number | null> {
     logger.info('Cloning lead via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     // WHY the prior claim below was WRONG, disproven live (2026-09-07): this
@@ -2320,28 +2331,37 @@ export class LeadsPage extends BasePage {
     // Email exists" backend rejection. saveButton() becoming visible is NOT
     // a reliable proxy for the email field's own pre-fill having committed.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    // WHY the Last Name pre-fill is awaited before anything is edited or saved
-    // (2026-10-16, sandbox run 38855451748 shard 3/5, leads.spec.ts:175 attempt
-    // 1): the failed attempt's clone (ID captured from the save response, and
-    // its detail page shows the clone's own `clone<ts>@testkylas.com` email)
-    // was saved with the UNCHANGED last name — the detail page header read
-    // "Miss. Levi Kutch(#169947)", no "Copy" — and 25 re-reads over 15s never
-    // saw it change. saveButton() becoming visible is not proof the form's
-    // "<lastName> Copy" pre-fill has committed (the same class as the email
-    // pre-fill race documented above, and as DealsPage.cloneDeal()'s Name wait,
-    // docs/PATTERNS.md P5). Mechanism for THIS failure is inferred from that
-    // analogy plus the saved result, not observed directly (trace not pulled).
-    // Fails loudly here if "Copy" never appears — both callers (L35, L23)
-    // assert "Copy" in the saved last name anyway, so saving without it can
-    // only fail later and less clearly.
-    const cloneFormT0 = Date.now();
+    // Main checks (must pass): the Clone form is open and carries the original lead's data. The form is a modal on
+    // the lead's detail page (the URL does not change), headed "Clone Lead".
     await this.withSessionExpiryRecovery(() =>
       expect(
-        this.lastNameInput(),
-        'Clone lead form Last Name should be pre-filled with "Copy" before Save is clicked'
-      ).toHaveValue(/Copy/, { timeout: 20000 })
+        // WHY not getByRole: the app's modal heading has no accessible name (snapshot: `heading [level=2]: Clone Lead`)
+        this.page.locator('h2').filter({ hasText: /^\s*Clone Lead\s*$/ }),
+        'The Clone Lead form should open'
+      ).toBeVisible({ timeout: 15000 })
     );
-    logger.debug(`Clone lead form Last Name pre-filled ("Copy") at +${Date.now() - cloneFormT0}ms`);
+    if (original) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.firstNameInput(), 'Clone form should carry the original lead\'s first name').toHaveValue(
+          original.firstName,
+          { timeout: 20000 }
+        )
+      );
+    }
+    // KI-67 (owner decision 2026-11-17): the " Copy" suffix on Last Name is OBSERVED, never a failure. The app sets
+    // it in the form's own change and sometimes loses it to its form reinitialize (probe: INITIALIZE(42 keys) landing
+    // after CHANGE lastName, 1 of 39 traced opens); the form's first render already holds the final value, so a
+    // short grace is enough. Last Name must have a value before the form is used.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.lastNameInput(), 'Clone form Last Name should be filled').not.toHaveValue('', { timeout: 20000 })
+    );
+    const copyPrefilled = await expect(this.lastNameInput())
+      .toHaveValue(/ Copy$/, { timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!copyPrefilled) {
+      recordKnownIssue('KI-67', "clone Copy prefill lost to the app's form reinitialize race (Last Name has no \" Copy\")");
+    }
     // WHY: Change email to unique value — same email as original causes
     // duplicate error. WHY waitFor('visible') instead of a one-shot
     // isVisible() (the bug fixed here): isVisible() returns an instant,
@@ -2421,11 +2441,19 @@ export class LeadsPage extends BasePage {
         'Clone phone field never became visible — skipping (may not exist for this entity)'
       );
     }
-    // WHY: Capture POST response before saving
-    const cloneIdPromise = this.captureLeadIdFromResponse();
-    await this.click(this.saveButton(), 'clone save button');
+    // B6 (ADR 0017 save confirmation, leads clone x24 diagnostic): the clone's own answer, armed before the click.
+    // The old id capture matched only a 200/201 POST, so a refused save (staging answered 400 code 000000
+    // "Unexpected error occurred!!" in one run) was never seen: it waited 60 s and then reported "save likely
+    // failed silently". Now a missing or non-2xx answer fails at once, naming status, code and message.
+    const cloneResponse = await this.saveAndAwait(() => this.click(this.saveButton(), 'clone save button'), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/?$/,
+      description: 'Lead clone save (POST /v1/leads)',
+    });
+    const cloneBody = (await cloneResponse.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+    const clonedId = cloneBody?.id ?? cloneBody?.data?.id ?? null;
+    reportCreatedRecord('lead', clonedId);
     await this.assertNoFormErrors('clone lead form');
-    const clonedId = await cloneIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveLead() above.
     if (!clonedId) {
       throw new Error(
@@ -2478,8 +2506,18 @@ export class LeadsPage extends BasePage {
       // network response is observed, not once React has re-rendered the DOM
       // with it. A one-shot body.innerText() read right after can race ahead
       // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-      await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
-      logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      // Main check: the clone's own detail page shows the original lead's last name. The " Copy" suffix is
+      // observed only (KI-67, see cloneLead): without it the clone keeps the original last name.
+      await expect(this.page.locator('body')).toContainText(originalLastName, { timeout: 15000 });
+      const hasCopy = await expect(this.page.locator('body'))
+        .toContainText(clonedLastName, { timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
+      if (hasCopy) {
+        logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      } else {
+        recordKnownIssue('KI-67', `cloned lead ${clonedId} was saved without " Copy" in its Last Name`);
+      }
       return;
     }
     logger.warn('Cloned lead ID not available — falling back to list search');
@@ -2522,12 +2560,11 @@ export class LeadsPage extends BasePage {
       await closeLeadToggle.waitFor({ state: 'visible', timeout: 10000 });
     }
     await closeLeadToggle.click();
-    await this.page.waitForTimeout(500);
+    // B6: no pauses here: the menu item and then the popup are each waited for as elements below
     // WHY: Click the stage option from the dropdown
     const stageItem = this.closeLeadDropdownItem(stage);
     await stageItem.waitFor({ state: 'visible', timeout: 5000 });
     await stageItem.click();
-    await this.page.waitForTimeout(500);
     // WHY: All stages show a confirmation popup — for Closed stages select random reason
     let selectedReason = '';
     if (stage !== 'Won') {
@@ -2545,8 +2582,18 @@ export class LeadsPage extends BasePage {
       logger.info(`Selected reason: ${selectedReason}`);
     }
     await this.stagePopupYesButton().waitFor({ state: 'visible', timeout: 5000 });
-    await this.stagePopupYesButton().click();
-    await this.page.waitForTimeout(1000);
+    // B6: the app's answer to Yes is POST /v1/leads/{id}/pipeline-stages/{stageId}/activate (200 in the traced
+    // run, then the lead is refetched); fail by name if it is missing or not 2xx, then wait for the popup to close
+    await this.saveAndAwait(() => this.stagePopupYesButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/pipeline-stages\/\d+\/activate\/?$/,
+      description: 'Lead stage change (POST /v1/leads/{id}/pipeline-stages/{stageId}/activate)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The stage popup should close after Yes').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead marked as: ${stage} — reason: ${selectedReason}`);
     return selectedReason;
   }
@@ -2567,7 +2614,18 @@ export class LeadsPage extends BasePage {
     logger.info(`Converting lead to Deal+Contact+Company — deal name: ${dealName}`);
     await this.waitForTenantUsageLoaded();
     await this.clickEllipsisOption('Convert');
-    await this.page.waitForTimeout(1500);
+    // B6: the Convert dialog is rendered once its first entity checkbox is there
+    await this.page.locator('#entity_deals').waitFor({ state: 'visible', timeout: 10000 });
+    // B6 (leads full run 1, ui:1275): each ticked section renders its own details form after its layout loads
+    // (contact fields about 0.75 s, company about 0.85 s after the tick). Ticking the next one or touching a
+    // "Show auto-mapped fields" toggle before that left the Contact section without its form: the first toggle's
+    // lookups reset it (radios unselected, toggle gone) and the third toggle never existed. The old 500 ms
+    // pauses covered it; the real signal is the section's key field being visible.
+    const sectionReady: Record<string, string> = {
+      entity_deals: '[id="1_11_input_deal.details.name"]',
+      entity_contacts: '[id="2_13_input_contact.details.lastName"]',
+      entity_companies: '[id="3_11_input_company.details.name"]',
+    };
     // WHY: Check Deal, Contact, Company checkboxes — unchecked by default
     for (const id of ['entity_deals', 'entity_contacts', 'entity_companies']) {
       const checkbox = this.page.locator(`#${id}`);
@@ -2575,10 +2633,14 @@ export class LeadsPage extends BasePage {
       if (!isChecked) {
         const label = this.page.locator(`label[for="${id}"]`).first();
         await label.click();
-        await this.page.waitForTimeout(500);
+        // B6: the tick is applied (its section renders from it)
+        await this.withSessionExpiryRecovery(() =>
+          expect(checkbox, `Convert: "${id}" should be ticked`).toBeChecked({ timeout: config.timeouts.expect })
+        );
       }
+      // the section's form has rendered (whether it was just ticked or already on)
+      await this.page.locator(sectionReady[id]).waitFor({ state: 'visible', timeout: config.timeouts.expect });
     }
-    await this.page.waitForTimeout(500);
     // WHY: Enable Show auto-mapped fields for all entities
     const autoMappedToggles = this.page.locator('#auto_mapped');
     const autoMappedCount = await autoMappedToggles.count();
@@ -2587,10 +2649,13 @@ export class LeadsPage extends BasePage {
       const isChecked = await toggle.isChecked().catch(() => false);
       if (!isChecked) {
         await toggle.locator('xpath=parent::div').locator('label').click();
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, 'Convert: "Show auto-mapped fields" should be on').toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
       }
     }
-    await this.page.waitForTimeout(500);
     // WHY: Fill mandatory deal name
     await this.convertDealNameInput().waitFor({ state: 'visible', timeout: 10000 });
     await this.convertDealNameInput().fill(dealName);
@@ -2633,10 +2698,16 @@ export class LeadsPage extends BasePage {
     const addProductBtn = this.page.locator('span.add-new-product').first();
     if (await addProductBtn.isVisible().catch(() => false)) {
       await addProductBtn.scrollIntoViewIfNeeded();
-      await addProductBtn.click();
-      await this.page.waitForTimeout(500);
-      // WHY: Click last product dropdown indicator to open product options
       const allIndicators = this.page.locator('.look-up.col-3 .is-invalid__indicator');
+      const indicatorsBefore = await allIndicators.count();
+      await addProductBtn.click();
+      // B6: the new row's control exists before `.last()` is used (else it would be the previous row's)
+      await this.withSessionExpiryRecovery(() =>
+        expect(allIndicators, 'Convert: the added product row should render').toHaveCount(indicatorsBefore + 1, {
+          timeout: config.timeouts.expect,
+        })
+      );
+      // WHY: Click last product dropdown indicator to open product options
       await allIndicators.last().waitFor({ state: 'visible', timeout: 10000 });
       await allIndicators.last().scrollIntoViewIfNeeded();
       await allIndicators.last().click({ force: true });
@@ -2653,14 +2724,14 @@ export class LeadsPage extends BasePage {
       const count = await productOptions.count();
       const randomIndex = Math.floor(Math.random() * count);
       await productOptions.nth(randomIndex).click();
-      await this.page.waitForTimeout(500);
+      // B6: the pick is applied when the menu closes
+      await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
       logger.debug('Product added to convert deal');
       // WHY: Add part payment after product is added
       const addPaymentBtn = this.page.locator('button.btn-add-payment-full').first();
       if (await addPaymentBtn.isVisible().catch(() => false)) {
         await addPaymentBtn.scrollIntoViewIfNeeded();
         await addPaymentBtn.click();
-        await this.page.waitForTimeout(500);
         // WHY: Installments modal appears — fill 1 installment and confirm
         const installmentsModal = this.page.locator('.installments-modal');
         await installmentsModal.waitFor({ state: 'visible', timeout: 10000 });
@@ -2669,14 +2740,29 @@ export class LeadsPage extends BasePage {
         await installmentsInput.fill('1');
         await this.page.getByRole('button', { name: 'Confirm' }).click();
         await installmentsModal.waitFor({ state: 'hidden', timeout: 10000 });
-        await this.page.waitForTimeout(500);
+        // B6: the part-payments summary renders in the same update as the modal closing (baseline trace)
+        await this.page.locator('.part-payments-summary').first().waitFor({ state: 'visible', timeout: 10000 });
         logger.debug('Part payment added with 1 installment');
       }
     }
     // WHY: Click Convert button to submit
     await this.convertButton().waitFor({ state: 'visible', timeout: 10000 });
-    await this.convertButton().click();
-    await this.page.waitForTimeout(3000);
+    // B6: the app's answer to Convert is POST /v1/leads/{id}/convert (200 in the traced run). It used to be
+    // clicked blind and followed by a 3 s pause, so a refused convert went unnoticed here. Now it fails by
+    // name when the answer is missing or not 2xx; then the result dialog must appear.
+    await this.saveAndAwait(() => this.convertButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/convert\/?$/,
+      description: 'Lead convert (POST /v1/leads/{id}/convert)',
+    });
+    // the app answers with a "Lead successfully converted" result dialog (screenshot: Deal / Contact / Company
+    // cards and Done): that is the visible confirmation, not the dialog closing
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.page.getByText('Lead successfully converted'),
+        'The "Lead successfully converted" dialog should appear after Convert'
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success(`Lead converted — deal: ${dealName}`);
   }
 
@@ -2693,65 +2779,41 @@ export class LeadsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
-  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
-  // stalled a full-suite regression run across many share-based RBAC tests):
-  // `shareTypeControl.click()` / `userOption.click()` (selecting "User") were
-  // raw, UNBOUNDED clicks — same "click registers, handler race" class as
-  // clickAddCompany/selectFromContactDropdown/selectFromIsInvalidControl. If
-  // userOption.click() didn't register, shareToUserInput()
-  // (`[id="undefined_undefinedundefined_input_toId"]`) never mounts, and the
-  // immediately-following `.fill()` (also unbounded) hangs until the outer
-  // test timeout — matching the observed pattern exactly ("Share search
-  // term" logged, then a multi-minute gap, then failure). Fixed with the
-  // same shape as the other 3 fixes: bound every click to
-  // config.timeouts.expect and retry the whole open-type-dropdown ->
-  // select-User -> wait-for-search-input sequence up to 3 times. Same fix
-  // applied identically to shareCompany/shareContact/shareDeal.
+  // B6 (owner decision 2026-11-17): one bounded pass, no retry loop. The missed "User" click (root-caused
+  // 2026-07-22: a pick that did not register left shareToUserInput() unmounted and a raw fill() hung ~9 min) is
+  // prevented by waiting (menu open, option visible and enabled, one click, then the control must show "User"),
+  // and fails by name if it did not take. Same shape as CompaniesPage.openUserShareTypeSearch().
   private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page
-          .locator('.is-invalid__option')
-          .filter({ hasText: 'User' })
-          .first();
-        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({
-          state: 'visible',
-          timeout: config.timeouts.expect,
-        });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
-            'closing any stuck menu and retrying'
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    await shareTypeControl.click({ timeout: config.timeouts.expect });
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await expect(userOption, 'Share dialog: the "User" share-type option should be visible (menu open)').toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await expect(userOption, 'Share dialog: the "User" share-type option should be enabled').toBeEnabled({
+      timeout: config.timeouts.expect,
+    });
+    await userOption.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
+    await expect(
+      shareTypeControl.locator('.is-invalid__single-value'),
+      'Share dialog: the share-type control should show "User" after the pick'
+    ).toHaveText('User', { timeout: config.timeouts.expect });
+    await expect(
+      this.shareToUserInput(),
+      'Share dialog: the user search input should appear after picking "User"'
+    ).toBeVisible({ timeout: config.timeouts.expect });
   }
 
   async shareLead(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing lead with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
-    await this.page.waitForTimeout(1000);
-    // WHY: Click the Share To type dropdown control — opens User/Team options
+    // WHY: Click the Share To type dropdown control (the modal control is waited for just below) — opens User/Team options
     const shareTypeControl = this.page
       .locator('.modal.show')
       .locator('.is-invalid__control')
       .first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
     await this.openUserShareTypeSearch(shareTypeControl);
-    await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
@@ -2764,7 +2826,8 @@ export class LeadsPage extends BasePage {
     // genuinely-just-created user's search-index propagation a real chance
     // to catch up instead of failing fast on one 5s window.
     await this.selectUserOptionWithRetry(this.shareToUserInput(), searchTerm, restrictedUserName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
       const toggle = this.sharePermissionToggle(permission);
@@ -2776,24 +2839,30 @@ export class LeadsPage extends BasePage {
           const label = input?.parentElement?.querySelector('label') as HTMLElement;
           label?.click();
         }, permission);
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, `Share: permission "${permission}" should be on`).toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
         logger.debug(`Permission ${permission} toggled`);
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the share-API response wait BEFORE clicking — confirms the
-    // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/leads\/\d+\/share$/) !== null && res.request().method() === 'POST',
-      'lead share response',
-      15000
-    ).catch(() => null);
-    await this.shareConfirmButton().click();
-    const shareResponse = await shareResponsePromise;
-    const sharedBody = (await shareResponse?.json().catch(() => null)) as { id?: number } | null;
+    // B6 (ADR 0017 save confirmation): the share's own answer, armed before the click. It used to end in
+    // `.catch(() => null)`, so a missed or refused share carried on and broke the RBAC steps that follow;
+    // now it fails by name when the answer is missing or not 2xx. Then the share dialog must close.
+    const shareResponse = await this.saveAndAwait(() => this.shareConfirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/share\/?$/,
+      description: 'Lead share (POST /v1/leads/{id}/share)',
+    });
+    const sharedBody = (await shareResponse.json().catch(() => null)) as { id?: number } | null;
     reportCreatedRecord('share rule', sharedBody?.id);
-    await this.page.waitForTimeout(300);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The share dialog should close after Share').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead shared with: ${restrictedUserName}`);
   }
 
@@ -2804,30 +2873,32 @@ export class LeadsPage extends BasePage {
   async reassignLead(userDisplayName: string): Promise<void> {
     logger.info(`Reassigning lead to: ${userDisplayName}`);
     await this.clickEllipsisOption('Reassign');
-    await this.page.waitForTimeout(500);
-    // WHY: Search requires minimum 3 characters
+    // WHY: Search requires minimum 3 characters (the dialog input is waited for just below)
     const words = userDisplayName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? userDisplayName.trim().substring(0, 3);
     logger.debug(`Reassign search term: "${validWord}" (from: "${userDisplayName}")`);
     await this.reassignUserInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.reassignUserInput().fill(validWord);
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() below waits for the matching user option
     // WHY selectUserOptionWithRetry() — see shareLead()'s identical comment
     // for the full evidence (2026-07-30).
     await this.selectUserOptionWithRetry(this.reassignUserInput(), validWord, userDisplayName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the reassign-API (owner change) response wait BEFORE
-    // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/leads\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-      'lead reassign response',
-      15000
-    ).catch(() => null);
-    await this.reassignConfirmButton().click();
-    await reassignResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the owner change's own answer (PUT /v1/leads/{id}/owner), armed before
+    // the click. It used to be awaited but its result ignored (`.catch(() => null)`), so a refused reassign
+    // carried on; now it fails by name when missing or not 2xx. Then the dialog must close.
+    await this.saveAndAwait(() => this.reassignConfirmButton().click(), {
+      method: 'PUT',
+      urlRe: /^\/v1\/leads\/\d+\/owner\/?$/,
+      description: 'Lead reassign (PUT /v1/leads/{id}/owner)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The reassign dialog should close after Reassign').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead reassigned to: ${userDisplayName}`);
   }
 
@@ -2846,8 +2917,8 @@ export class LeadsPage extends BasePage {
   async assertDetailTabContent(tabId: string, expectedValues: string[]): Promise<void> {
     logger.info(`Asserting tab ${tabId} content`);
     // WHY: Click tab by ID, then check active pane text content
-    await this.page.locator(`#${tabId}`).click();
-    await this.page.waitForTimeout(800);
+    await this.activateDetailTab(this.page.locator(`#${tabId}`), tabId);
+    await expect(this.detailTabPane(), `Tab ${tabId} pane should be visible`).toBeVisible({ timeout: config.timeouts.expect });
     const paneText = ((await this.detailTabPane().textContent()) ?? '').toLowerCase();
     for (const value of expectedValues) {
       // WHY: Compare lowercase — detail page may display in different case
@@ -2929,8 +3000,7 @@ export class LeadsPage extends BasePage {
       tab,
       '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
     ).toBeVisible({ timeout: config.timeouts.navigation });
-    await tab.click();
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Other Details');
 
     const cf = data.customFields;
     await this.assertCustomFieldOnDetail(
@@ -3040,12 +3110,10 @@ export class LeadsPage extends BasePage {
       // Location tab (nav-tab1-tab). Container ids match the internal field
       // names directly, same convention as requirementCurrency/requirementBudget
       // below — not guessed, read straight off the live DOM.
-      await this.page.locator('#nav-tab0-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab0-tab'), 'Communication');
       await this.assertFieldOnDetailByContainerId('timezone', data.timezone, 'Timezone');
 
-      await this.page.locator('#nav-tab1-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab1-tab'), 'Location');
       await this.assertFieldOnDetailByContainerId('country', data.country, 'Country');
 
       // WHY: confirmed live (2026-07-17) — all 5 Professional-section fields
@@ -3054,8 +3122,7 @@ export class LeadsPage extends BasePage {
       // a plain number with no currency formatting (confirmed: "8475910", not
       // "INR 84.7L" or similar) — String(data.companyAnnualRevenue) is correct
       // as-is, no special formatting needed.
-      await this.page.locator('#nav-tab3-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab3-tab'), 'Professional');
       await this.assertFieldOnDetailByContainerId(
         'companyIndustry',
         data.companyIndustry,
@@ -3088,8 +3155,7 @@ export class LeadsPage extends BasePage {
       tab,
       '"Requirement" tab did not appear on the detail page — standard field verification cannot proceed'
     ).toBeVisible({ timeout: config.timeouts.navigation });
-    await tab.click();
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Requirement');
 
     // WHY: confirmed live (2026-07-17) — container id "requirementName"
     // matches the field's internal name, same convention as the other
@@ -3676,26 +3742,6 @@ export class LeadsPage extends BasePage {
     logger.success('Note added');
   }
 
-  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
-  async assertNoteTextPresent(text: string): Promise<void> {
-    await expect
-      .poll(
-        () =>
-          this.page.evaluate((expected) => {
-            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
-              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
-              try {
-                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
-              } catch {
-                /* cross-origin iframe — not a note */
-              }
-            }
-            return false;
-          }, text),
-        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
-      )
-      .toBe(true);
-  }
   // ──────────────────────────────────────────────────────────
   // Create form: error summary and the duplicate "View Lead" link
   // ──────────────────────────────────────────────────────────

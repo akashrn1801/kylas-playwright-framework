@@ -10,21 +10,18 @@ Snapshots of 2026-11-03 (rerun shard) and 2026-10-31 (Leads); the Jenkins part i
 ## `feature/framework-hardening-20261104` (first-attempt hardening, [ADR 0016](./adr/0016-first-attempt-hardening-framework-wide.md))
 
 - B-1 to B5 committed. B3 sandbox: all green but company formFields (staging login 400 `000004`; now retried + job stagger, ADR 0017). Watch `reports.spec:866` (flaky; get its trace). B4/B5 proof open. **Follow-up:** on staging, "headless re-auth did not stick" and the UI-login escalation ran ~3 min. Not on QA; now logs whether the API accepts the new token. Check on staging after the sandbox run.
+- **B6/B8 plan, recorded 2026-11-16 (not fixed):** (1) `MeetingsPage.saveEditedMeeting` swallows the modal-hidden wait and sleeps 1 s: no response check. (2) `TasksPage.saveEditedTask` waits only for the modal to close. (3) Q14 owner field (`quotations.spec.ts:202`): flake, cause not found; suspects `goToQuotationDetail` ending its GET wait in `.catch(() => null)` and `assertOwnerOnDetailPage` without `withSessionExpiryRecovery`. (4) `QuotationsPage.clickEllipsisEdit` has no callers. (5) `BasePage.fillTextLikeCustomField` and siblings skip a field not yet in the DOM with only a log line. (6) No test verifies Customer Emotion after save. (7) CL24 (`call-logs.spec.ts:582`) unconditional `test.skip`, reason contradicted by locators-and-timing.md: re-verify. Also KI-65.
+- **Run window (2026-11-17):** the 4 h run window is too strict for short local runs; consider scaling it to the selected tests, or documenting the `SESSION_MIN_REMAINING_FOR_RUN_MS` override in RUNBOOK.
+- **Auth follow-ups 2026-11-17:** CI: one session-renew step at workflow start, before shards (needs workflow review; a login cannot extend a live session and CI never logs out, ADR 0017), and `reports/<env>/session-info.json` must reach the notify job to show in the email. 429 on headless re-login during the refresh cascade (9 tests, probe run 05:42Z): recorded, not fixed.
 
 ## `feature/ci-rerun-shard-20261103` (cut from `dev`, nothing committed, nothing run on GitHub)
 
 - **Built (sandbox.yml only):** formFields attempt gate, `rerun-failed` shard behind `vars.RERUN_SHARD == 'on'`, combined report/email/history, manual `rerun-failed.yml`, email review fixes ([ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), [REPORTING](./REPORTING.md) 3.1). Offline checks pass (`check:rerun`, `check:failure-labels`, actionlint); the UNVERIFIED GitHub behaviours are in the ADR. **Next:** review the diff, commit, run sandbox with `RERUN_SHARD` off, then on.
-- **Follow-ups (seen, deliberately not changed):** JobStats lists only the latest attempt's jobs, so a re-run's job-minutes exclude the earlier attempt; the email's "Artifacts:" line shows a runner path, not a link; a manual rerun's email shows the original build number but links to the manual run; the merged HTML report stays the first run (only `results.json` is combined); rerun misc errors are uploaded but not aggregated; the manual workflow needs `run-meta-*` (sandbox runs only); qa/stage/main are not wired; Jenkins is not covered. `withRateLimitRecovery` reloads on the 'Something is broken' screen too; review whether that should fail fast (ADR 0014).
-
-## `feature/leads-coverage-gaps-20261030` (PR #684, merged into `dev`)
-
-- Four commits pushed (last `3373bfe`). Sandbox run 41066366856 on staging: all passed except two new lead tests: duplicate e-mail (staging uniqueness was NONE, now EMAIL_PHONE; the test checks the setting first) and attach-pipeline (not reproducible; removed 2026-11-02, KI-56 closed in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), root cause not confirmed).
-- **Uncommitted at the 2026-10-31 snapshot:** `uniqueValues.ts` (unique e-mail/phone for lead, contact, company factories, clone flows, `LeadApi`) and the lead `has-duplicates` pre-check (a duplicate fails loudly, a non-OK endpoint is skipped with a warning).
-- **Live 2026-10-31:** QA 6/6; staging 1/6 (lead and contact creates 400 `000000`, unique e-mail/phone did not fix it): [KI-58](./KNOWN_ISSUES_ACTIVE.md).
-- **Next:** have staging's lead/contact create checked (backend log, uniqueness config); sandbox CI after that.
+- Follow-ups for this branch moved to [CHANGELOG_ARCHIVE.md](./CHANGELOG_ARCHIVE.md).
 
 ## Still open
 
+- Leads coverage gaps (PR #684, merged into `dev`): details moved to [CHANGELOG_ARCHIVE.md](./CHANGELOG_ARCHIVE.md).
 - [KI-58](./KNOWN_ISSUES_ACTIVE.md): staging create 400 `000000` with e-mail/phone. The attach-pipeline test (KI-56) was removed 2026-11-02.
 - 400 `000000` is no longer classified transient (ADR 0014, 2026-11-02); the sandbox run is the proof.
 - [KI-52](./KNOWN_ISSUES_ACTIVE.md) to KI-55: lead coverage known app bugs and watch items; the tests stay green until Kylas fixes them.

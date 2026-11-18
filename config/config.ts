@@ -51,6 +51,14 @@ export const config = {
     navigation: Number(process.env.NAVIGATION_TIMEOUT) || 60000,
     expect: Number(process.env.EXPECT_TIMEOUT) || 10000,
   },
+  // ADR 0017: a login inside a live session returns the SAME token and expiry, so a session with less than
+  // `minRemainingForRunMs` left cannot be extended by logging in again. globalSetup then fails by name (local),
+  // or only warns (CI). `renewSession` (SESSION_RENEW=1, local only, never CI) does DELETE /v1/tokens/logout and a
+  // fresh login instead; that revokes the token for EVERY holder of the account (CI, other laptops).
+  auth: {
+    minRemainingForRunMs: Number(process.env.SESSION_MIN_REMAINING_FOR_RUN_MS) || 4 * 60 * 60 * 1000,
+    renewSession: process.env.SESSION_RENEW === '1',
+  },
   browser: {
     name: process.env.BROWSER || 'chromium',
     headless: process.env.HEADLESS === 'true',

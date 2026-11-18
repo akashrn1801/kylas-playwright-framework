@@ -269,7 +269,7 @@ export class QuotationsPage extends BasePage {
   // never requested (cached) or times out resolves quietly and the render
   // wait below decides, exactly as before. A session expiry rethrows, like
   // every other armResponseWaitWithRecovery() caller.
-  private armLayoutLoadCheck(kind: 'list' | 'create'): Promise<void> {
+  private armLayoutLoadCheck(kind: 'list' | 'create' | 'edit'): Promise<void> {
     const layoutUrl = new RegExp(`/v1/quotations/layout/${kind}(?:\\?|$)`);
     const check = this.armResponseWaitWithRecovery(
       (res) => layoutUrl.test(res.url()) && res.request().method() === 'GET',
@@ -342,15 +342,8 @@ export class QuotationsPage extends BasePage {
     logger.info(`Selecting date: ${date.toDateString()}`);
     await input.click();
     await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
-    // WHY kept (2026-08-09, Task 1b date-time-picker audit): same react-dates
-    // SingleDatePicker widget as DealsPage.selectDateInPicker(), which keeps
-    // an identical wait here with a stated (though unverified-this-session)
-    // Firefox animation-settling reason — this project runs a real `firefox`
-    // project locally, not just chromium. Left in place for consistency
-    // rather than guessing it's safe to remove without live Firefox
-    // verification; only the loop-internal duplicate below (which had no
-    // such justification) was removed.
-    await this.page.waitForTimeout(400);
+    // B6: no animation pause: the day cell wait below is the real signal (it is also what Firefox needs), and
+    // click() waits for the cell to be stable.
     const dayCell = this.calendarDayByLabel(dayLabel);
     let found = false;
     let attempts = 0;
@@ -378,51 +371,30 @@ export class QuotationsPage extends BasePage {
     logger.success(`Date selected: ${date.toDateString()}`);
   }
 
-  // WHY the bounded whole-sequence retry (2026-07-22): identical bug class to
-  // CompaniesPage.clickAddCompany / DealsPage.cloneDeal /
-  // ContactsPage.selectFromContactDropdown (which this method was originally
-  // copied from, per its own prior comment) — every click here was a raw,
-  // UNBOUNDED Playwright `.click()` (no `timeout`, no global `actionTimeout`
-  // configured anywhere), so a "click registers, handler not yet attached"
-  // React race could hang until the outer test timeout. Fixed with the exact
-  // same proven shape: bound every click to config.timeouts.expect and retry
-  // the whole open->fill->select sequence (not just the click) up to 3
-  // times, since a half-opened/half-filtered menu from a failed attempt
-  // isn't a valid state to resume from. Flat across all environments —
-  // client-side rendering race, not a server/data-volume-dependent
-  // operation, same reasoning as the sibling fixes (no per-env branching).
+  // B6: ONE bounded pass (the old 3-attempt loop re-ran open/fill/pick after an Escape + 500 ms on any
+  // error). The 2026-07-22 root cause (raw unbounded clicks hanging a whole test) stays fixed: every step is
+  // bounded and fails by name. Opening goes through openReactSelectAndWaitForOptions() (ADR 0014 section 4):
+  // it re-clicks only when NO menu is open (the React "click lands, nothing happens" race) and only waits
+  // when a menu is open but empty, so an open menu is never toggled shut. The pick is applied when the menu
+  // closes.
   private async selectFromIsInvalidControl(
     control: Locator,
     input: Locator,
     value: string
   ): Promise<void> {
-    const menu = this.page.locator('.is-invalid__menu');
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await control.click({ timeout: config.timeouts.expect });
-        await input.fill(value);
-        const option = menu.locator('.is-invalid__option').filter({ hasText: value }).first();
-        await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await option.click({ timeout: config.timeouts.expect });
-        await this.ensureReactSelectMenuClosed(`is-invalid control "${value}"`, control);
-        logger.debug(`Selected "${value}" from is-invalid control`);
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `selectFromIsInvalidControl("${value}") attempt ${attempt}/${maxAttempts} failed: ` +
-            `${String(error)} — closing any stuck menu and retrying`
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `selectFromIsInvalidControl: failed to select "${value}" after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    const description = `is-invalid control "${value}"`;
+    await this.openReactSelectAndWaitForOptions(control, description);
+    await input.fill(value, { timeout: config.timeouts.expect });
+    const option = this.page
+      .locator('.is-invalid__menu .is-invalid__option')
+      .filter({ hasText: value })
+      .first();
+    await expect(option, `${description}: option should be listed`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await option.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed(description, control);
+    logger.debug(`Selected "${value}" from is-invalid control`);
   }
 
   // WHY the post-click Escape check was added (2026-08-11) — HARDENED BASED
@@ -610,35 +582,32 @@ export class QuotationsPage extends BasePage {
 
   private async retryFindInList(searchValue: string): Promise<boolean> {
     const { retries, wait } = this.retryConfig;
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${retries} for: ${searchValue}`);
-      await this.goToQuotationsList();
-      await this.performSearch(searchValue);
-      // WHY: The list rows show system-assigned quotation numbers (e.g. QUO-00012),
-      // not the custom RES.../ADM... prefix from the factory. The fulltext search
-      // API searches across all fields including summary — so search returns rows
-      // but hasText(searchValue) never matches the row text.
-      // Strategy: after search fires, check if ANY non-empty rows exist.
-      // If search returned results, the quotation exists. If no rows, it doesn't.
-      await this.page.waitForTimeout(1000);
-      const allRows = this.page.locator('.rt-tr-group');
-      // WHY: batched allTextContents() (2026-07-17) — confirmed live via direct
-      // timing comparison that N individual `.nth(i).innerText()` calls (one
-      // CDP round-trip each) cost ~778ms for 10 rows, vs ~23ms for a single
-      // allTextContents() call returning the same data — a 33.8x difference,
-      // identical result. Same "filter out empty filler rows" logic, just
-      // computed from one round-trip instead of N.
-      const rowTexts = await allRows.allTextContents().catch(() => []);
-      // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
-      const nonEmptyCount = rowTexts.filter((t) => t.trim().length > 0).length;
-      if (nonEmptyCount > 0) {
-        logger.success(`Search returned ${nonEmptyCount} row(s) for: ${searchValue}`);
-        return true;
-      }
-      logger.info(`No rows found on attempt ${attempt} — waiting before retry`);
-      if (attempt < retries) await this.page.waitForTimeout(wait);
+    // B6: the real condition is "the search returned a non-empty row" after a fresh list + search (a new
+    // quotation can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // fixed retries x (results wait + pause) took, instead of fixed pauses (1 s before the rows, `wait`
+    // between attempts). Same shape as ContactsPage.retryFindContact().
+    // WHY: The list rows show system-assigned quotation numbers (e.g. QUO-00012),
+    // not the custom RES.../ADM... prefix from the factory. The fulltext search
+    // API searches across all fields including summary — so search returns rows
+    // but hasText(searchValue) never matches the row text.
+    // Strategy: after search fires, check if ANY non-empty rows exist.
+    // If search returned results, the quotation exists. If no rows, it doesn't.
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching quotation: ${searchValue}`);
+          await this.goToQuotationsList();
+          await this.performSearch(searchValue);
+          // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
+          const nonEmptyRow = this.page.locator('.rt-tr-group').filter({ hasText: /\S/ }).first();
+          await expect(nonEmptyRow, `No rows found for: ${searchValue}`).toBeVisible({ timeout: 5000 });
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success(`Search returned row(s) for: ${searchValue}`);
+      return true;
+    } catch {
+      return false;
     }
-    return false;
   }
 
   private async performSearch(value: string): Promise<void> {
@@ -668,24 +637,32 @@ export class QuotationsPage extends BasePage {
           if (backdrop) backdrop.remove();
           document.body.classList.remove('modal-open');
         `);
-        await this.page.waitForTimeout(300);
+        // B6: the forced close is done when the modal has lost d-block (no pause)
+        await this.page.locator('#editEntityModal.d-block').waitFor({ state: 'hidden', timeout: 5000 });
       }
     }
 
     // WHY: .portal-element tooltips float above the list and block clicks — move mouse away.
     await this.page.mouse.move(0, 0);
-    await this.page.waitForTimeout(300);
 
     await this.fill(this.searchInput(), value, 'search input');
 
-    await Promise.all([
-      this.armResponseWaitWithRecovery(
-        (r) => r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
-        'performSearch: search POST',
-        15000
-      ).catch(() => null),
-      this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 }),
-    ]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/quotations/search?...` -> 200. The old wait
+    // matched ANY POST whose URL contains "search", which includes `POST /v1/rules/search/action-logs`
+    // (fires on every page, and first), and ended in `.catch(() => null)`. Now the exact request, armed
+    // before the click, failing by name with its status/code when it is not 2xx.
+    const searchAnswered = this.armResponseWaitWithRecovery(
+      (r) =>
+        r.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(r.url()).pathname),
+      'performSearch: POST /v1/quotations/search',
+      15000
+    );
+    searchAnswered.catch(() => undefined);
+    await this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 });
+    const searchResponse = await searchAnswered;
+    if (!searchResponse.ok()) {
+      throw new Error(`performSearch: ${await this.describeMatchedResponse(searchResponse)}`);
+    }
 
     try {
       await this.page
@@ -778,8 +755,26 @@ export class QuotationsPage extends BasePage {
     return dealName;
   }
 
+  // B6 (staging probe 2026-11-17, 3 deals): after the deal's GET is answered the product section is empty
+  // (price "" and no "add product" button) and fills about 250-350 ms later: the price gets its value and
+  // `span.add-new-product` appears in the same instant. The button is the render signal that replaces the
+  // old 2 s pause. A deal WITHOUT products was not observed (all three had one), so if the button never
+  // appears within the budget this does not fail: it logs and falls through to the existing price check
+  // below, which adds a product manually (the old behaviour after its pause).
+  private async waitForProductSectionRendered(): Promise<void> {
+    const rendered = await this.addNewProductButton()
+      .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (!rendered) {
+      logger.warn(
+        `Quotation form: no "add product" button ${config.timeouts.expect}ms after the deal was selected — continuing with the price check (deal without products?)`
+      );
+    }
+  }
+
   private async ensureProductRowExists(): Promise<void> {
-    await this.page.waitForTimeout(2000);
+    await this.waitForProductSectionRendered();
     // Check if first product row has a selected product (price > 0 means product is selected)
     const firstPrice = this.page.locator('[id="1_03_input_products.0.price"]');
     const priceValue = await firstPrice.inputValue().catch(() => '0');
@@ -815,7 +810,9 @@ export class QuotationsPage extends BasePage {
   // flows those methods serve (a deal is always selected there), so this
   // avoids any ripple risk to the 15+ existing Quotation tests using them.
   private async ensureProductRowExistsFromPanel(): Promise<void> {
-    await this.page.waitForTimeout(2000);
+    // B6: the panel modal's product section renders like the standalone form's (see
+    // waitForProductSectionRendered); bounded, then the existing "not interactable, skipping" handling below
+    await this.waitForProductSectionRendered();
     const firstPrice = this.page.locator('[id="1_03_input_products.0.price"]');
     const firstPriceValue = await firstPrice.inputValue().catch(() => '');
     if (firstPriceValue && firstPriceValue !== '0') {
@@ -951,18 +948,25 @@ export class QuotationsPage extends BasePage {
     // GET /v1/quotations/{id} may complete before waitForQuotationDetailPage registers
     // its own listener, causing it to miss the response and return null after 15s.
     // Registering here guarantees we capture the response regardless of timing.
+    // B6 (Q14 suspect): the answer used to be awaited with `.catch(() => null)` and only a 404 threw, so a
+    // missing GET, a 401 or a 5xx went on silently to the next step. Now a missing or non-2xx answer fails
+    // by name with the request's status/code/message.
     const responsePromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
       'goToQuotationDetail: detail GET',
       20000
-    ).catch(() => null);
+    );
+    responsePromise.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
     await this.waitForUrl(/\/quotations\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     const response = await responsePromise;
-    if (response?.status() === 404) {
+    if (response.status() === 404) {
       throw new Error('Quotation detail page returned 404 — quotation does not exist');
+    }
+    if (!response.ok()) {
+      throw new Error(`goToQuotationDetail(${id}): ${await this.describeMatchedResponse(response)}`);
     }
     logger.info(`Navigated to quotation detail: ${id}`);
   }
@@ -1024,7 +1028,18 @@ export class QuotationsPage extends BasePage {
       this.productIdInput(newRowIndex),
       this.page.locator('.is-invalid__menu .is-invalid__option'),
       name,
-      expectFound
+      expectFound,
+      async (rowControl) => {
+        // WHY: never overwrite a filled row (see waitForEditFormReady()); a stale count must fail loudly
+        const filledValue = await rowControl.locator('[class*="__single-value"]').count();
+        if (filledValue > 0) {
+          const current = await rowControl.locator('[class*="__single-value"]').first().innerText();
+          throw new Error(
+            `addFreshProductByName: product row ${newRowIndex} (products.${newRowIndex}.id) already holds ` +
+              `"${current.trim()}" after Add New (counted ${existingRowCount} rows before) — refusing to overwrite it`
+          );
+        }
+      }
     );
   }
 
@@ -1374,15 +1389,19 @@ export class QuotationsPage extends BasePage {
     const discountInput = this.productDiscountInput(row);
     const taxInput = this.productTaxInput(row);
 
-    if (await discountInput.isVisible()) {
-      await discountInput.clear();
-      await discountInput.fill(String(data.discount));
-    }
-    if (await taxInput.isVisible()) {
-      await taxInput.clear();
-      await taxInput.fill(String(data.tax));
-    }
-    await this.page.waitForTimeout(500);
+    // B6: both fields must be there (they used to be skipped silently when not visible, which left the
+    // grand-total test checking a quotation whose discount/tax was never changed); no pause: the totals
+    // are re-read by assertGrandTotalMath()'s retrying poll.
+    await expect(discountInput, `Product row ${row}: discount input should be visible`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await discountInput.clear();
+    await discountInput.fill(String(data.discount));
+    await expect(taxInput, `Product row ${row}: tax input should be visible`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await taxInput.clear();
+    await taxInput.fill(String(data.tax));
   }
 
   // WHY this exists, and why it retries ONLY this one exact signature
@@ -1893,7 +1912,8 @@ export class QuotationsPage extends BasePage {
       // actionability timeout. Escape reliably dismisses it without
       // depending on the portal's CSS-in-JS hash class name.
       await this.page.keyboard.press('Escape');
-      await this.page.waitForTimeout(500);
+      // B6: the menu being gone is the signal (no pause)
+      await this.ensureReactSelectMenuClosed('after clearing the inaccessible entity');
     }
 
     // Unreachable — the loop above always returns or throws.
@@ -1936,18 +1956,30 @@ export class QuotationsPage extends BasePage {
 
   // ─── 8. Edit actions ─────────────────────────────────────────────────────────
 
-  async clickEditButton(): Promise<void> {
-    await this.editActionBtn().waitFor({ state: 'visible', timeout: 15000 });
-    await this.editActionBtn().click();
+  // WHY the ready gate (2026-11-16, sandbox run 42064754304, PS15/P&S rbac): the edit drawer opens
+  // at once but its fields and the quotation's product rows render only after GET
+  // /v1/quotations/layout/edit and GET /v1/quotations/<id>. addFreshProductByName() counted rows 17 ms
+  // after the modal appeared, read 0, and overwrote row 0 while the new row 1 stayed empty, so the
+  // form's own "required field" validation blocked Save and no request was sent. Same shape as
+  // openCreateForm(): arm the layout check before the click, fail at once on a 4xx/5xx layout, then
+  // wait for the quotation number to hold its value (set from the loaded quotation).
+  private async waitForEditFormReady(layoutCheck: Promise<void>): Promise<void> {
     await this.modal().waitFor({ state: 'visible', timeout: 15000 });
-    logger.info('Opened edit modal via edit button');
+    await this.waitForRenderOrLayoutFailure(layoutCheck, [this.quotationNumberInput()]);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.quotationNumberInput(),
+        'Quotation edit form did not load the quotation (number input stayed empty)'
+      ).not.toHaveValue('', { timeout: config.timeouts.navigation })
+    );
   }
 
-  async clickEllipsisEdit(quotationNumber: string): Promise<void> {
-    await this.listRowEllipsis(quotationNumber).click();
-    await this.ellipsisMenuItem('Edit').click();
-    await this.modal().waitFor({ state: 'visible', timeout: 15000 });
-    logger.info(`Opened edit modal via ellipsis for: ${quotationNumber}`);
+  async clickEditButton(): Promise<void> {
+    await this.editActionBtn().waitFor({ state: 'visible', timeout: 15000 });
+    const layoutCheck = this.armLayoutLoadCheck('edit');
+    await this.editActionBtn().click();
+    await this.waitForEditFormReady(layoutCheck);
+    logger.info('Opened edit modal via edit button');
   }
 
   async fillEditForm(changes: Partial<QuotationData>): Promise<void> {
@@ -2045,8 +2077,15 @@ export class QuotationsPage extends BasePage {
     // Then check that NO row contains that exact summary text.
     // We do NOT check for zero rows — other quotations always exist in the list.
     // We check that this specific summary is absent.
+    // B6: positive control first: performSearch now throws unless POST /v1/quotations/search answered 2xx
+    // (and the loader is gone), then the absence is asserted with a retrying expect (no 2 s pause).
     await this.performSearch(searchTerm);
-    await this.page.waitForTimeout(2000);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.page.locator('.rt-tr-group').filter({ hasText: new RegExp(this.escapeRegExp(searchTerm), 'i') }),
+        `Quotation should NOT be visible in list but was found: "${searchTerm}"`
+      ).toHaveCount(0, { timeout: 5000 })
+    );
     const allRows = this.page.locator('.rt-tr-group');
     // WHY: batched allTextContents() — same fix/evidence as retryFindInList()
     // above (33.8x measured speedup, identical result, single round-trip).
@@ -2164,46 +2203,59 @@ export class QuotationsPage extends BasePage {
     // fill() resolves, but under real system load (concurrent workers/tests)
     // that recompute can lag behind. Poll until the read-back values satisfy
     // the formula instead of asserting on a single snapshot.
-    const maxAttempts = 10;
+    // B6: a retrying poll (the fixed 300 ms pause between 10 reads is gone); same budget as before
+    // (10 attempts), same formula, same error text on exhaustion.
     let last: GrandTotalComponents | null = null;
     let expected = 0;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const subTotal = await this.getNumericValue(this.subTotalInput());
-      const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
-      const additionalTax = await this.getNumericValue(this.additionalTaxInput());
-      const adjustment = await this.getNumericValue(this.adjustmentInput());
-      const grandTotal = await this.getNumericValue(this.grandTotalInput());
+    let lastError: unknown;
+    try {
+      await expect(async () => {
+        const subTotal = await this.getNumericValue(this.subTotalInput());
+        const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
+        const additionalTax = await this.getNumericValue(this.additionalTaxInput());
+        const adjustment = await this.getNumericValue(this.adjustmentInput());
+        const grandTotal = await this.getNumericValue(this.grandTotalInput());
 
-      // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
-      const afterDiscount = subTotal * (1 - additionalDiscount / 100);
-      const afterTax = afterDiscount * (1 + additionalTax / 100);
-      expected = afterTax * (1 + adjustment / 100);
-      last = { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
-
-      if (Math.abs(expected - grandTotal) <= tolerance) {
-        logger.success(
-          `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`
-        );
-        return last;
-      }
-      if (attempt < maxAttempts) await this.page.waitForTimeout(300);
+        // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
+        const afterDiscount = subTotal * (1 - additionalDiscount / 100);
+        const afterTax = afterDiscount * (1 + additionalTax / 100);
+        expected = afterTax * (1 + adjustment / 100);
+        last = { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
+        if (Math.abs(expected - grandTotal) > tolerance) {
+          throw new Error(`grand total ${grandTotal} != expected ${expected.toFixed(2)}`);
+        }
+      }).toPass({ timeout: 5000, intervals: [100, 200, 300] });
+    } catch (error) {
+      lastError = error;
     }
 
-    const { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal } = last!;
-    throw new Error(
-      `Grand total math failed after ${maxAttempts} attempts. Expected: ${expected.toFixed(2)}, Got: ${grandTotal}. ` +
-        `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
-        `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`
+    if (!last) {
+      throw new Error(`Grand total components could not be read: ${String(lastError)}`);
+    }
+    const read: GrandTotalComponents = last;
+    if (lastError) {
+      throw new Error(
+        `Grand total math failed (polled 5 s). Expected: ${expected.toFixed(2)}, Got: ${read.grandTotal}. ` +
+          `SubTotal: ${read.subTotal}, AdditionalDiscount: ${read.additionalDiscount}%, ` +
+          `AdditionalTax: ${read.additionalTax}%, Adjustment: ${read.adjustment}%`
+      );
+    }
+    logger.success(
+      `Grand total math verified: ${read.subTotal} × (1-${read.additionalDiscount}%) × (1+${read.additionalTax}%) × (1+${read.adjustment}%) = ${read.grandTotal}`
     );
+    return read;
   }
 
   async assertProductRowsVisible(): Promise<number> {
-    await this.page.waitForTimeout(1500);
+    // B6: the rows are polled until at least one renders (no 1.5 s pause); none within the budget fails by name
     const rows = this.page.locator('[id*="input_products"][id*="quantity"]');
+    await expect
+      .poll(() => rows.count(), {
+        timeout: config.timeouts.expect,
+        message: 'No product rows found after deal selection',
+      })
+      .toBeGreaterThan(0);
     const count = await rows.count();
-    if (count === 0) {
-      throw new Error('No product rows found after deal selection');
-    }
     logger.success(`Product rows auto-populated: ${count} rows`);
     return count;
   }
@@ -2242,7 +2294,13 @@ export class QuotationsPage extends BasePage {
     // variable render time under load and can still race under heavier CI
     // load than this was calibrated for. Use an auto-retrying assertion
     // instead — it polls until the real DOM condition is met.
-    await expect(this.page.locator('body')).toContainText(ownerName, { timeout: 15000 });
+    // B6 (Q14 suspect): a raw expect(); wrapped like every other detail-page assertion (rule 3)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('body'), `Owner "${ownerName}" should be shown on the detail page`).toContainText(
+        ownerName,
+        { timeout: 15000 }
+      )
+    );
     logger.success(`Owner confirmed: ${ownerName}`);
   }
 
@@ -2295,7 +2353,8 @@ export class QuotationsPage extends BasePage {
             document.body.classList.remove('modal-open');
           `);
         }
-        await this.page.waitForTimeout(500);
+        // B6: dismissed = no d-block (no pause)
+        await modal.waitFor({ state: 'hidden', timeout: 5000 });
         logger.info('Edit modal dismissed');
       }
     } catch {
@@ -2493,47 +2552,6 @@ export class QuotationsPage extends BasePage {
     const stats = fs.statSync(filePath || '');
     logger.success(`Downloaded: ${filename} (${stats.size} bytes)`);
     return { filename, size: stats.size };
-  }
-  // ─── Public helpers for T26 ─────────────────────────────────────────────────
-
-  async fillAssociatedCompanyFirstAvailable(): Promise<string> {
-    // WHY: Search with common 3-char prefixes in order until results appear.
-    // Single character returns too many results and may match companies the
-    // restricted user owns — defeating the purpose of the RBAC test.
-    const searchTerms = ['The', 'Pvt', 'Ltd', 'Tech', 'Inf', 'Sol', 'Sys', 'Con', 'Ser', 'Man'];
-
-    await this.companyControl().click();
-
-    for (const term of searchTerms) {
-      await this.companyInput().fill(term);
-      await this.page.waitForTimeout(500);
-
-      const optionCount = await this.page.locator('.is-invalid__option').count();
-      if (optionCount > 0) {
-        const firstName = await this.page.locator('.is-invalid__option').first().innerText();
-        await this.page.locator('.is-invalid__option').first().click();
-        await this.ensureReactSelectMenuClosed(`company search "${term}"`);
-        logger.info(`Linked company via search "${term}": ${firstName.trim()}`);
-        return firstName.trim();
-      }
-      logger.debug(`No company results for "${term}" — trying next`);
-    }
-
-    // Last resort — clear and try empty search (shows all)
-    await this.companyInput().fill('');
-    await this.page.waitForTimeout(800);
-    const fallbackCount = await this.page.locator('.is-invalid__option').count();
-    if (fallbackCount > 0) {
-      const firstName = await this.page.locator('.is-invalid__option').first().innerText();
-      await this.page.locator('.is-invalid__option').first().click();
-      await this.ensureReactSelectMenuClosed('company (empty search)');
-      logger.info(`Linked company via empty search: ${firstName.trim()}`);
-      return firstName.trim();
-    }
-
-    throw new Error(
-      'fillAssociatedCompanyFirstAvailable: no company options found with any search term'
-    );
   }
   async performSearchPublic(value: string): Promise<void> {
     await this.performSearch(value);

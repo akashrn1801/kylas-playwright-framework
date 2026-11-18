@@ -484,21 +484,29 @@ export class ContactsPage extends BasePage {
     }
   }
 
-  private async performSearch(searchText: string): Promise<void> {
+  // requireAnswer (B6): an ABSENCE check must know the search was really answered (200), otherwise "row
+  // not there" would also pass when the search never ran. Default false keeps the lenient callers as before.
+  private async performSearch(searchText: string, requireAnswer = false): Promise<void> {
     logger.info(`Searching contact: ${searchText}`);
     await this.fill(this.searchInput(), searchText, 'search input');
-    await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    const [answer] = await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    if (requireAnswer && answer === null) {
+      throw new Error(`Contact search for "${searchText}" was not answered with 200 within 15 s`);
+    }
     await this.waitForLoaderToDisappear();
   }
 
   private async waitForSearchApi(): Promise<Response | null> {
     try {
       return await this.armResponseWaitWithRecovery(
+        // B6 (staging trace 2026-11-17): the list search is `POST /v1/search/contact?...` -> 200. This used to
+        // match `GET` + any URL containing "search", which never occurs, so every search waited the full 15 s
+        // and returned null (a hidden delay, and no usable "search answered" signal).
         (response) =>
-          response.url().includes('search') &&
-          response.request().method() === 'GET' &&
+          response.request().method() === 'POST' &&
+          /^\/v1\/search\/contact\/?$/.test(new URL(response.url()).pathname) &&
           response.status() === 200,
-        'contact search API',
+        'contact search API (POST /v1/search/contact)',
         15000
       );
     } catch {
@@ -538,22 +546,12 @@ export class ContactsPage extends BasePage {
   // the control container. Scoping options to the visible .is-invalid__menu (the portal
   // root) prevents accidentally clicking stale options from a simultaneously-open dropdown.
   // Steps mirror selectFromIsInvalidControl in QuotationsPage but add the menu-visible gate.
-  // WHY the bounded whole-sequence retry (root-caused 2026-07-22 from a real
-  // PROD failure): every click in this method used to be a raw, UNBOUNDED
-  // Playwright `.click()` — no `timeout` option, and no `actionTimeout` set
-  // anywhere in the config (confirmed via grep), so Playwright's default of
-  // NO timeout applies. Reproduced live: on prod, `option.click()` (the final
-  // click, selecting Campaign/Source) hung with ZERO further log activity
-  // for the rest of the test's 480s budget, only surfacing as a generic
-  // "Test timeout exceeded" + "Target page ... closed" once the outer test
-  // timeout force-killed the browser. This is the same "click lands but
-  // nothing happens" React click-handler race already root-caused and fixed
-  // elsewhere in this codebase (CompaniesPage.clickAddCompany,
-  // DealsPage.cloneDeal) — the fix here is the same shape: bound every click
-  // to config.timeouts.expect so a stuck click fails FAST instead of eating
-  // the whole test budget, and retry the entire open->filter->select
-  // sequence (not just the click) since a half-opened/half-filtered menu
-  // from a failed attempt isn't a valid state to resume from.
+  // B6: ONE pass, no 3-attempt loop and no pause (it re-ran the whole open/filter/pick after an
+  // Escape + 500 ms, on any error). Root-caused 2026-07-22: a raw unbounded click() hung a whole test
+  // on PROD, so every step here is bounded and fails by name. Opening goes through
+  // openReactSelectAndWaitForOptions() (ADR 0014 section 4): it re-clicks the control only when NO
+  // menu is open (the React "click lands, nothing happens" race) and only waits when a menu is open
+  // but still empty, so an open menu is never toggled shut. The pick is applied when the menu closes.
   private async selectFromContactDropdown(inputId: string, optionText: string): Promise<void> {
     const input = this.page.locator(`[id="${inputId}"]`);
     await input.scrollIntoViewIfNeeded();
@@ -561,75 +559,46 @@ export class ContactsPage extends BasePage {
     // WHY: Click the ancestor .is-invalid__control wrapper — clicking the input alone
     // does not reliably trigger the React Select open handler on portalled dropdowns
     const control = input.locator('xpath=ancestor::div[contains(@class,"is-invalid__control")]');
-    const menu = this.page.locator('.is-invalid__menu');
-
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await control.click({ timeout: config.timeouts.expect });
-        // WHY: Confirmed live — a control click can occasionally fail to register (e.g.
-        // scroll/animation still settling right after a modal opens), which previously
-        // just burned the full menu-visible timeout for a click that never landed. Check
-        // for the menu portal being ATTACHED (React mounts it immediately on open, well
-        // before any visible-state CSS transition finishes) as a fast, safe signal the
-        // click worked. Only re-click if it's genuinely not attached — re-clicking an
-        // already-open dropdown would just toggle it closed.
-        const opened = await menu
-          .waitFor({ state: 'attached', timeout: 3000 })
-          .then(() => true)
-          .catch(() => false);
-        if (!opened) {
-          logger.warn(`Dropdown did not open on first click for ${inputId} — retrying click`);
-          await control.click({ timeout: config.timeouts.expect });
-        }
-        // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
-        await input.fill(optionText);
-        // WHY: Wait for .is-invalid__menu to appear — confirms THIS dropdown opened and its
-        // options are rendered in the portal. Prevents racing against another open dropdown.
-        await menu.waitFor({ state: 'visible', timeout: 10000 });
-        // WHY: Scope the option click to the visible menu container — avoids clicking options
-        // from a simultaneously-visible dropdown elsewhere on the page (portal conflict)
-        const option = menu.locator('.is-invalid__option').filter({ hasText: optionText }).first();
-        await option.waitFor({ state: 'visible', timeout: 5000 });
-        await option.click({ timeout: config.timeouts.expect });
-        // WHY: Wait for menu to collapse — confirms React Select registered the selection
-        await this.ensureReactSelectMenuClosed(`contact dropdown ${inputId} (${optionText})`, control);
-        logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `selectFromContactDropdown(${inputId}) attempt ${attempt}/${maxAttempts} failed: ` +
-            `${String(error)} — closing any stuck menu and retrying`
-        );
-        // Best-effort: close a possibly stuck-open menu before the next attempt
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `selectFromContactDropdown: failed to select "${optionText}" for ${inputId} after ` +
-        `${maxAttempts} attempts — ${String(lastError)}`
-    );
+    const description = `contact dropdown ${inputId}`;
+    await this.openReactSelectAndWaitForOptions(control, description);
+    // WHY: Fill to filter the option list before clicking — reduces noise and speeds up selection
+    await input.fill(optionText, { timeout: config.timeouts.expect });
+    // WHY: scoped to the visible menu container — avoids clicking options from a
+    // simultaneously-visible dropdown elsewhere on the page (portal conflict)
+    const option = this.page
+      .locator('.is-invalid__menu .is-invalid__option')
+      .filter({ hasText: optionText })
+      .first();
+    await expect(option, `${description}: option "${optionText}" should be listed`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await option.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed(`${description} (${optionText})`, control);
+    logger.debug(`Selected "${optionText}" from contact dropdown: ${inputId}`);
   }
 
   private async retryFindContact(firstName: string): Promise<boolean> {
-    const currentConfig = this.retryConfig;
-    for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${currentConfig.retries}`);
-      await this.goToContactsList();
-      await this.performSearch(firstName);
-      const found = await this.waitForSearchResults(firstName);
-      if (found) {
-        logger.success('Contact found');
-        return true;
-      }
-      if (attempt < currentConfig.retries) {
-        await this.page.waitForTimeout(currentConfig.wait);
-      }
+    const { retries, wait } = this.retryConfig;
+    // B6: the real condition is the contact's row in the search results after a fresh list + search (a new
+    // contact can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // fixed retries x (5 s results wait + pause) took, instead of a fixed pause between attempts. Same shape
+    // as CompaniesPage.retryFindCompany().
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching contact: ${firstName}`);
+          await this.goToContactsList();
+          await this.performSearch(firstName);
+          if (!(await this.waitForSearchResults(firstName))) {
+            throw new Error(`Contact "${firstName}" is not in the search results yet`);
+          }
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success('Contact found');
+      return true;
+    } catch {
+      return false;
     }
-    return false;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1019,12 +988,12 @@ export class ContactsPage extends BasePage {
     // ADR 0016 (B3, KI-22 / plan section 11 #2): the modal closes only after the update is answered, so
     // wait for that answer first (status checked) and only then for the modal; the 15 s no longer
     // includes a slow save.
-    await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
+    const saved = await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
       method: ['PUT', 'PATCH'],
       urlRe: /\/v1\/contacts\/\d+$/,
       description: 'Contact update (PUT /v1/contacts/{id})',
     });
-    await this.assertNoFormErrors('contact edit form');
+    await this.assertNoFormErrors('contact edit form', saved);
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeHidden({ timeout: 15000 })
     );
@@ -1119,63 +1088,53 @@ export class ContactsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
-  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
-  // stalled a full-suite regression run across many share-based RBAC tests):
-  // see LeadsPage.openUserShareTypeSearch() for the full explanation — same
-  // "click registers, handler race" class already fixed elsewhere in this
-  // module (selectFromContactDropdown), applied here to the Share modal's
-  // type-dropdown selection. If userOption.click() (User) didn't register,
-  // shareToUserInput() never mounts and the following raw `.fill()` hangs
-  // until the outer test timeout. Fixed identically here.
+  // B6: ONE bounded pass, same shape as CompaniesPage/LeadsPage.openUserShareTypeSearch(). The old
+  // 3-attempt loop (root-caused 2026-07-22 from ~9 min hangs: a lost "User" click left the user input
+  // unmounted) re-clicked the control, which toggles an open menu shut, and slept 500 ms between tries.
+  // Now: wait for the menu and an ENABLED "User" option, click once, wait for the menu to close, assert
+  // the control shows "User" and the search input mounted. Every step fails by name.
   private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
-        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
-            'closing any stuck menu and retrying'
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    await shareTypeControl.click({ timeout: config.timeouts.expect });
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await expect(userOption, 'Share dialog: the "User" share-type option should be visible (menu open)').toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await expect(userOption, 'Share dialog: the "User" share-type option should be enabled').toBeEnabled({
+      timeout: config.timeouts.expect,
+    });
+    await userOption.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
+    await expect(
+      shareTypeControl.locator('.is-invalid__single-value'),
+      'Share dialog: the share-type control should show "User" after the pick'
+    ).toHaveText('User', { timeout: config.timeouts.expect });
+    await expect(
+      this.shareToUserInput(),
+      'Share dialog: the user search input should appear after picking "User"'
+    ).toBeVisible({ timeout: config.timeouts.expect });
   }
 
   async shareContact(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing contact with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
-    await this.page.waitForTimeout(1000);
-    // WHY: Click the Share To type dropdown control — opens User/Team options
+    // WHY: Click the Share To type dropdown control (waited for just below) — opens User/Team options
     const shareTypeControl = this.page.locator('.modal.show').locator('.is-invalid__control').first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
     await this.openUserShareTypeSearch(shareTypeControl);
-    await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? restrictedUserName.trim().substring(0, 3);
     logger.debug(`Share search term: "${validWord}" (from: "${restrictedUserName}")`);
     await this.shareToUserInput().fill(validWord, { timeout: config.timeouts.expect });
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() waits for the matching user option
     // WHY selectUserOptionWithRetry(), not a bare fill+wait (2026-07-30,
     // found via a real CI failure — see BasePage's own comment on this
     // method for the full evidence): retries the search up to 3x for a
     // genuinely-just-created user's search-index propagation lag.
     await this.selectUserOptionWithRetry(this.shareToUserInput(), validWord, restrictedUserName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
       const toggle = this.sharePermissionToggle(permission);
@@ -1187,53 +1146,62 @@ export class ContactsPage extends BasePage {
           const label = input?.parentElement?.querySelector('label') as HTMLElement;
           label?.click();
         }, permission);
-        await this.page.waitForTimeout(300);
+        // B6: the toggle itself must show on (a missing input or a lost click fails by name)
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, `Share: permission "${permission}" should be on`).toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the share-API response wait BEFORE clicking — confirms the
-    // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/contacts\/\d+\/share$/) !== null && res.request().method() === 'POST',
-      'contact share response',
-      15000
-    ).catch(() => null);
-    await this.shareConfirmButton().click();
-    await shareResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the share's own answer, armed before the click. It used to end in
+    // `.catch(() => null)`, so a missed or refused share carried on and broke the RBAC steps that follow;
+    // now it fails by name when the answer is missing or not 2xx. Then the share dialog must close.
+    await this.saveAndAwait(() => this.shareConfirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/contacts\/\d+\/share\/?$/,
+      description: 'Contact share (POST /v1/contacts/{id}/share)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The share dialog should close after Share').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Contact shared with: ${restrictedUserName}`);
   }
 
   async reassignContact(userName: string): Promise<void> {
     logger.info(`Reassigning contact to: ${userName}`);
     await this.clickEllipsisOption('Reassign');
-    await this.page.waitForTimeout(500);
-    // WHY: Search requires minimum 3 characters
+    // WHY: Search requires minimum 3 characters (the dialog input is waited for just below)
     const words = userName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? userName.trim().substring(0, 3);
     logger.debug(`Reassign search term: "${validWord}" (from: "${userName}")`);
     const reassignUserInput = this.page.locator('[id="undefined_undefinedundefined_input_entitySelection"]');
     await reassignUserInput.waitFor({ state: 'visible', timeout: 5000 });
     await reassignUserInput.fill(validWord);
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() waits for the matching user option
     // WHY selectUserOptionWithRetry() — see shareContact()'s identical
     // comment for the full evidence (2026-07-30).
     await this.selectUserOptionWithRetry(reassignUserInput, validWord, userName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     const reassignConfirmButton = this.page.locator('.modal.show button.btn-primary.ml-auto').first();
     await reassignConfirmButton.waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the reassign-API (owner change) response wait BEFORE
-    // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/contacts\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-      'contact reassign response',
-      15000
-    ).catch(() => null);
-    await reassignConfirmButton.click();
-    await reassignResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the owner change's own answer (PUT /v1/contacts/{id}/owner), armed
+    // before the click; it used to be awaited with its result ignored (`.catch(() => null)`). Fails by name
+    // when missing or not 2xx; then the dialog must close.
+    await this.saveAndAwait(() => reassignConfirmButton.click(), {
+      method: 'PUT',
+      urlRe: /^\/v1\/contacts\/\d+\/owner\/?$/,
+      description: 'Contact reassign (PUT /v1/contacts/{id}/owner)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The reassign dialog should close after Reassign').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Contact reassigned to: ${userName}`);
   }
 
@@ -1242,8 +1210,35 @@ export class ContactsPage extends BasePage {
     const icon = this.rightPanelIcon(title);
     await icon.waitFor({ state: 'visible', timeout: 10000 });
     await icon.click();
-    await this.page.waitForTimeout(500);
+    // B6: no pause: every caller goes on with an auto-waiting step for its own panel content
     logger.success(`Right panel icon clicked: ${title}`);
+  }
+
+  // B6 (ADR 0017 save confirmation): Save in the "Add Deal" modal opened from the contact ellipsis menu.
+  // The two contacts.spec deal steps waited with a bare `/deals`|`/deal` URL substring and ended in
+  // `.catch(() => null)` on both the response and the modal-hidden wait, so a failed save went on without
+  // a deal. Now: POST /v1/deals answered 2xx (armed before the click, fails by name with status/code), the
+  // new deal's id is read from the body and must exist, and the modal must close (no swallow).
+  async saveDealFromAddDealModal(): Promise<number> {
+    const response = await this.saveAndAwait(() => this.click(this.saveButton(), 'Save (Add Deal modal)'), {
+      method: 'POST',
+      urlRe: /^\/v1\/deals\/?$/,
+      description: 'Deal create from contact (POST /v1/deals)',
+    });
+    const body = (await response.json().catch(() => ({}))) as { id?: number };
+    if (typeof body.id !== 'number') {
+      throw new Error(`Deal create from contact: the POST /v1/deals answer carried no deal id (${JSON.stringify(body).slice(0, 200)})`);
+    }
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The Add Deal modal should close after Save').toBeHidden({ timeout: 15000 })
+    );
+    return body.id;
+  }
+
+  // Opens the Notes panel and adds the note with the shared BasePage flow (baseline + exactly one more note).
+  async addNoteFromPanel(noteText: string): Promise<void> {
+    await this.clickRightPanelIcon('Notes');
+    await this.addNoteInOpenPanel(noteText);
   }
 
   // WHY delegates to QuotationsPage.fillAndSaveQuotationFromPanel() (2026-07-29
@@ -1258,9 +1253,18 @@ export class ContactsPage extends BasePage {
     checkCustomFieldsAbsent = false
   ): Promise<string | null> {
     logger.info('Adding quotation from contact productivity panel');
+    // WHY the armed search wait replaces a fixed 2 s sleep (CO12, ADR 0016): opening the panel makes the
+    // Quotations card load its own list (POST /v1/quotations/search, seen in the trace right after the icon
+    // click). That response is the card's ready signal; armed before the click so a fast answer is not missed.
+    const cardListLoaded = this.armResponseWaitWithRecovery(
+      (res) => res.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(res.url()).pathname),
+      'Quotations card list (POST /v1/quotations/search) after opening the panel',
+      30000
+    );
+    cardListLoaded.catch(() => undefined);
     // WHY: Click Quotations right panel icon to open quotations section
     await this.clickRightPanelIcon('Quotations');
-    await this.page.waitForTimeout(2000);
+    await cardListLoaded;
     // WHY: Add button is button.btn-primary.btn-xs inside Quotations card
     const quotationsCard = this.page
       .locator('.card')
@@ -1312,7 +1316,8 @@ export class ContactsPage extends BasePage {
   async assertContactNotInList(firstName: string): Promise<void> {
     logger.info(`Validating contact absent: ${firstName}`);
     await this.goToContactsList();
-    await this.performSearch(firstName);
+    // B6: positive control first (the search was answered 200 and the list settled), then the absence
+    await this.performSearch(firstName, true);
     await this.withSessionExpiryRecovery(() =>
       expect(this.contactRowNameCell(firstName)).toBeHidden({ timeout: 10000 })
     );
@@ -1321,17 +1326,24 @@ export class ContactsPage extends BasePage {
 
   async assertContactDeletedById(contactId: number): Promise<void> {
     logger.info(`Asserting contact ${contactId} is deleted`);
-    // WHY: Navigate to detail URL — deleted contact shows error toast or redirects to list
+    // B6: positive control first (the detail GET was answered), then the specific not-found state (staging
+    // trace 2026-11-17: GET /v1/contacts/{id} answers 404 / code 000010 "Resource doesnt seem to exists or
+    // you dont have enough permissions"; same code as a deleted lead, not the company one). The old check
+    // slept 2 s and passed on ANY redirect or any error element, even before the page loaded.
+    const contactGet = this.armResponseWaitWithRecovery(
+      (res) =>
+        new URL(res.url()).pathname === `/v1/contacts/${contactId}` && res.request().method() === 'GET',
+      `assertContactDeletedById: contact ${contactId} GET`,
+      config.timeouts.navigation
+    );
+    contactGet.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/contacts/details/${contactId}`);
-    await this.page.waitForTimeout(2000);
-    const url = this.page.url();
-    // WHY: Check either URL redirected away OR contact no longer accessible
-    const isRedirected = !url.includes(`/contacts/details/${contactId}`);
-    const hasErrorToast = await this.page
-      .locator('.toastr.rrt-error, .alert-danger, [class*="error-toast"]')
-      .isVisible()
-      .catch(() => false);
-    expect(isRedirected || hasErrorToast).toBeTruthy();
+    const response = await contactGet;
+    const body = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
+    expect(
+      { status: response.status(), code: body.code, message: body.message },
+      `Contact ${contactId} should answer 404 / code 000010 (not found) after the delete`
+    ).toMatchObject({ status: 404, code: '000010' });
     logger.success(`Contact ${contactId} confirmed deleted`);
   }
 
@@ -1375,6 +1387,33 @@ export class ContactsPage extends BasePage {
     logger.success(`Owner confirmed: ${expectedOwner}`);
   }
 
+  // B6: click a detail tab and know it is the active one (trace: the link goes from "nav-item nav-link" to
+  // "nav-item nav-link active" about 0.5 s after the click) instead of pausing. Same as LeadsPage.activateDetailTab().
+  private async activateDetailTab(tab: Locator, name: string): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should appear on the detail page`).toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
+    await tab.click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should be active after the click`).toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
+  private async expectTabContains(tabPane: Locator, tabName: string, values: string[]): Promise<void> {
+    await this.withSessionExpiryRecovery(async () => {
+      for (const value of values) {
+        await expect(tabPane, `${tabName} tab should show "${value}"`).toContainText(value, {
+          ignoreCase: true,
+          timeout: config.timeouts.expect,
+        });
+      }
+    });
+  }
+
   async assertContactDetailFields(data: ContactData): Promise<void> {
     logger.info('Asserting contact detail fields');
     // WHY: Detail page renders field values as text inside .read-only-info containers
@@ -1386,45 +1425,35 @@ export class ContactsPage extends BasePage {
     await expect(this.page.locator('body')).toContainText(data.lastName, { timeout: 5000 });
     // WHY: Same tab pattern as LeadsPage.assertDetailTabContent()
     const tabPane = this.page.locator('.tab-pane.active.show');
+    // B6: each tab is clicked and known ACTIVE (activateDetailTab) and its values are asserted with
+    // retrying expects (ignoreCase = the old lower-cased compare), instead of an 800 ms pause and a
+    // one-shot textContent() read.
     // WHY: Verify Communication tab — email, phone, timezone
-    await this.page.locator('#nav-tab0-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab0Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab0Text).toContain(data.email.toLowerCase());
-    expect(tab0Text).toContain(data.phone);
+    await this.activateDetailTab(this.page.locator('#nav-tab0-tab'), 'Communication');
+    await this.expectTabContains(tabPane, 'Communication', [data.email, data.phone]);
     // WHY: confirmed live (2026-07-17) via direct DOM inspection of a fresh
     // contact's detail page — Timezone renders on this same Communication
     // tab, container id "timezone", same as Lead's equivalent field.
     if (data.timezone) {
-      expect(tab0Text).toContain(data.timezone.toLowerCase());
+      await this.expectTabContains(tabPane, 'Communication', [data.timezone]);
     }
     logger.debug(`Communication tab — email: ${data.email} | phone: ${data.phone} | timezone: ${data.timezone}`);
     // WHY: Verify Location tab — address, city, state, zipcode
-    await this.page.locator('#nav-tab1-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab1Text = (await tabPane.textContent() ?? '').toLowerCase();
+    await this.activateDetailTab(this.page.locator('#nav-tab1-tab'), 'Location');
     // WHY: this line was missing despite the comment above claiming address
     // was already checked (2026-07-15 fix) — added now because PART B's
     // GPS-address work needs the detail page to genuinely verify whatever
     // address text ended up in the field (GPS-selected or manual), and every
     // other Contact test benefits from the same real coverage this comment
     // always claimed to provide.
-    expect(tab1Text).toContain(data.address.toLowerCase());
-    expect(tab1Text).toContain(data.city.toLowerCase());
-    expect(tab1Text).toContain(data.state.toLowerCase());
-    expect(tab1Text).toContain(data.zipcode.toLowerCase());
+    await this.expectTabContains(tabPane, 'Location', [data.address, data.city, data.state, data.zipcode]);
     logger.debug(`Location tab — address: ${data.address} | city: ${data.city} | state: ${data.state} | zipcode: ${data.zipcode}`);
     // WHY: Verify Social tab — facebook, twitter, linkedin
-    await this.page.locator('#nav-tab2-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab2Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab2Text).toContain(data.facebook.toLowerCase());
-    expect(tab2Text).toContain(data.twitter.toLowerCase());
-    expect(tab2Text).toContain(data.linkedin.toLowerCase());
+    await this.activateDetailTab(this.page.locator('#nav-tab2-tab'), 'Social');
+    await this.expectTabContains(tabPane, 'Social', [data.facebook, data.twitter, data.linkedin]);
     logger.debug(`Social tab — facebook: ${data.facebook} | twitter: ${data.twitter} | linkedin: ${data.linkedin}`);
     // WHY: Verify Professional tab — department, designation, company
-    await this.page.locator('#nav-tab3-tab').click();
-    await this.page.waitForTimeout(800);
+    await this.activateDetailTab(this.page.locator('#nav-tab3-tab'), 'Professional');
     // WHY auto-retrying assertions, not a one-shot textContent() read (qa run
     // 39471331508, contacts.spec:551, both attempts): the Professional tab showed
     // "company271129" where the typed company name was expected. Whether the
@@ -1456,17 +1485,21 @@ export class ContactsPage extends BasePage {
       logger.debug(`Salutation verified: ${data.salutation}`);
     }
     // WHY: Verify Campaign Information tab — subSource, campaign, source, utmSource etc.
-    await this.page.locator('#nav-tab4-tab').click();
-    await this.page.waitForTimeout(800);
-    const tab4Text = (await tabPane.textContent() ?? '').toLowerCase();
-    expect(tab4Text).toContain(data.subSource.toLowerCase());
-    if (data.campaign) expect(tab4Text).toContain(data.campaign.toLowerCase());
-    if (data.source) expect(tab4Text).toContain(data.source.toLowerCase());
-    expect(tab4Text).toContain(data.utmSource.toLowerCase());
-    expect(tab4Text).toContain(data.utmCampaign.toLowerCase());
-    expect(tab4Text).toContain(data.utmMedium.toLowerCase());
-    expect(tab4Text).toContain(data.utmContent.toLowerCase());
-    expect(tab4Text).toContain(data.utmTerm.toLowerCase());
+    await this.activateDetailTab(this.page.locator('#nav-tab4-tab'), 'Campaign Information');
+    await this.expectTabContains(
+      tabPane,
+      'Campaign Information',
+      [
+        data.subSource,
+        data.campaign,
+        data.source,
+        data.utmSource,
+        data.utmCampaign,
+        data.utmMedium,
+        data.utmContent,
+        data.utmTerm,
+      ].filter((v): v is string => Boolean(v))
+    );
     logger.debug(`Campaign tab — subSource: ${data.subSource} | campaign: ${data.campaign} | source: ${data.source} | utmSource: ${data.utmSource}`);
     logger.success('Contact detail fields verified');
   }
@@ -1509,8 +1542,7 @@ export class ContactsPage extends BasePage {
       tab,
       '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
     ).toBeVisible({ timeout: config.timeouts.navigation });
-    await tab.click();
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Other Details');
 
     const cf = data.customFields;
     await this.assertCustomFieldOnDetail(
@@ -1569,7 +1601,7 @@ export class ContactsPage extends BasePage {
     logger.info(`Asserting detail tab content for: ${iconTitle}`);
     // WHY: Click the right panel icon to open that section
     await this.clickRightPanelIcon(iconTitle);
-    await this.page.waitForTimeout(800);
+    // B6: no pause: the card header below is awaited with a retrying expect
     // WHY: After clicking the icon, the corresponding card section appears
     // Cards have h2.h2 inside .card-header with matching text
     const cardHeader = this.page
@@ -1628,7 +1660,7 @@ export class ContactsPage extends BasePage {
   async assertQuotationInPanel(quotationNumber: string): Promise<void> {
     logger.info(`Asserting quotation in panel: ${quotationNumber}`);
     await this.clickRightPanelIcon('Quotations');
-    await this.page.waitForTimeout(1000);
+    // B6: no pause: the retrying expect below waits for the quotation row
     await this.withSessionExpiryRecovery(() =>
       expect(this.page.locator('.quotation').filter({ hasText: quotationNumber })).toBeVisible({
         timeout: 10000,

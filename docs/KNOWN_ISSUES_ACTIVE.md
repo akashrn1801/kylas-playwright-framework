@@ -59,10 +59,37 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
+### KI-70 — Quick-task "Assigned To" menu sometimes never renders (2026-11-18)
+- **Status:** open, hardened, root cause not confirmed · **Since:** 2026-11-17
+- **What:** CO10 (`companies.spec.ts`) and COR9 (`companies.rbac.spec.ts:186`) failed in `TasksPage.fillQuickTaskForm`: click landed, `GET /v1/users/lookup?q=firstName:` returned 200 with 2 users, no `.assigned-to-menu-list` for 10 s, a second click fired no lookup. 2 of 7 full Companies runs failed; 0 of 56 probe repeats and 0 of 2 instrumented full runs.
+- **Next check:** `openQuickTaskMenu` is hardening only (did not stop COR9). The next failure's error message carries `document.activeElement`, the element at the button centre, whether the menu ever appeared, and the lookup timing. No sleeps or longer timeouts.
+
+### KI-69 — Restricted owner's lead menu without "Delete" (2026-11-16)
+- **Status:** open, cause found, fix awaiting verification · **Since:** staging `leads.rbac.spec.ts:762` (12/12 fail), 698
+- **What:** own lead's ellipsis menu had only "Clone" and "Trigger Sequence" although the API said `recordActions.delete: true`. Cause: `restricted.json` (re-auth of a signed-out page, 17:04Z) lacked `userId/tenantId/userName/slingApp`; rebuilt: both pass 2/2. Fix: state guard + globalSetup key check (ADR 0017); close after the next full runs.
+
+### KI-68 — App shell stuck on "Loading" after a direct-URL navigation (2026-11-16)
+- **Status:** open, intermittent, backend/network side proven by the network log · **Since:** staging `leads.rbac.spec.ts:744` x24 (2 of 24)
+- **What:** after `goto /sales/leads/details/<id>` the page stayed on the splash: `GET /v1/entities/label` and `/v1/tenants` were never answered (HAR -1), so no lead GET followed; `waitForLeadDetailsPage()` failed by name.
+
+### KI-67 — Clone lead form: Last Name sometimes loses the " Copy" pre-fill (2026-11-16)
+- **Status:** open, tracked; tests do not fail on it (owner 2026-11-17: not an app bug) · **Since:** sandbox 38855451748 (2026-10-16); staging 2/24, 3/24 at 4 workers
+- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone. The Copy branch runs once per mount (`hasCloneValuesSet`); `enableReinitialize` shares the payload.
+- **Test:** `cloneLead(original)` must pass: "Clone Lead" form open, original first name in it, save gives a NEW id. A missing " Copy" only adds a `known-issue` annotation + warning.
+
+### KI-66 — Deal edit: "Distribute Equally" banner and Actual Value sometimes not recalculated after a product attach (2026-11-16)
+- **Status:** open, intermittent, app client cause not confirmed; test fix NOT applied · **Since:** 2026-10-09 (QA 37733648349, passed on retry); 2026-11-16 (staging `productsAndServices.rbac.spec.ts:161`, 1 of 6)
+- **What:** failing run: Estimated 17,308 -> 42,308 but Actual stayed 17,308, no `button.distribute-unallocated-btn` in 10 s, `PUT /v1/deals/107666` -> 400 `01001091` (payload: estimated 42308, actual 17308, 10 installments summing 17308, #1 RECEIVED). 10/10 traced passes (admin 2 installments, restricted 2-11): banner in 10-40 ms, Actual = Estimated at the pick. Role, installment count and server traffic do not separate them; after the pick a passing run re-renders both columns, a failing one only Estimated.
+- **Next check:** a second failing trace; if Actual never follows it is app behavior (report it). Designed fix (not applied): race "Estimated changed" vs banner in `handleDistributeUnallocatedAmountIfPresent`, fail by name before Save.
+### KI-65 — `productFixtureNeed` skips product fixtures when a file filter carries a `:line` suffix (2026-11-16)
+- **Status:** open, not fixed (workaround below) · **Since:** found 2026-11-16 reproducing sandbox run 42064754304
+- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`. `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path and is not flagged ambiguous. This is the unsafe "wrong skip" direction the file's own header warns about.
+- **Next check:** strip a trailing `:\d+` (and `:\d+:\d+`) from each filter in `extractFileFilters`; add a case to its unit check. Workaround: file path + `--grep`.
+
 ### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B3; sleeps go to B6) · **Since:** 2026-11-04 plan RC4
-- **What:** `BasePage.assertNoFormErrors` sleeps 1.5 s, then reads errors once; ~230 `waitForTimeout` remain in page objects. A save-aware replacement needs each caller's own signal (`saveAndAwait` adopted at B3 call sites only).
-- **Next check:** B6 per module; never raise the 1.5 s.
+- **What:** `BasePage.assertNoFormErrors(context, confirmedSave?)` skips the 1.5 s pause only when the caller passes its confirmed save response (Tasks edit and due-date, Contacts edit, Meetings create, Call Logs edit). All other callers keep the pause. Other `waitForTimeout` left in `src/`: ADR 0014 transport-retry backoffs (`BasePage` ~1041, `authManager` ~167).
+- **Next check:** migrate the remaining callers to pass their `saveAndAwait` response; never raise the 1.5 s.
 
 ### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B2) · **Since:** 2026-11-04 plan RC1
@@ -85,7 +112,7 @@
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
 - **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
-- **Tests:** `leads.rbac.spec.ts` L77 (notes), L79 (tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14.
+- **Tests:** `leads.rbac.spec.ts` L77 (API, notes), L79 (API, tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14 (passes).
 
 ### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
@@ -97,7 +124,7 @@
 
 ### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
 - **Status:** open, watch · **Since:** 2026-11-02
-- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers; lead page size/sort/Kanban are shared per-user state. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **Occurred 2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban (20:04:31-37) while L65 (`leads.spec.ts:1409`) was sorting; its 2nd sort reloaded the board, no `.rt-tr` rows for 60 s. Not fixed (owner decision). Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
 - **Status:** open · **Since:** 2026-11-03 (sandbox, staging)
@@ -130,17 +157,9 @@
 - **What:** two occurrences (a Lead create-POST wait; a Quotations HTTP 500 after three rapid re-auth cycles) were correlated with another worker forcing a fresh login for the same role. `AuthManager` *does* serialize file writes (`withFileLock` + atomic rename), so file corruption is excluded; a same-role session-invalidation collision is not. Almost every pipeline runs `--workers=2`, so the old "always run `--workers=1`" requirement is not observed in CI.
 - **Next check:** per-worker credential isolation or a confirmed trace of the invalidation; until then treat a lone `--workers>1` ID-capture timeout near a `forcing a fresh login` log line as suspect.
 
-### KI-20 — `waitForTimeout(500)` left in `openUserShareTypeSearch()` catch backoff
-- **Status:** open (verified: the `openUserShareTypeSearch()` catch backoff in `CompaniesPage.ts`, `LeadsPage.ts`, `ContactsPage.ts` and `DealsPage.ts`, after the `Escape` keypress) · **Since:** 2026-08-09
-- **Fix when touched:** replace with the condition-based wait that `QuotationsPage.fillOwner()` already uses (`ensureReactSelectMenuClosed()`, which waits for `.is-invalid__menu` to hide). (The pre-commit hook only blocks *newly added* lines, so old ones persist.)
-
 ### KI-21 — Unbounded random-option clicks remain in Leads and Quotations
 - **Status:** unverified (carried over; not re-read this session) · **Since:** 2026-07
 - **What:** `LeadsPage.ts` close-reason radio and convert-to-deal product selection, and several `QuotationsPage.ts` random-option pickers use a raw unbounded `.click()`. `QuotationsPage.fillOwner()` was fixed. Pattern to apply: `BasePage.selectRandomOptionWithRetry()` ([PATTERNS.md](./PATTERNS.md)).
-
-### KI-22 — `ContactsPage.saveEditedContact()` has no network confirmation
-- **Status:** open (verified: clicks Save, asserts no form errors, waits for the modal to hide) · **Since:** 2026-08-25
-- **What:** the same gap `saveEditedCompany()` / Leads had; fix is the ~15-line "await the PUT response" pattern already used there. Seven test call sites exercise `ContactsPage.saveEditedContact()` (`contacts.spec.ts` x2, `contacts.rbac.spec.ts` x3, `contactFieldLimits.spec.ts` and `contactFieldLimits.rbac.spec.ts` x1 each), plus one internal call.
 
 ### KI-23 — `assertQuotationInList()` can false-positive on the never-cleaned QA dataset
 - **Status:** open (verified: delegates to `retryFindInList()` and checks the search term appears in a row) · **Since:** 2026-08-17

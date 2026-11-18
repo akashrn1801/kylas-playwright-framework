@@ -8,6 +8,7 @@ import {
   generateMinimalDealData,
 } from '../../src/data/factories/dealFactory';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
+import { waitForRecordAction } from '../../src/utils/recordActionsApi';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 import { ContactsPage } from '../../src/modules/contacts/ContactsPage';
 import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
@@ -29,8 +30,8 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 
 // ADR 0017 (B4): ONE attempt. This used to repeat the whole flow up to 3 times on any error, which could
 // log the call twice (an attempt can fail after the call log was saved) and hid the real failure behind
-// the last attempt's. A share-permission error on the save is still retried inside
-// CallLogsPage.saveCallLog(), the one place that knows it is safe (the save was refused).
+// the last attempt's. A share-permission refusal on the save is no longer retried (ADR 0014, ADR 0017
+// amendment 2026-11-16): the caller waits for the share to apply BEFORE this function (waitForRecordAction).
 async function logCallFromDealPanel(
   restrictedPage: ConstructorParameters<typeof DealsPage>[0],
   restrictedDealsPage: DealsPage,
@@ -278,8 +279,7 @@ test.describe('Deals RBAC', () => {
     const companyLink = restrictedPage.locator('.title.text-break.link-primary span').first();
     await companyLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
     await companyLink.click({ force: true });
-    // WHY: Staging env renders modal slower — wait before checking visibility
-    await restrictedPage.waitForTimeout(2000);
+    // B6: no pause: the modal wait below (visible, bounded by the navigation timeout) is the real signal
 
     const companyModal = restrictedPage
       .locator('.modal-content')
@@ -709,6 +709,13 @@ test.describe('Deals RBAC', () => {
       await adminDealsPage.goToDealDetailsById(dealId);
     }
     await adminDealsPage.shareDeal(restrictedUserName, ['call']);
+
+    // B6: the shares above must have applied for the restricted user before Log a call opens: the deal and
+    // its contact need `call`, its company needs read (the call log save is refused if any associated entity
+    // is inaccessible). Polled as the restricted user, on each record's own rights.
+    const sharedDeal = await waitForRecordAction(restrictedPage, 'deals', dealId, 'call');
+    if (associatedContactId) await waitForRecordAction(restrictedPage, 'contacts', associatedContactId, 'call');
+    if (sharedDeal.company?.id) await waitForRecordAction(restrictedPage, 'companies', sharedDeal.company.id, 'read');
 
     const restrictedDealsPage = new DealsPage(restrictedPage);
     const callLogId = await logCallFromDealPanel(

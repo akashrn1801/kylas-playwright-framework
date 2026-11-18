@@ -257,36 +257,10 @@ export class MeetingsPage extends BasePage {
         .catch(() => {});
       await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
       await this.waitForListReady();
-      await this.sortByLatestFirst().catch(() => logger.warn('Sort failed — continuing'));
+      await this.sortByLatestFirst();
     }
     logger.warn(`Meeting "${title}" not found after ${retries} attempts`);
     return false;
-  }
-
-  private async openFilterPanel(): Promise<void> {
-    logger.info('Opening filter panel');
-    const alreadyOpen = await this.filterModal()
-      .evaluate((el) => el.classList.contains('show'))
-      .catch(() => false);
-    if (alreadyOpen) {
-      logger.debug('Filter panel already open');
-      return;
-    }
-    // WHY: filter button click can be unreliable on CI — retry up to 3 times
-    let filterOpened = false;
-    for (let i = 0; i < 3; i++) {
-      await this.filterActionButton().click({ force: true });
-      try {
-        await this.filterModal().waitFor({ state: 'visible', timeout: 10000 });
-        filterOpened = true;
-        break;
-      } catch {
-        logger.warn(`Filter panel did not open on attempt ${i + 1}, retrying`);
-      }
-    }
-    if (!filterOpened) throw new Error('Filter panel did not open after 3 attempts');
-    await this.page.waitForTimeout(500);
-    logger.success('Filter panel opened');
   }
 
   private async fillDate(daysFromNow: number): Promise<void> {
@@ -387,19 +361,34 @@ export class MeetingsPage extends BasePage {
   // Sort
   // ──────────────────────────────────────────────────────────
 
+  // B6 (staging trace 2026-11-17: Apply answers with POST /v1/meetings/search): each step waits for the control it
+  // needs, Apply's own answer is awaited and the modal must close. Callers no longer swallow a failed sort
+  // (`.catch(() => {})`): the sort succeeds or fails by name.
   async sortByLatestFirst(): Promise<void> {
     logger.info('Sorting meetings by Latest First');
     await this.sortButton().click();
-    await this.sortModal().waitFor({ state: 'visible', timeout: 5000 });
-    await this.page.waitForTimeout(400);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortModal(), 'Sort: the sort dialog should open').toBeVisible({ timeout: config.timeouts.expect })
+    );
     // WHY: Click the singleValue text inside the sort dropdown to open it
     await this.sortDropdownSingleVal().waitFor({ state: 'visible', timeout: 5000 });
     await this.sortDropdownSingleVal().click();
-    await this.page.waitForTimeout(400);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortLatestFirstOption(), 'Sort: the "Latest First" option should appear').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
     await this.sortLatestFirstOption().click();
-    await this.page.waitForTimeout(400);
-    await this.sortApplyButton().click();
-    await this.page.waitForTimeout(1000);
+    await this.saveAndAwait(() => this.sortApplyButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/search\/?$/,
+      description: 'Meeting list sort (POST /v1/meetings/search)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortModal(), 'Sort: the sort dialog should close after Apply').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success('Sorted by Latest First');
   }
 
@@ -471,9 +460,9 @@ export class MeetingsPage extends BasePage {
     // Fall back to Offline
     logger.warn('No online calendar connected — falling back to Offline');
     await this.click(this.mediumInputControl(), 'medium control (Offline)');
-    await this.page.waitForTimeout(500);
     await this.click(this.page.getByText('Offline', { exact: true }).last(), 'medium option: Offline');
-    await this.page.waitForTimeout(500);
+    // B6: the menu closing is the signal that the pick was processed (replaces two 500 ms pauses)
+    await this.ensureReactSelectMenuClosed('Medium "Offline"');
     logger.success('Selected medium: Offline (fallback)');
     return 'OFFLINE';
   }
@@ -496,60 +485,113 @@ export class MeetingsPage extends BasePage {
       logger.info(`Selecting entity type: ${entityType}`);
 
       // Step 1: Click Entities dropdown and select entity type
+      // B6 (staging probe 2026-11-17: all four types answer a three-space search for admin AND restricted, the
+      // slowest in 3.9 s): every step waits for the thing it needs, the hardcoded fallback search terms are gone,
+      // and a type with no records FAILS by name instead of logging "skipping" and saving without that relation.
       await this.entitiesDropdown().click();
-      await this.page.waitForTimeout(400);
       // WHY: Scope to dropdown options only — getByText matches invitee chips too
-      await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();
-      await this.page.waitForTimeout(500);
+      const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
+      await this.withSessionExpiryRecovery(() =>
+        expect(typeOption, `Related To: the "${entityType}" type option should appear`).toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      );
+      await typeOption.click({ timeout: config.timeouts.expect });
 
       // Step 2: Click Search... to open entity search dropdown
-      await this.page.getByText('Search ...').last().click();
-      await this.page.waitForTimeout(400);
+      const searchControl = this.page.getByText('Search ...').last();
+      await this.withSessionExpiryRecovery(() =>
+        expect(searchControl, `Related To: the ${entityType} search control should appear`).toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      );
+      await searchControl.click();
 
-      // Step 3: Type into relatedTo input
+      // Step 3: Type spaces to load the first results, and wait for them
       await this.relatedToInput().fill('   ');
-      await this.page.waitForTimeout(1500);
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.relationOptions().first(),
+          `Related To: the ${entityType} search should list at least one record (none found)`
+        ).toBeVisible({ timeout: config.timeouts.expect })
+      );
+      logger.info(`Options count for ${entityType}: ${await this.relationOptions().count()}`);
 
-      // Step 4: Wait for options to appear
-      try {
-        await this.relationOptions().first().waitFor({ state: 'visible', timeout: 5000 });
-      } catch {
-        // Options not loaded yet — try search terms
-        for (const term of ['abc', 'isa', 'rau', 'amb', 'win', 'dea', 'con', 'the', 'inc']) {
-          await this.relatedToInput().fill(term);
-          await this.page.waitForTimeout(1000);
-          const appeared = await this.relationOptions()
-            .first()
-            .isVisible()
-            .catch(() => false);
-          if (appeared) {
-            logger.info(`Found ${entityType} results with term: "${term}"`);
-            break;
-          }
-          await this.relatedToInput().clear();
-          await this.page.waitForTimeout(200);
-        }
-      }
-      const count = await this.relationOptions()
-        .count()
-        .catch(() => 0);
-      logger.info(`Options count for ${entityType}: ${count}`);
-
-      // Step 5: Pick random option
-      if (count > 0) {
-        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
-        // before — was an unbounded textContent()+click() on a random option.
-        await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
-          maxOptions: 5,
-        });
-        await this.page.waitForTimeout(300);
-        await this.relatedToInput().press('Enter');
-      } else {
-        logger.warn(`No ${entityType} records found - skipping`);
-        await this.page.keyboard.press('Escape');
-      }
-      await this.page.waitForTimeout(600);
+      // Step 4: Pick random option
+      // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
+      // before — was an unbounded textContent()+click() on a random option.
+      await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
+        maxOptions: 5,
+      });
+      await this.relatedToInput().press('Enter');
     }
+  }
+
+  // B6 (staging trace 2026-11-17: typing in the Related To search sends GET /v1/search/<entity>/lookup/?view=meeting&q=firstName:<text>):
+  // open the Related To search of one entity type on the open Add form...
+  async openRelatedToSearch(entityType: string): Promise<void> {
+    await this.entitiesDropdown().click();
+    const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
+    await this.withSessionExpiryRecovery(() =>
+      expect(typeOption, `Related To: the "${entityType}" type option should appear`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await typeOption.click({ timeout: config.timeouts.expect });
+    const searchControl = this.page.getByText('Search ...').last();
+    await this.withSessionExpiryRecovery(() =>
+      expect(searchControl, `Related To: the ${entityType} search control should appear`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await searchControl.click();
+  }
+
+  // ...and search it: returns the lookup's own answer (body text) for that text, failing by name when the answer
+  // is missing or not 2xx, so an absence check on it is made on a real answer, not on a list that had not loaded.
+  async lookupRelatedTo(text: string): Promise<string> {
+    await this.relatedToInput().fill('');
+    const answered = this.armResponseWaitWithRecovery(
+      (res) => {
+        const url = new URL(res.url());
+        return (
+          res.request().method() === 'GET' &&
+          /^\/v1\/search\/[a-z]+\/lookup\/?$/.test(url.pathname) &&
+          decodeURIComponent(url.search).includes(`q=firstName:${text}`)
+        );
+      },
+      `Related To lookup for "${text}"`,
+      config.timeouts.expect
+    );
+    answered.catch(() => undefined);
+    await this.relatedToInput().fill(text);
+    const response = await answered;
+    if (!response.ok()) {
+      throw new Error(`Related To lookup for "${text}": ${await this.describeMatchedResponse(response)}`);
+    }
+    return response.text();
+  }
+
+  // B6 (staging probe 2026-11-17): Escape does NOT close the Add Meeting form; the header close button does,
+  // with no confirmation. Closes the form without saving and requires it to be gone.
+  async closeAddForm(): Promise<void> {
+    await this.editModal().locator('button.close').first().click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The Add Meeting form should close after its close button').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
+  // B6 (owner decision 2026-11-17): the Add form opens when its title input renders. One bounded wait that fails
+  // by name, replacing the retry loop (re-click Add after a reload or a 1 s pause, every miss swallowed by a
+  // catch). The loop existed for a MeetingCreate JS crash seen on QA; if it recurs it now fails with this name.
+  private async waitForAddFormOpen(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.titleInput(), 'The Add Meeting form (title input) should open after clicking Add').toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
   }
 
   async openAddForm(): Promise<void> {
@@ -557,31 +599,7 @@ export class MeetingsPage extends BasePage {
     // to open the form without filling all fields (GPS test, RBAC entity test)
     // WHY: MeetingCreate JS crash on QA — reload page before retry to clear crashed state
     await this.click(this.addButton(), 'Add button');
-    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-    const { retries, wait } = this.retryConfig;
-    let formOpened = false;
-    for (let i = 0; i < retries; i++) {
-      try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-        formOpened = true;
-        break;
-      } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-        // makes sense on the standalone meetings list page — reloading an
-        // embedded panel (e.g. a lead's detail page) would close the panel
-        // and lose all context, since this method doesn't know how to reopen it.
-        if (/\/sales\/meetings\/list/.test(this.page.url())) {
-          await this.reloadPage();
-          await this.waitForListReady();
-        } else {
-          await this.page.waitForTimeout(1000);
-        }
-        await this.click(this.addButton(), 'Add button retry');
-      }
-    }
-    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+    await this.waitForAddFormOpen();
     logger.success('Meeting add form opened');
   }
 
@@ -698,6 +716,25 @@ export class MeetingsPage extends BasePage {
     logger.success('Add Meeting form opened from entity detail panel');
   }
 
+  // Save the title-only form opened from an entity's detail panel and STAY on the parent: unlike saveMeeting()
+  // it does not click the post-save popup (which navigates to the meeting's own page). Returns the created
+  // meeting's id, from the POST /v1/meetings answer; fails by name when that id is not captured. Additive:
+  // used by CompaniesPage.addMeetingFromPanel(); every existing caller keeps its own method.
+  async saveMeetingFromEntityPanel(): Promise<number> {
+    logger.info('Saving meeting from entity detail panel');
+    const idPromise = this.captureIdFromResponse();
+    await this.click(this.addMeetingSaveButton(), 'save meeting (from entity panel)');
+    await this.assertNoFormErrors('meeting create form (from entity panel)');
+    const id = await idPromise;
+    if (!id) {
+      throw new Error(
+        'Meeting ID not captured after save from the entity panel — cannot proceed (save likely failed silently)'
+      );
+    }
+    logger.success(`Meeting saved from entity panel (ID: ${id})`);
+    return id;
+  }
+
   async fillMeetingForm(
     data: MeetingData,
     createdBy = 'Admin',
@@ -730,10 +767,25 @@ export class MeetingsPage extends BasePage {
 
     // Creator is auto-added — optionally add another invitee
     if (addInvitee) {
+      // B6: pick the first option that is not already a chip, and require the pick to add one chip. Trace
+      // 2026-11-17: the creator is a chip already, and for a restricted creator the FIRST option is the creator
+      // themself, so the old "click the first option" added nobody (a vacuous step the old code never noticed).
+      const inviteeChips = this.inviteesContainer().locator('.is-invalid__multi-value');
+      const chipNames = (await inviteeChips.allTextContents()).map((t) => t.trim()).filter(Boolean);
+      const chipsBefore = chipNames.length;
       await this.inviteesControl().click();
       await this.inviteesFirstOption().waitFor({ state: 'visible', timeout: 10000 });
-      await this.page.waitForTimeout(300);
-      await this.inviteesFirstOption().click();
+      let candidates = this.page.locator('.is-invalid__menu-list .is-invalid__option');
+      for (const name of chipNames) {
+        candidates = candidates.filter({ hasNotText: name });
+      }
+      await candidates.first().click({ timeout: config.timeouts.expect });
+      await this.withSessionExpiryRecovery(() =>
+        expect(inviteeChips, 'Meeting form: an invitee chip should be added by the pick').toHaveCount(
+          chipsBefore + 1,
+          { timeout: config.timeouts.expect }
+        )
+      );
       logger.info(`Invitee added by ${createdBy}`);
       // WHY: confirmed live (2026-09-08) — Invitees is a multi-select
       // (`is-invalid__menu-list--is-multi`) whose menu/backdrop can persist
@@ -772,38 +824,35 @@ export class MeetingsPage extends BasePage {
 
   async saveMeeting(): Promise<number | null> {
     logger.info('Saving meeting');
-    const idPromise = this.captureIdFromResponse();
-    await this.addMeetingSaveButton().click();
-    await this.assertNoFormErrors('meeting create form');
-    const id = await idPromise;
-    await this.page.waitForTimeout(1500);
-
-    // WHY: After save a popup appears with span.link-primary containing meeting ID
-    // WHY: Confirmed live (2026-07-06/07) — this popup is a toast that can
-    // auto-dismiss on its own. The waitFor() above only confirms it was
-    // visible at that instant; a bare click() with no timeout has no bound
-    // of its own, so if the toast vanished in the gap between waitFor and
-    // click, the click hung until the WHOLE TEST's timeout fired instead of
-    // being caught by this try/catch's already-correct fallback design.
-    // Give both clicks an explicit bound so a vanished toast fails fast and
-    // falls through to the existing safe fallback, as originally intended.
+    // B6 (ADR 0017 save confirmation): the create's own answer (POST /v1/meetings), armed before the click, fails
+    // by name with status/code/message when it is missing or not 2xx. Before, only a toast checked once after
+    // 1.5 s (assertNoFormErrors) caught a refused create, which a fast-vanishing toast could miss (CR9 failed once
+    // under 4-worker load: no throw on the 422 / 01503001 answer). The id is read from that same response.
+    let response;
     try {
-      await this.meetingIdPopup().waitFor({ state: 'visible', timeout: 5000 });
-      await this.meetingIdPopup().click({ timeout: 5000 });
-      await this.page.waitForTimeout(1000);
-      logger.success('Clicked meeting popup');
-    } catch {
-      try {
-        await this.meetingIdPopupFallback().waitFor({ state: 'visible', timeout: 3000 });
-        await this.meetingIdPopupFallback().click({ timeout: 3000 });
-        await this.page.waitForTimeout(1000);
-        logger.success('Clicked meeting popup (fallback)');
-      } catch {
-        logger.warn('Meeting popup not found — navigating to meetings list');
-        await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
-        await this.waitForListReady();
-      }
+      response = await this.saveAndAwait(() => this.addMeetingSaveButton().click(), {
+        method: 'POST',
+        urlRe: /^\/v1\/meetings\/?$/,
+        description: 'Meeting create (POST /v1/meetings)',
+      });
+    } catch (error) {
+      // client-side validation sends no request: surface the form's own errors first
+      await this.assertNoFormErrors('meeting create form');
+      throw error;
     }
+    await this.assertNoFormErrors('meeting create form', response);
+    const body = (await response.json().catch(() => ({}))) as { id?: number };
+    const id = body?.id ?? null;
+    if (id) logger.info(`Captured meeting ID: ${id}`);
+    // B6: the form must close. The post-save toast popup is no longer clicked: its click only navigated to the
+    // meeting (or fell back to the list after 1.5 s + 1 s pauses), and no caller depends on that: every one
+    // re-navigates by the id returned here (searchMeetingById, assertMeetingInList, goTo...DetailsById) or
+    // verifies through the API. Callers go ID-first.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The Add Meeting form should close after Save').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
     return id;
   }
 
@@ -852,7 +901,15 @@ export class MeetingsPage extends BasePage {
     maxAttempts = 3,
     saveAction: () => Promise<number | null> = () => this.saveMeeting()
   ): Promise<number | null> {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // B6 (owner decision 2026-11-17): a bounded poll on the real condition (the save is accepted) instead of a
+    // fixed 3 s sleep between attempts. ONLY the confirmed 422 / errorCode 01503001 answer is retried (ADR 0014);
+    // any other failure leaves the poll at once and is rethrown unretried. Refused creates are not double-submits
+    // (ADR 0017): the 422 means nothing was created.
+    let attempt = 0;
+    let id: number | null = null;
+    let fatal: unknown = null;
+    await expect(async () => {
+      attempt++;
       const lagResponsePromise = this.armResponseWaitWithRecovery(
         (res) =>
           res.url().includes('/v1/meetings') &&
@@ -866,23 +923,23 @@ export class MeetingsPage extends BasePage {
           return body?.errorCode === '01503001';
         })
         .catch(() => false);
-
       try {
-        return await saveAction();
+        id = await saveAction();
+        fatal = null;
       } catch (error) {
         const isKnownPropagationLag = await lagResponsePromise;
         if (isKnownPropagationLag && attempt < maxAttempts) {
           logger.warn(
             `Meeting save hit the confirmed entity-summary permission-propagation lag ` +
-              `(attempt ${attempt}/${maxAttempts}) — waiting and retrying the same save`
+              `(attempt ${attempt}/${maxAttempts}) — retrying the same save`
           );
-          await this.page.waitForTimeout(3000);
-          continue;
+          throw error;
         }
-        throw error;
+        fatal = error;
       }
-    }
-    return null;
+    }).toPass({ intervals: [1000, 2000, 3000], timeout: maxAttempts * 20000 });
+    if (fatal) throw fatal;
+    return id;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -891,13 +948,18 @@ export class MeetingsPage extends BasePage {
 
   async searchMeetingInList(title: string): Promise<void> {
     logger.info(`Searching for meeting by name: "${title}"`);
-    const nameVisible = await this.nameFilterInput()
-      .isVisible()
-      .catch(() => false);
-    if (nameVisible) {
-      await this.nameFilterInput().fill(title);
-      await this.page.waitForTimeout(1000);
-    }
+    // B6: the filter input must be there (a missing input used to skip the search silently) and the name
+    // filter's own answer (POST /v1/meetings/search) is awaited instead of a 1 s pause
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameFilterInput(), 'Meeting list: the name filter should be visible').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await this.saveAndAwait(() => this.nameFilterInput().fill(title), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/search\/?$/,
+      description: 'Meeting list name filter (POST /v1/meetings/search)',
+    });
   }
 
   async openMeetingFromList(title: string): Promise<void> {
@@ -907,7 +969,12 @@ export class MeetingsPage extends BasePage {
       timeout: config.timeouts.navigation,
     });
     await this.meetingTitleInList(title).click();
-    await this.page.waitForTimeout(800);
+    // B6: the detail panel opening is the signal (replaces an 800 ms pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.meetingDetailTitle(), 'The meeting detail panel should open').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Meeting "${title}" opened`);
   }
 
@@ -940,11 +1007,17 @@ export class MeetingsPage extends BasePage {
     logger.success('Edit form opened');
   }
 
+  // B6 (staging trace 2026-11-17: Mark as Conducted is POST /v1/meetings/{id}/conduct -> 200, Cancel is
+  // POST /v1/meetings/{id}/cancel -> 200): each action's own answer is armed before the click and awaited,
+  // replacing 1 s pauses; callers assert the resulting status on the detail.
   async markAsConducted(): Promise<void> {
     logger.info('Marking meeting as Conducted via ellipsis menu');
     await this.openEllipsisMenu();
-    await this.markConductedOption().click();
-    await this.page.waitForTimeout(1000);
+    await this.saveAndAwait(() => this.markConductedOption().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/\d+\/conduct\/?$/,
+      description: 'Meeting mark conducted (POST /v1/meetings/{id}/conduct)',
+    });
     logger.success('Meeting marked as Conducted');
   }
 
@@ -952,16 +1025,18 @@ export class MeetingsPage extends BasePage {
     logger.info('Cancelling meeting via ellipsis menu');
     await this.openEllipsisMenu();
     await this.cancelMeetingOption().click();
-    await this.page.waitForTimeout(500);
-    // WHY: Confirm cancellation popup
-    const confirmVisible = await this.confirmButton()
-      .isVisible()
-      .catch(() => false);
-    if (confirmVisible) {
-      await this.confirmButton().click();
-      logger.info('Confirmed cancellation popup');
-    }
-    await this.page.waitForTimeout(1000);
+    // WHY: Confirm cancellation popup. B6: it must appear (it used to be an instant isVisible() after a 500 ms
+    // pause, so a missing popup meant the cancel was silently never confirmed)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.confirmButton(), 'Cancel meeting: the confirmation popup should appear').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await this.saveAndAwait(() => this.confirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/\d+\/cancel\/?$/,
+      description: 'Meeting cancel (POST /v1/meetings/{id}/cancel)',
+    });
     logger.success('Meeting cancelled');
   }
 
@@ -1006,13 +1081,25 @@ export class MeetingsPage extends BasePage {
 
   async saveEditedMeeting(): Promise<void> {
     logger.info('Saving edited meeting');
-    await this.editMeetingSaveButton().click();
-    // WHY: Wait for edit modal to close before proceeding
-    await this.editModal()
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    await this.page.waitForTimeout(1000);
+    await this.saveMeetingUpdate(() => this.editMeetingSaveButton().click(), 'Meeting update');
     logger.success('Meeting edit saved');
+  }
+
+  // B6 (ADR 0017 save confirmation; staging trace 2026-11-17: edit and reschedule are both PUT /v1/meetings/{id}
+  // -> 200): the update's own answer is armed before the click and awaited, then the modal must close. It used to
+  // be a click, a swallowed `.catch(() => {})` on the modal closing and a 1 s pause, so a refused or never-sent
+  // save passed.
+  private async saveMeetingUpdate(click: () => Promise<void>, description: string): Promise<void> {
+    await this.saveAndAwait(click, {
+      method: ['PUT', 'PATCH'],
+      urlRe: /^\/v1\/meetings\/\d+\/?$/,
+      description: `${description} (PUT /v1/meetings/{id})`,
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), `${description}: the edit modal should close after Save`).toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
   }
 
   async rescheduleMeeting(title: string): Promise<void> {
@@ -1056,12 +1143,7 @@ export class MeetingsPage extends BasePage {
     await dayCell.click();
     logger.success(`Reschedule date selected: ${d.toDateString()}`);
 
-    await this.editMeetingSaveButton().click();
-    // WHY: Wait for edit modal to close — prevents next action failing
-    await this.editModal()
-      .waitFor({ state: 'hidden', timeout: config.timeouts.navigation })
-      .catch(() => {});
-    await this.page.waitForTimeout(500);
+    await this.saveMeetingUpdate(() => this.editMeetingSaveButton().click(), 'Meeting reschedule');
     logger.success(`Meeting "${title}" rescheduled`);
   }
 
@@ -1097,7 +1179,7 @@ export class MeetingsPage extends BasePage {
     }
     const currentUrl = this.page.url();
     if (currentUrl.includes('/sales/meetings/list')) {
-      await this.sortByLatestFirst().catch(() => {});
+      await this.sortByLatestFirst();
       const visibleAfterSort = await this.meetingTitleInList(title)
         .isVisible()
         .catch(() => false);
@@ -1108,7 +1190,7 @@ export class MeetingsPage extends BasePage {
     }
     await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
     await this.waitForListReady();
-    await this.sortByLatestFirst().catch(() => {});
+    await this.sortByLatestFirst();
     const found = await this.retryFindMeetingInList(title);
     if (!found) throw new Error(`Meeting "${title}" was not found in the list after retries`);
     logger.success(`Meeting "${title}" confirmed in list`);
@@ -1170,8 +1252,9 @@ export class MeetingsPage extends BasePage {
       return;
     }
     // Fallback: name-based search when ID not available
+    // B6: searchMeetingInList() returns once the filter's answer arrived: the positive control for the absence
     await this.searchMeetingInList(title);
-    await this.page.waitForTimeout(1500);
+    await this.waitForListReady();
     const visible = await this.meetingTitleInList(title)
       .isVisible()
       .catch(() => false);
@@ -1227,7 +1310,12 @@ export class MeetingsPage extends BasePage {
       ).toBeVisible({ timeout: config.timeouts.navigation })
     );
     await this.click(tab, 'Other Details tab');
-    await this.page.waitForTimeout(500);
+    // B6: the tab being active is the signal (replaces a 500 ms pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, '"Other Details" tab should be active after the click').toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
+    );
 
     await this.assertCustomFieldOnDetail(
       MEETING_CUSTOM_FIELD_NAMES.textField,
@@ -1287,31 +1375,7 @@ export class MeetingsPage extends BasePage {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
       await this.click(this.addButton(), 'Add button');
-      // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-      // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-      const { retries, wait } = this.retryConfig;
-      let formOpened = false;
-      for (let i = 0; i < retries; i++) {
-        try {
-          await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-          formOpened = true;
-          break;
-        } catch {
-          logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-          // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-          // makes sense on the standalone meetings list page — reloading an
-          // embedded panel (e.g. a lead's detail page) would close the panel
-          // and lose all context, since this method doesn't know how to reopen it.
-          if (/\/sales\/meetings\/list/.test(this.page.url())) {
-            await this.reloadPage();
-            await this.waitForListReady();
-          } else {
-            await this.page.waitForTimeout(1000);
-          }
-          await this.click(this.addButton(), 'Add button retry');
-        }
-      }
-      if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+      await this.waitForAddFormOpen();
       await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
       // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
       // description can all trigger React re-renders that reset the title controlled
@@ -1325,7 +1389,12 @@ export class MeetingsPage extends BasePage {
         );
         await this.titleInput().click();
         await this.titleInput().fill(data.title);
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.titleInput(), 'Meeting form: the title should hold the refilled value').toHaveValue(
+            data.title,
+            { timeout: config.timeouts.expect }
+          )
+        );
       }
       // WHY (2026-09-07, PROD Build #4): route through the entity-summary-
       // lag-tolerant save here too — this method previously called
