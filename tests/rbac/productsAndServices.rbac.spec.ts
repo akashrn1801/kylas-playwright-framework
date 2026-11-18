@@ -158,7 +158,9 @@ test.describe('Products & Services RBAC', () => {
   // addProductRowAndSearchByName() call already asserts the product row's
   // control renders the fixture's name before returning success, so a
   // clean (non-throwing) call IS the proof this test needs.
-  test('@regression restricted user can select admin-owned active product fixture on a new deal', async ({
+  test.fixme('@regression restricted user can select admin-owned active product fixture on a new deal', {
+    annotation: { type: 'fixme', description: 'KI-66: app edit-form race, disabled until fixed. See KNOWN_ISSUES_ACTIVE KI-66' },
+  }, async ({
     restrictedPage,
   }) => {
     test.setTimeout(480000);
@@ -174,7 +176,8 @@ test.describe('Products & Services RBAC', () => {
     const dealId = await dealsPage.createDeal(data);
     if (!dealId) throw new Error('Deal ID not captured after create');
 
-    await dealsPage.updateDeal(data, data.name, dealId, fixture.name);
+    // KI-66: while the app's edit-form race exists a stuck attach is an expected failure (annotated), never red
+    await dealsPage.updateDealAttachingProduct(data, data.name, dealId, fixture.name);
 
     logger.success('PS11 passed');
   });

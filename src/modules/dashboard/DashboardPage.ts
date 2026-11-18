@@ -38,6 +38,8 @@ export interface DefaultDashboardSection {
   sectionId: string;
 }
 
+export const DEFAULT_DASHBOARD_NAME = 'Default Dashboard';
+
 export const DEFAULT_DASHBOARD_SECTIONS: DefaultDashboardSection[] = [
   { label: 'Leads', sectionId: 'lead_section' },
   { label: 'Deals', sectionId: 'deal_section' },
@@ -340,6 +342,22 @@ export class DashboardPage extends BasePage {
     await this.navigateTo(`${config.appUrl}/sales/home`);
     await this.assertDashboardLoaded();
     logger.success('On Dashboard page');
+  }
+
+  // WHY (DB14/DB26 scan, 2026-11-18): the account's Primary dashboard is ONE per user and DB14 (admin) / DB26 (restricted)
+  // mark their own dashboard Primary for about a minute, so a bare load in a concurrent test of the same user lands on
+  // that empty dashboard (the historical DB1/2/4/5/16/17 failures). Tests that need "Default Dashboard" therefore
+  // switch to it by name instead of relying on which dashboard is Primary. Switching only changes the view, it never
+  // marks anything Primary. Call it again after a reload: a reload lands on the Primary dashboard again.
+  async ensureDefaultDashboardActive(): Promise<void> {
+    if ((await this.getCurrentDashboardName()) === DEFAULT_DASHBOARD_NAME) return;
+    logger.info(`Primary dashboard is not "${DEFAULT_DASHBOARD_NAME}" (another test marked its own Primary) — switching`);
+    await this.switchToDashboard(DEFAULT_DASHBOARD_NAME);
+  }
+
+  async goToDefaultDashboard(): Promise<void> {
+    await this.goToDashboard();
+    await this.ensureDefaultDashboardActive();
   }
 
   // WHY wrapped in withRateLimitRecovery() (2026-10-16, sandbox run

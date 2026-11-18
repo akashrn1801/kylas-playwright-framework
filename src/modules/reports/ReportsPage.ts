@@ -1767,35 +1767,56 @@ export class ReportsPage extends BasePage {
   // The sound unfiltered check is report == live truth over the SAME window: the API (`/v1/search/*`, which already
   // excludes the deleted lead) is read right after each report read, and a report that still counted the deleted lead
   // would stay above the API count. Bounded by the navigation timeout, re-navigating (no sleep) like the other loops.
+  // Fix 1 (2026-11-18, R65 scan): the report read and the API read cannot happen at the same instant, and other
+  // shards keep creating and deleting leads in the unfiltered window, so a single "report == API after the report"
+  // pair flips with the churn. The report read is therefore BRACKETED by two API reads, and the report must lie
+  // between them (inclusive): the report was computed at some instant between the reads, and the count moves in
+  // small steps, so a value outside [low, high] cannot come from that window. Limit: an excursion that goes up and
+  // comes back down entirely between the two reads is invisible to the bracket (it can only make the check more
+  // tolerant, never fail it). A report that still counted the deleted lead stays above the high bound.
   async waitForReportTotalToMatchApi(
     reportId: string,
     entityType: ReportEntityType,
     windowStart: Date,
     windowEnd: Date
-  ): Promise<{ reportTotal: number; apiTotal: number }> {
+  ): Promise<{ reportTotal: number; apiLow: number; apiHigh: number }> {
+    const deadline = Date.now() + config.timeouts.navigation;
+    for (let attempt = 1; ; attempt++) {
+      const apiBefore = await this.getNarrowWindowApiCount(entityType, windowStart, windowEnd);
+      const dataPromise = this.armReportDataResponseCapture(entityType);
+      await this.goToReportDetails(reportId);
+      const reportTotal = await dataPromise;
+      const apiAfter = await this.getNarrowWindowApiCount(entityType, windowStart, windowEnd);
+      const apiLow = Math.min(apiBefore, apiAfter);
+      const apiHigh = Math.max(apiBefore, apiAfter);
+      if (reportTotal >= apiLow && reportTotal <= apiHigh) {
+        logger.success(
+          `waitForReportTotalToMatchApi(${entityType}): report=${reportTotal} within API [${apiLow}, ${apiHigh}] on attempt ${attempt}`
+        );
+        return { reportTotal, apiLow, apiHigh };
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `waitForReportTotalToMatchApi(${entityType}): report shows ${reportTotal} but the API shows [${apiLow}, ${apiHigh}] ` +
+            `(read before and after the report) for the +-${this.NARROW_WINDOW_PADDING_MINUTES} min window of ` +
+            `[${windowStart.toISOString()}, ${windowEnd.toISOString()}] after ${attempt} read(s) over ` +
+            `${Math.round(config.timeouts.navigation / 1000)} s`
+        );
+      }
+      logger.info(
+        `waitForReportTotalToMatchApi: report=${reportTotal} api=[${apiLow}, ${apiHigh}] on attempt ${attempt} — re-reading`
+      );
+    }
+  }
+
+  // The live API count of the same +-5 minute window the narrow-window report uses (verifyRunCountForEntity() compares
+  // the report with the UNPADDED window, so on its own it never checks the padded one).
+  async getNarrowWindowApiCount(entityType: ReportEntityType, windowStart: Date, windowEnd: Date): Promise<number> {
     const paddedStart = new Date(windowStart);
     const paddedEnd = new Date(windowEnd);
     paddedStart.setMinutes(paddedStart.getMinutes() - this.NARROW_WINDOW_PADDING_MINUTES);
     paddedEnd.setMinutes(paddedEnd.getMinutes() + this.NARROW_WINDOW_PADDING_MINUTES);
-    const deadline = Date.now() + config.timeouts.navigation;
-    for (let attempt = 1; ; attempt++) {
-      const dataPromise = this.armReportDataResponseCapture(entityType);
-      await this.goToReportDetails(reportId);
-      const reportTotal = await dataPromise;
-      const apiTotal = await this.getApiCountForWindow(entityType, paddedStart, paddedEnd);
-      if (reportTotal === apiTotal) {
-        logger.success(`waitForReportTotalToMatchApi(${entityType}): report=${reportTotal}, api=${apiTotal} on attempt ${attempt}`);
-        return { reportTotal, apiTotal };
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `waitForReportTotalToMatchApi(${entityType}): report still shows ${reportTotal} but the API shows ${apiTotal} ` +
-            `for window [${paddedStart.toISOString()}, ${paddedEnd.toISOString()}] after ${attempt} read(s) over ` +
-            `${Math.round(config.timeouts.navigation / 1000)} s`
-        );
-      }
-      logger.info(`waitForReportTotalToMatchApi: report=${reportTotal} api=${apiTotal} on attempt ${attempt} — re-reading`);
-    }
+    return this.getApiCountForWindow(entityType, paddedStart, paddedEnd);
   }
 
   async assertMetricTotal(expectedTotal: number): Promise<void> {
