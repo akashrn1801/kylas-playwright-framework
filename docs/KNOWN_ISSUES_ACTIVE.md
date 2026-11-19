@@ -59,10 +59,17 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
-### KI-70 — Click lands, popup never shows: quick-task "Assigned To" menu, Tasks Add dropdown (2026-11-18)
-- **Status:** open, hardened, root cause not confirmed · **Since:** 2026-11-17
-- **What:** CO10, COR9 (full Companies runs) and sandbox 44258530411: deals.rbac:574 (1 of 4 quick-task opens in shard 2), tasks.rbac:273 (Add dropdown "Detailed Task" never visible, same class, no diagnostics then). In deals.rbac:574: lookup 200 at +832 ms, nothing covered the button, menu probably rendered then removed, a second click fired no lookup. 0 of 56 probe repeats failed.
-- **Next check:** `BasePage.openMenuAndWaitForItem` (Tasks Add dropdown, due date, Assigned To) is hardening only. A failure's error carries an ordered event log (menu, focus, clicks, lookup). Read it first; the re-click is unchanged on purpose.
+### KI-71 — Staging-wide API stall 18:36:06-18:37:04Z, sandbox 44361216176 (2026-11-18)
+- **Status:** open, environment (staging backend), one occurrence · **Since:** 2026-11-18
+- **What:** every `/v1/` call was held about 58 s and released together at 18:37:04-09 on 3 shards (lists 48-57 s). `POST /v1/deals/` answered 500 `01003002` after 46 s (reports.rbac:148), a contact create got no answer in 45 s (contacts.spec:619), the Products options lookup none in 10 s (call-logs:485). All passed on retry; no 429/`001002`; sessions had 9 h left.
+- **Tests:** no change (no wait passes a stall). Contacts create errors say "sent, no answer" or "never sent"; multi-select open errors list unanswered requests. Not yet in Companies/Leads/Deals creates (leftover).
+- **Next check:** on a recurrence compare timestamps across shards; ask Kylas for gateway logs.
+
+### KI-70 — Quick-task "Assigned To" menu closes at once: it opens on hover and the click steals its focus (2026-11-18)
+- **Status:** root cause found in the app bundle 2026-11-19; fixed, verify in sandbox · **Since:** 2026-11-17
+- **What:** CO10, COR9, sandbox 44258530411 (deals.rbac:574), 44361216176 (companies.rbac:330, contacts.rbac:174). Both 44361216176 errors: focusin INPUT +165/+181 ms, menu ADDED, focusout INPUT -> `BUTTON.assign-to` 4 ms later, menu REMOVED 6 ms after, lookup fired after the removal, the second click adds no event.
+- **Cause (bundle `index.d0a7f5a2…`, quick-task form):** `button.assign-to` has `onClick: preventDefault` and opens on `onMouseEnter`; the Field renders with `autoFocus` and `input.onBlur` closes it. Playwright's click moves the pointer (mouseenter: menu renders, input focused) then mousedown: the browser focuses the button, the input blurs, the menu closes. It passes if mousedown lands before the autofocus. A second click cannot reopen it (pointer already over the button: no new mouseenter). Due date and Priority also open on mouseenter (no blur handler). The Tasks Add dropdown (tasks.rbac:273) is a Bootstrap click toggle, cause unconfirmed.
+- **Fix (2026-11-19):** `openMenuAndWaitForItem(..., {openBy:'hover'})` for Assigned To and due date (pointer parked, `hover()`, one retry); 20/20 opens passed. Close after a clean sandbox run. Tasks Add dropdown: Bootstrap click, unchanged.
 
 ### KI-69 — Restricted owner's lead menu without "Delete" (2026-11-16)
 - **Status:** open, cause found, fix awaiting verification · **Since:** staging `leads.rbac.spec.ts:762` (12/12 fail), 698
@@ -74,24 +81,23 @@
 
 ### KI-67 — Clone lead form: Last Name sometimes loses the " Copy" pre-fill (2026-11-16)
 - **Status:** open, tracked; tests do not fail on it (owner 2026-11-17: not an app bug) · **Since:** sandbox 38855451748 (2026-10-16); staging 2/24, 3/24 at 4 workers
-- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone. The Copy branch runs once per mount (`hasCloneValuesSet`); `enableReinitialize` shares the payload.
+- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone.
 - **Test:** `cloneLead(original)` must pass: "Clone Lead" form open, original first name in it, save gives a NEW id. A missing " Copy" only adds a `known-issue` annotation + warning.
 
 ### KI-66 — Deal edit: Actual Total not recalculated after a product attach; 3 tests disabled (2026-11-18)
-- **Status:** open; PS14, PS11 and D51 are `test.fixme` (owner decision, to be added back); app edit-form race, not reported to Kylas for now · **Since:** 2026-10-09 (QA), 2026-11-16, 2026-11-18
-- **Tests:** P&S PS14 / PS11 (`:161`): admin / restricted picks the admin-owned product fixture on a deal during edit, then Distribute Equally -> "Yes, Proceed" -> Save. D51 (`deals.spec.ts`): the same with 11 installments. Kept: `DealsPage.updateDealAttachingProduct` (runtime known-bug verdict) and the `updateDeal` guard.
-- **Issue:** when the edit form's cached layout and the deal GET land together, it never builds `formFieldIndex`, so `isActualValueFieldPresent` is false: adding a product updates Estimated but not Actual Total, no "Distribute Equally" link, Save -> 400 `01001091`. Probe: 4/4 stuck runs never saw `layoutLoading=true`. Not tied to installment count (5/10 stuck at 2). Not reproduced manually.
-- **At risk, same race (left running, passes so far):** `deals.spec.ts` "admin should distribute unallocated amount equally after adding a product…". Mark it `test.fixme` if it fails with the KI-66 message.
-- **Re-enable:** remove `test.fixme`, run each x10 (they use `updateDealAttachingProduct`).
+- **Status:** open; PS14, PS11 and D51 are `test.fixme` (owner decision); app edit-form race, not reported to Kylas for now · **Since:** 2026-10-09 (QA), 2026-11-16, 2026-11-18
+- **Tests:** P&S PS14 / PS11 (`:161`) and D51 (`deals.spec.ts`, 11 installments): pick the admin-owned product on a deal during edit, Distribute Equally -> "Yes, Proceed" -> Save. Kept: `DealsPage.updateDealAttachingProduct` (runtime known-bug verdict) and the `updateDeal` guard.
+- **Issue:** when the edit form's cached layout and the deal GET land together, `formFieldIndex` is never built, so `isActualValueFieldPresent` is false: Estimated updates, Actual Total and the banner do not, Save -> 400 `01001091`. Probe: 4/4 stuck runs never saw `layoutLoading=true`. Not tied to installment count; not reproduced manually.
+- **At risk, same race:** `deals.spec.ts` "admin should distribute unallocated amount equally after adding a product…": `test.fixme` it if it fails with the KI-66 message. **Re-enable:** remove `test.fixme`, run each x10.
 
 ### KI-65 — `productFixtureNeed` skips product fixtures when a file filter carries a `:line` suffix (2026-11-16)
 - **Status:** open, not fixed (workaround below) · **Since:** found 2026-11-16 reproducing sandbox run 42064754304
-- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`. `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path and is not flagged ambiguous. This is the unsafe "wrong skip" direction the file's own header warns about.
+- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`: `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path (the unsafe "wrong skip" direction).
 - **Next check:** strip a trailing `:\d+` (and `:\d+:\d+`) from each filter in `extractFileFilters`; add a case to its unit check. Workaround: file path + `--grep`.
 
 ### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B3; sleeps go to B6) · **Since:** 2026-11-04 plan RC4
-- **What:** `BasePage.assertNoFormErrors(context, confirmedSave?)` skips the 1.5 s pause only when the caller passes its confirmed save response (Tasks edit, due-date; Contacts edit; Meetings create; Call Logs edit). Others keep the pause. Other `waitForTimeout` left in `src/`: ADR 0014 transport-retry backoffs (`BasePage` ~1041, `authManager` ~167).
+- **What:** `BasePage.assertNoFormErrors(context, confirmedSave?)` skips the 1.5 s pause only when the caller passes its confirmed save response (Tasks edit, due-date; Contacts edit; Meetings create; Call Logs edit). Others keep the pause. Other `waitForTimeout` left: ADR 0014 backoffs (`BasePage` ~1041, `authManager` ~167).
 - **Next check:** migrate the other callers to pass their `saveAndAwait` response; never raise the 1.5 s.
 
 ### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
@@ -101,21 +107,20 @@
 - **Next check:** after the sandbox 10-worker run, grep for "Test timeout of 120000ms" whose last step is a `click`.
 
 ### KI-62 — App crash `QuotationApprovalStateFieldValue` on a freshly loaded company page with quotations (2026-11-05)
-- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** seen 2026-11-04
-- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')` (pageError, bundle `index.*.bundle.js`); the Quotations card never renders. The quotation search answered 200 with a normal `approvalState`. Staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8. Rendering the card in place after the save never crashed.
-- **Test side:** CO12 verifies in place and fails 2 s after an uncaught page error with its text (ADR 0016). Other tests that load a company with quotations by URL could meet it; none seen.
-- **Next check:** reload a company with a quotation 10x; if the crash persists, give Kylas the stack.
+- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** 2026-11-04
+- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')`; the Quotations card never renders (staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8). CO12 now verifies in place and fails 2 s after an uncaught page error (ADR 0016).
+- **Next check:** reload a company with a quotation 10x; if it persists, give Kylas the stack.
 
 ### KI-61 — QA deal search stopped indexing new deals (2026-11-04): "Related Deals (0)", deal tests fail
 - **Status:** open, environment (QA backend) · **Since:** 2026-11-04
-- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`, status OPEN, company set) were still absent from `POST /v1/search/deal` at 14:58 UTC (3.5 h). Company and contact search were current (newest 12:43 / 12:45), leads 11:45. The company page's Related Deals card (`POST /v1/search/deal`, rule company = id AND forecastingType in OPEN) therefore answered `totalElements: 0` after every create.
-- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2 with and without B1 (ADR 0016): the create answers 201, the card shows "Related Deals (0)". Not a wait problem: no bounded wait on the search can pass while the index is stalled. `companies.spec.ts:248` and `contacts.spec.ts:244` (quotation from the panel, same deal search returning 0) pass about half the time: not yet attributed.
-- **Next check:** repeat the query below when QA's indexer is restored (`search by ids` returning the deals); if the lag is seconds again, add a bounded re-issue of the app's own search (post-save refresh, plan batch B3) instead of one read. [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md) for the 429 side.
+- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`) were still absent from `POST /v1/search/deal` 3.5 h later; company/contact/lead search were current. The company page's Related Deals card therefore showed 0 after every create.
+- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2; `companies.spec.ts:248` and `contacts.spec.ts:244` pass about half the time (not attributed). No wait can pass while the index is stalled.
+- **Next check:** repeat the search by ids when QA's indexer is restored; if the lag is seconds again, add a bounded re-issue of the app's own search (plan batch B3). [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
 
 ### KI-52 — A lead shared READ-ONLY still lets the restricted user delete the admin's note and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
-- **What:** with a `read`-only rule: note ADD fixed on QA 2026-11-18 (401 `000004`; staging/prod still 200); DELETE of the admin's note still 200 on QA (fix in progress, SD-32157); task create 200 (meetings 422, call logs 403). Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
-- **Tests:** `leads.rbac.spec.ts` L77 (add note), L80 (delete), L79 (tasks): fix detected at run time (`applyKnownBugVerdict`, `src/utils/knownIssue.ts`): accepted = expected failure, refused = pass + annotation to add the env to `KNOWN_BUG_FIX_CONFIRMED_ENVS` (strict = red on regression; QA for add note). Close when all three are strict ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)).
+- **What:** with a `read`-only rule: note ADD fixed on QA 2026-11-18 (401 `000004`; staging/prod still 200); DELETE of the admin's note still 200 on QA (SD-32157); task create 200. [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
+- **Tests:** `leads.rbac.spec.ts` L77, L80, L79 decide at run time (`applyKnownBugVerdict`, `src/utils/knownIssue.ts`): accepted = expected failure, refused = pass + annotation to add the env to `KNOWN_BUG_FIX_CONFIRMED_ENVS`. Close when all three are strict ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)).
 
 ### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
@@ -127,10 +132,11 @@
 
 ### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
 - **Status:** open, watch · **Since:** 2026-11-02
-- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **Occurred 2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban (20:04:31-37) while L65 (`leads.spec.ts:1409`) was sorting; its 2nd sort reloaded the board, no `.rt-tr` rows for 60 s. Mitigated 2026-11-18 inside `leads.spec.ts` only: `leadListPreferences.ts` (shared lock, writers L65/L68 exclusive, works within one machine/shard, verified live); other lead specs on other shards are not covered. Own-smart-list isolation is impossible: `POST /search-lists/lead` creates a list, but `mark-as-preferred` makes it THE preferred list of the user and the Leads page then showed no table. Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban while L65 (`leads.spec.ts:1409`) was sorting; no `.rt-tr` rows for 60 s. Mitigated 2026-11-18 inside `leads.spec.ts` only (`leadListPreferences.ts` lock, verified live); other lead specs on other shards are not covered. Own-smart-list isolation is impossible (`mark-as-preferred` makes it the user's only preferred list). Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
 - **Status:** open · **Since:** 2026-11-03 (sandbox, staging)
+- **2026-11-19:** sandbox 44361216176 shard 1 logged 9 such 500s in 18 min; reports.spec:866 Save As failed on the attempt and the retry. Save As now has the same one retry on exactly 500 + `01403004`, after a name check (ADR 0017); an unavailable check fails by name.
 - **What:** `POST /v3/reports` 500 `01403004` hit Save As and a Lead report ("Meeting-only" is stale); both now fail at once with status/code (the one existing create retry stays). Product control stays disabled if `GET /v1/deals/{id}` fails (now a labelled fast failure). 400 "Connection prematurely closed BEFORE response" on a quotation save is KI-49, not retried. `quotations.rbac` edit-shared "Save toast not visible": hardened, cause unconfirmed, needs a trace.
 
 ### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
@@ -151,9 +157,8 @@
 
 ### KI-16 — JWT lifetime is not a stable constant; `ensureFreshSession()` margin is unsized
 - **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
-- **What:** measured token lifetimes differ between investigations (~10.4 h documented, ~20 min once, ~101 min later, 4/4 reproducible). `AuthManager.ensureFreshSession()` refreshes at <10 min remaining, sized against the wrong assumption. A ~40-minute-old storage state landing on sign-in is likewise unexplained.
-- **2026-11-05 (ADR 0016):** the margin is now sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when its own `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669, P&S: a ~47 min token). Why the lifetime varies (10.2 h on a fresh staging login the same day) is still unexplained.
-- **Next check:** dedicated investigation into *why* the lifetime varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **What:** measured token lifetimes differ between investigations (~10.4 h, ~20 min once, ~101 min later). Since 2026-11-05 (ADR 0016) the refresh margin is sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669). Why the lifetime varies is unexplained.
+- **Next check:** investigate why it varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
 - **Status:** inconclusive · **Since:** 2026-08-07

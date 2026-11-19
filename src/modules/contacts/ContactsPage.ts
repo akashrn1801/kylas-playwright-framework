@@ -735,6 +735,11 @@ export class ContactsPage extends BasePage {
     transient: boolean;
     detail: string;
   }> {
+    // WHY (2026-11-19, sandbox 44361216176 contacts.spec:619: no create response in 45 s, during a staging-wide stall):
+    // the timeout could not say "sent, no answer" from "never sent". The watcher records the create request itself.
+    const createWatch = this.watchRequests(
+      (r) => r.method() === 'POST' && r.url().includes('/v1/contacts') && !r.url().includes('/reports/')
+    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -777,7 +782,9 @@ export class ContactsPage extends BasePage {
       // logged at debug level, so the thrown error could not say whether the
       // wait timed out or the session expired. Still classified non-transient.
       logger.debug(`Contact create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000) };
+      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000, createWatch) };
+    } finally {
+      createWatch.stop();
     }
   }
 
