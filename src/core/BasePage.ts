@@ -24,6 +24,13 @@ import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 // this is an opt-in parameter rather than an unconditional dual-match.
 export type CustomFieldSuffixStyle = 'legacy' | 'plain';
 
+export interface RequestWatch {
+  sentCount(): number;
+  unansweredCount(): number;
+  describe(onlyUnanswered?: boolean): string;
+  stop(): void;
+}
+
 export class BasePage {
   protected page: Page;
 
@@ -285,12 +292,63 @@ export class BasePage {
     return error;
   }
 
-  protected describeMissedResponse(error: unknown, waitedMs: number): string {
+  // Records the requests a step sends (matched by `match`) and whether each was answered, so a timeout can say
+  // "sent, no answer" (backend) or "never sent" (lost click) instead of "either". Nothing is logged here; the
+  // caller reads `describe()` only when it is about to fail. Paths only (no query string, no body, no headers).
+  protected watchRequests(match: (request: Request) => boolean): RequestWatch {
+    const t0 = Date.now();
+    const seen = new Map<Request, { sentAt: number; status?: number; answeredAt?: number; failure?: string }>();
+    const onRequest = (r: Request): void => {
+      if (match(r)) seen.set(r, { sentAt: Date.now() - t0 });
+    };
+    const onResponse = (r: Response): void => {
+      const entry = seen.get(r.request());
+      if (entry) Object.assign(entry, { status: r.status(), answeredAt: Date.now() - t0 });
+    };
+    const onFailed = (r: Request): void => {
+      const entry = seen.get(r);
+      if (entry) entry.failure = r.failure()?.errorText ?? 'failed';
+    };
+    this.page.on('request', onRequest);
+    this.page.on('response', onResponse);
+    this.page.on('requestfailed', onFailed);
+    const label = (r: Request): string => `${r.method()} ${new URL(r.url()).pathname}`;
+    return {
+      sentCount: () => seen.size,
+      unansweredCount: () => [...seen.values()].filter((e) => e.status === undefined && !e.failure).length,
+      describe: (onlyUnanswered = false) => {
+        const now = Date.now() - t0;
+        const rows = [...seen.entries()]
+          .filter(([, e]) => !onlyUnanswered || (e.status === undefined && !e.failure))
+          .slice(0, 8)
+          .map(([r, e]) =>
+            e.failure
+              ? `${label(r)} sent +${e.sentAt}ms, failed: ${e.failure}`
+              : e.status === undefined
+                ? `${label(r)} sent +${e.sentAt}ms, NO ANSWER after ${now - e.sentAt}ms`
+                : `${label(r)} sent +${e.sentAt}ms, HTTP ${e.status} after ${(e.answeredAt ?? 0) - e.sentAt}ms`
+          );
+        return `${seen.size} request(s) seen, ${[...seen.values()].filter((e) => e.status === undefined && !e.failure).length} unanswered${rows.length ? `: ${rows.join('; ')}` : ''}`;
+      },
+      stop: () => {
+        this.page.off('request', onRequest);
+        this.page.off('response', onResponse);
+        this.page.off('requestfailed', onFailed);
+      },
+    };
+  }
+
+  protected describeMissedResponse(error: unknown, waitedMs: number, watch?: RequestWatch): string {
     const text = String(error);
     if (/session expired while waiting for a response/i.test(text)) {
       return 'no create response: the session expired while waiting (session was recovered, the request could not be resumed)';
     }
     if (/Timeout \d+ms exceeded/i.test(text)) {
+      if (watch) {
+        return watch.sentCount() === 0
+          ? `no matching create request was SENT within ${waitedMs}ms (the request never fired: the Save click or submit was lost)`
+          : `the create request was SENT but got no answer within ${waitedMs}ms (backend did not answer): ${watch.describe()}`;
+      }
       return `no matching create request completed within ${waitedMs}ms (the request never fired or the backend did not answer)`;
     }
     return `no create response captured: ${text}`;
@@ -1890,7 +1948,11 @@ export class BasePage {
   // Opens the select and waits for its options. If nothing appears and NO menu is open, the click did not
   // register (the React "click lands, nothing happens" race), so click again; if a menu IS open but still
   // empty it is loading, so only wait (a second click would close it). Bounded; fails loudly.
-  protected async openReactSelectAndWaitForOptions(control: Locator, description: string): Promise<Locator> {
+  protected async openReactSelectAndWaitForOptions(
+    control: Locator,
+    description: string,
+    failureDetail?: () => string
+  ): Promise<Locator> {
     const options = this.reactSelectOpenOptions();
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1904,7 +1966,8 @@ export class BasePage {
         if (attempt === maxAttempts) {
           throw new Error(
             `${description}: react-select showed no options after ${maxAttempts} open attempts ` +
-              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}`
+              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}` +
+              (failureDetail ? `\n[requests during the open] ${failureDetail()}` : '')
           );
         }
         logger.warn(`${description}: no react-select options yet (attempt ${attempt}/${maxAttempts})`);
@@ -1914,7 +1977,13 @@ export class BasePage {
   }
 
   // Opens a toggle-driven menu (Bootstrap dropdown, Assigned To, due-date options) and waits for one item of it.
-  // HARDENING, ROOT CAUSE NOT CONFIRMED (KI-70, 2026-11-18): the click lands and the menu never shows. Seen in full
+  // `openBy: 'hover'` (KI-70, root cause found in the app bundle 2026-11-19): the quick-task Assigned To, due-date and
+  // Priority buttons open on `onMouseEnter`, and Assigned To's lookup field has `autoFocus` and an `onBlur` that closes it.
+  // Playwright's click moves the pointer (menu renders, input focused) and then presses the mouse: the button takes
+  // focus, the input blurs, the menu closes, and a second click cannot reopen it (no new mouseenter). Those toggles are
+  // hovered, never clicked; a retry parks the pointer away and hovers again. Bootstrap dropdowns (Tasks Add) are
+  // click-driven (`data-toggle="dropdown"`) and keep the default.
+  // HARDENING, ROOT CAUSE NOT CONFIRMED for click-opened toggles (KI-70, 2026-11-18): the click lands and the menu never shows. Seen in full
   // Companies runs (CO10, COR9), in sandbox 44258530411 (deals.rbac:574, Assigned To: lookup 200, the menu was probably
   // rendered and removed within one poll, focus back on the button) and on the Tasks Add dropdown (tasks.rbac:273,
   // "Detailed Task" option never visible). Shape (ADR 0014 section 4): click only when NO menu is open (a click on an
@@ -1928,9 +1997,10 @@ export class BasePage {
     menuSelector: string,
     item: Locator,
     description: string,
-    options: { lookupUrlPart?: string } = {}
+    options: { lookupUrlPart?: string; openBy?: 'click' | 'hover' } = {}
   ): Promise<void> {
     const maxAttempts = 2;
+    const openBy = options.openBy ?? 'click';
     const menu = this.page.locator(menuSelector);
     const t0 = Date.now();
     const nodeEvents: string[] = [];
@@ -1982,8 +2052,17 @@ export class BasePage {
         .catch(() => undefined);
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if ((await menu.count()) === 0) {
-          nodeEvents.push(`${at()} click ${attempt}/${maxAttempts}`);
-          await this.click(toggle, `${description}: open toggle (${attempt}/${maxAttempts})`);
+          if (openBy === 'hover') {
+            // The pointer is parked at the corner first, so the move onto the toggle is always a fresh mouseenter
+            // (a second hover with the pointer already on the toggle fires nothing).
+            nodeEvents.push(`${at()} hover ${attempt}/${maxAttempts}`);
+            logger.info(`Hovering: ${description}: open toggle (${attempt}/${maxAttempts})`);
+            await this.page.mouse.move(0, 0);
+            await toggle.hover({ timeout: config.timeouts.expect });
+          } else {
+            nodeEvents.push(`${at()} click ${attempt}/${maxAttempts}`);
+            await this.click(toggle, `${description}: open toggle (${attempt}/${maxAttempts})`);
+          }
         }
         try {
           await this.withSessionExpiryRecovery(() =>
@@ -2870,9 +2949,19 @@ export class BasePage {
     // reopen-clicks in the loop below switch to clicking the control's own
     // <input> instead — see that comment for why.
     const controlInput = control.locator('input').first();
-    await this.click(control, `multi-select control: ${description}`);
+    // WHY the shared open helper (2026-11-19, sandbox 44361216176 call-logs:485, "Products or Services": a bare click then a
+    // 10 s wait timed out with no clue why): it clicks only while no menu is open, waits, re-clicks once if the click
+    // did not register, and fails by name. Failure-only detail: the API requests sent during the open and whether each
+    // was answered (that run: a staging-wide stall, every request held ~58 s).
     const menuOptions = this.page.locator('.is-invalid__menu .is-invalid__option');
-    await menuOptions.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    const openWatch = this.watchRequests((r) => /\/v[13]\//.test(r.url()));
+    try {
+      await this.openReactSelectAndWaitForOptions(control, `multi-select control: ${description}`, () =>
+        openWatch.describe(true)
+      );
+    } finally {
+      openWatch.stop();
+    }
     const allOptionTexts = (await menuOptions.allInnerTexts()).map((t) => t.trim());
     if (allOptionTexts.length === 0) {
       throw new Error(

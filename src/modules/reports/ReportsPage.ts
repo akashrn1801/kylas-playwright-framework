@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { BasePage } from '../../core/BasePage';
 import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import { ReportApi } from '../../utils/reportApi';
 import {
   ReportData,
   ReportCategory,
@@ -1436,14 +1437,37 @@ export class ReportsPage extends BasePage {
     // WHY (2026-11-03, reports.spec "save as"): Save As POSTs /v3/reports like a create, and it
     // can return the same HTTP 500 01403004. Without reading that response the test waited out
     // the whole waitForURL timeout. Armed before the click; a rejected save fails at once.
-    const saveResponse = this.page
-      .waitForResponse(
-        (res) => res.request().method() === 'POST' && this.isReportCreatePath(res),
-        { timeout: config.timeouts.navigation }
-      )
-      .catch(() => null);
-    await this.click(this.saveAsConfirmButton(), 'Save As — confirm');
-    await this.failIfReportSaveRejected(await saveResponse, 'Save As');
+    const clickSaveAsConfirm = async (): Promise<Response | null> => {
+      const saveResponse = this.page
+        .waitForResponse(
+          (res) => res.request().method() === 'POST' && this.isReportCreatePath(res),
+          { timeout: config.timeouts.navigation }
+        )
+        .catch(() => null);
+      await this.click(this.saveAsConfirmButton(), 'Save As — confirm');
+      return saveResponse;
+    };
+    const firstResponse = await clickSaveAsConfirm();
+    if (await this.isKnownTransientReportSaveBug(firstResponse)) {
+      // WHY one retry here, with a check first (2026-11-19, sandbox 44361216176 reports.spec:866: Save As answered
+      // 500 / 01403004 on the attempt and on Playwright's retry, passed on the next run; shard 1 logged 9 such
+      // 500s in 18 min, KI-60). Same exact status + code as createReport's retry. ADR 0017: a create is repeated
+      // only after a check shows it was not written; an unavailable check fails by name.
+      await this.assertSaveAsNotWrittenBeforeRetry(finalName, originalId);
+      logger.warn(
+        `Save As: POST /v3/reports returned 500/${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} (known backend defect, ` +
+          'KI-60); report not found by name — confirming Save As once more'
+      );
+      if (!(await this.saveAsModal().isVisible())) {
+        await this.openSaveAsDialog();
+      }
+      if ((await this.saveAsNameInput().inputValue()) !== finalName) {
+        await this.fill(this.saveAsNameInput(), finalName, 'Save As — new name (retry)');
+      }
+      await this.failIfReportSaveRejected(await clickSaveAsConfirm(), 'Save As (after the one 01403004 retry)');
+    } else {
+      await this.failIfReportSaveRejected(firstResponse, 'Save As');
+    }
     await this.page.waitForURL(
       (url) => /\/reports\/details\/\d+/.test(url.pathname) && !url.pathname.endsWith(`/${originalId}`),
       { timeout: config.timeouts.navigation }
@@ -2225,6 +2249,57 @@ export class ReportsPage extends BasePage {
       `${action} rejected by the server: HTTP ${response.status()} code ${code} message ` +
         `"${body?.message ?? ''}" on POST /v3/reports${known}`
     );
+  }
+
+  private async isKnownTransientReportSaveBug(response: Response | null): Promise<boolean> {
+    if (!response || response.ok() || response.status() !== 500) return false;
+    const body = (await response.json().catch(() => null)) as { code?: string } | null;
+    return body?.code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE;
+  }
+
+  // Before the Save As retry: was the report written anyway? Polls the search API (the index trails the write,
+  // 15 s) for the new name. Found -> fails by name, no retry. The check must be non-vacuous: it first looks up
+  // the ORIGINAL report (known to exist) with the same query and requires its name in the answer; if that control
+  // fails (API shape, 4xx/5xx, no name) the check cannot be made and the step fails by name, it does not guess.
+  private async assertSaveAsNotWrittenBeforeRetry(newName: string, originalId: string | null): Promise<void> {
+    const unavailable = (why: string): never => {
+      throw new Error(
+        `Save As answered HTTP 500 / ${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} and the existence check could not be made ` +
+          `(${why}); not retrying, a retry could create a second report.`
+      );
+    };
+    if (!originalId) unavailable('the original report id was not readable from the URL');
+    const api = await ReportApi.forPage(this.page).catch((error) =>
+      unavailable(`no API access: ${String(error).split('\n')[0]}`)
+    );
+    let found = false;
+    try {
+      const originalName = await api.nameOf(originalId as string).catch((error) =>
+        unavailable(`original report not readable: ${String(error).split('\n')[0]}`)
+      );
+      if (!originalName) unavailable('the original report has no readable name');
+      const control = await api.searchText(originalName as string).catch((error) =>
+        unavailable(`search failed: ${String(error).split('\n')[0]}`)
+      );
+      if (!control.includes(originalName as string)) {
+        unavailable('control failed: the search did not list the original report by name');
+      }
+      await expect
+        .poll(async () => (found = (await api.searchText(newName)).includes(newName)), {
+          timeout: 15000,
+          intervals: [1000, 2000, 3000],
+        })
+        .toBe(true)
+        .catch(() => undefined);
+    } finally {
+      await api.dispose();
+    }
+    if (found) {
+      throw new Error(
+        `Save As answered HTTP 500 / ${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} but a report named "${newName}" exists, ` +
+          'so it was written; not retrying (a retry would create a duplicate).'
+      );
+    }
   }
 
   private async attemptSaveOnceAndClassify(): Promise<{

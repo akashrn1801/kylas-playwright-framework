@@ -417,7 +417,8 @@ export class TasksPage extends BasePage {
       this.quickTaskDateButton(),
       '.duedate-dropdown-options',
       tomorrowOption,
-      'Quick task: the "Tomorrow" due-date option'
+      'Quick task: the "Tomorrow" due-date option',
+      { openBy: 'hover' }
     );
     await tomorrowOption.click({ timeout: config.timeouts.expect });
     await this.withSessionExpiryRecovery(async () => {
@@ -441,7 +442,7 @@ export class TasksPage extends BasePage {
       '.assigned-to-menu-list',
       assignedToOptions.first(),
       'Quick task: the Assigned To options',
-      { lookupUrlPart: '/users/lookup' }
+      { lookupUrlPart: '/users/lookup', openBy: 'hover' }
     );
     // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
     // textContent()+click() on a random option, same bug class.
