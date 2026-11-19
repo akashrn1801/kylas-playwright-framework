@@ -1791,15 +1791,41 @@ export class QuotationsPage extends BasePage {
       // that the real create endpoint is `/v1/quotations/` WITH a trailing
       // slash — the pattern below tolerates one optionally before/after the
       // id segment, otherwise this silently never matches and times out.
+      // Sandbox 44533064234, quotations.rbac:41: this wait swallowed its miss (`.catch(() => null)`) and failed with
+      // "Could not confirm save outcome", which could not say whether the save was sent. The watcher records every write
+      // to /v1/quotations so a miss below names "NEVER SENT" or "SENT but NO ANSWER" and what was sent.
+      const saveWatch = this.watchRequests(
+        (r) =>
+          r.method() !== 'GET' &&
+          /^\/v1\/quotations(\/|$)/.test(new URL(r.url()).pathname) &&
+          !/\/search\/?$/.test(new URL(r.url()).pathname)
+      );
       const responsePromise = this.armResponseWaitWithRecovery(
         (res) =>
           /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
           ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
         'saveQuotationHandlingInaccessibleEntities: save POST/PATCH/PUT',
         20000
-      ).catch(() => null);
-      await this.modalSaveButton().click();
-      const response = await responsePromise;
+      );
+      let missedAnswer: unknown = null;
+      const settledResponse = responsePromise.then(
+        (res) => res,
+        (error: unknown) => {
+          missedAnswer = error;
+          return null;
+        }
+      );
+      let response: Response | null;
+      let watchSummary: string;
+      let sentCount: number;
+      try {
+        await this.modalSaveButton().click();
+        response = await settledResponse;
+      } finally {
+        watchSummary = saveWatch.describe();
+        sentCount = saveWatch.sentCount();
+        saveWatch.stop();
+      }
 
       if (response && response.status() < 400) {
         this.lastSaveAnsweredOk = true;
@@ -1823,9 +1849,15 @@ export class QuotationsPage extends BasePage {
           logger.warn('Save response not captured, but the success toast was shown after the click');
           return { succeeded: true, removedEntities, lastErrorMessage };
         }
+        // a client-side validation error never reaches the network: report that, not "no answer"
+        await this.assertNoFormErrors('quotation save form', undefined).catch((formError: Error) => {
+          throw new Error(`${formError.message} (no save request was answered: ${watchSummary})`);
+        });
         throw new Error(
           'Could not confirm save outcome — no matching API response captured within 20 s and no ' +
-            `success toast was shown after the click (still on: ${this.page.url()})`
+            `success toast was shown after the click (still on: ${this.page.url()}) — ` +
+            `${sentCount === 0 ? 'the save request was NEVER SENT' : 'the save request was SENT but got NO ANSWER'}: ` +
+            `${watchSummary}. Wait error: ${String(missedAnswer).split('\n')[0]}`
         );
       }
 

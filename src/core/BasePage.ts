@@ -24,6 +24,18 @@ import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 // this is an opt-in parameter rather than an unconditional dual-match.
 export type CustomFieldSuffixStyle = 'legacy' | 'plain';
 
+// Thrown by saveAndAwait() when the save's answer never came: says whether the request was sent at all, so a caller can
+// check before it repeats the save (ADR 0017) and a failure names "NEVER SENT" or "SENT but NO ANSWER".
+export class SaveAnswerMissedError extends Error {
+  constructor(
+    message: string,
+    readonly sentCount: number
+  ) {
+    super(message);
+    this.name = 'SaveAnswerMissedError';
+  }
+}
+
 export interface RequestWatch {
   sentCount(): number;
   unansweredCount(): number;
@@ -235,8 +247,23 @@ export class BasePage {
     );
     // a failing click must not leave this rejection unhandled
     waiting.catch(() => undefined);
-    await click();
-    const response = await waiting;
+    // Sandbox 44533064234, contacts.rbac:839: "no matching response within 30003ms" could not say whether the PUT was
+    // sent. The watcher sees every request of the same method and path, whatever its answer.
+    const watch = this.watchRequests(
+      (r) => methods.includes(r.method()) && expected.urlRe.test(new URL(r.url()).pathname)
+    );
+    let response: Response;
+    try {
+      await click();
+      response = await waiting;
+    } catch (error) {
+      throw new SaveAnswerMissedError(
+        `${String(error)} — ${watch.sentCount() === 0 ? 'the request was NEVER SENT' : 'the request was SENT but got NO ANSWER'}: ${watch.describe()}`,
+        watch.sentCount()
+      );
+    } finally {
+      watch.stop();
+    }
     if (!response.ok()) {
       throw new Error(`${expected.description}: ${await this.describeMatchedResponse(response)}`);
     }
