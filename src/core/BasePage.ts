@@ -294,8 +294,9 @@ export class BasePage {
 
   // Records the requests a step sends (matched by `match`) and whether each was answered, so a timeout can say
   // "sent, no answer" (backend) or "never sent" (lost click) instead of "either". Nothing is logged here; the
-  // caller reads `describe()` only when it is about to fail. Paths only (no query string, no body, no headers).
-  protected watchRequests(match: (request: Request) => boolean): RequestWatch {
+  // caller reads `describe()` only when it is about to fail. Paths only (no query string, no body, no headers),
+  // unless the caller passes `labelOf` to add one non-sensitive query value (e.g. the lookup's `name`).
+  protected watchRequests(match: (request: Request) => boolean, labelOf?: (request: Request) => string): RequestWatch {
     const t0 = Date.now();
     const seen = new Map<Request, { sentAt: number; status?: number; answeredAt?: number; failure?: string }>();
     const onRequest = (r: Request): void => {
@@ -312,7 +313,7 @@ export class BasePage {
     this.page.on('request', onRequest);
     this.page.on('response', onResponse);
     this.page.on('requestfailed', onFailed);
-    const label = (r: Request): string => `${r.method()} ${new URL(r.url()).pathname}`;
+    const label = labelOf ?? ((r: Request): string => `${r.method()} ${new URL(r.url()).pathname}`);
     return {
       sentCount: () => seen.size,
       unansweredCount: () => [...seen.values()].filter((e) => e.status === undefined && !e.failure).length,
@@ -336,6 +337,107 @@ export class BasePage {
         this.page.off('requestfailed', onFailed);
       },
     };
+  }
+
+  // Count-bounded attempts (sandbox 44464192762, deals.rbac:666): the B6 `expect(...).toPass({ timeout: retries * (5000 + wait) })`
+  // put the navigation inside a 30 s (staging) budget, so one list that took 38 s expired it mid-step and
+  // `catch { return false }` hid the cause. Each attempt is now run to its own bounds (the steps inside carry them),
+  // at most `attempts` times; the failure names the last error. No pause between attempts: every attempt already ends
+  // in a real bounded wait (the results/row wait), which is the pacing the old fixed pause stood in for.
+  protected async retryAttempts(attempts: number, description: string, attempt: (n: number) => Promise<void>): Promise<void> {
+    let last: unknown;
+    for (let n = 1; n <= attempts; n++) {
+      try {
+        await attempt(n);
+        return;
+      } catch (error) {
+        last = error;
+        logger.info(`${description}: attempt ${n}/${attempts} did not succeed: ${String(error).split('\n')[0].slice(0, 200)}`);
+      }
+    }
+    throw new Error(`${description}: not satisfied after ${attempts} attempt(s). Last error: ${String(last)}`);
+  }
+
+  // Detail pages (sandbox 44464192762, deals.rbac:323): the page's own requests were held, the app gave up on them
+  // after about 60 s (action-logs ERR_FAILED, pipeline ERR_ABORTED), rendered nothing and never asked again, while the
+  // test kept waiting a further 60 s on a page that could not recover. ADR 0014: a transport failure may be retried,
+  // so on such a failure (and only then) the page is reloaded ONCE. A page whose requests did not fail is not touched:
+  // the wait runs to its bound and fails by name with the page state. The reload is skipped when the element shows up
+  // within 5 s after the failure (an unrelated aborted request).
+  async waitForDetailElement(locator: Locator, description: string, timeout = config.timeouts.navigation): Promise<void> {
+    let failure = '';
+    let signal: () => void = () => undefined;
+    const failed = new Promise<'failed'>((resolve) => {
+      signal = () => resolve('failed');
+    });
+    const onFailed = (r: Request): void => {
+      const type = r.resourceType();
+      const text = r.failure()?.errorText ?? '';
+      if ((type === 'xhr' || type === 'fetch') && /ERR_(FAILED|ABORTED)/.test(text) && !failure) {
+        failure = `${r.method()} ${new URL(r.url()).pathname} (${text})`;
+        signal();
+      }
+    };
+    this.page.on('requestfailed', onFailed);
+    try {
+      const first = await Promise.race([
+        locator.waitFor({ state: 'visible', timeout }).then(() => 'visible' as const),
+        failed,
+      ]);
+      if (first === 'visible') return;
+      const settled = await locator.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+      if (settled) return;
+      logger.warn(`${description}: a page request failed at transport level (${failure}) and the element did not appear — reloading once (ADR 0014)`);
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await locator.waitFor({ state: 'visible', timeout });
+    } catch (error) {
+      throw new Error(`${description}: not visible${failure ? ` (page request failed: ${failure}; reloaded once)` : ' (no page request failed at transport level)'}. ${String(error).split('\n')[0]} ${await this.describePageStall()}`);
+    } finally {
+      this.page.off('requestfailed', onFailed);
+    }
+  }
+
+  // Failure-only: what the page looked like when an element that should have rendered did not (call-logs.spec:554,
+  // sandbox 44464192762: Leads list table missing for 3 x 120 s, cause unknown). Reads Playwright's own record of
+  // the last 100 requests, so it also covers requests sent before this call; nothing is armed or waited for.
+  // Paths and states only: no query string, no body, no page text.
+  protected async describePageStall(): Promise<string> {
+    try {
+      const url = new URL(this.page.url());
+      const now = Date.now();
+      const api = (await this.page.requests()).filter((r) => /^\/v1\//.test(new URL(r.url()).pathname));
+      const unanswered = api.filter((r) => r.existingResponse() === null && r.failure() === null);
+      const failed = api.filter((r) => r.failure() !== null);
+      const rows = (list: Request[], what: (r: Request) => string): string =>
+        list
+          .slice(0, 6)
+          .map((r) => `${r.method()} ${new URL(r.url()).pathname} sent ${Math.round((now - r.timing().startTime) / 1000)}s ago${what(r)}`)
+          .join('; ');
+      const state = await this.page
+        .evaluate(() => ({
+          ready: document.readyState,
+          tables: document.querySelectorAll('.rt-table').length,
+          skeletons: document.querySelectorAll('.react-loading-skeleton').length,
+          splash: /^\s*Loading/i.test(document.body?.innerText ?? ''),
+        }))
+        .catch(() => null);
+      const rateLimited = await this.page
+        .getByText(RATE_LIMIT_PAGE_PATTERN)
+        .first()
+        .isVisible()
+        .catch(() => false);
+      return (
+        `[page state] ${url.origin}${url.pathname}; signed-out page: ${isSignInUrl(this.page.url())}; rate-limit page: ${rateLimited}; ` +
+        (state
+          ? `readyState=${state.ready}, .rt-table=${state.tables}, skeleton rows=${state.skeletons}, "Loading" splash=${state.splash}; `
+          : 'DOM not readable; ') +
+        `${api.length} /v1/ request(s) in the last 100: ${unanswered.length} unanswered, ${failed.length} failed` +
+        (unanswered.length ? `; unanswered: ${rows(unanswered, () => '')}` : '') +
+        (failed.length ? `; failed: ${rows(failed, (r) => ` (${r.failure()?.errorText ?? 'failed'})`)}` : '')
+      );
+    } catch (error) {
+      return `[page state] could not be read (${String(error).slice(0, 120)})`;
+    }
   }
 
   protected describeMissedResponse(error: unknown, waitedMs: number, watch?: RequestWatch): string {
@@ -1487,16 +1589,21 @@ export class BasePage {
       // confusing downstream Playwright-teardown error.
       const MIN_VIABLE_RETRY_BUDGET_MS = 15000;
       const remaining = deadline - Date.now();
+      const stall = await this.describePageStall();
       if (Number.isFinite(deadline) && remaining < MIN_VIABLE_RETRY_BUDGET_MS) {
         throw new Error(
-          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)}`
+          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)} ${stall}`
         );
       }
       logger.warn(
-        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)}`
+        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)} ${stall}`
       );
       await this.page.reload({ waitUntil: 'domcontentloaded' });
-      await assertTableVisible();
+      try {
+        await assertTableVisible();
+      } catch (retryError) {
+        throw new Error(`${String(retryError)}\nAfter the reload: ${await this.describePageStall()}`);
+      }
     }
   }
 

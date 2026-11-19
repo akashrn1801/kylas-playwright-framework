@@ -1,5 +1,5 @@
-import { Page, expect, Locator, test } from '@playwright/test';
-import { BasePage } from '../../core/BasePage';
+import { Page, expect, Locator, test, Request, Response } from '@playwright/test';
+import { BasePage, RequestWatch } from '../../core/BasePage';
 import {
   DealData,
   formatDateForCalendarLabel,
@@ -495,6 +495,13 @@ export class DealsPage extends BasePage {
   }
 
   private async captureDealIdFromResponse(): Promise<{ id: number | null; detail: string }> {
+    // WHY (KI-71, 2026-11-19): the timeout could not say "sent, no answer" from "never sent". Diagnostics only.
+    const createWatch = this.watchRequests(
+      (r) =>
+        r.method() === 'POST' &&
+        (r.url().includes('/v1/deals') || r.url().includes('/v1/deal')) &&
+        !r.url().includes('/reports/')
+    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -538,31 +545,29 @@ export class DealsPage extends BasePage {
       };
     } catch (error) {
       logger.warn(`Unable to capture deal ID: ${String(error)}`);
-      return { id: null, detail: this.describeMissedResponse(error, config.timeouts.navigation) };
+      return { id: null, detail: this.describeMissedResponse(error, config.timeouts.navigation, createWatch) };
+    } finally {
+      createWatch.stop();
     }
   }
 
   private async retryFindDeal(name: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is the deal's row in the search results after a fresh list + search (a new deal
-    // can lag in the search index); toPass repeats that with its own backoff inside the budget the fixed
+    // can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the fixed
     // retries x (5 s results wait + pause) took. Same shape as ContactsPage.retryFindContact().
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Searching deal: ${name}`);
-          await this.goToDealsList();
-          await this.performSearch(name);
-          if (!(await this.waitForSearchResults(name))) {
-            throw new Error(`Deal "${name}" is not in the search results yet`);
-          }
-        }).toPass({ timeout: retries * (5000 + wait) })
-      );
-      logger.success('Deal found');
-      return true;
-    } catch {
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Deal "${name}" search`, async () => {
+        logger.info(`Searching deal: ${name}`);
+        await this.goToDealsList();
+        await this.performSearch(name);
+        if (!(await this.waitForSearchResults(name))) {
+          throw new Error(`Deal "${name}" is not in the search results yet`);
+        }
+      })
+    );
+    logger.success('Deal found');
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -733,21 +738,50 @@ export class DealsPage extends BasePage {
   // answer for THIS text is the signal the filtered list is ready; it replaces the 800 ms pauses. Armed before
   // the fill; fails by name when it is missing or not 2xx.
   private async fillAndAwaitLookup(inputLocator: Locator, text: string): Promise<void> {
-    const lookup = this.armResponseWaitWithRecovery(
-      (res) => {
-        const url = new URL(res.url());
-        return (
-          res.request().method() === 'GET' &&
-          /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(url.pathname) &&
-          url.searchParams.get('name') === text
-        );
-      },
-      `Associated lookup for "${text}"`,
-      15000
-    );
-    lookup.catch(() => undefined);
-    await inputLocator.fill(text);
-    const response = await lookup;
+    // WHY (sandbox 44464192762, meetings.rbac:189): the timeout could not say whether the lookup was sent. The watcher
+    // lists every associated lookup with its `name`, so the error shows sent/answered, or a different name. Error text only.
+    const isLookup = (r: Request): boolean =>
+      r.method() === 'GET' && /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(new URL(r.url()).pathname);
+    const lookupWatch = this.watchRequests(isLookup, (r) => {
+      const url = new URL(r.url());
+      return `GET ${url.pathname} name="${url.searchParams.get('name') ?? ''}"`;
+    });
+    try {
+      const lookup = this.armResponseWaitWithRecovery(
+        (res) => {
+          const url = new URL(res.url());
+          return (
+            res.request().method() === 'GET' &&
+            /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(url.pathname) &&
+            url.searchParams.get('name') === text
+          );
+        },
+        `Associated lookup for "${text}"`,
+        15000
+      );
+      lookup.catch(() => undefined);
+      await inputLocator.fill(text);
+      await this.assertAssociatedLookupAnswered(lookup, text, lookupWatch);
+    } finally {
+      lookupWatch.stop();
+    }
+  }
+
+  private async assertAssociatedLookupAnswered(
+    lookup: Promise<Response>,
+    text: string,
+    lookupWatch: RequestWatch
+  ): Promise<void> {
+    let response: Response;
+    try {
+      response = await lookup;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      err.message = `${err.message}\n[associated lookups] expected name="${text}": ${
+        lookupWatch.sentCount() === 0 ? 'no lookup request was sent' : lookupWatch.describe()
+      }`;
+      throw err;
+    }
     if (!response.ok()) {
       throw new Error(`Associated lookup for "${text}": ${await this.describeMatchedResponse(response)}`);
     }

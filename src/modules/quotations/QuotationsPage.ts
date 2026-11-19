@@ -581,9 +581,9 @@ export class QuotationsPage extends BasePage {
   }
 
   private async retryFindInList(searchValue: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is "the search returned a non-empty row" after a fresh list + search (a new
-    // quotation can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // quotation can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the
     // fixed retries x (results wait + pause) took, instead of fixed pauses (1 s before the rows, `wait`
     // between attempts). Same shape as ContactsPage.retryFindContact().
     // WHY: The list rows show system-assigned quotation numbers (e.g. QUO-00012),
@@ -592,22 +592,18 @@ export class QuotationsPage extends BasePage {
     // but hasText(searchValue) never matches the row text.
     // Strategy: after search fires, check if ANY non-empty rows exist.
     // If search returned results, the quotation exists. If no rows, it doesn't.
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Searching quotation: ${searchValue}`);
-          await this.goToQuotationsList();
-          await this.performSearch(searchValue);
-          // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
-          const nonEmptyRow = this.page.locator('.rt-tr-group').filter({ hasText: /\S/ }).first();
-          await expect(nonEmptyRow, `No rows found for: ${searchValue}`).toBeVisible({ timeout: 5000 });
-        }).toPass({ timeout: retries * (5000 + wait) })
-      );
-      logger.success(`Search returned row(s) for: ${searchValue}`);
-      return true;
-    } catch {
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Quotation search "${searchValue}" search`, async () => {
+        logger.info(`Searching quotation: ${searchValue}`);
+        await this.goToQuotationsList();
+        await this.performSearch(searchValue);
+        // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
+        const nonEmptyRow = this.page.locator('.rt-tr-group').filter({ hasText: /\S/ }).first();
+        await expect(nonEmptyRow, `No rows found for: ${searchValue}`).toBeVisible({ timeout: 5000 });
+      })
+    );
+    logger.success(`Search returned row(s) for: ${searchValue}`);
+    return true;
   }
 
   private async performSearch(value: string): Promise<void> {
@@ -1433,18 +1429,31 @@ export class QuotationsPage extends BasePage {
   // saves are structurally unaffected) and to this exact quotations-create
   // path, never a blanket "retry any failed save."
   private readonly QUOTATION_CREATE_PATH_PATTERN = /\/v1\/quotations\/?(?:\?.*)?$/;
+  private readonly QUOTATION_EDIT_PATH_PATTERN = /^\/v1\/quotations\/\d+\/?$/;
 
   private async attemptQuotationSaveOnceAndClassify(): Promise<
     'done' | 'confirmedTransientServerError'
   > {
-    const responsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.request().method() === 'POST' &&
-          this.QUOTATION_CREATE_PATH_PATTERN.test(new URL(res.url()).pathname),
-        { timeout: config.timeouts.navigation }
-      )
-      .catch(() => null);
+    // Method-aware (sandbox 44464192762, shard 4): an edit saves with PUT/PATCH on /v1/quotations/<id>, which the old
+    // POST-only matcher never saw, so every edit waited the full navigation timeout (4 x 120.0 s) and swallowed the miss.
+    // The strict wait matches the create POST or an edit PUT/PATCH; the watcher records every write to /v1/quotations so
+    // a miss says what was (not) sent, whatever the edit's real method turns out to be.
+    const saveWatch = this.watchRequests(
+      (r) => r.method() !== 'GET' && /^\/v1\/quotations(\/|$)/.test(new URL(r.url()).pathname) && !/\/search\/?$/.test(new URL(r.url()).pathname)
+    );
+    const responsePromise = this.armResponseWaitWithRecovery(
+      (res) => {
+        const method = res.request().method();
+        const path = new URL(res.url()).pathname;
+        return (
+          (method === 'POST' && this.QUOTATION_CREATE_PATH_PATTERN.test(path)) ||
+          ((method === 'PUT' || method === 'PATCH') && this.QUOTATION_EDIT_PATH_PATTERN.test(path))
+        );
+      },
+      'quotation save: POST (create) / PUT or PATCH (edit) on /v1/quotations',
+      config.timeouts.navigation
+    );
+    responsePromise.catch(() => undefined);
     // WHY this.click(), not a raw .click() (locator-reviewer finding,
     // 2026-09-07): this refactor centralizes the Save click into a method
     // that can now fire up to twice per save (primary + fallback retry),
@@ -1467,18 +1476,24 @@ export class QuotationsPage extends BasePage {
         },
         () => undefined
       );
-    await this.click(this.modalSaveButton(), 'quotation save (attempt)');
-    const response = await responsePromise;
-    this.lastSaveAnsweredOk = response?.ok() ?? false;
-    if (!response || response.ok()) {
-      // Either a real success, or no matching response was captured at all
-      // (e.g. a client-side validation error that never reached the
-      // network) — either way, this isn't the confirmed transient
-      // signature, so let assertNoFormErrors()/the modal-hidden check below
-      // be the real signal, unmodified.
+    let response: Response;
+    try {
+      await this.click(this.modalSaveButton(), 'quotation save (attempt)');
+      response = await responsePromise;
+    } catch (error) {
+      // a client-side validation error never reaches the network: say that, not "no answer"
+      await this.assertNoFormErrors('quotation save form', undefined).catch((formError: Error) => {
+        throw new Error(`${formError.message} (no save request was answered: ${saveWatch.describe()})`);
+      });
+      throw new Error(`${String(error)} — ${saveWatch.sentCount() === 0 ? 'the save request was NEVER SENT' : 'the save request was SENT but got NO ANSWER'}: ${saveWatch.describe()}`);
+    } finally {
+      saveWatch.stop();
+    }
+    this.lastSaveAnsweredOk = response.ok();
+    if (response.ok()) {
       return 'done';
     }
-    return response.status() === 500 ? 'confirmedTransientServerError' : 'done';
+    return response.status() === 500 && response.request().method() === 'POST' ? 'confirmedTransientServerError' : 'done';
   }
 
   // ADR 0017 (B4): check first, then decide. An HTTP 500 on the create does not prove nothing was

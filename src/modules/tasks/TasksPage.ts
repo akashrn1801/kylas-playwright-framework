@@ -321,26 +321,21 @@ export class TasksPage extends BasePage {
   }
 
   private async retryFindTask(name: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is the task's row after a fresh list + quoted search (a new task can lag in the
-    // search index); toPass repeats that with its own backoff inside the budget the fixed retries x (list +
+    // search index); retryAttempts repeats that with its own backoff inside the budget the fixed retries x (list +
     // results wait + pause) took, instead of fixed pauses. Same shape as LeadsPage.retryFindLead().
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Looking for task "${name}"`);
-          await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
-          await this.waitForListReady();
-          await this.searchTaskByName(name, 'retryFindTask');
-          await expect(this.taskListItemByName(name)).toBeVisible({ timeout: 5000 });
-        }).toPass({ timeout: retries * (15000 + wait) })
-      );
-      logger.success(`Task "${name}" found via quoted search`);
-      return true;
-    } catch {
-      logger.warn(`Task "${name}" not found within ${retries} attempts`);
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Task "${name}" search`, async () => {
+        logger.info(`Looking for task "${name}"`);
+        await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
+        await this.waitForListReady();
+        await this.searchTaskByName(name, 'retryFindTask');
+        await expect(this.taskListItemByName(name)).toBeVisible({ timeout: 5000 });
+      })
+    );
+    logger.success(`Task "${name}" found via quoted search`);
+    return true;
   }
 
   private async closeDetailedModalIfOpen(): Promise<void> {

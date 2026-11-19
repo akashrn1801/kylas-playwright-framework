@@ -578,27 +578,23 @@ export class ContactsPage extends BasePage {
   }
 
   private async retryFindContact(firstName: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is the contact's row in the search results after a fresh list + search (a new
-    // contact can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // contact can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the
     // fixed retries x (5 s results wait + pause) took, instead of a fixed pause between attempts. Same shape
     // as CompaniesPage.retryFindCompany().
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Searching contact: ${firstName}`);
-          await this.goToContactsList();
-          await this.performSearch(firstName);
-          if (!(await this.waitForSearchResults(firstName))) {
-            throw new Error(`Contact "${firstName}" is not in the search results yet`);
-          }
-        }).toPass({ timeout: retries * (5000 + wait) })
-      );
-      logger.success('Contact found');
-      return true;
-    } catch {
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Contact "${firstName}" search`, async () => {
+        logger.info(`Searching contact: ${firstName}`);
+        await this.goToContactsList();
+        await this.performSearch(firstName);
+        if (!(await this.waitForSearchResults(firstName))) {
+          throw new Error(`Contact "${firstName}" is not in the search results yet`);
+        }
+      })
+    );
+    logger.success('Contact found');
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────
