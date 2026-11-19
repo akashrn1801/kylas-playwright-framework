@@ -8,6 +8,8 @@ import {
   TASK_CUSTOM_FIELD_NAMES,
   TaskCustomFieldKey,
 } from '@data/factories/taskFactory';
+import { TaskRelationTargets, getTaskRelationTargets } from './TaskRelationTargets';
+
 class InaccessibleRelationError extends Error {}
 
 // WHY: the shape of a task-save error response body — a dynamic API response,
@@ -383,11 +385,13 @@ export class TasksPage extends BasePage {
 
   async openQuickTaskForm(): Promise<void> {
     logger.info('Opening Quick Task form via dropdown');
-    await this.openMenuAndWaitForItem(
-      this.addDropdownToggle(),
-      '.dropdown-menu.show',
-      this.addQuickTaskOption(),
-      'Add dropdown: the "Quick Task" option'
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.addDropdownToggle(),
+        '.dropdown-menu.show',
+        this.addQuickTaskOption(),
+        'Add dropdown: the "Quick Task" option'
+      )
     );
     await this.addQuickTaskOption().click();
     await this.quickTaskCard().waitFor({ state: 'visible', timeout: 10000 });
@@ -408,12 +412,14 @@ export class TasksPage extends BasePage {
     const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', {
       hasText: 'Tomorrow',
     });
-    await this.openMenuAndWaitForItem(
-      this.quickTaskDateButton(),
-      '.duedate-dropdown-options',
-      tomorrowOption,
-      'Quick task: the "Tomorrow" due-date option',
-      { openBy: 'hover' }
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.quickTaskDateButton(),
+        '.duedate-dropdown-options',
+        tomorrowOption,
+        'Quick task: the "Tomorrow" due-date option',
+        { openBy: 'hover' }
+      )
     );
     await tomorrowOption.click({ timeout: config.timeouts.expect });
     await this.withSessionExpiryRecovery(async () => {
@@ -432,12 +438,14 @@ export class TasksPage extends BasePage {
     logger.info('Setting Assigned To');
     // WHY: Assigned To uses .assigned-to-menu-list with .is-invalid__option items
     const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
-    await this.openMenuAndWaitForItem(
-      this.quickTaskAssignedToButton(),
-      '.assigned-to-menu-list',
-      assignedToOptions.first(),
-      'Quick task: the Assigned To options',
-      { lookupUrlPart: '/users/lookup', openBy: 'hover' }
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.quickTaskAssignedToButton(),
+        '.assigned-to-menu-list',
+        assignedToOptions.first(),
+        'Quick task: the Assigned To options',
+        { lookupUrlPart: '/users/lookup', openBy: 'hover' }
+      )
     );
     // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
     // textContent()+click() on a random option, same bug class.
@@ -556,11 +564,16 @@ export class TasksPage extends BasePage {
     logger.info('Opening Detailed Task form via dropdown');
     // B6 (owner decision 2026-11-17): bounded waits, no retry loop (the old 3-attempt loop with 1 s pauses
     // swallowed every wait with `.catch(() => {})`). Each step waits for the thing it needs and fails by name.
-    await this.openMenuAndWaitForItem(
-      this.addDropdownToggle(),
-      '.dropdown-menu.show',
-      this.addDetailedTaskOption(),
-      'Add dropdown: the "Detailed Task" option'
+    // Sandbox 44533064234 (tasks.rbac:360/385, 13:43:20Z, two workers at once): the app showed its 429 page ("Too many
+    // requests at once") when the Add dropdown was opened, right after a staging stall released. ADR 0014 allows a 429
+    // retry: withRateLimitRecovery clicks the app's own Refresh once and opens the menu once more (nothing else).
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.addDropdownToggle(),
+        '.dropdown-menu.show',
+        this.addDetailedTaskOption(),
+        'Add dropdown: the "Detailed Task" option'
+      )
     );
     await this.addDetailedTaskOption().click({ timeout: config.timeouts.expect });
     await this.withSessionExpiryRecovery(() =>
@@ -738,11 +751,20 @@ export class TasksPage extends BasePage {
     );
   }
 
-  async fillRelation(): Promise<void> {
+  async fillRelation(targets?: TaskRelationTargets): Promise<void> {
     logger.info('Filling Relation field — all entity types');
-    const entityTypes = ['Lead', 'Deal', 'Contact', 'Company'];
+    // run-owned records, never a random existing one another test may delete (see TaskRelationTargets)
+    const owned = targets ?? (await getTaskRelationTargets(this.page));
+    const entityTypes = ['Lead', 'Deal', 'Contact', 'Company'] as const;
+    const nameOf: Record<(typeof entityTypes)[number], string> = {
+      Lead: owned.lead,
+      Deal: owned.deal,
+      Contact: owned.contact,
+      Company: owned.company,
+    };
 
     for (const entityType of entityTypes) {
+      const targetName = nameOf[entityType];
       logger.info(`Selecting relation entity type: ${entityType}`);
 
       // Step 1: Open the entity type dropdown (relation type selector) and pick the type.
@@ -757,8 +779,7 @@ export class TasksPage extends BasePage {
       // Step 2: Click the entity search dropdown and search
       // WHY: After selecting entity type, a search dropdown appears — same as meetings
       // B6 (staging probe 2026-11-17: all four types exist and answer a three-space search within ~25 ms): the
-      // search control and the results are awaited, not slept on; a type with no records FAILS by name (it used
-      // to log "skipping" and save the task without that relation).
+      // search control and the results are awaited, not slept on.
       const searchControl = this.page
         .locator('div')
         .filter({ hasText: /^Search \.\.\.$/ })
@@ -770,22 +791,41 @@ export class TasksPage extends BasePage {
       );
       await searchControl.click();
 
-      // Step 3: Type spaces to load the first results
-      await this.taskRelationTypeInput().fill('   ');
-      const options = this.page.locator('.is-invalid__option');
-      await this.withSessionExpiryRecovery(() =>
-        expect(
-          options.first(),
-          `Relation: the ${entityType} search should list at least one record (none found)`
-        ).toBeVisible({ timeout: config.timeouts.expect })
+      // Step 3: search for THIS run's record by name and pick it. The lookups the search sends are watched, so a
+      // miss says "sent, no answer" (staging hold), an HTTP status (429) or "never sent" (sandbox 44533064234,
+      // tasks.rbac:360: "none found" after a held lookup, with nothing to tell which). Count-bounded: a
+      // search that shows nothing is typed again (the lookup is answered from an index that can lag a create).
+      const lookupWatch = this.watchRequests(
+        (r) => r.method() === 'GET' && /^\/v1\/.*lookup/.test(new URL(r.url()).pathname),
+        (r) => {
+          const u = new URL(r.url());
+          const q = u.searchParams.get('name') ?? u.searchParams.get('q') ?? '';
+          return `GET ${u.pathname}${q ? ` q="${q.slice(0, 40)}"` : ''}`;
+        }
       );
-
-      // Step 4: Pick a random option
-      // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
-      // before — was an unbounded textContent()+click() on a random option.
-      await this.selectRandomOptionWithRetry(options, `Selected ${entityType} relation`, {
-        maxOptions: 5,
-      });
+      // the Lead and Contact lookups query `firstName:<text>` (seen live: GET /v1/search/lead/lookup q="firstName:..."), so
+      // the full name never matches: type the first name (unique per run), then match the full name in the option
+      const searchText = entityType === 'Lead' || entityType === 'Contact' ? targetName.split(' ')[0] : targetName;
+      const option = this.page.locator('.is-invalid__option').filter({ hasText: targetName }).first();
+      try {
+        await this.withSessionExpiryRecovery(() =>
+          this.retryAttempts(this.retryConfig.retries, `Relation: the ${entityType} search for "${targetName}"`, async () => {
+            await this.taskRelationTypeInput().fill('');
+            await this.taskRelationTypeInput().fill(searchText);
+            await expect(
+              option,
+              `Relation: the ${entityType} search should list this run's record "${targetName}"`
+            ).toBeVisible({ timeout: config.timeouts.expect });
+          })
+        );
+      } catch (error) {
+        const lookups = lookupWatch.describe();
+        throw new Error(`${String(error)}\n  Lookups seen: ${lookups}`);
+      } finally {
+        lookupWatch.stop();
+      }
+      await option.click();
+      logger.success(`Selected ${entityType} relation: "${targetName}" (this run's record)`);
       // the pick adds one relation row (each row has a trash icon)
       await this.withSessionExpiryRecovery(() =>
         expect(
