@@ -347,6 +347,12 @@ jobs:
     # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
     if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
     # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
@@ -378,6 +384,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -522,6 +529,12 @@ jobs:
     needs: [detect, run-tests]
     if: ${{ !cancelled() && vars.RERUN_SHARD == 'on' && needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -569,7 +582,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.select.outputs.run == 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.select.outputs.run == 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -686,6 +699,12 @@ jobs:
     needs: [detect, run-tests, rerun-failed]
     if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -739,7 +758,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.gate.outputs.skip != 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -840,6 +859,12 @@ jobs:
     needs: [detect, run-tests, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     timeout-minutes: 35
     continue-on-error: true
     permissions:
@@ -876,7 +901,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.gate.outputs.skip != 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
