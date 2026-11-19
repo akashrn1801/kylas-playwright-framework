@@ -158,9 +158,7 @@ test.describe('Products & Services RBAC', () => {
   // addProductRowAndSearchByName() call already asserts the product row's
   // control renders the fixture's name before returning success, so a
   // clean (non-throwing) call IS the proof this test needs.
-  test.fixme('@regression restricted user can select admin-owned active product fixture on a new deal', {
-    annotation: { type: 'fixme', description: 'KI-66: app edit-form race, disabled until fixed. See KNOWN_ISSUES_ACTIVE KI-66' },
-  }, async ({
+  test('@regression restricted user can select admin-owned active product fixture on a new deal', async ({
     restrictedPage,
   }) => {
     test.setTimeout(480000);

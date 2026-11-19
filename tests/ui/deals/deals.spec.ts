@@ -851,9 +851,7 @@ test.describe('Deals', () => {
   //   That one case is marked an expected failure at run time (not red); anything else, including a rejected Save, fails.
   //   The same classification (`updateDealAttachingProduct`) is used by the P&S deal-edit tests PS14 and PS11, which got
   //   stuck 5 of 10 times even with 2 installments: the installment count is not a factor.
-  test.fixme('@regression admin attaches a product during edit of a deal with 11 installments and distributes equally', {
-    annotation: { type: 'fixme', description: 'KI-66: app edit-form race, disabled until fixed. See KNOWN_ISSUES_ACTIVE KI-66' },
-  }, async ({
+  test('@regression admin attaches a product during edit of a deal with 11 installments and distributes equally', async ({
     adminPage,
   }) => {
     test.setTimeout(480000);

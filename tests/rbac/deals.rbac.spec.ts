@@ -379,7 +379,7 @@ test.describe('Deals RBAC', () => {
 
     logger.info('Verifying contact owner');
     const contactLink = restrictedPage.locator('.deal-contact__name').first();
-    await contactLink.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    await dealsPage.waitForDetailElement(contactLink, 'deal details: associated contact link');
 
     const [newTab] = await Promise.all([
       restrictedPage.context().waitForEvent('page', { timeout: config.timeouts.navigation }),

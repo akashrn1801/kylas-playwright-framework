@@ -240,9 +240,7 @@ test.describe('Products & Services', () => {
   // ─── PS14 ──────────────────────────────────────────────────────────────────
   // WHY: admin-role mirror of PS11 (RBAC file, restricted role) for Deals —
   // same gap-audit finding as PS13.
-  test.fixme('@regression admin should select admin-owned active product fixture on a new deal', {
-    annotation: { type: 'fixme', description: 'KI-66: app edit-form race, disabled until fixed. See KNOWN_ISSUES_ACTIVE KI-66' },
-  }, async ({
+  test('@regression admin should select admin-owned active product fixture on a new deal', async ({
     adminPage,
   }) => {
     test.setTimeout(480000);
