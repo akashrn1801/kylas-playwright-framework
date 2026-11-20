@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, Request, Response, errors, expect, test } from '@playwright/test';
+import { Page, Locator, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -23,25 +23,6 @@ import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
 export type CustomFieldSuffixStyle = 'legacy' | 'plain';
-
-// Thrown by saveAndAwait() when the save's answer never came: says whether the request was sent at all, so a caller can
-// check before it repeats the save (ADR 0017) and a failure names "NEVER SENT" or "SENT but NO ANSWER".
-export class SaveAnswerMissedError extends Error {
-  constructor(
-    message: string,
-    readonly sentCount: number
-  ) {
-    super(message);
-    this.name = 'SaveAnswerMissedError';
-  }
-}
-
-export interface RequestWatch {
-  sentCount(): number;
-  unansweredCount(): number;
-  describe(onlyUnanswered?: boolean): string;
-  stop(): void;
-}
 
 export class BasePage {
   protected page: Page;
@@ -247,23 +228,8 @@ export class BasePage {
     );
     // a failing click must not leave this rejection unhandled
     waiting.catch(() => undefined);
-    // Sandbox 44533064234, contacts.rbac:839: "no matching response within 30003ms" could not say whether the PUT was
-    // sent. The watcher sees every request of the same method and path, whatever its answer.
-    const watch = this.watchRequests(
-      (r) => methods.includes(r.method()) && expected.urlRe.test(new URL(r.url()).pathname)
-    );
-    let response: Response;
-    try {
-      await click();
-      response = await waiting;
-    } catch (error) {
-      throw new SaveAnswerMissedError(
-        `${String(error)} — ${watch.sentCount() === 0 ? 'the request was NEVER SENT' : 'the request was SENT but got NO ANSWER'}: ${watch.describe()}`,
-        watch.sentCount()
-      );
-    } finally {
-      watch.stop();
-    }
+    await click();
+    const response = await waiting;
     if (!response.ok()) {
       throw new Error(`${expected.description}: ${await this.describeMatchedResponse(response)}`);
     }
@@ -319,165 +285,12 @@ export class BasePage {
     return error;
   }
 
-  // Records the requests a step sends (matched by `match`) and whether each was answered, so a timeout can say
-  // "sent, no answer" (backend) or "never sent" (lost click) instead of "either". Nothing is logged here; the
-  // caller reads `describe()` only when it is about to fail. Paths only (no query string, no body, no headers),
-  // unless the caller passes `labelOf` to add one non-sensitive query value (e.g. the lookup's `name`).
-  protected watchRequests(match: (request: Request) => boolean, labelOf?: (request: Request) => string): RequestWatch {
-    const t0 = Date.now();
-    const seen = new Map<Request, { sentAt: number; status?: number; answeredAt?: number; failure?: string }>();
-    const onRequest = (r: Request): void => {
-      if (match(r)) seen.set(r, { sentAt: Date.now() - t0 });
-    };
-    const onResponse = (r: Response): void => {
-      const entry = seen.get(r.request());
-      if (entry) Object.assign(entry, { status: r.status(), answeredAt: Date.now() - t0 });
-    };
-    const onFailed = (r: Request): void => {
-      const entry = seen.get(r);
-      if (entry) entry.failure = r.failure()?.errorText ?? 'failed';
-    };
-    this.page.on('request', onRequest);
-    this.page.on('response', onResponse);
-    this.page.on('requestfailed', onFailed);
-    const label = labelOf ?? ((r: Request): string => `${r.method()} ${new URL(r.url()).pathname}`);
-    return {
-      sentCount: () => seen.size,
-      unansweredCount: () => [...seen.values()].filter((e) => e.status === undefined && !e.failure).length,
-      describe: (onlyUnanswered = false) => {
-        const now = Date.now() - t0;
-        const rows = [...seen.entries()]
-          .filter(([, e]) => !onlyUnanswered || (e.status === undefined && !e.failure))
-          .slice(0, 8)
-          .map(([r, e]) =>
-            e.failure
-              ? `${label(r)} sent +${e.sentAt}ms, failed: ${e.failure}`
-              : e.status === undefined
-                ? `${label(r)} sent +${e.sentAt}ms, NO ANSWER after ${now - e.sentAt}ms`
-                : `${label(r)} sent +${e.sentAt}ms, HTTP ${e.status} after ${(e.answeredAt ?? 0) - e.sentAt}ms`
-          );
-        return `${seen.size} request(s) seen, ${[...seen.values()].filter((e) => e.status === undefined && !e.failure).length} unanswered${rows.length ? `: ${rows.join('; ')}` : ''}`;
-      },
-      stop: () => {
-        this.page.off('request', onRequest);
-        this.page.off('response', onResponse);
-        this.page.off('requestfailed', onFailed);
-      },
-    };
-  }
-
-  // Count-bounded attempts (sandbox 44464192762, deals.rbac:666): the B6 `expect(...).toPass({ timeout: retries * (5000 + wait) })`
-  // put the navigation inside a 30 s (staging) budget, so one list that took 38 s expired it mid-step and
-  // `catch { return false }` hid the cause. Each attempt is now run to its own bounds (the steps inside carry them),
-  // at most `attempts` times; the failure names the last error. No pause between attempts: every attempt already ends
-  // in a real bounded wait (the results/row wait), which is the pacing the old fixed pause stood in for.
-  protected async retryAttempts(attempts: number, description: string, attempt: (n: number) => Promise<void>): Promise<void> {
-    let last: unknown;
-    for (let n = 1; n <= attempts; n++) {
-      try {
-        await attempt(n);
-        return;
-      } catch (error) {
-        last = error;
-        logger.info(`${description}: attempt ${n}/${attempts} did not succeed: ${String(error).split('\n')[0].slice(0, 200)}`);
-      }
-    }
-    throw new Error(`${description}: not satisfied after ${attempts} attempt(s). Last error: ${String(last)}`);
-  }
-
-  // Detail pages (sandbox 44464192762, deals.rbac:323): the page's own requests were held, the app gave up on them
-  // after about 60 s (action-logs ERR_FAILED, pipeline ERR_ABORTED), rendered nothing and never asked again, while the
-  // test kept waiting a further 60 s on a page that could not recover. ADR 0014: a transport failure may be retried,
-  // so on such a failure (and only then) the page is reloaded ONCE. A page whose requests did not fail is not touched:
-  // the wait runs to its bound and fails by name with the page state. The reload is skipped when the element shows up
-  // within 5 s after the failure (an unrelated aborted request).
-  async waitForDetailElement(locator: Locator, description: string, timeout = config.timeouts.navigation): Promise<void> {
-    let failure = '';
-    let signal: () => void = () => undefined;
-    const failed = new Promise<'failed'>((resolve) => {
-      signal = () => resolve('failed');
-    });
-    const onFailed = (r: Request): void => {
-      const type = r.resourceType();
-      const text = r.failure()?.errorText ?? '';
-      if ((type === 'xhr' || type === 'fetch') && /ERR_(FAILED|ABORTED)/.test(text) && !failure) {
-        failure = `${r.method()} ${new URL(r.url()).pathname} (${text})`;
-        signal();
-      }
-    };
-    this.page.on('requestfailed', onFailed);
-    try {
-      const first = await Promise.race([
-        locator.waitFor({ state: 'visible', timeout }).then(() => 'visible' as const),
-        failed,
-      ]);
-      if (first === 'visible') return;
-      const settled = await locator.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
-      if (settled) return;
-      logger.warn(`${description}: a page request failed at transport level (${failure}) and the element did not appear — reloading once (ADR 0014)`);
-      await this.page.reload({ waitUntil: 'domcontentloaded' });
-      await locator.waitFor({ state: 'visible', timeout });
-    } catch (error) {
-      throw new Error(`${description}: not visible${failure ? ` (page request failed: ${failure}; reloaded once)` : ' (no page request failed at transport level)'}. ${String(error).split('\n')[0]} ${await this.describePageStall()}`);
-    } finally {
-      this.page.off('requestfailed', onFailed);
-    }
-  }
-
-  // Failure-only: what the page looked like when an element that should have rendered did not (call-logs.spec:554,
-  // sandbox 44464192762: Leads list table missing for 3 x 120 s, cause unknown). Reads Playwright's own record of
-  // the last 100 requests, so it also covers requests sent before this call; nothing is armed or waited for.
-  // Paths and states only: no query string, no body, no page text.
-  protected async describePageStall(): Promise<string> {
-    try {
-      const url = new URL(this.page.url());
-      const now = Date.now();
-      const api = (await this.page.requests()).filter((r) => /^\/v1\//.test(new URL(r.url()).pathname));
-      const unanswered = api.filter((r) => r.existingResponse() === null && r.failure() === null);
-      const failed = api.filter((r) => r.failure() !== null);
-      const rows = (list: Request[], what: (r: Request) => string): string =>
-        list
-          .slice(0, 6)
-          .map((r) => `${r.method()} ${new URL(r.url()).pathname} sent ${Math.round((now - r.timing().startTime) / 1000)}s ago${what(r)}`)
-          .join('; ');
-      const state = await this.page
-        .evaluate(() => ({
-          ready: document.readyState,
-          tables: document.querySelectorAll('.rt-table').length,
-          skeletons: document.querySelectorAll('.react-loading-skeleton').length,
-          splash: /^\s*Loading/i.test(document.body?.innerText ?? ''),
-        }))
-        .catch(() => null);
-      const rateLimited = await this.page
-        .getByText(RATE_LIMIT_PAGE_PATTERN)
-        .first()
-        .isVisible()
-        .catch(() => false);
-      return (
-        `[page state] ${url.origin}${url.pathname}; signed-out page: ${isSignInUrl(this.page.url())}; rate-limit page: ${rateLimited}; ` +
-        (state
-          ? `readyState=${state.ready}, .rt-table=${state.tables}, skeleton rows=${state.skeletons}, "Loading" splash=${state.splash}; `
-          : 'DOM not readable; ') +
-        `${api.length} /v1/ request(s) in the last 100: ${unanswered.length} unanswered, ${failed.length} failed` +
-        (unanswered.length ? `; unanswered: ${rows(unanswered, () => '')}` : '') +
-        (failed.length ? `; failed: ${rows(failed, (r) => ` (${r.failure()?.errorText ?? 'failed'})`)}` : '')
-      );
-    } catch (error) {
-      return `[page state] could not be read (${String(error).slice(0, 120)})`;
-    }
-  }
-
-  protected describeMissedResponse(error: unknown, waitedMs: number, watch?: RequestWatch): string {
+  protected describeMissedResponse(error: unknown, waitedMs: number): string {
     const text = String(error);
     if (/session expired while waiting for a response/i.test(text)) {
       return 'no create response: the session expired while waiting (session was recovered, the request could not be resumed)';
     }
     if (/Timeout \d+ms exceeded/i.test(text)) {
-      if (watch) {
-        return watch.sentCount() === 0
-          ? `no matching create request was SENT within ${waitedMs}ms (the request never fired: the Save click or submit was lost)`
-          : `the create request was SENT but got no answer within ${waitedMs}ms (backend did not answer): ${watch.describe()}`;
-      }
       return `no matching create request completed within ${waitedMs}ms (the request never fired or the backend did not answer)`;
     }
     return `no create response captured: ${text}`;
@@ -1616,21 +1429,16 @@ export class BasePage {
       // confusing downstream Playwright-teardown error.
       const MIN_VIABLE_RETRY_BUDGET_MS = 15000;
       const remaining = deadline - Date.now();
-      const stall = await this.describePageStall();
       if (Number.isFinite(deadline) && remaining < MIN_VIABLE_RETRY_BUDGET_MS) {
         throw new Error(
-          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)} ${stall}`
+          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)}`
         );
       }
       logger.warn(
-        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)} ${stall}`
+        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)}`
       );
       await this.page.reload({ waitUntil: 'domcontentloaded' });
-      try {
-        await assertTableVisible();
-      } catch (retryError) {
-        throw new Error(`${String(retryError)}\nAfter the reload: ${await this.describePageStall()}`);
-      }
+      await assertTableVisible();
     }
   }
 
@@ -2082,11 +1890,7 @@ export class BasePage {
   // Opens the select and waits for its options. If nothing appears and NO menu is open, the click did not
   // register (the React "click lands, nothing happens" race), so click again; if a menu IS open but still
   // empty it is loading, so only wait (a second click would close it). Bounded; fails loudly.
-  protected async openReactSelectAndWaitForOptions(
-    control: Locator,
-    description: string,
-    failureDetail?: () => string
-  ): Promise<Locator> {
+  protected async openReactSelectAndWaitForOptions(control: Locator, description: string): Promise<Locator> {
     const options = this.reactSelectOpenOptions();
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -2100,149 +1904,13 @@ export class BasePage {
         if (attempt === maxAttempts) {
           throw new Error(
             `${description}: react-select showed no options after ${maxAttempts} open attempts ` +
-              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}` +
-              (failureDetail ? `\n[requests during the open] ${failureDetail()}` : '')
+              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}`
           );
         }
         logger.warn(`${description}: no react-select options yet (attempt ${attempt}/${maxAttempts})`);
       }
     }
     throw new Error(`${description}: react-select did not open`);
-  }
-
-  // Opens a toggle-driven menu (Bootstrap dropdown, Assigned To, due-date options) and waits for one item of it.
-  // `openBy: 'hover'` (KI-70, root cause found in the app bundle 2026-11-19): the quick-task Assigned To, due-date and
-  // Priority buttons open on `onMouseEnter`, and Assigned To's lookup field has `autoFocus` and an `onBlur` that closes it.
-  // Playwright's click moves the pointer (menu renders, input focused) and then presses the mouse: the button takes
-  // focus, the input blurs, the menu closes, and a second click cannot reopen it (no new mouseenter). Those toggles are
-  // hovered, never clicked; a retry parks the pointer away and hovers again. Bootstrap dropdowns (Tasks Add) are
-  // click-driven (`data-toggle="dropdown"`) and keep the default.
-  // HARDENING, ROOT CAUSE NOT CONFIRMED for click-opened toggles (KI-70, 2026-11-18): the click lands and the menu never shows. Seen in full
-  // Companies runs (CO10, COR9), in sandbox 44258530411 (deals.rbac:574, Assigned To: lookup 200, the menu was probably
-  // rendered and removed within one poll, focus back on the button) and on the Tasks Add dropdown (tasks.rbac:273,
-  // "Detailed Task" option never visible). Shape (ADR 0014 section 4): click only when NO menu is open (a click on an
-  // open toggle closes it), wait for the item, bounded, at most 2 attempts, fail by name. The re-click behaviour is
-  // unchanged on purpose until the diagnostics below say what removes the menu.
-  // Diagnostics, failure only (nothing is logged on success): an ordered event buffer is kept silently in the page
-  // (`menuSelector` added/removed, focusin/focusout with relatedTarget) and in Node (clicks, `lookupUrlPart`
-  // request/response), and both are read into the error. The page and Node clocks start within a few ms of each other.
-  protected async openMenuAndWaitForItem(
-    toggle: Locator,
-    menuSelector: string,
-    item: Locator,
-    description: string,
-    options: { lookupUrlPart?: string; openBy?: 'click' | 'hover' } = {}
-  ): Promise<void> {
-    const maxAttempts = 2;
-    const openBy = options.openBy ?? 'click';
-    const menu = this.page.locator(menuSelector);
-    const t0 = Date.now();
-    const nodeEvents: string[] = [];
-    const at = (): string => `+${Date.now() - t0}ms`;
-    const onRequest = (r: Request): void => {
-      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) nodeEvents.push(`${at()} lookup request`);
-    };
-    const onResponse = (r: Response): void => {
-      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) {
-        nodeEvents.push(`${at()} lookup response ${r.status()}`);
-      }
-    };
-    this.page.on('request', onRequest);
-    this.page.on('response', onResponse);
-    const stopPageBuffer = async (): Promise<void> => {
-      await this.page.evaluate(() => (window as unknown as { __omwStop?: () => void }).__omwStop?.()).catch(() => undefined);
-    };
-    try {
-      await this.page
-        .evaluate((selector: string) => {
-          const w = window as unknown as { __omwStop?: () => void; __omwEvents?: string[] };
-          w.__omwStop?.();
-          const events: string[] = [];
-          w.__omwEvents = events;
-          const start = Date.now();
-          const push = (text: string): void => {
-            if (events.length < 80) events.push(`+${Date.now() - start}ms ${text}`);
-          };
-          const hits = (n: Node): boolean => n instanceof Element && (n.matches(selector) || !!n.querySelector(selector));
-          const describe = (n: EventTarget | null): string =>
-            n instanceof Element ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null';
-          const observer = new MutationObserver((records) => {
-            for (const record of records) {
-              record.addedNodes.forEach((n) => hits(n) && push('menu ADDED'));
-              record.removedNodes.forEach((n) => hits(n) && push(`menu REMOVED (active=${describe(document.activeElement)})`));
-            }
-          });
-          observer.observe(document.documentElement, { childList: true, subtree: true });
-          const onFocusIn = (e: FocusEvent): void => push(`focusin ${describe(e.target)} from ${describe(e.relatedTarget)}`);
-          const onFocusOut = (e: FocusEvent): void => push(`focusout ${describe(e.target)} to ${describe(e.relatedTarget)}`);
-          document.addEventListener('focusin', onFocusIn, true);
-          document.addEventListener('focusout', onFocusOut, true);
-          w.__omwStop = () => {
-            observer.disconnect();
-            document.removeEventListener('focusin', onFocusIn, true);
-            document.removeEventListener('focusout', onFocusOut, true);
-          };
-        }, menuSelector)
-        .catch(() => undefined);
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        if ((await menu.count()) === 0) {
-          if (openBy === 'hover') {
-            // The pointer is parked at the corner first, so the move onto the toggle is always a fresh mouseenter
-            // (a second hover with the pointer already on the toggle fires nothing).
-            nodeEvents.push(`${at()} hover ${attempt}/${maxAttempts}`);
-            logger.info(`Hovering: ${description}: open toggle (${attempt}/${maxAttempts})`);
-            await this.page.mouse.move(0, 0);
-            await toggle.hover({ timeout: config.timeouts.expect });
-          } else {
-            nodeEvents.push(`${at()} click ${attempt}/${maxAttempts}`);
-            await this.click(toggle, `${description}: open toggle (${attempt}/${maxAttempts})`);
-          }
-        }
-        try {
-          await this.withSessionExpiryRecovery(() =>
-            expect(item, `${description} should appear`).toBeVisible({ timeout: config.timeouts.expect })
-          );
-          return;
-        } catch (error) {
-          if (attempt === maxAttempts) {
-            throw new Error(`${String(error)}\n${await this.describeMenuFailure(toggle, menu, nodeEvents)}`);
-          }
-          logger.warn(
-            `${description}: not visible yet (attempt ${attempt}/${maxAttempts}), menu open: ${(await menu.count()) > 0}`
-          );
-        }
-      }
-    } finally {
-      this.page.off('request', onRequest);
-      this.page.off('response', onResponse);
-      await stopPageBuffer();
-    }
-  }
-
-  private async describeMenuFailure(toggle: Locator, menu: Locator, nodeEvents: string[]): Promise<string> {
-    const snapshot = await toggle
-      .evaluate(
-        (el) => {
-          const rect = el.getBoundingClientRect();
-          const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-          const active = document.activeElement;
-          const name = (n: Element | null): string => (n ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null');
-          return {
-            activeElement: name(active),
-            coveringElement: name(top),
-            toggleReceivesClicks: !!top && (el === top || el.contains(top)),
-            documentHasFocus: document.hasFocus(),
-            pageEvents: (window as unknown as { __omwEvents?: string[] }).__omwEvents ?? [],
-          };
-        },
-        undefined,
-        { timeout: 2000 }
-      )
-      .catch((e: unknown) => ({ error: String(e).slice(0, 100) }));
-    return (
-      `Menu diagnostics (KI-70, hardening, root cause not confirmed): ${JSON.stringify(snapshot)}; ` +
-      `menu element now present: ${(await menu.count()) > 0}; node events: ${nodeEvents.length ? nodeEvents.join(', ') : 'none'}`
-    );
   }
 
   // Picks the option whose whole text is `name`, then clicks it.
@@ -3083,19 +2751,9 @@ export class BasePage {
     // reopen-clicks in the loop below switch to clicking the control's own
     // <input> instead — see that comment for why.
     const controlInput = control.locator('input').first();
-    // WHY the shared open helper (2026-11-19, sandbox 44361216176 call-logs:485, "Products or Services": a bare click then a
-    // 10 s wait timed out with no clue why): it clicks only while no menu is open, waits, re-clicks once if the click
-    // did not register, and fails by name. Failure-only detail: the API requests sent during the open and whether each
-    // was answered (that run: a staging-wide stall, every request held ~58 s).
+    await this.click(control, `multi-select control: ${description}`);
     const menuOptions = this.page.locator('.is-invalid__menu .is-invalid__option');
-    const openWatch = this.watchRequests((r) => /\/v[13]\//.test(r.url()));
-    try {
-      await this.openReactSelectAndWaitForOptions(control, `multi-select control: ${description}`, () =>
-        openWatch.describe(true)
-      );
-    } finally {
-      openWatch.stop();
-    }
+    await menuOptions.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
     const allOptionTexts = (await menuOptions.allInnerTexts()).map((t) => t.trim());
     if (allOptionTexts.length === 0) {
       throw new Error(

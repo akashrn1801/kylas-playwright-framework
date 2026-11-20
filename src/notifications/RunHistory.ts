@@ -802,18 +802,6 @@ export interface PassRatePoint {
 }
 
 /**
- * "Passed first time" as one decimal, rounded to the nearest: a run with any test that did not pass first time (flaky,
- * failed, skipped, not run) can never read 100% (2026-11-19, sandbox build #227: 938 of 941 = 99.68% showed "100%" with
- * flaky tests because the figure was rounded to a whole number; it now reads 99.7%). Capped at 99.9 below 100%.
- * Shared by the email tile, its delta and the trend series.
- */
-export function passRatePercent(passed: number, total: number): number {
-  if (total <= 0) return 0;
-  if (passed >= total) return 100;
-  return Math.min(99.9, Math.round((passed / total) * 1000) / 10);
-}
-
-/**
  * Last-n (default 10) pass-rate points, oldest first, including the current
  * run — for the email's pass-rate sparkline. Reuses fields every
  * RunHistoryRecord already stores (passed/total); no new per-record data was
@@ -826,7 +814,7 @@ export function buildPassRateSeries(
 ): PassRatePoint[] {
   const toPoint = (r: RunHistoryRecord): PassRatePoint => ({
     buildNumber: r.buildNumber,
-    passRate: passRatePercent(r.passed, r.total),
+    passRate: r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0,
     timestamp: r.timestamp,
   });
   // WHY de-duplicated per build (2026-10-06): a re-run of a build's failed

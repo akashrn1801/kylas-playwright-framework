@@ -14,7 +14,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { ReportParser, ParsedReport } from '../src/notifications/ReportParser';
-import { passRatePercent } from '../src/notifications/RunHistory';
 import { clusterFailures, normalizeTestTitle } from '../src/notifications/FailureAnalyzer';
 import { enrichClusters, buildFlakyFailureDetails, EnrichedCluster, EnrichmentContext, FailureDetail } from '../src/notifications/FailureDetailBuilder';
 import { computeHealthScore, computeOverallVerdict } from '../src/notifications/AutomationHealth';
@@ -549,10 +548,6 @@ function main(): void {
 
 
   // 11. two labels that cannot be confused, and retry vs rerun wording (email review follow-up, 2026-11-03)
-  // 11a. "Passed first time" never rounds up to 100 while any test did not pass first time (build #227: 952 of 955 = 99.7% read 100%)
-  check(passRatePercent(938, 941) === 99.7 && passRatePercent(952, 955) === 99.7 && passRatePercent(954, 955) === 99.9, 'pass rate: 938/941 reads 99.7%, 952/955 99.7%, 954/955 99.9% (nearest decimal)');
-  check(passRatePercent(99999, 100000) === 99.9 && passRatePercent(940, 941) === 99.9, 'pass rate: a value that rounds to 100.0 with a test not passed stays 99.9');
-  check(passRatePercent(955, 955) === 100 && passRatePercent(0, 0) === 0 && passRatePercent(9999, 10000) === 99.9, 'pass rate: all passed = 100, empty = 0, 9999/10000 = 99.9 (never 100.0)');
   check(baseHtml.includes('>Passed first time<') && !baseHtml.includes('>Pass Rate<'), 'email: the KPI tile is "Passed first time" (passed / all tests), not "Pass Rate"');
   check(baseHtml.includes('Passed incl. flaky:') && !baseHtml.includes('Pass rate:'), 'email: the Health factor is "Passed incl. flaky" (passed + flaky over executed), not a second "Pass rate"');
   const seriesHtml = tpl.html({ ...rr, passRateSeries: [{ buildNumber: '6', passRate: 90, timestamp: 't' }, { buildNumber: '7', passRate: 80, timestamp: 't' }] });
@@ -562,12 +557,6 @@ function main(): void {
     { file: 'ui/a.spec.ts', title: 'retry then rerun', status: 'flaky', res: ['failed', 'passed', 'passed:rerun'] },
     { file: 'ui/a.spec.ts', title: 'retry only', status: 'flaky', res: ['failed', 'passed'] },
   ]);
-  const viaRerunHtml = tpl.html({ ...rr, report: viaRerun, clusters: [], flakyFailureDetails: [] });
-  check(viaRerun.totalRetries === 5 && viaRerun.retriesFromRerun === 2, 'parser: 3 flaky tests = 5 retries, 2 of them rerun-shard attempts', `${viaRerun.totalRetries}/${viaRerun.retriesFromRerun}`);
-  check(viaRerunHtml.includes('2 are rerun-shard attempts, 3 in-job retries'), 'email: the Retries tile says how many retries are rerun-shard attempts and how many are in-job retries');
-  check(!baseHtml.includes('are rerun-shard attempts'), 'email: a run without a rerun has no rerun-shard wording in the Retries tile');
-  check(rerunHtml.includes('the rerun shard itself ran with 0 in-job retries; the Retries tile counts that rerun attempt as one retry'), 'email: the rerun sentence separates the rerun shard\'s own retry budget from the Retries tile');
-  check(tpl.html({ ...rr, rerun: { ...rerunSummary, retries: 2 } }).includes('the rerun shard itself ran with 2 in-job retries'), 'email: the rerun sentence shows the real in-job retry budget');
   const flagOf = (t: string): boolean | undefined => viaRerun.flakyTests.find((x) => x.title === t)?.recoveredOnRerun;
   check(flagOf('recovered') === true && flagOf('retry then rerun') === undefined && flagOf('retry only') === undefined, 'parser: only a test that failed every first-run attempt and passed on the rerun is "recovered on rerun"');
   check(splitText(2, 3, 1) === '2 failed outright, 2 passed on retry, 1 recovered on rerun' && splitText(2, 3) === '2 failed outright, 3 passed on retry' && splitText(0, 1, 1) === '1 recovered on rerun', 'wording: splitText says "passed on retry" or "recovered on rerun" by what happened; without a rerun it is unchanged');

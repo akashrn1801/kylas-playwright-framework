@@ -10,7 +10,7 @@ End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (st
 Current suite size (generated; do not edit by hand):
 
 <!-- GEN:suite-totals:START -->
-**957 tests** in **35 spec files** (UI 525 · RBAC 432)
+**955 tests** in **35 spec files** (UI 524 · RBAC 431)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
@@ -22,9 +22,9 @@ Current suite size (generated; do not edit by hand):
 | Contacts | 23 | 23 | 46 |
 | Contacts — Field Limits | 42 | 28 | 70 |
 | Dashboard | 34 | 29 | 63 |
-| Deals | 27 | 30 | 57 |
+| Deals | 26 | 30 | 56 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 40 | 40 | 80 |
+| Leads | 40 | 39 | 79 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,13 +33,13 @@ Current suite size (generated; do not edit by hand):
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **525** | **432** | **957** |
+| **Total** | **524** | **431** | **955** |
 <!-- GEN:module-table:END -->
 
 Tag counts:
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 925 · `@prodSafe` 54
+`@smoke` 51 · `@regression` 923 · `@prodSafe` 54
 <!-- GEN:tag-counts:END -->
 
 Module names in the table come from `deriveModuleFromFile()` (the same labels the notification email uses). Login's spec lives in `tests/ui/dashboard/` and is counted under Dashboard.

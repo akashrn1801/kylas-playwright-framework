@@ -23,8 +23,6 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class CallLogsPage extends BasePage {
-  private lastSearchText = '';
-  private lastSearchRowCount: number | null = null;
 
   // ──────────────────────────────────────────────────────────
   // Retry Config
@@ -517,16 +515,6 @@ export class CallLogsPage extends BasePage {
     // focus+keydown works in DevTools but not in Playwright context due to form re-render timing
     const inputId = await inputLocator.getAttribute('id').catch(() => null);
     const resolvedId = inputId ?? '1_12_input_relatedEntityIdName';
-    // Diagnostics only (sandbox 44464192762, call-logs.rbac:472: "Options loaded: 0", then "No Lead options found"):
-    // the lookups this dropdown sends, so a miss says "sent, no answer" (staging hold) or "never sent" (our side).
-    const lookupWatch = this.watchRequests(
-      (r) => r.method() === 'GET' && /^\/v1\/.*lookup/.test(new URL(r.url()).pathname),
-      (r) => {
-        const u = new URL(r.url());
-        const q = u.searchParams.get('name') ?? u.searchParams.get('q') ?? '';
-        return `GET ${u.pathname}${q ? ` q="${q.slice(0, 40)}"` : ''}`;
-      }
-    );
     // WHY: Use page.mouse.click on exact input coordinates to open dropdown
     // Retries up to 3 times if menu doesn't open
     const resolvedInputId = resolvedId;
@@ -569,27 +557,25 @@ export class CallLogsPage extends BasePage {
       // WHY: Use last word of name for search — full name may not filter correctly
       // e.g. "ADM1781854620513 Nienow" → search "Nienow"
       const searchQuery = searchTerm.trim().split(' ').pop() ?? searchTerm;
-      const { retries } = this.retryConfig;
+      const { retries, wait } = this.retryConfig;
       // B6: a just-created entity can take a moment to hit the search index (confirmed live). Without a
       // retry, zero matches falls straight through to the blind "click first option" fallback below, which
       // can land on an unrelated (possibly inaccessible) entity. The real condition is an option matching
-      // the typed query, so re-type the query, count-bounded (retryAttempts), each attempt ending in its own
-      // 5 s wait. No match still falls through to the fallback.
+      // the typed query, so poll it by re-typing the query; toPass backs off by itself, inside the budget
+      // the old fixed retries x (5 s + pause) took. No match still falls through to the fallback.
       const matching = this.page.locator('.is-invalid__option').filter({ hasText: searchQuery });
       try {
         await this.withSessionExpiryRecovery(() =>
-          this.retryAttempts(retries, `Associated ${description} lookup`, async () => {
+          expect(async () => {
             logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}")`);
             await this.page.keyboard.press('Control+A');
             await this.page.keyboard.press('Backspace');
             await this.page.keyboard.type(searchQuery, { delay: 50 });
             await matching.first().waitFor({ state: 'visible', timeout: 5000 });
-          })
+          }).toPass({ timeout: retries * (5000 + wait) })
         );
       } catch {
-        logger.warn(
-          `No filtered options for "${searchQuery}" — entity may not be search-indexed (continuing to the fallback); lookups: ${lookupWatch.describe()}`
-        );
+        logger.warn(`No filtered options for "${searchQuery}" — entity may not be search-indexed (continuing to the fallback)`);
       }
       const filteredCount = await matching.count();
       logger.debug(`Filtered options after typing: ${filteredCount}`);
@@ -626,12 +612,7 @@ export class CallLogsPage extends BasePage {
       (pool[idx] as HTMLElement).click();
       return pool[idx].textContent?.trim() ?? '';
     }, searchTerm ?? null);
-    if (!selectedText) {
-      const lookups = lookupWatch.describe();
-      lookupWatch.stop();
-      throw new Error(`No ${description} options found in dropdown (lookups: ${lookups})`);
-    }
-    lookupWatch.stop();
+    if (!selectedText) throw new Error(`No ${description} options found in dropdown`);
     // B6: the selection is applied when the menu closes
     await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     logger.success(`Selected ${description}: ${selectedText.trim()}`);
@@ -820,19 +801,24 @@ export class CallLogsPage extends BasePage {
 
   // WHY: Retry find call log in list by navigating to ?id= URL
   private async retryFindCallLog(callLogId: number): Promise<boolean> {
-    const { retries } = this.retryConfig;
+    const { retries, wait } = this.retryConfig;
     // B6: the real condition is the call log's list item after a fresh navigation (the list API returns it);
-    // retryAttempts re-navigates with its own backoff inside the budget the fixed retries x (7 s + pause) took
-    await this.withSessionExpiryRecovery(() =>
-      this.retryAttempts(retries, `Call log ID ${callLogId} search`, async () => {
-        logger.info(`Looking for call log ID ${callLogId}`);
-        await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
-        await this.waitForListReady();
-        await this.callLogListItemById(callLogId).waitFor({ state: 'visible', timeout: 7000 });
-      })
-    );
-    logger.success(`Call log ID ${callLogId} found`);
-    return true;
+    // toPass re-navigates with its own backoff inside the budget the fixed retries x (7 s + pause) took
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Looking for call log ID ${callLogId}`);
+          await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
+          await this.waitForListReady();
+          await this.callLogListItemById(callLogId).waitFor({ state: 'visible', timeout: 7000 });
+        }).toPass({ timeout: retries * (7000 + wait) })
+      );
+      logger.success(`Call log ID ${callLogId} found`);
+      return true;
+    } catch {
+      logger.warn(`Call log ID ${callLogId} not found within ${retries * (7000 + wait)}ms`);
+      return false;
+    }
   }
 
   // WHY: Search by text — phone number or entity name
@@ -843,20 +829,12 @@ export class CallLogsPage extends BasePage {
     await input.fill(searchText);
     // B6: the list search is `POST /v1/call-logs/search` (as navigateAndAwaitCallLogsData). The old wait matched a
     // GET on /v1/call-logs, armed after Enter, and swallowed its miss. Armed before Enter and strict.
-    const searchResponse = await this.saveAndAwait(() => input.press('Enter'), {
+    await this.saveAndAwait(() => input.press('Enter'), {
       method: 'POST',
       urlRe: /^\/v1\/call-logs\/search\/?$/,
       description: 'performSearch: POST /v1/call-logs/search',
       timeout: 15000,
     });
-    // kept so assertSearchResultContains() can search again and say how many rows the last search answered with
-    this.lastSearchText = searchText;
-    this.lastSearchRowCount = await searchResponse
-      .json()
-      .then((body: { totalElements?: unknown; content?: unknown[] }) =>
-        typeof body.totalElements === 'number' ? body.totalElements : Array.isArray(body.content) ? body.content.length : null
-      )
-      .catch(() => null);
     // B6: the list has re-rendered the results once its loading skeleton is gone
     await this.waitForNoLoadingSkeleton();
     logger.success(`Search triggered for: "${searchText}"`);
@@ -885,20 +863,9 @@ export class CallLogsPage extends BasePage {
       config.timeouts.navigation
     );
     permissionsLoaded.catch(() => undefined);
-    // Diagnostics only (sandbox 44464192762, call-logs.rbac:472 retry: this wait ran the full 120 s): was users/me
-    // sent at all, and did it get an answer?
-    const meWatch = this.watchRequests((r) => r.method() === 'GET' && /^\/v1\/users\/me\/?$/.test(new URL(r.url()).pathname));
-    try {
-      await this.navigateTo(`${config.appUrl}/sales/calls/list`);
-      await this.waitForListReady();
-      await permissionsLoaded;
-    } catch (error) {
-      throw new Error(
-        `${String(error)} — GET /v1/users/me: ${meWatch.sentCount() === 0 ? 'NEVER SENT' : meWatch.unansweredCount() > 0 ? 'SENT but NO ANSWER' : 'answered'} (${meWatch.describe()}); ${await this.describePageStall()}`
-      );
-    } finally {
-      meWatch.stop();
-    }
+    await this.navigateTo(`${config.appUrl}/sales/calls/list`);
+    await this.waitForListReady();
+    await permissionsLoaded;
     logger.success('On Call Logs list page');
   }
 
@@ -2053,23 +2020,11 @@ export class CallLogsPage extends BasePage {
     logger.success('Duration field confirmed disabled');
   }
 
-  // sandbox 44464192762, call-logs.rbac:247: the search POST was answered but the list stayed empty for 15 s (a new
-  // call log can trail the search index), and the single 15 s check had no second search. Same shape as
-  // Leads/Companies retryFind*: search again, count-bounded, each attempt ending in its own 15 s wait.
   async assertSearchResultContains(phoneOrName: string): Promise<void> {
     logger.info(`Asserting search result contains: "${phoneOrName}"`);
-    const searchText = this.lastSearchText;
-    const { retries } = this.retryConfig;
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        this.retryAttempts(searchText ? retries : 1, `Call log search "${phoneOrName}"`, async (attempt) => {
-          if (attempt > 1 && searchText) await this.performSearch(searchText);
-          await expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 });
-        })
-      );
-    } catch (error) {
-      throw new Error(`${String(error)} (the last search POST /v1/call-logs/search answered with ${this.lastSearchRowCount ?? 'an unreadable number of'} row(s))`);
-    }
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 })
+    );
     const count = await this.callLogListItem().count();
     logger.success(`Search returned ${count} results for: "${phoneOrName}"`);
   }

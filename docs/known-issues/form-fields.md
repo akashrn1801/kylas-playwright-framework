@@ -5,7 +5,7 @@
 > **Size budget:** 30k chars (hard cap 60k)
 > **Last verified:** 2026-10-27 @ a9f5372
 
-Open failures (`FFPS5`, `FFRPS8`) are [KI-01](./watch-items.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms (run 36573185433; that run id is not recorded in the linked file) are described in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
+Open failures (`FFPS5`, `FFRPS8`) are [KI-01](../KNOWN_ISSUES_ACTIVE.md#ki-01--ffps5-stable-across-re-testing-root-cause-unconfirmed) and KI-02. The 429 / error-boundary symptoms (run 36573185433; that run id is not recorded in the linked file) are described in [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md); locking and sharding are in [sharding-and-locks.md](./sharding-and-locks.md). Generic rules are in [PATTERNS.md](../PATTERNS.md).
 
 ## Durable rules
 

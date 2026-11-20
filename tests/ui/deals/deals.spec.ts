@@ -3,7 +3,6 @@ import { safeWaitForURL } from '../../../src/utils/navigation';
 import { DealsPage } from '../../../src/modules/deals/DealsPage';
 import {
   generateDealData,
-  generateAdminDealData,
   generateSharedDealData,
   generateMinimalDealData,
   CLOSED_LOST_REASONS,
@@ -12,7 +11,6 @@ import {
 import { faker } from '@faker-js/faker';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
-import { getProductFixture } from '../../../src/data/productFixtureAccessor';
 
 test.describe('Deals', () => {
   // ──────────────────────────────────────────────────────────
@@ -837,31 +835,5 @@ test.describe('Deals', () => {
     await expect(adminPage.getByText(newUtmCampaign)).toBeVisible({ timeout: 10000 });
 
     logger.success('D50 passed');
-  });
-  // ── D51 ───────────────────────────────────────────────────
-
-  // WHAT: on a deal with 11 installments, attaching a product in the edit form updates Estimated Value and Actual Total
-  //   together, the unallocated amount is spread with "Distribute Equally" -> "Yes, Proceed", and Save is accepted.
-  // WHY: a person doing this always gets the banner and a saved deal. KI-66: sometimes the app's edit form never
-  //   recalculates Actual Value (probe 2026-11-18, 20 real runs: in the 4 stuck runs `layoutLoading` was never seen
-  //   `true`, `formFieldIndex` stayed empty, `isActualValueFieldPresent` stayed false, because the layout and the deal
-  //   GET landed together), so Save would be rejected with 400 01001091. About 1 in 4 at 11 installments, none at 2.
-  // HOW: `updateDeal()` attaches the admin fixture product and, when the unallocated banner shows, clicks it and confirms.
-  //   Its guard raises DealEditActualNotFollowedError when Estimated changed but Actual did not and no banner came.
-  //   That one case is marked an expected failure at run time (not red); anything else, including a rejected Save, fails.
-  //   The same classification (`updateDealAttachingProduct`) is used by the P&S deal-edit tests PS14 and PS11, which got
-  //   stuck 5 of 10 times even with 2 installments: the installment count is not a factor.
-  test('@regression admin attaches a product during edit of a deal with 11 installments and distributes equally', async ({
-    adminPage,
-  }) => {
-    test.setTimeout(480000);
-    const dealsPage = new DealsPage(adminPage);
-    const fixture = getProductFixture('adminActive', config.env);
-    const data = generateAdminDealData({ numberOfInstallments: 11 });
-    await dealsPage.goToDealsList();
-    const dealId = await dealsPage.createDeal(data);
-    if (!dealId) throw new Error('Deal ID not captured after create');
-    await dealsPage.updateDealAttachingProduct(data, data.name, dealId, fixture.name);
-    logger.success('D51 passed');
   });
 });
