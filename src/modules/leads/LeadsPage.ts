@@ -1166,11 +1166,6 @@ export class LeadsPage extends BasePage {
     noResponseObserved: boolean;
     detail: string;
   }> {
-    // WHY (KI-71, 2026-11-19): the timeout could not say "sent, no answer" from "never sent". Diagnostics only: the
-    // transient classification and the check-before-retry in createLead() (ADR 0017) are unchanged.
-    const createWatch = this.watchRequests(
-      (r) => r.method() === 'POST' && r.url().includes('/v1/leads') && !r.url().includes('/reports/')
-    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -1236,30 +1231,32 @@ export class LeadsPage extends BasePage {
         id: null,
         transient: true,
         noResponseObserved: true,
-        detail: this.describeMissedResponse(error, config.timeouts.navigation, createWatch),
+        detail: this.describeMissedResponse(error, config.timeouts.navigation),
       };
-    } finally {
-      createWatch.stop();
     }
   }
 
   private async retryFindLead(firstName: string): Promise<boolean> {
-    const { retries } = this.retryConfig;
+    const { retries, wait } = this.retryConfig;
     // B6: the real condition is the lead's row in the search results after a fresh list + search (a new lead
-    // can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the fixed
+    // can lag in the search index); toPass repeats that with its own backoff inside the budget the fixed
     // retries x (5 s results wait + pause) took, instead of a fixed pause between attempts
-    await this.withSessionExpiryRecovery(() =>
-      this.retryAttempts(retries, `Lead "${firstName}" search`, async () => {
-        logger.info(`Searching lead: ${firstName}`);
-        await this.goToLeadsList();
-        await this.performSearch(firstName);
-        if (!(await this.waitForSearchResults(firstName))) {
-          throw new Error(`Lead "${firstName}" is not in the search results yet`);
-        }
-      })
-    );
-    logger.success('Lead found');
-    return true;
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching lead: ${firstName}`);
+          await this.goToLeadsList();
+          await this.performSearch(firstName);
+          if (!(await this.waitForSearchResults(firstName))) {
+            throw new Error(`Lead "${firstName}" is not in the search results yet`);
+          }
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success('Lead found');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ──────────────────────────────────────────────────────────

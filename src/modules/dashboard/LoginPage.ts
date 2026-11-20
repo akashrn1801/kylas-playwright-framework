@@ -1,5 +1,5 @@
 import { Page } from '@playwright/test';
-import { BasePage, RequestWatch } from '../../core/BasePage';
+import { BasePage } from '../../core/BasePage';
 import { logger } from '../../utils/logger';
 import { config } from '../../../config/config';
 import { UserRole } from '../../auth/authManager';
@@ -11,11 +11,6 @@ export class LoginPage extends BasePage {
   private readonly loginButton = () => this.page.locator('#loginBtn');
   private readonly errorMessage = () =>
     this.page.locator('.alert-danger, .error-message, [class*="error"]');
-
-  // WHY (sandbox 44464192762, login.spec LG2: waitForURL 15 s on both attempts): nothing recorded the login request, so
-  // "login held", "login rejected" and "app stuck after the login" looked the same. The watcher is armed by the click
-  // and read only when assertLoggedIn() is about to fail. Error text only; no wait or retry changed.
-  private loginWatch: RequestWatch | null = null;
 
   constructor(page: Page) {
     super(page);
@@ -36,8 +31,6 @@ export class LoginPage extends BasePage {
   }
 
   async clickLogin(): Promise<void> {
-    this.loginWatch?.stop();
-    this.loginWatch = this.watchRequests((r) => r.method() === 'PUT' && /\/v1\/users\/login\/?$/.test(new URL(r.url()).pathname));
     await this.click(this.loginButton(), 'login button');
   }
 
@@ -75,44 +68,7 @@ export class LoginPage extends BasePage {
   }
 
   async assertLoggedIn(): Promise<void> {
-    try {
-      await this.waitForUrl(/sales\/home/, 15000);
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `${err.message}\n${await this.describeLoginFailure()}`;
-      throw err;
-    } finally {
-      this.loginWatch?.stop();
-      this.loginWatch = null;
-    }
+    await this.waitForUrl(/sales\/home/, 15000);
     logger.success('User is logged in');
-  }
-
-  private finalUrlWithoutQuery(): string {
-    try {
-      const url = new URL(this.page.url());
-      return `${url.origin}${url.pathname}`;
-    } catch {
-      return this.page.url();
-    }
-  }
-
-  // Which of the login outcomes happened: request never sent, sent with no answer, rejected, or accepted but the app did not
-  // reach /sales/home. Paths, status and visible page text only (no credentials, no body).
-  private async describeLoginFailure(): Promise<string> {
-    const watch = this.loginWatch;
-    const request = !watch
-      ? 'login request not tracked (clickLogin() was not used)'
-      : watch.sentCount() === 0
-        ? 'the login request was NEVER SENT (the Sign In click or submit was lost)'
-        : watch.unansweredCount() > 0
-          ? `the login request was SENT but got NO ANSWER (backend did not answer): ${watch.describe()}`
-          : `the login request was answered: ${watch.describe()}`;
-    const visibleError = await this.errorMessage()
-      .first()
-      .innerText({ timeout: 1000 })
-      .then((text) => text.trim().slice(0, 200))
-      .catch(() => '');
-    return `[login] ${request}; final URL: ${this.finalUrlWithoutQuery()}; visible error text: ${visibleError || '(none)'}`;
   }
 }

@@ -8,7 +8,6 @@ import {
   SlowTestTrend,
   SuiteDrift,
   PassRatePoint,
-  passRatePercent,
 } from './RunHistory';
 import { HealthScore, VerdictResult, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
 import { FailureCategory } from './FailureAnalyzer';
@@ -668,16 +667,10 @@ ${body}
     // mechanism). Only rendered when sweeps actually contributed anything,
     // matching this file's existing "signal chips only render when
     // nonzero" convention.
-    // Rerun shard attempts are counted in the tile too (each rerun result is one more result of its test), so the
-    // tile and the rerun section's "(N in-job retries)" (the rerun shard's own retry budget) are told apart here.
-    const retriesSubtext = [
-      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} are rerun-shard attempts, ${report.totalRetries - report.retriesFromRerun} in-job retries` : '',
+    const retriesSubtext =
       report.retriesFromCleanSweeps > 0
         ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
-        : '',
-    ]
-      .filter(Boolean)
-      .join('; ') || undefined;
+        : undefined;
 
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
@@ -828,11 +821,11 @@ ${body}
     if (delta === 0) return `<span style="color:${MUTED};">— vs last run</span>`;
     const color = delta > 0 ? SUCCESS : FAIL;
     const arrow = delta > 0 ? '▲' : '▼';
-    return `<span style="color:${color};font-weight:700;">${arrow} ${Math.round(Math.abs(delta) * 10) / 10}${suffix} vs last run</span>`;
+    return `<span style="color:${color};font-weight:700;">${arrow} ${Math.abs(delta)}${suffix} vs last run</span>`;
   }
 
   private passRateOf(record: { total: number; passed: number }): number {
-    return passRatePercent(record.passed, record.total);
+    return record.total > 0 ? Math.round((record.passed / record.total) * 100) : 0;
   }
 
   // ===================== Trend section (incl. sparkline) =====================
@@ -1522,7 +1515,7 @@ ${body}
 <tr><td id="section-rerun" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
     ${heading}
-    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} recovered, ${rerun.stillFailing} still failing. A test that passes only on the rerun is counted as Flaky, never as Passed.${origin}</div>
+    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (${rerun.retries} in-job retries): ${rerun.recovered} recovered, ${rerun.stillFailing} still failing. A test that passes only on the rerun is counted as Flaky, never as Passed.${origin}</div>
     ${summaryTable}
     ${testTable}
     ${excluded}

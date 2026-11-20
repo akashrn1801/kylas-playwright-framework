@@ -455,23 +455,27 @@ export class CompaniesPage extends BasePage {
   }
 
   private async retryFindCompany(name: string): Promise<boolean> {
-    const { retries } = this.retryConfig;
+    const { retries, wait } = this.retryConfig;
     // B6: the real condition is the company's row in the search results after a fresh list + search (a new
-    // company can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the
+    // company can lag in the search index); toPass repeats that with its own backoff inside the budget the
     // fixed retries x (5 s results wait + pause) took, instead of a fixed pause between attempts. Same shape
     // as LeadsPage.retryFindLead().
-    await this.withSessionExpiryRecovery(() =>
-      this.retryAttempts(retries, `Company "${name}" search`, async () => {
-        logger.info(`Searching company: ${name}`);
-        await this.goToCompaniesList();
-        await this.performSearch(name);
-        if (!(await this.waitForSearchResults(name))) {
-          throw new Error(`Company "${name}" is not in the search results yet`);
-        }
-      })
-    );
-    logger.success('Company found');
-    return true;
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(async () => {
+          logger.info(`Searching company: ${name}`);
+          await this.goToCompaniesList();
+          await this.performSearch(name);
+          if (!(await this.waitForSearchResults(name))) {
+            throw new Error(`Company "${name}" is not in the search results yet`);
+          }
+        }).toPass({ timeout: retries * (5000 + wait) })
+      );
+      logger.success('Company found');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ──────────────────────────────────────────────────────────
@@ -767,15 +771,6 @@ export class CompaniesPage extends BasePage {
     transient: boolean;
     detail: string;
   }> {
-    // WHY (KI-71, 2026-11-19): a timeout could not say "sent, no answer" from "never sent". The watcher records the
-    // create request itself; diagnostics only, the classification below is unchanged.
-    const createWatch = this.watchRequests(
-      (r) =>
-        r.method() === 'POST' &&
-        /\/v1\/companies\/?(?:\?|$)/.test(r.url()) &&
-        !r.url().includes('/reports/') &&
-        !r.url().includes('has-duplicates')
-    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -831,9 +826,7 @@ export class CompaniesPage extends BasePage {
       // debug line gave no way to tell a real 30s timeout apart from some
       // other rejection when this path fires.
       logger.debug(`Company create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000, createWatch) };
-    } finally {
-      createWatch.stop();
+      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000) };
     }
   }
 

@@ -1,7 +1,7 @@
 {
   "_comment": "Generated from a real \"npx playwright test --project=chromium --list --reporter=json\" run — never hand-edited. Regenerate via: npx ts-node scripts/generate-expected-test-counts.ts",
-  "generatedAt": "2026-11-18T17:04:30.004Z",
-  "total": 957,
+  "generatedAt": "2026-11-02T09:12:54.581Z",
+  "total": 955,
   "fileCount": 35,
   "perFile": {
     "rbac/call-logs.rbac.spec.ts": 28,
@@ -15,7 +15,7 @@
     "rbac/formFields/leadFieldLimits.rbac.spec.ts": 25,
     "rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts": 31,
     "rbac/formFields/taskFieldLimits.rbac.spec.ts": 31,
-    "rbac/leads.rbac.spec.ts": 40,
+    "rbac/leads.rbac.spec.ts": 39,
     "rbac/meetings.rbac.spec.ts": 12,
     "rbac/productsAndServices.rbac.spec.ts": 7,
     "rbac/quotations.rbac.spec.ts": 17,
@@ -26,7 +26,7 @@
     "ui/contacts/contacts.spec.ts": 23,
     "ui/dashboard/dashboard.spec.ts": 30,
     "ui/dashboard/login.spec.ts": 4,
-    "ui/deals/deals.spec.ts": 27,
+    "ui/deals/deals.spec.ts": 26,
     "ui/formFields/companyFieldLimits.spec.ts": 39,
     "ui/formFields/contactFieldLimits.spec.ts": 42,
     "ui/formFields/dealFieldLimits.spec.ts": 39,

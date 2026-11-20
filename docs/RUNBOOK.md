@@ -122,4 +122,4 @@ Confirmed real Kylas bugs are kept in a file outside this repo (not tracked), wi
 - A thrown error after the marker (transport failure, no HTTP answer) must not count as the expected failure: wrap those calls in `orInconclusive()` (`leads.rbac.spec.ts`), which turns it into `test.skip(true, 'inconclusive: transport error …')` — the run shows SKIPPED, never green-by-accident. Proven once by simulating the error (2026-10-30).
 - One test per ticket, so fixing one bug is not hidden by another still being open.
 - While the bug exists the run is green. The day Kylas fixes it Playwright reports "Expected to fail, but passed": that is the signal to delete the `test.fail()` line, close the `KI-nn` entry and move it to its topic file. Add a new confirmed bug the same way, with live evidence.
-- Example: `tests/rbac/leads.rbac.spec.ts` L77/L80 (API, SD-32157, note add/delete) and L79 (API, SD-32158, tasks); the UI half is L14 (passes); `KI-52`.
+- Example: `tests/rbac/leads.rbac.spec.ts` L77 (API, SD-32157, notes) and L79 (API, SD-32158, tasks); the UI half is L14 (passes); `KI-52`.

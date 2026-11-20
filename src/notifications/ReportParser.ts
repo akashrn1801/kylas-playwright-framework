@@ -1,6 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { passRatePercent } from './RunHistory';
 
 // WHY: Confirmed live (2026-07-14, isolated no-login test run against a
 // throwaway config) — Playwright's JSON reporter does NOT strip terminal
@@ -153,8 +152,6 @@ export interface TestResult {
   errorStack?: string;
   errorLocation?: ErrorLocation;
   retries: number;
-  // How many of those `retries` are the rerun shard's attempt (results flagged `rerun`), not in-job retries.
-  rerunAttempts?: number;
   // True for a flaky test that failed every first-run attempt and passed only on the rerun shard (ADR 0015), so the
   // email can say "recovered on rerun" instead of "passed on retry". A test that passed on an in-job retry is false.
   recoveredOnRerun?: boolean;
@@ -312,8 +309,6 @@ export interface ParsedReport {
   // email state the real reconciliation instead of a bare, confusing total.
   retriesFromNonCleanTests: number;
   retriesFromCleanSweeps: number;
-  // Part of totalRetries that is the rerun shard's own attempt (a result flagged `rerun`), not an in-job retry.
-  retriesFromRerun: number;
   // WHY: sourced from Playwright's own raw.config — real, not guessed. Feeds
   // the new Environment Info block (browsers actually exercised, worker
   // count Playwright itself resolved, and the Playwright version that
@@ -472,7 +467,7 @@ export class ReportParser {
           : flaky - flakyPassedOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
             ? 'unstable' // green only when every test passed on its first try: not-run and rerun-only tests are never clean
             : 'passed';
-    const passRate = passRatePercent(passed, total);
+    const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
     // WHY: Confirmed live (same incident) — raw.startTime does not exist at
     // the top level of Playwright's JSON report, only raw.stats.startTime.
     // The old fallback to "now" silently produced the run's real END time
@@ -548,7 +543,6 @@ export class ReportParser {
       .filter((r) => r.status === 'failed' || r.status === 'flaky')
       .reduce((sum, r) => sum + r.retries, 0);
     const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
-    const retriesFromRerun = results.reduce((sum, r) => sum + (r.rerunAttempts ?? 0), 0);
     const projects: string[] = Array.isArray(raw.config?.projects)
       ? raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name))
       : [];
@@ -577,7 +571,6 @@ export class ReportParser {
       totalRetries,
       retriesFromNonCleanTests,
       retriesFromCleanSweeps,
-      retriesFromRerun,
       playwrightVersion: raw.config?.version,
       workers: raw.config?.workers,
       projects,
@@ -609,7 +602,6 @@ export class ReportParser {
             // retriesFromCleanSweeps, whose email text says "passed every attempt but were swept into another
             // test's serial-block retry" — false for a test that did not run — and inflated the Retries tile.
             const retries = status === 'skipped' ? 0 : allResults.length - 1;
-            const rerunAttempts = status === 'skipped' ? 0 : allResults.filter((r) => r.rerun === true).length;
             const recoveredOnRerun =
               status === 'flaky' &&
               lastResult?.rerun === true &&
@@ -678,7 +670,6 @@ export class ReportParser {
               errorSnippet,
               allErrors,
               retries,
-              ...(rerunAttempts > 0 ? { rerunAttempts } : {}),
               ...(recoveredOnRerun ? { recoveredOnRerun } : {}),
               ...(didNotRun ? { didNotRun } : {}),
               ...(flakyPassedOnRerun ? { flakyPassedOnRerun } : {}),

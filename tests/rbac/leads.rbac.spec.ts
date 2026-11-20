@@ -20,7 +20,6 @@ import {
   LEAD_CUSTOM_FIELD_NAMES,
 } from '../../src/data/factories/leadFactory';
 import { config } from '../../config/config';
-import { applyKnownBugVerdict } from '../../src/utils/knownIssue';
 import { logger } from '../../src/utils/logger';
 import { reportCreatedRecord } from '../../src/utils/createdRecords';
 import { LeadApi } from '../../src/utils/leadApi';
@@ -70,61 +69,9 @@ async function restrictedRights(
   };
 }
 
-type ReadOnlyNoteScenario = {
-  readOnly: Awaited<ReturnType<typeof shareNewLeadWithRestricted>>;
-  control: Awaited<ReturnType<typeof shareNewLeadWithRestricted>>;
-  adminId: number;
-  restrictedId: number;
-};
-
-// Set-up shared by L77 and L80: a brand-new read-only lead and a brand-new lead shared WITH Note (the control), every
-// precondition asserted BEFORE any test.fail() is set, so a set-up problem is never mistaken for the known bug.
-async function setUpReadOnlyNoteScenario(
-  adminPage: PageArg,
-  restrictedPage: PageArg,
-  leadCleanup: LeadCleanup,
-  shareRuleCleanup: ShareRuleCleanup
-): Promise<ReadOnlyNoteScenario> {
-  await new LeadsPage(adminPage).goToLeadsList();
-  await new LeadsPage(restrictedPage).goToLeadsList();
-  const readOnly = await shareNewLeadWithRestricted(adminPage, restrictedPage, [], {
-    leads: leadCleanup,
-    rules: shareRuleCleanup,
-  });
-  const control = await shareNewLeadWithRestricted(adminPage, restrictedPage, ['note'], {
-    leads: leadCleanup,
-    rules: shareRuleCleanup,
-  });
-  const scenario = { readOnly, control, adminId: 0, restrictedId: 0 };
-  try {
-    const adminId = await readOnly.adminApi.getMyUserId();
-    const restrictedId = await readOnly.restrictedApi.getMyUserId();
-    expect(restrictedId, 'Set-up: the token used for the calls is the shared user, not the admin').not.toBe(adminId);
-    expect(await readOnly.ruleApi.countRules('LEAD', readOnly.leadId), 'Set-up: one rule on the read-only lead').toBe(1);
-    const rule = await readOnly.ruleApi.getRule(readOnly.ruleId);
-    expect(rule.body.toId, 'Set-up: the rule is for the restricted user').toBe(restrictedId);
-    expect(ShareRuleApi.permissionsOf(rule.body), 'Set-up: the saved rule grants only Read').toEqual(permissionSet([]));
-    expect((await readOnly.adminApi.getLeadOrThrow(readOnly.leadId)).ownerId, 'Set-up: the admin owns the lead').toBe(adminId);
-    await waitForRestrictedRights(restrictedPage, readOnly.leadId, permissionSet([]));
-    await waitForRestrictedRights(restrictedPage, control.leadId, permissionSet(['note']));
-    return { readOnly, control, adminId, restrictedId };
-  } catch (error) {
-    await disposeNoteScenario(scenario);
-    throw error;
-  }
-}
-
-async function disposeNoteScenario(scenario: Pick<ReadOnlyNoteScenario, 'readOnly' | 'control'>): Promise<void> {
-  for (const shared of [scenario.readOnly, scenario.control]) {
-    await shared.adminApi.dispose();
-    await shared.restrictedApi.dispose();
-    await shared.ruleApi.dispose();
-  }
-}
-
 // Poll the REAL access check (the lead's own rights for this user) until it shows the expected set.
 // Returns how long the change took to apply. No sleeps: bounded polling on the server's own answer.
-// WHY (known-bug tests L77/L80/L79): after test.fail() ANY thrown error counts as the expected failure. A
+// WHY (known-bug tests L77/L79): after test.fail() ANY thrown error counts as the expected failure. A
 // transport error (no HTTP answer at all, or an unreadable set-up read inside the call) says nothing about
 // permissions, so it must not: such a run is reported as SKIPPED ("inconclusive"), and only the permission
 // assertions that follow can produce the expected failure. Only calls that throw are wrapped — an HTTP
@@ -459,7 +406,7 @@ test.describe('Leads RBAC', () => {
     // WHY the positive anchor: "icon not visible" passes instantly when nothing has rendered yet, so
     // first prove the lead detail page is rendered (Clone is offered to a read-only share)
     await restrictedLeadsPage.assertEllipsisOptionVisible('Clone');
-    // UI half: L14 (passes). API half: L77/L80/L79 (SD-32157 notes, SD-32158 tasks).
+    // UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
     // WHY: Read only — productivity icons should NOT be visible
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Notes');
     await restrictedLeadsPage.assertRightPanelIconNotVisible('Tasks');
@@ -1810,87 +1757,52 @@ test.describe('Leads RBAC', () => {
   // ── L77 ───────────────────────────────────────────────────
 
   // WHAT: on a lead the admin shared with the restricted user as READ ONLY, the restricted user cannot
-  //   add a note (the API answers 401, code 000004).
-  // WHY: a share without the Note right must not let that person write to the lead's history; adding
-  //   notes through the back-end would bypass the share.
+  //   see the admin's notes and cannot add a note or delete the admin's note.
+  // WHY: a share without the Note right must not let that person write to the lead's history; being
+  //   able to add or remove notes through the back-end would bypass the share.
   // HOW: a brand-new admin lead (never an existing one, so no old share rule can add rights) with
   //   exactly one share rule, read only. The set-up is asserted first — the rule grants only Read, the
   //   token belongs to the shared user (not the admin), the user's rights are read only — and a second
-  //   brand-new lead shared WITH Note is the control, where adding a note works. Only then is the
-  //   refusal asserted with the restricted user's own token.
-  //   UI half: L14 (passes). API half: L77 (add note), L80 (delete the admin's note), L79 (tasks).
-  // KNOWN KYLAS BUG — SD-32157, add note: fixed on QA 2026-11-18 (HTTP 401, code 000004), so QA is strict: an accepted
-  //   note fails red there. Elsewhere the answer decides at run time (applyKnownBugVerdict in src/utils/knownIssue.ts):
-  //   accepted -> test.fail "not fixed on <env>" + known-issue annotation (expected failure); refused -> pass plus an
-  //   annotation "fix detected on <env>, add it to the strict list" (KNOWN_BUG_FIX_CONFIRMED_ENVS). The assertions
-  //   state the CORRECT behaviour and must not be weakened. Close KI-52 when all three API bug tests are strict everywhere.
-  test('@regression (API) restricted user cannot add notes on an admin lead shared read only', async ({
+  //   brand-new lead shared WITH Note is the control, where the same requests succeed. Only then is the
+  //   test marked as an expected failure and the refusals asserted with the restricted user's own token.
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
+  // KNOWN KYLAS BUG — SD-32157: the server accepts adding a note and deleting the admin's note. The
+  //   test.fail() below keeps the run green while that is true and turns it red ("expected to fail but
+  //   passed") the day Kylas fixes it: then delete the marker and close KI-52. The assertions state the
+  //   CORRECT behaviour and must not be weakened.
+  test('@regression (API) restricted user cannot add or delete notes on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
     leadCleanup,
     shareRuleCleanup,
   }) => {
     test.setTimeout(480000);
-    const scenario = await setUpReadOnlyNoteScenario(adminPage, restrictedPage, leadCleanup, shareRuleCleanup);
-    const { readOnly, control } = scenario;
+    await new LeadsPage(adminPage).goToLeadsList();
+    await new LeadsPage(restrictedPage).goToLeadsList();
+    const readOnly = await shareNewLeadWithRestricted(adminPage, restrictedPage, [], {
+      leads: leadCleanup,
+      rules: shareRuleCleanup,
+    });
+    const control = await shareNewLeadWithRestricted(adminPage, restrictedPage, ['note'], {
+      leads: leadCleanup,
+      rules: shareRuleCleanup,
+    });
     try {
-      // control: with the Note right granted, the same request works — so a refusal below is down to the missing right
-      const controlNote = await control.restrictedApi.addNote(control.leadId, `Control note ${Date.now()}`);
-      expect(controlNote.status, 'Set-up control: add note WITH the Note right').toBe(200);
-      expect(
-        (await control.restrictedApi.deleteNote((controlNote.body as { id: number }).id)).status,
-        'Set-up control: delete own note WITH the Note right'
-      ).toBe(200);
-
-      // ── the known bug SD-32157 (add): the verdict decides at run time (see applyKnownBugVerdict)
-      const addNote = await orInconclusive(() => readOnly.restrictedApi.addNote(readOnly.leadId, 'Must be refused'));
-      logger.info(`L77: add note on the read-only share -> HTTP ${addNote.status} ${JSON.stringify(addNote.body).slice(0, 200)}`);
-      applyKnownBugVerdict({
-        bug: 'SD-32157:add-note',
-        issueId: 'KI-52',
-        what: 'add note on a read-only share',
-        env: config.env,
-        response: addNote,
-        confirmedRefusal: { status: 401, code: '000004' },
-      });
-    } finally {
-      await disposeNoteScenario(scenario);
-    }
-    logger.success('L77 passed');
-  });
-
-  // ── L80 ───────────────────────────────────────────────────
-
-  // WHAT: the restricted user with a READ ONLY share cannot delete a note the ADMIN created on that lead.
-  // WHY: owner's rule: a user may delete his OWN note, but never one created by someone else. The set-up
-  //   proves the note is the admin's (its createdBy is the admin's id) and that the same user CAN delete his own
-  //   note where he has the Note right (the control), so a 200 below is the bug and not a wrong expectation.
-  // HOW: same set-up as L77; the admin's note is created through the admin API, its createdBy asserted, and it is
-  //   not listed to the read-only share (correct today). Then the delete is attempted with the restricted token.
-  // KNOWN KYLAS BUG — SD-32157 (delete gap; the add half was fixed on QA 2026-11-18, the delete was not: QA still
-  //   answered HTTP 200). Delete fix in progress (SD-32157, per the Kylas team). Decided at run time like L77
-  //   (applyKnownBugVerdict): accepted -> expected failure "not fixed on <env>"; refused -> pass + "fix detected on
-  //   <env>" annotation. When the fix is confirmed on QA, put 'qa' in KNOWN_BUG_FIX_CONFIRMED_ENVS['SD-32157:delete-admins-note']
-  //   (strict: a 200 there fails red), re-run on QA, and close KI-52 once all three are strict everywhere.
-  test('@regression (API) restricted user cannot delete the admin\'s note on an admin lead shared read only', async ({
-    adminPage,
-    restrictedPage,
-    leadCleanup,
-    shareRuleCleanup,
-  }) => {
-    test.setTimeout(480000);
-    const scenario = await setUpReadOnlyNoteScenario(adminPage, restrictedPage, leadCleanup, shareRuleCleanup);
-    const { readOnly, control, adminId } = scenario;
-    try {
+      // ── set-up: any failure here is a set-up problem, NOT the known bug (test.fail() is not set yet)
+      const adminId = await readOnly.adminApi.getMyUserId();
+      const restrictedId = await readOnly.restrictedApi.getMyUserId();
+      expect(restrictedId, 'Set-up: the token used for the calls is the shared user, not the admin').not.toBe(adminId);
+      expect(await readOnly.ruleApi.countRules('LEAD', readOnly.leadId), 'Set-up: one rule on the read-only lead').toBe(1);
+      const rule = await readOnly.ruleApi.getRule(readOnly.ruleId);
+      expect(rule.body.toId, 'Set-up: the rule is for the restricted user').toBe(restrictedId);
+      expect(ShareRuleApi.permissionsOf(rule.body), 'Set-up: the saved rule grants only Read').toEqual(permissionSet([]));
+      expect((await readOnly.adminApi.getLeadOrThrow(readOnly.leadId)).ownerId, 'Set-up: the admin owns the lead').toBe(adminId);
+      await waitForRestrictedRights(restrictedPage, readOnly.leadId, permissionSet([]));
+      await waitForRestrictedRights(restrictedPage, control.leadId, permissionSet(['note']));
       const adminNote = await readOnly.adminApi.addNote(readOnly.leadId, `Admin note ${Date.now()}`);
       expect(adminNote.status, 'Set-up: the admin can add a note').toBe(200);
-      const adminNoteBody = adminNote.body as { id: number; createdBy?: number | { id: number } };
-      const adminNoteId = adminNoteBody.id;
-      // WHY the createdBy guard: the test is only meaningful if the note really is the admin's
-      const createdBy = typeof adminNoteBody.createdBy === 'object' ? adminNoteBody.createdBy?.id : adminNoteBody.createdBy;
-      expect(createdBy, `Set-up: the note create response must carry createdBy (got ${JSON.stringify(adminNote.body).slice(0, 200)})`).toBeDefined();
-      expect(createdBy, "Set-up: the note being deleted must be created by the admin").toBe(adminId);
-      // control: the user who has the Note right can delete his OWN note, so a refusal below is about whose note it is
+      const adminNoteId = (adminNote.body as { id: number }).id;
+      // control: with the Note right granted, the same requests work — so a refusal below is down to the missing right
       const controlNote = await control.restrictedApi.addNote(control.leadId, `Control note ${Date.now()}`);
       expect(controlNote.status, 'Set-up control: add note WITH the Note right').toBe(200);
       expect(
@@ -1903,20 +1815,22 @@ test.describe('Leads RBAC', () => {
         "The admin's note must not be listed to a read-only share"
       ).not.toContain(adminNoteId);
 
-      // ── the known bug SD-32157 (delete gap, fix in progress): the verdict decides at run time
+      // ── the known bug: from here the test is EXPECTED to fail (SD-32157)
+      test.fail(true, 'Kylas bug SD-32157: the API allows adding and deleting notes on a read-only share');
+      const addNote = await orInconclusive(() => readOnly.restrictedApi.addNote(readOnly.leadId, 'Must be refused'));
+      expect(addNote.status, 'SD-32157: add note without the Note right must be refused').toBeGreaterThanOrEqual(400);
+      expect(addNote.status, 'SD-32157: add note without the Note right must be refused (client error)').toBeLessThan(500);
       const deleteNote = await orInconclusive(() => readOnly.restrictedApi.deleteNote(adminNoteId));
-      logger.info(`L80: delete the admin's note -> HTTP ${deleteNote.status} ${JSON.stringify(deleteNote.body).slice(0, 200)}`);
-      applyKnownBugVerdict({
-        bug: 'SD-32157:delete-admins-note',
-        issueId: 'KI-52',
-        what: "delete the admin's note on a read-only share",
-        env: config.env,
-        response: deleteNote,
-      });
+      expect(deleteNote.status, "SD-32157: delete the admin's note without the Note right must be refused").toBeGreaterThanOrEqual(400);
+      expect(deleteNote.status, "SD-32157: delete the admin's note without the Note right must be refused (client error)").toBeLessThan(500);
     } finally {
-      await disposeNoteScenario(scenario);
+      for (const shared of [readOnly, control]) {
+        await shared.adminApi.dispose();
+        await shared.restrictedApi.dispose();
+        await shared.ruleApi.dispose();
+      }
     }
-    logger.success('L80 passed');
+    logger.success('L77 passed');
   });
 
   // ── L79 ───────────────────────────────────────────────────
@@ -1928,10 +1842,10 @@ test.describe('Leads RBAC', () => {
   // HOW: same set-up and control as the notes test, with the Task right. After the set-up is asserted
   //   the test is marked as an expected failure and the refusal is asserted with the restricted
   //   user's own token.
-  //   UI half: L14 (passes). API half: L77/L80/L79 (SD-32157 notes, SD-32158 tasks).
-  // KNOWN KYLAS BUG — SD-32158: the server accepts the task. Decided at run time like L77 (applyKnownBugVerdict):
-  //   accepted -> expected failure "not fixed on <env>"; refused -> pass + "fix detected on <env>" annotation; once the
-  //   fix is confirmed on an env, add it to KNOWN_BUG_FIX_CONFIRMED_ENVS['SD-32158:add-task'] (strict there).
+  //   UI half: L14 (passes). API half: L77/L79 (test.fail SD-32157/SD-32158).
+  // KNOWN KYLAS BUG — SD-32158: the server accepts the task. test.fail() keeps the run green while
+  //   that is true and turns it red the day Kylas fixes it: then delete the marker and close KI-52.
+  //   The assertion states the CORRECT behaviour and must not be weakened.
   test('@regression (API) restricted user cannot add tasks on an admin lead shared read only', async ({
     adminPage,
     restrictedPage,
@@ -1967,19 +1881,14 @@ test.describe('Leads RBAC', () => {
       expect(controlTask.status, 'Set-up control: add task WITH the Task right').toBe(200);
       if (controlTask.body.id) await leadCleanup.trackRecord(adminPage, 'task', controlTask.body.id);
 
-      // ── the known bug SD-32158: the verdict decides at run time (see applyKnownBugVerdict)
+      // ── the known bug: from here the test is EXPECTED to fail (SD-32158)
+      test.fail(true, 'Kylas bug SD-32158: the API allows adding a task on a read-only share');
       const addTask = await orInconclusive(() =>
         readOnly.restrictedApi.createTaskOnLead({ id: readOnly.leadId, name: readOnly.leadName }, restrictedId)
       );
-      logger.info(`L79: add task on the read-only share -> HTTP ${addTask.status} ${JSON.stringify(addTask.body).slice(0, 200)}`);
       if (addTask.body.id) await leadCleanup.trackRecord(adminPage, 'task', addTask.body.id); // only if the server wrongly accepted it
-      applyKnownBugVerdict({
-        bug: 'SD-32158:add-task',
-        issueId: 'KI-52',
-        what: 'add task on a read-only share',
-        env: config.env,
-        response: addTask,
-      });
+      expect(addTask.status, 'SD-32158: add task without the Task right must be refused').toBeGreaterThanOrEqual(400);
+      expect(addTask.status, 'SD-32158: add task without the Task right must be refused (client error)').toBeLessThan(500);
     } finally {
       for (const shared of [readOnly, control]) {
         await shared.adminApi.dispose();

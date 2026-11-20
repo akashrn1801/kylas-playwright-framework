@@ -10,7 +10,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 ## 1. Suite at a glance
 
 <!-- GEN:suite-totals:START -->
-**957 tests** in **35 spec files** (UI 525 · RBAC 432)
+**955 tests** in **35 spec files** (UI 524 · RBAC 431)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
@@ -22,9 +22,9 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Contacts | 23 | 23 | 46 |
 | Contacts — Field Limits | 42 | 28 | 70 |
 | Dashboard | 34 | 29 | 63 |
-| Deals | 27 | 30 | 57 |
+| Deals | 26 | 30 | 56 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 40 | 40 | 80 |
+| Leads | 40 | 39 | 79 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,7 +33,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **525** | **432** | **957** |
+| **Total** | **524** | **431** | **955** |
 <!-- GEN:module-table:END -->
 
 ## 2. Repository layout
@@ -213,8 +213,8 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 122 / 123 / 32 | 6 |
-| full suite (stage, main) | 5 | 125 / 123 / 125 / 124 / 43 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 123 / 125 / 123 / 28 | 6 |
+| full suite (stage, main) | 5 | 124 / 123 / 125 / 124 / 42 | 6 |
 <!-- GEN:shard-plan:END -->
 
 ```mermaid

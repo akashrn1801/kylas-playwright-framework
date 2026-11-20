@@ -10,7 +10,6 @@ import { config, buildApiUrl } from '../../config/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { selectionNeedsProductFixtures } from './productFixtureNeed';
-import { effectiveRunWindow } from './runWindow';
 import { acquireLoginSlot, clearLoginSlots } from './loginGate';
 import { isLoginDatabaseError, isRetryableHttpStatus } from '../utils/retryableStatus';
 import {
@@ -42,20 +41,7 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
   'global-setup-traces'
 );
 
-// ADR 0017: session life a run needs. config.auth.minRemainingForRunMs (4 h) is the full window; a local run of a
-// selection of tests is scaled to that selection (src/auth/runWindow.ts). Set once per run in globalSetup().
-let runWindowMs = config.auth.minRemainingForRunMs;
-
 async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
-  const runWindow = effectiveRunWindow({
-    cliArgs: process.argv.slice(2),
-    workers: _playwrightConfig.workers,
-    fullWindowMs: config.auth.minRemainingForRunMs,
-    explicit: Boolean(process.env.SESSION_MIN_REMAINING_FOR_RUN_MS),
-    isCI: Boolean(process.env.CI),
-  });
-  runWindowMs = runWindow.windowMs;
-  console.log(`[globalSetup] Session run window ${Math.round(runWindowMs / 60000)} min: ${runWindow.reason}`);
   ErrorCollector.attachNodeListeners();
   ErrorCollector.resetMainProcessRecoveryEvents();
   fs.mkdirSync(STORAGE_STATE_DIR, { recursive: true });
@@ -479,7 +465,7 @@ async function setupRole(role: Role, browser: PwBrowser): Promise<void> {
 // token), and is renewed only on request (SESSION_RENEW=1, local), which logs out and starts a fresh session.
 async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void> {
   const stateFile = path.join(STORAGE_STATE_DIR, `${role}.json`);
-  const windowMs = runWindowMs;
+  const windowMs = config.auth.minRemainingForRunMs;
   const windowMin = Math.round(windowMs / 60000);
   const read = (): { endIso: string; minutesLeft: number } | null => {
     const raw = readStoredTokenFromStateFile(stateFile);

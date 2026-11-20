@@ -11,6 +11,16 @@
 
 ## A. Failing / flaky tests
 
+### KI-01 — FFPS5: stable across re-testing, root cause unconfirmed
+- **Status:** inconclusive (currently stable; original symptom never reproduced) · **Since:** 2026-09-23 (re-investigated 2026-09-28)
+- **What:** `FFPS5 admin should confirm typing exactly the minimum allowed characters in the Text field is accepted when creating a product` (`tests/ui/formFields/productsAndServicesFieldLimits.spec.ts`). Six independent conditions reproduced neither the dropped-value nor the fill/locator symptom. Write-up: [form-fields.md](./known-issues/form-fields.md) (conditions list).
+- **Next check:** if it fails again, capture the failing run's `trace.zip` or a screen recording *at that moment* (never obtained); do not re-argue from theory. Existing bounded retries stay as labeled hardening (rule 10).
+
+### KI-02 — FFRPS8 is a load-dependent flake with no prior record
+- **Status:** inconclusive · **Since:** 2026-10-06 CI results (reported by the repo owner)
+- **What:** `FFRPS8 restricted user should confirm typing too few characters in the Text field is rejected when creating a product` (`tests/rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts`) — fails intermittently under concurrent CI load; nothing in git history or the old issue log mentions it.
+- **Next check:** per rule 21 a clean isolated run proves nothing; look for the same symptom on sibling tests sharing the P&S form-field lock (`productsAndServicesFormFieldLock.ts`; generic lock: [sharding-and-locks.md](./known-issues/sharding-and-locks.md)) before treating it as test-specific. Possibly related to KI-01 (same entity, same Text field) — unconfirmed.
+
 ### KI-03 — Quotations "auto-reveal a hidden field" is a timing outlier
 - **Status:** open · **Since:** 2026-09-09
 - **What:** `@regression admin should auto-reveal a hidden field immediately after editing it, without re-toggling` (`quotations.spec.ts`) and its restricted twin (`quotations.rbac.spec.ts`) run several times longer than the same Hide-Empty-Fields test in every other module. Recurring Companies / Products & Services Hide-Empty-Fields failures in the 2026-09-29 run match the same shape.
@@ -24,6 +34,16 @@
 - **Status:** open · **Since:** 2026-09-02
 - **What:** `DB33 add Smartlist dashlet for Email` and `DB36 add Grouped Smartlists dashlet for Contact` still intermittently fail after the self-cancelling-retry bug was fixed: DB36's confirmation fetch never fires; DB33's fetch returns 200 but no dashlet paints. Separately, pre-existing Report-type dashlets on the Default dashboard stay on their loading placeholder (root cause never established; deliberately not exercised by any test).
 - **Next check:** needs an app-side rendering investigation; suspected client-side paint failure under rapid multi-dashlet adds. History: [dashboard-module.md](./known-issues/dashboard-module.md).
+
+### KI-06 — Part of the first sharded qa run's elevated flaky count is not root-caused
+- **Status:** unverified · **Since:** 2026-09-09
+- **What:** 14 flaky tests in that run vs a historical 1–3; 8 are explained by the `wrongPage`-landing and ellipsis-toggle fixes ([ci-pipelines.md](./known-issues/ci-pipelines.md)), the other 6 were never individually traced (no trace-level access then).
+- **Next check:** compare the flaky count of the next full sharded qa runs against that baseline before opening an investigation — only a recurring test justifies one.
+
+### KI-07 — `browser.newContext()` CDP Protocol error: one occurrence, cause unconfirmed
+- **Status:** inconclusive · **Since:** 2026-08-26
+- **What:** a thrown Protocol error during fixture setup in one long multi-worker run (resource-pressure-consistent, never reproduced). The adjacent structural gap (recovery login not wrapped, so setup got one attempt instead of two) was fixed ([locators-and-timing.md](./known-issues/locators-and-timing.md)); the Protocol error itself was deliberately not hardened (rule 10).
+- **Next check:** a recurrence with resource metrics (`free -h`, process counts) from the runner.
 
 ### KI-48 — Quotation form app crash (`getCurrencyId`) blanks the page
 - **Status:** open · **Since:** 2026-10-28 (PROD main run 40637702829, Q27)
@@ -39,25 +59,10 @@
 - **What:** all shards share one admin; shard 3 proactively re-logged in (595 s left) at 05:26:50 and shards 1, 2, 4 saw `Session expiry detected` within 3 s, re-logging in until 05:34. First `/sales/` race capped; the storm is untouched.
 - **Ask / next check:** does a new admin login kill older tokens on staging? Should CI refresh admin at all? [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
-### KI-72 — Task relation picked a record another shard then deleted: POST /v1/tasks/ 400 007005 / 007003 (2026-11-19)
-- **Status:** fixed in code, verified on staging 2026-11-19 (tasks UI+RBAC 34/34, quotations.rbac 17/17, contacts.rbac:839/:572, tasks.spec:153) · **Seen:** sandbox 44533064234 (accf30e), tasks.rbac:74 (13:38:17Z) and tasks.spec:153 (14:24:16Z)
-- **Proof (007005):** shard 5 picked contact "Shaun Jakubowski" at 13:38:05; shard 4's contacts.rbac:572 created it 13:37:17 and deleted it 13:38:11-13; the task POST got 400 `007005` "Contact not found". 007003 is the same for a lead (delete not seen in my logs).
-- **Fix:** `TasksPage.fillRelation` uses only run-owned records (`TaskRelationTargets`: one lead, deal, contact, company per account and worker, deleted by no test), found by name with a lookup watcher (leads/contacts by first name: the lookup queries `firstName:`).
-- **Same run:** the 429 pages came at the end of an all-worker stall (KI-71), not from extra retries (none logged). The Add dropdown now reloads once on the 429 page; missed saves name "NEVER SENT" / "SENT but NO ANSWER"; a missed contact update is checked before a second save. **Open:** a limiter change is unproven; the quotations list-layout 429 is not recovered.
-
-### KI-71 — Staging-wide API stalls: 2026-11-18 once, 2026-11-19 three windows in one run (sandbox 44361216176, 44464192762)
-- **Status:** open, environment (staging backend), 4 windows in 2 days · **Since:** 2026-11-18
-- **What (11-18):** every `/v1/` call held about 58 s, released together at 18:37:04-09 on 3 shards; `POST /v1/deals/` 500 `01003002` after 46 s, a contact create unanswered in 45 s, a Products lookup unanswered in 10 s. All passed on retry.
-- **What (11-19, f635980, 5 shards, 4 workers each):** windows where every worker of a shard logged nothing, released together: 05:26:11-44 (s2, s5), 05:32:46-05:33:46 (all 5, released 05:33:44-46: list waits 59.5 s and 59.3 s), 05:40:54-05:41:36 (s1, s2, s4, s5). Proven by trace or log (request sent, no answer): login.spec:16 attempt 1 (login PUT; attempt 2 got 200, then no post-login request until the release), meetings.rbac:189 (`contacts/lookup`), tasks.rbac:39 (`users/lookup`, `tasks/search`), contacts.rbac:81 (`users/lookup` x5, `tenants/usage`), contacts.rbac:572 (`POST /v1/contacts/` 44,683 ms). deals.rbac:323: hold proven, but the app dropped its requests at 60 s and the test waited on a dead page (now reloads once on a transport failure). call-logs.rbac:472 attempt 1: probable, unproven (lookup returned 0 options inside the 05:41 window).
-- **Not holds (ours):** deals.rbac:666, call-logs.rbac:247, call-logs.rbac:472 retry, call-logs.spec:554 (causes in CHANGELOG); fixed or instrumented 2026-11-19. Run 44533064234 (accf30e): another all-worker stall 13:42:37-13:43:20Z (s4, s5), then 429 pages: KI-72.
-- **Tests:** no wait passes a stall. Create captures, saves, `LoginPage` and lookups say "sent, no answer" or "never sent"; list/detail failures append `describePageStall()`.
-- **Next check:** compare timestamps across shards on a recurrence; ask Kylas for gateway logs for 2026-11-18 18:36-18:37Z and 2026-11-19 05:26, 05:32-05:33, 05:40-05:41Z.
-
-### KI-70 — Quick-task "Assigned To" menu closes at once: it opens on hover and the click steals its focus (2026-11-18)
-- **Status:** root cause found in the app bundle 2026-11-19; fixed, verify in sandbox · **Since:** 2026-11-17
-- **What:** CO10, COR9, sandbox 44258530411 (deals.rbac:574), 44361216176 (companies.rbac:330, contacts.rbac:174). Both 44361216176 errors: focusin INPUT +165/+181 ms, menu ADDED, focusout INPUT -> `BUTTON.assign-to` 4 ms later, menu REMOVED 6 ms after, lookup fired after the removal, the second click adds no event.
-- **Cause (bundle `index.d0a7f5a2…`, quick-task form):** `button.assign-to` has `onClick: preventDefault` and opens on `onMouseEnter`; the Field renders with `autoFocus` and `input.onBlur` closes it. Playwright's click moves the pointer (mouseenter: menu renders, input focused) then mousedown: the browser focuses the button, the input blurs, the menu closes. It passes if mousedown lands before the autofocus. A second click cannot reopen it (pointer already over the button: no new mouseenter). Due date and Priority also open on mouseenter (no blur handler). The Tasks Add dropdown (tasks.rbac:273) is a Bootstrap click toggle, cause unconfirmed.
-- **Fix (2026-11-19):** `openMenuAndWaitForItem(..., {openBy:'hover'})` for Assigned To and due date (pointer parked, `hover()`, one retry); 20/20 opens passed. Close after a clean sandbox run. Tasks Add dropdown: Bootstrap click, unchanged.
+### KI-70 — Quick-task "Assigned To" menu sometimes never renders (2026-11-18)
+- **Status:** open, hardened, root cause not confirmed · **Since:** 2026-11-17
+- **What:** CO10 (`companies.spec.ts`) and COR9 (`companies.rbac.spec.ts:186`) failed in `TasksPage.fillQuickTaskForm`: click landed, `GET /v1/users/lookup?q=firstName:` returned 200 with 2 users, no `.assigned-to-menu-list` for 10 s, a second click fired no lookup. 2 of 7 full Companies runs failed; 0 of 56 probe repeats and 0 of 2 instrumented full runs.
+- **Next check:** `openQuickTaskMenu` is hardening only (did not stop COR9). The next failure's error message carries `document.activeElement`, the element at the button centre, whether the menu ever appeared, and the lookup timing. No sleeps or longer timeouts.
 
 ### KI-69 — Restricted owner's lead menu without "Delete" (2026-11-16)
 - **Status:** open, cause found, fix awaiting verification · **Since:** staging `leads.rbac.spec.ts:762` (12/12 fail), 698
@@ -69,24 +74,22 @@
 
 ### KI-67 — Clone lead form: Last Name sometimes loses the " Copy" pre-fill (2026-11-16)
 - **Status:** open, tracked; tests do not fail on it (owner 2026-11-17: not an app bug) · **Since:** sandbox 38855451748 (2026-10-16); staging 2/24, 3/24 at 4 workers
-- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone.
+- **What:** probe (store hook, traced, restricted): passing opens (38/38): FORM_SUCCESS(44) -> INITIALIZE(42) 3-21 ms later -> `CHANGE lastName "X Copy"` after the fields register. The failing open (1 of 39): CHANGE +484 ms (no field registered), then INITIALIZE(42) +508 (47 ms after FORM_SUCCESS(44)): Copy gone. The Copy branch runs once per mount (`hasCloneValuesSet`); `enableReinitialize` shares the payload.
 - **Test:** `cloneLead(original)` must pass: "Clone Lead" form open, original first name in it, save gives a NEW id. A missing " Copy" only adds a `known-issue` annotation + warning.
 
-### KI-66 — Deal edit: Actual Total not recalculated after a product attach; 3 tests re-enabled with a runtime verdict (2026-11-18)
-- **Status:** open; PS14, PS11 and D51 re-enabled 2026-11-19 (`test.fixme` removed; stuck attach = expected failure with the KI-66 annotation, anything else red); app edit-form race, not reported to Kylas for now · **Since:** 2026-10-09 (QA), 2026-11-16, 2026-11-18
-- **Tests:** P&S PS14 / PS11 (`:161`) and D51 (`deals.spec.ts`, 11 installments): pick the admin-owned product on a deal during edit, Distribute Equally -> "Yes, Proceed" -> Save. Kept: `DealsPage.updateDealAttachingProduct` (runtime known-bug verdict) and the `updateDeal` guard.
-- **Issue:** when the edit form's cached layout and the deal GET land together, `formFieldIndex` is never built, so `isActualValueFieldPresent` is false: Estimated updates, Actual Total and the banner do not, Save -> 400 `01001091`. Probe: 4/4 stuck runs never saw `layoutLoading=true`. Not tied to installment count; not reproduced manually.
-- **At risk, same race:** `deals.spec.ts` "admin should distribute unallocated amount equally after adding a product…": apply the same `updateDealAttachingProduct` verdict if it fails with the KI-66 message.
-
+### KI-66 — Deal edit: "Distribute Equally" banner and Actual Value sometimes not recalculated after a product attach (2026-11-16)
+- **Status:** open, intermittent, app client cause not confirmed; test fix NOT applied · **Since:** 2026-10-09 (QA 37733648349, passed on retry); 2026-11-16 (staging `productsAndServices.rbac.spec.ts:161`, 1 of 6)
+- **What:** failing run: Estimated 17,308 -> 42,308 but Actual stayed 17,308, no `button.distribute-unallocated-btn` in 10 s, `PUT /v1/deals/107666` -> 400 `01001091` (payload: estimated 42308, actual 17308, 10 installments summing 17308, #1 RECEIVED). 10/10 traced passes (admin 2 installments, restricted 2-11): banner in 10-40 ms, Actual = Estimated at the pick. Role, installment count and server traffic do not separate them; after the pick a passing run re-renders both columns, a failing one only Estimated.
+- **Next check:** a second failing trace; if Actual never follows it is app behavior (report it). Designed fix (not applied): race "Estimated changed" vs banner in `handleDistributeUnallocatedAmountIfPresent`, fail by name before Save.
 ### KI-65 — `productFixtureNeed` skips product fixtures when a file filter carries a `:line` suffix (2026-11-16)
 - **Status:** open, not fixed (workaround below) · **Since:** found 2026-11-16 reproducing sandbox run 42064754304
-- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`: `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path (the unsafe "wrong skip" direction).
+- **What:** `npx playwright test tests/ui/productsAndServices/productsAndServices.spec.ts:264 ...` logs `Product fixtures: SKIPPED — file filters [...:264 ...] match none of 16 fixture-needing specs`, then the tests fail `getProductFixture: no fixture file found for ENV=staging`. `extractFileFilters` keeps the `:264` suffix, so the filter never matches a spec path and is not flagged ambiguous. This is the unsafe "wrong skip" direction the file's own header warns about.
 - **Next check:** strip a trailing `:\d+` (and `:\d+:\d+`) from each filter in `extractFileFilters`; add a case to its unit check. Workaround: file path + `--grep`.
 
 ### KI-64 — `assertNoFormErrors` 1.5 s grace sleep and per-module sleeps remain (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B3; sleeps go to B6) · **Since:** 2026-11-04 plan RC4
-- **What:** `BasePage.assertNoFormErrors(context, confirmedSave?)` skips the 1.5 s pause only when the caller passes its confirmed save response (Tasks edit, due-date; Contacts edit; Meetings create; Call Logs edit). Others keep the pause. Other `waitForTimeout` left: ADR 0014 backoffs (`BasePage` ~1041, `authManager` ~167).
-- **Next check:** migrate the other callers to pass their `saveAndAwait` response; never raise the 1.5 s.
+- **What:** `BasePage.assertNoFormErrors(context, confirmedSave?)` skips the 1.5 s pause only when the caller passes its confirmed save response (Tasks edit and due-date, Contacts edit, Meetings create, Call Logs edit). All other callers keep the pause. Other `waitForTimeout` left in `src/`: ADR 0014 transport-retry backoffs (`BasePage` ~1041, `authManager` ~167).
+- **Next check:** migrate the remaining callers to pass their `saveAndAwait` response; never raise the 1.5 s.
 
 ### KI-63 — `BasePage.click()` legs stack to ~150 s worst case (2026-11-05)
 - **Status:** open, deliberate leftover (ADR 0016, B2) · **Since:** 2026-11-04 plan RC1
@@ -95,20 +98,21 @@
 - **Next check:** after the sandbox 10-worker run, grep for "Test timeout of 120000ms" whose last step is a `click`.
 
 ### KI-62 — App crash `QuotationApprovalStateFieldValue` on a freshly loaded company page with quotations (2026-11-05)
-- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** 2026-11-04
-- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')`; the Quotations card never renders (staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8). CO12 now verifies in place and fails 2 s after an uncaught page error (ADR 0016).
-- **Next check:** reload a company with a quotation 10x; if it persists, give Kylas the stack.
+- **Status:** open, app (not reported, owner decision plan section 8); test avoids the trigger · **Since:** seen 2026-11-04
+- **What:** loading `/sales/companies/details/{id}` by URL after a quotation exists throws `TypeError: Cannot read properties of undefined (reading 'find')` (pageError, bundle `index.*.bundle.js`); the Quotations card never renders. The quotation search answered 200 with a normal `approvalState`. Staging companies.spec:248 failed 3 of 5 with the old reload step, QA 3 of 8. Rendering the card in place after the save never crashed.
+- **Test side:** CO12 verifies in place and fails 2 s after an uncaught page error with its text (ADR 0016). Other tests that load a company with quotations by URL could meet it; none seen.
+- **Next check:** reload a company with a quotation 10x; if the crash persists, give Kylas the stack.
 
 ### KI-61 — QA deal search stopped indexing new deals (2026-11-04): "Related Deals (0)", deal tests fail
 - **Status:** open, environment (QA backend) · **Since:** 2026-11-04
-- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`) were still absent from `POST /v1/search/deal` 3.5 h later; company/contact/lead search were current. The company page's Related Deals card therefore showed 0 after every create.
-- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2; `companies.spec.ts:248` and `contacts.spec.ts:244` pass about half the time (not attributed). No wait can pass while the index is stalled.
-- **Next check:** repeat the search by ids when QA's indexer is restored; if the lag is seconds again, add a bounded re-issue of the app's own search (plan batch B3). [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md).
+- **What:** deals created after 11:25 UTC (ids 437935-437952, all returned by `GET /v1/deals/{id}`, status OPEN, company set) were still absent from `POST /v1/search/deal` at 14:58 UTC (3.5 h). Company and contact search were current (newest 12:43 / 12:45), leads 11:45. The company page's Related Deals card (`POST /v1/search/deal`, rule company = id AND forecastingType in OPEN) therefore answered `totalElements: 0` after every create.
+- **Tests:** `companies.spec.ts:331`, `:387`, `contacts.spec.ts:318` failed 2/2 with and without B1 (ADR 0016): the create answers 201, the card shows "Related Deals (0)". Not a wait problem: no bounded wait on the search can pass while the index is stalled. `companies.spec.ts:248` and `contacts.spec.ts:244` (quotation from the panel, same deal search returning 0) pass about half the time: not yet attributed.
+- **Next check:** repeat the query below when QA's indexer is restored (`search by ids` returning the deals); if the lag is seconds again, add a bounded re-issue of the app's own search (post-save refresh, plan batch B3) instead of one read. [rate-limits-and-error-pages.md](./known-issues/rate-limits-and-error-pages.md) for the 429 side.
 
-### KI-52 — A lead shared READ-ONLY still lets the restricted user delete the admin's note and add tasks via the API
+### KI-52 — A lead shared READ-ONLY still lets the restricted user add/delete notes and add tasks via the API
 - **Status:** open — Kylas [SD-32157](https://kylas.atlassian.net/browse/SD-32157) (notes), [SD-32158](https://kylas.atlassian.net/browse/SD-32158) (tasks) · **Since:** 2026-10-30
-- **What:** with a `read`-only rule: note ADD fixed on QA 2026-11-18 (401 `000004`; staging/prod still 200); DELETE of the admin's note still 200 on QA (SD-32157); task create 200. [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
-- **Tests:** `leads.rbac.spec.ts` L77, L80, L79 decide at run time (`applyKnownBugVerdict`, `src/utils/knownIssue.ts`): accepted = expected failure, refused = pass + annotation to add the env to `KNOWN_BUG_FIX_CONFIRMED_ENVS`. Close when all three are strict ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)).
+- **What:** with a `read`-only rule the API returns 200 for note create/delete and task create (meetings 422, call logs 403); the UI hides the icons. Evidence: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md).
+- **Tests:** `leads.rbac.spec.ts` L77 (API, notes), L79 (API, tasks) carry `test.fail(true, 'Kylas bug SD-…')`; "expected to fail but passed" = fixed: delete the marker, close this entry ([RUNBOOK](./RUNBOOK.md#when-it-is-an-app-bug)). UI half: L14 (passes).
 
 ### KI-57 — `assertNoFormErrors()` reads ANY error toast, including ones from unrelated requests
 - **Status:** open (fixed only for company clone) · **Since:** 2026-10-30
@@ -120,11 +124,10 @@
 
 ### KI-59 — Unverified siblings of the 2026-11-02 sandbox fixes
 - **Status:** open, watch · **Since:** 2026-11-02
-- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban while L65 (`leads.spec.ts:1409`) was sorting; no `.rt-tr` rows for 60 s. Mitigated 2026-11-18 inside `leads.spec.ts` only (`leadListPreferences.ts` lock, verified live); other lead specs on other shards are not covered. Own-smart-list isolation is impossible (`mark-as-preferred` makes it the user's only preferred list). Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
+- **What:** Notes-panel clicks in Contacts/Companies/Deals do not wait for the entity header; other modules keep their own react-select pickers. **Occurred 2026-11-16 (staging, 4 workers):** lead page size/sort/view are shared per-user state: L68 switched admin to Kanban (20:04:31-37) while L65 (`leads.spec.ts:1409`) was sorting; its 2nd sort reloaded the board, no `.rt-tr` rows for 60 s. Not fixed (owner decision). Detail: [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ### KI-60 — Staging report-save 500 `01403004` (Lead reports too) and quotation-save timing (2026-11-03)
 - **Status:** open · **Since:** 2026-11-03 (sandbox, staging)
-- **2026-11-19:** sandbox 44361216176 shard 1 logged 9 such 500s in 18 min; reports.spec:866 Save As failed on the attempt and the retry. Save As now has the same one retry on exactly 500 + `01403004`, after a name check (ADR 0017); an unavailable check fails by name.
 - **What:** `POST /v3/reports` 500 `01403004` hit Save As and a Lead report ("Meeting-only" is stale); both now fail at once with status/code (the one existing create retry stays). Product control stays disabled if `GET /v1/deals/{id}` fails (now a labelled fast failure). 400 "Connection prematurely closed BEFORE response" on a quotation save is KI-49, not retried. `quotations.rbac` edit-shared "Save toast not visible": hardened, cause unconfirmed, needs a trace.
 
 ### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
@@ -145,8 +148,9 @@
 
 ### KI-16 — JWT lifetime is not a stable constant; `ensureFreshSession()` margin is unsized
 - **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
-- **What:** measured token lifetimes differ between investigations (~10.4 h, ~20 min once, ~101 min later). Since 2026-11-05 (ADR 0016) the refresh margin is sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669). Why the lifetime varies is unexplained.
-- **Next check:** investigate why it varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
+- **What:** measured token lifetimes differ between investigations (~10.4 h documented, ~20 min once, ~101 min later, 4/4 reproducible). `AuthManager.ensureFreshSession()` refreshes at <10 min remaining, sized against the wrong assumption. A ~40-minute-old storage state landing on sign-in is likewise unexplained.
+- **2026-11-05 (ADR 0016):** the margin is now sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when its own `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669, P&S: a ~47 min token). Why the lifetime varies (10.2 h on a fresh staging login the same day) is still unexplained.
+- **Next check:** dedicated investigation into *why* the lifetime varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
 
 ### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
 - **Status:** inconclusive · **Since:** 2026-08-07
@@ -193,7 +197,10 @@
 
 ## D. Accepted behavior / decisions needed
 
-- **KI-30 / KI-31 / KI-32 / KI-33** (accepted behavior and decisions needed: display names, Lead edit fields, Company Website negative test, Quotation report entity on QA only) moved verbatim to [known-issues/watch-items.md](./known-issues/watch-items.md) (2026-11-18), text unchanged, IDs stable.
+- **KI-30 — `deriveModuleFromFile()` display names** (`Call-logs`, `ProductsAndServices`, `login.spec.ts` counted under Dashboard) are deliberately unfixed: renaming would break trend continuity in `ci/reporting-history`. Read the code comment above the final name computation before touching it.
+- **KI-31 — Lead `fillEditForm()` does not update Timezone/Country/Professional fields** (Contact's updates Timezone and Professional only). Create-only was the lower-risk choice; extending it is a maintainer decision.
+- **KI-32 — Company Website validation has no negative test** (the custom `UrlField` does).
+- **KI-33 — Quotation report entity type is deployed to QA only** (as of 2026-09-09; **UNVERIFIED**: `ReportsPage.ts` comments disagree on stage/prod and nothing in the repo settles it); the two tests that need it self-skip via a live presence check — re-verify per environment ([ci-pipelines.md](./known-issues/ci-pipelines.md), [reports-module.md](./known-issues/reports-module.md)).
 
 ## Watch items moved to [known-issues/watch-items.md](./known-issues/watch-items.md) (2026-11-04)
 
@@ -201,10 +208,6 @@ Still open, text unchanged, IDs stable; moved only to keep this file's size unde
 
 | ID | Item | Status |
 |---|---|---|
-| KI-01 | FFPS5: stable across re-testing, root cause unconfirmed | inconclusive (currently stable; original symptom never repro |
-| KI-02 | FFRPS8 is a load-dependent flake with no prior record | inconclusive |
-| KI-06 | Part of the first sharded qa run's elevated flaky count is not root-caused | unverified |
-| KI-07 | `browser.newContext()` CDP Protocol error: one occurrence, cause unconfirmed | inconclusive |
 | KI-34 | Field-config reset job and concurrency groups: never run, GitHub behaviours unconfirmed | unverified (implemented 2026-10-06; only |
 | KI-36 | Sandbox formFields split never exercised in a real CI run | unverified (implemented 2026-10-07) |
 | KI-38 | Sandbox formFields entity selection: never exercised on GitHub | unverified (implemented 2026-10-08) |
