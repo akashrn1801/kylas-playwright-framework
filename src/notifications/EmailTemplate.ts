@@ -639,6 +639,10 @@ ${body}
       .map((entry) => {
         const end = new Date(entry.endIso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' });
         const note = entry.belowRunWindow ? ' (less than the run window left at start: failures near the end may be the session refresh)' : '';
+        if (entry.renewedAt) {
+          const at = new Date(entry.renewedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' });
+          return row(`${entry.role} session`, this.esc(`renewed at ${at}, ends ${end}`));
+        }
         return row(`${entry.role} session`, this.esc(`ends ${end}, ${entry.minutesLeft} min left at start${note}`));
       })
       .join('');

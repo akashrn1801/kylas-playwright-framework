@@ -9,6 +9,8 @@ export interface SessionInfoEntry {
   minutesLeft: number;
   belowRunWindow: boolean;
   recordedAt: string;
+  // set only by the CI `renew-session` job when it logged this role out and in again (ADR 0017)
+  renewedAt?: string;
 }
 
 export function sessionInfoPath(env: string): string {

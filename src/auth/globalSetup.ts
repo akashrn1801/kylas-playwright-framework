@@ -508,7 +508,7 @@ async function enforceSessionLife(role: Role, browser: PwBrowser): Promise<void>
   if (process.env.CI) {
     console.warn(
       `[globalSetup] WARNING: the ${role} session ends at ${end.endIso} (${end.minutesLeft} min left), less than the ${windowMin} min run window. ` +
-        "CI never renews a session; a failure near that time may be the app's token-refresh cascade (ADR 0017)."
+        "CI shards never renew a session (sandbox's renew-session job does, before the shards); a failure near that time may be the app's token-refresh cascade (ADR 0017)."
     );
     return;
   }
