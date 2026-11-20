@@ -7,6 +7,7 @@ import {
   DealCustomFieldKey,
 } from '../../data/factories/dealFactory';
 import { TasksPage } from '../tasks/TasksPage';
+import { getTaskRelationTargets } from '../tasks/TaskRelationTargets';
 import { MeetingsPage } from '../meetings/MeetingsPage';
 import { QuotationsPage } from '../quotations/QuotationsPage';
 import { QuotationCustomFieldData } from '../../data/factories/quotationFactory';
@@ -651,7 +652,7 @@ export class DealsPage extends BasePage {
   private async selectFirstOptionFromDropdown(
     inputLocator: Locator,
     description: string,
-    exactName?: string
+    exactName: string
   ): Promise<void> {
     logger.info(`Selecting ${description}`);
     // WHY: Click the dropdown indicator arrow — more reliable than clicking input.
@@ -668,69 +669,35 @@ export class DealsPage extends BasePage {
     // bounded (3 x expect timeout) and fails by name.
     await this.openReactSelectAndWaitForOptions(indicator, description);
 
-    // WHY: Deterministic path — for tests where the associated contact/
-    // company's ownership matters (share/reassign/permission tests), picking
-    // a random pre-existing entity is unsafe (its owner/share-state is
-    // unknown and uncontrolled). Type the known entity's name and select the
-    // exact match instead of falling back to the random-index behavior below.
-    if (exactName) {
-      const words = exactName.trim().split(' ');
-      const validWord = words.find((w) => w.length >= 3) ?? exactName.trim().substring(0, 3);
-      await this.fillAndAwaitLookup(inputLocator, validWord);
-      const exactOption = this.page
-        .locator('.is-invalid__option')
-        .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactName)}\\s*$`) })
-        .first();
-      await exactOption.waitFor({ state: 'visible', timeout: 10000 });
-      await exactOption.click();
-      await this.closeIsInvalidMenuRobustly(description);
-      logger.success(`${description} selected: "${exactName}" (exact match)`);
-      return;
-    }
+    // WHY: always the named record (share/reassign/permission tests need a known owner and share state, and a
+    // random pre-existing entity has neither): type its name and select the exact match.
+    await this.searchAndPickExact(inputLocator, description, exactName);
+  }
 
-    // WHY the search-then-select rewrite (root-caused 2026-07-21, applied
-    // 2026-07-22 after the same failure signature was confirmed live ON
-    // STAGE — previously scoped "qa/prod only, stage's list is too small to
-    // trigger it" — stage's associated-company list has since grown to the
-    // same 25-option scale, so the environmental boundary has shifted and
-    // this is no longer a qa/prod-only issue): `selectRandomOptionWithRetry`
-    // picking a random index from the UNFILTERED, page-wide `.is-invalid__
-    // option` locator (up to 25+ options) intermittently timed out reading/
-    // clicking `.nth(idx)` for ANY index under real load/render-churn — all
-    // 3 bounded attempts (each re-rolling a fresh index) failed identically
-    // in the confirmed live failure. Rather than raising the 15s bound (a
-    // guess that doesn't address list SIZE), this mirrors the exactName
-    // path immediately above: batch-read every option's text in ONE
-    // round-trip (`allTextContents()` — same "batch instead of N individual
-    // reads" fix already proven elsewhere in this codebase, e.g.
-    // QuotationsPage's retryFindInList), pick one at random, type it into
-    // the search input to filter the list down to (ideally) a single match,
-    // then click that exact match — identical mechanics to the exactName
-    // branch, which has never flaked. Bounded 3-attempt retry (re-picking a
-    // fresh random option each attempt) for the same defense-in-depth as the
-    // original, but now targeting a FILTERED, small list instead of the
-    // full unfiltered one.
-    // B6: ONE pass (the 3-attempt loop re-picked after clearing the search and sleeping 500 ms; each of its
-    // steps is already bounded and fails by name). The option list is read once, one option is picked at
-    // random, typed into the search, and the exact filtered match is clicked once.
-    const allTexts = (await this.page.locator('.is-invalid__option').allTextContents())
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    if (allTexts.length === 0) {
-      throw new Error(`${description}: no non-empty options found`);
-    }
-    const pick = allTexts[Math.floor(Math.random() * allTexts.length)];
-    const words = pick.split(' ');
-    const validWord = words.find((w) => w.length >= 3) ?? pick.substring(0, 3);
-    await this.fillAndAwaitLookup(inputLocator, validWord);
-    const filteredOption = this.page
+  // Types the first word of `exactName` into an OPEN associated dropdown and picks the option with exactly that text.
+  private async searchAndPickExact(inputLocator: Locator, description: string, exactName: string): Promise<void> {
+    const words = exactName.trim().split(' ');
+    const validWord = words.find((w) => w.length >= 3) ?? exactName.trim().substring(0, 3);
+    const exactOption = this.page
       .locator('.is-invalid__option')
-      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(pick)}\\s*$`) })
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(exactName)}\\s*$`) })
       .first();
-    await filteredOption.waitFor({ state: 'visible', timeout: 10000 });
-    await filteredOption.click({ timeout: config.timeouts.expect });
+    // WHY polled on the real lookup (sandbox 44683950030, meetings.rbac:189): a record created seconds ago can be
+    // missing from the search index, and a common first name ("Ron") made the lookup itself slow. Each attempt
+    // clears the box, types the word, awaits THAT lookup's answer and then the option; count-bounded, no pause.
+    // Callers that need a quick, certain hit pass a run-owned record with a unique first word.
+    await this.retryAttempts(
+      config.searchRetry[config.env as keyof typeof config.searchRetry].retries,
+      `${description}: search for "${validWord}" listing "${exactName}"`,
+      async () => {
+        await inputLocator.fill('');
+        await this.fillAndAwaitLookup(inputLocator, validWord);
+        await exactOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      }
+    );
+    await exactOption.click();
     await this.closeIsInvalidMenuRobustly(description);
-    logger.success(`${description} selected: "${pick}" (search-filtered random pick)`);
+    logger.success(`${description} selected: "${exactName}" (exact match)`);
   }
 
   // B6 (staging probe 2026-11-17): typing into the Associated Contact / Company search fires
@@ -1051,16 +1018,16 @@ export class DealsPage extends BasePage {
     // RBAC tests (skipAssociatedEntities) and now also in this feature's own
     // minimal-fill mode to create deals with no linked entities.
     if (!data.skipAssociatedEntities && !minimal) {
-      await this.selectFirstOptionFromDropdown(
-        this.associatedContactsInput(),
-        'associated contact',
-        data.associatedContactName
-      );
-      await this.selectFirstOptionFromDropdown(
-        this.associatedCompanyInput(),
-        'associated company',
-        data.associatedCompanyName
-      );
+      // WHY (rule 5, sandbox 44683950030): never a random pre-existing contact/company, whose owner, shares and
+      // index state are unknown and which another test may delete or change. A caller that names its own records
+      // gets those; otherwise this user's run-owned pair (TaskRelationTargets: created once per account and
+      // worker, kept, unique first word, found by search).
+      const contactName =
+        data.associatedContactName ?? (await getTaskRelationTargets(this.page)).contact;
+      const companyName =
+        data.associatedCompanyName ?? (await getTaskRelationTargets(this.page)).company;
+      await this.selectFirstOptionFromDropdown(this.associatedContactsInput(), 'associated contact', contactName);
+      await this.selectFirstOptionFromDropdown(this.associatedCompanyInput(), 'associated company', companyName);
     } else {
       logger.info('Skipping associated contact and company (skipAssociatedEntities or minimal)');
     }
@@ -2829,11 +2796,10 @@ export class DealsPage extends BasePage {
       await indicator.click();
       await firstOption.waitFor({ state: 'visible', timeout: 10000 });
     }
-    // WHY: shared bounded+re-roll selector (2026-07-17) — previously an
-    // unbounded textContent()+click() on a random index, same bug class as
-    // selectFirstOptionFromDropdown().
-    const allOptions = this.page.locator('.is-invalid__option');
-    await this.selectRandomOptionWithRetry(allOptions, 'Associated contact');
+    // WHY the run-owned SECOND contact, never a random one (rule 5): a default deal links the first run-owned contact,
+    // so the second can always be added, and no other test deletes or changes it (TaskRelationTargets).
+    const second = (await getTaskRelationTargets(this.page)).secondContact;
+    await this.searchAndPickExact(this.associatedContactsInput(), 'associated contact', second);
 
     await this.saveEditedDeal();
     logger.success('Contact added to deal');

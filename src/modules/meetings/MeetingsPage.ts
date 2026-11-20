@@ -1,5 +1,6 @@
-import { Page, Response, expect } from '@playwright/test';
+import { Page, Request, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
+import { getTaskRelationTargets } from '../tasks/TaskRelationTargets';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
 import {
@@ -477,53 +478,21 @@ export class MeetingsPage extends BasePage {
     await this.fillAddressViaGpsOrManual(this.locationInput(), manualAddress, 'location');
   }
 
+  // WHY run-owned records, not a random pick (rule 5; sandbox 44683950030): a random existing record's owner, shares and
+  // index state are unknown and another test may delete it (tasks.rbac 007005). Each type relates this user's own
+  // record from TaskRelationTargets (created once per account and worker, kept, unique first word), found through the
+  // same polled search as createMeetingWithRelatedRecords. A type with no record FAILS by name.
   async fillRelatedTo(_isRestrictedUser = false): Promise<void> {
-    logger.info('Filling Related To - all entity types');
-    const entityTypes = ['Lead', 'Contact', 'Deal', 'Company'];
-
-    for (const entityType of entityTypes) {
-      logger.info(`Selecting entity type: ${entityType}`);
-
-      // Step 1: Click Entities dropdown and select entity type
-      // B6 (staging probe 2026-11-17: all four types answer a three-space search for admin AND restricted, the
-      // slowest in 3.9 s): every step waits for the thing it needs, the hardcoded fallback search terms are gone,
-      // and a type with no records FAILS by name instead of logging "skipping" and saving without that relation.
-      await this.entitiesDropdown().click();
-      // WHY: Scope to dropdown options only — getByText matches invitee chips too
-      const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
-      await this.withSessionExpiryRecovery(() =>
-        expect(typeOption, `Related To: the "${entityType}" type option should appear`).toBeVisible({
-          timeout: config.timeouts.expect,
-        })
-      );
-      await typeOption.click({ timeout: config.timeouts.expect });
-
-      // Step 2: Click Search... to open entity search dropdown
-      const searchControl = this.page.getByText('Search ...').last();
-      await this.withSessionExpiryRecovery(() =>
-        expect(searchControl, `Related To: the ${entityType} search control should appear`).toBeVisible({
-          timeout: config.timeouts.expect,
-        })
-      );
-      await searchControl.click();
-
-      // Step 3: Type spaces to load the first results, and wait for them
-      await this.relatedToInput().fill('   ');
-      await this.withSessionExpiryRecovery(() =>
-        expect(
-          this.relationOptions().first(),
-          `Related To: the ${entityType} search should list at least one record (none found)`
-        ).toBeVisible({ timeout: config.timeouts.expect })
-      );
-      logger.info(`Options count for ${entityType}: ${await this.relationOptions().count()}`);
-
-      // Step 4: Pick random option
-      // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
-      // before — was an unbounded textContent()+click() on a random option.
-      await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
-        maxOptions: 5,
-      });
-      await this.relatedToInput().press('Enter');
+    logger.info('Filling Related To - all entity types (this account\'s run-owned records)');
+    const owned = await getTaskRelationTargets(this.page);
+    const names: Array<[string, string]> = [
+      ['Lead', owned.lead],
+      ['Contact', owned.contact],
+      ['Deal', owned.deal],
+      ['Company', owned.company],
+    ];
+    for (const [entityType, name] of names) {
+      await this.selectRelatedRecord(entityType, name, 'contains');
     }
   }
 
@@ -1455,14 +1424,21 @@ export class MeetingsPage extends BasePage {
 
   // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", related-to
   // input), then picks the named record: the option whose text equals the full name.
-  // Where to look, in order (sandbox run 39601551444, meetings.rbac:187): (1) the list
-  // the dropdown shows on opening, which held the just-created contact; (2) a
-  // first-word search; (3) a last-word search. Typing the full two-word name returned
-  // 0 results from POST /v1/search/contact/associated-with-entity, so it is not
-  // tried. Related To is search-only (results carry id and name, there is no way to
-  // enter an id), so the option is matched by its text. No other fallback: when
-  // nothing matches it throws with every term tried and its result count.
-  private async selectRelatedRecord(entityType: string, name: string): Promise<void> {
+  // Where to look, in order: (1) the list the dropdown shows on opening (sandbox run 39601551444, meetings.rbac:187:
+  // it held the just-created contact); (2) a search for the name's FIRST word, polled on the real lookup request
+  // (sandbox 44683950030, meetings.rbac:189 retry: "Ward Gislason" gave 0 results for the list, "Ward" and
+  // "Gislason", a just-created contact the search index had not caught up with). Each poll attempt clears the
+  // box, types the word, awaits the answer of THAT lookup (`GET /v1/search/<entity>/lookup`) and then the option;
+  // count-bounded (`config.searchRetry`), no pause: the answer wait is the pacing. The Lead and Contact lookups
+  // query `firstName:<text>`, so the first word is the one that can match, and the records this is called with are
+  // run-owned with a unique first word (a common name such as "Ron" is slow across all staging contacts). The full
+  // two-word name returns 0 results, so it is never typed. Related To is search-only (results carry id and name),
+  // so the option is matched by its text. No other fallback: a miss throws with every lookup the page sent.
+  private async selectRelatedRecord(
+    entityType: string,
+    name: string,
+    match: 'exact' | 'contains' = 'exact'
+  ): Promise<void> {
     logger.info(`Relating ${entityType} "${name}"`);
     await this.entitiesDropdown().click();
     await this.page
@@ -1474,37 +1450,58 @@ export class MeetingsPage extends BasePage {
     await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
     await searchPlaceholder.click();
 
-    const exactName = new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`);
+    // 'contains' is for run-owned records, whose unique stamp makes a substring match safe (a Lead option may carry more than its name)
+    const exactName = new RegExp(match === 'exact' ? `^\\s*${this.escapeRegExp(name)}\\s*$` : this.escapeRegExp(name));
     const option = this.relationOptions().filter({ hasText: exactName }).first();
-    const words = name.trim().split(/\s+/);
-    const firstWord = words[0];
-    const lastWord = words[words.length - 1];
-    const tried: string[] = [];
-
-    const lookup = async (path: string, term: string | null): Promise<boolean> => {
-      if (term !== null) await this.relatedToInput().fill(term);
-      const found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+    const firstWord = name.trim().split(/\s+/)[0];
+    const isLookup = (r: Request): boolean =>
+      r.method() === 'GET' && /^\/v1\/search\/[a-z]+\/lookup\/?$/.test(new URL(r.url()).pathname);
+    const lookupWatch = this.watchRequests(isLookup, (r) => {
+      const u = new URL(r.url());
+      return `GET ${u.pathname} q="${(u.searchParams.get('q') ?? u.searchParams.get('name') ?? '').slice(0, 40)}"`;
+    });
+    let via = 'opening list';
+    try {
+      const inOpeningList = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
         () => true,
         () => false
       );
-      const results = await this.relationOptions().count();
-      tried.push(`${path}${term !== null ? ` "${term}"` : ''}: ${results} result(s)`);
-      if (found) logger.info(`Related ${entityType} "${name}" found via ${path}`);
-      return found;
-    };
-
-    let found = await lookup('opening list', null);
-    if (!found) found = await lookup('first-word search', firstWord);
-    if (!found && lastWord !== firstWord) found = await lookup('last-word search', lastWord);
-    if (!found) {
-      throw new Error(
-        `Related To ${entityType}: no option with the exact text "${name}". Tried: ${tried.join('; ')}`
-      );
+      if (!inOpeningList) {
+        via = `search "${firstWord}"`;
+        try {
+          await this.withSessionExpiryRecovery(() =>
+            this.retryAttempts(config.searchRetry[config.env as keyof typeof config.searchRetry].retries, `Related To ${entityType} search for "${firstWord}"`, async () => {
+              await this.relatedToInput().fill('');
+              const answered = this.armResponseWaitWithRecovery(
+                (res) => isLookup(res.request()) && decodeURIComponent(new URL(res.url()).search).includes(firstWord),
+                `Related To lookup for "${firstWord}"`,
+                config.timeouts.expect
+              );
+              answered.catch(() => undefined);
+              await this.relatedToInput().fill(firstWord);
+              const response = await answered;
+              if (!response.ok()) {
+                throw new Error(`lookup answered: ${await this.describeMatchedResponse(response)}`);
+              }
+              await expect(option, `Related To ${entityType}: the search should list "${name}"`).toBeVisible({
+                timeout: config.timeouts.expect,
+              });
+            })
+          );
+        } catch (error) {
+          throw new Error(
+            `Related To ${entityType}: no option with the exact text "${name}" (opening list: ${await this.relationOptions().count()} result(s)). ${String(error)}\n  Lookups seen: ${lookupWatch.describe()}`
+          );
+        }
+      }
+    } finally {
+      lookupWatch.stop();
     }
+    logger.info(`Related ${entityType} "${name}" found via ${via}`);
     await option.click();
     await this.relatedToInput().press('Enter');
     await this.ensureReactSelectMenuClosed(`Related To ${entityType}`);
-    logger.success(`Related ${entityType}: "${name}" (${tried[tried.length - 1]})`);
+    logger.success(`Related ${entityType}: "${name}" (${via})`);
   }
 
   async updateMeeting(

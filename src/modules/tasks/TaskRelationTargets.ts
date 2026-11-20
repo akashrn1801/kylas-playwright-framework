@@ -21,15 +21,25 @@ export interface TaskRelationTargets {
   lead: string;
   deal: string;
   contact: string;
+  // a second contact no deal links by default, for DealsPage.addContactToDeal (never the one a default deal already holds)
+  secondContact: string;
   company: string;
 }
 
 const targetsByUser = new Map<number, Promise<TaskRelationTargets>>();
+// users whose set this process is building right now: a call for one of them is a call from inside the creation
+// (the creation's own pages use DealsPage/MeetingsPage), which would wait on itself forever
+const building = new Set<number>();
 
 export async function getTaskRelationTargets(page: Page): Promise<TaskRelationTargets> {
   const api = await LeadApi.forPage(page);
   try {
     const userId = await api.getMyUserId();
+    if (building.has(userId)) {
+      throw new Error(
+        `getTaskRelationTargets(${userId}) was called while that user's relation targets are being created: the creation must not use a flow that needs them (it would wait on itself)`
+      );
+    }
     let pending = targetsByUser.get(userId);
     if (!pending) {
       pending = createTargets(page, api, userId);
@@ -43,6 +53,15 @@ export async function getTaskRelationTargets(page: Page): Promise<TaskRelationTa
 }
 
 async function createTargets(page: Page, api: LeadApi, userId: number): Promise<TaskRelationTargets> {
+  building.add(userId);
+  try {
+    return await buildTargets(page, api, userId);
+  } finally {
+    building.delete(userId);
+  }
+}
+
+async function buildTargets(page: Page, api: LeadApi, userId: number): Promise<TaskRelationTargets> {
   const stamp = `REL${Date.now()}`;
   logger.info(`Creating the task relation targets for user ${userId} (${stamp}) — created once, kept, never deleted`);
   await api.createLead({ firstName: stamp, lastName: 'Lead' });
@@ -54,13 +73,16 @@ async function createTargets(page: Page, api: LeadApi, userId: number): Promise<
     const contacts = new ContactsPage(helper);
     await contacts.goToContactsList();
     await contacts.createContact(contactData);
+    const secondData = generateMinimalContactData({ firstName: `${stamp}B`, lastName: 'Contact' });
+    await contacts.goToContactsList();
+    await contacts.createContact(secondData);
 
     const companyData = generateMinimalCompanyData({ name: `${stamp} Company` });
     const companies = new CompaniesPage(helper);
     await companies.goToCompaniesList();
     await companies.createCompany(companyData);
 
-    const dealData = generateMinimalDealData({ name: `${stamp} Deal` });
+    const dealData = generateMinimalDealData({ name: `${stamp} Deal`, skipAssociatedEntities: true });
     const deals = new DealsPage(helper);
     await deals.goToDealsList();
     await deals.createDeal(dealData);
@@ -68,6 +90,7 @@ async function createTargets(page: Page, api: LeadApi, userId: number): Promise<
     return {
       lead: `${stamp} Lead`,
       contact: `${contactData.firstName} ${contactData.lastName}`,
+      secondContact: `${secondData.firstName} ${secondData.lastName}`,
       company: companyData.name,
       deal: dealData.name,
     };

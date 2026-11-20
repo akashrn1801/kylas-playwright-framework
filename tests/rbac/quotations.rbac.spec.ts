@@ -78,7 +78,8 @@ test.describe('Quotations — RBAC', () => {
   }) => {
     test.setTimeout(480000);
     const adminCompaniesPage = new CompaniesPage(adminPage);
-    const companyData = generateCompanyData();
+    // run-stamped first word: the deal's Associated Company search types it (sandbox 44683950030), unique and fast
+    const companyData = generateCompanyData({ name: `QTR${Date.now()} Company` });
     await adminCompaniesPage.goToCompaniesList();
     const companyId = await adminCompaniesPage.createCompany(companyData);
     if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');

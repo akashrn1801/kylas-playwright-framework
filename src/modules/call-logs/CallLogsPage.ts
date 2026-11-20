@@ -2175,7 +2175,9 @@ export class CallLogsPage extends BasePage {
   async ensureOwnedContactExists(): Promise<string> {
     logger.info('Creating owned contact for call log entity selection');
     const contactsPage = new ContactsPage(this.page);
-    const contactData = generateContactData();
+    // run-stamped first word: the Deal flow's Associated search and the deal's Associated Contact search type it
+    // (sandbox 44683950030), so they find this record only, quickly
+    const contactData = generateContactData({ firstName: `CLG${Date.now()}`, lastName: 'Contact' });
     await contactsPage.goToContactsList();
     await contactsPage.createContact(contactData);
     const fullName = `${contactData.firstName} ${contactData.lastName}`;
