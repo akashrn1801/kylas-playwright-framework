@@ -27,7 +27,7 @@ import { logger } from '../../../src/utils/logger';
 test.describe('Dashboard', () => {
   test('@smoke @prodSafe DB1 default sections + dashlets visible on load', async ({ adminPage }) => {
     const dashboardPage = new DashboardPage(adminPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     await dashboardPage.assertDefaultSectionsVisible();
     for (const section of DEFAULT_DASHBOARD_SECTIONS) {
       await dashboardPage.assertSectionHasDashlets(section.label);
@@ -37,7 +37,7 @@ test.describe('Dashboard', () => {
 
   test('@smoke @regression DB2 collapse each default section', async ({ adminPage }) => {
     const dashboardPage = new DashboardPage(adminPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     try {
       for (const section of DEFAULT_DASHBOARD_SECTIONS) {
         // WHY explicitly expanded FIRST, not assumed: `collapseSection()`
@@ -86,7 +86,7 @@ test.describe('Dashboard', () => {
 
   test('@regression DB4 collapse state survives a full page reload', async ({ adminPage }) => {
     const dashboardPage = new DashboardPage(adminPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     const section = DEFAULT_DASHBOARD_SECTIONS[0];
     try {
       // WHY expanded first: see DB2's identical WHY comment above.
@@ -94,6 +94,7 @@ test.describe('Dashboard', () => {
       await dashboardPage.collapseSection(section.sectionId);
       await dashboardPage.reloadPage();
       await dashboardPage.assertDashboardLoaded();
+      await dashboardPage.ensureDefaultDashboardActive();
       expect(await dashboardPage.isSectionExpanded(section.sectionId)).toBe(false);
     } finally {
       await dashboardPage.expandSection(section.sectionId);
@@ -103,7 +104,7 @@ test.describe('Dashboard', () => {
 
   test('@regression DB5 edit mode disables collapse/expand', async ({ adminPage }) => {
     const dashboardPage = new DashboardPage(adminPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     const section = DEFAULT_DASHBOARD_SECTIONS[0];
     await dashboardPage.enterEditMode();
     try {

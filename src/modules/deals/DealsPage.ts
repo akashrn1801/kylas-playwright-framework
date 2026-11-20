@@ -1,5 +1,5 @@
-import { Page, expect, Locator } from '@playwright/test';
-import { BasePage } from '../../core/BasePage';
+import { Page, expect, Locator, test, Request, Response } from '@playwright/test';
+import { BasePage, RequestWatch } from '../../core/BasePage';
 import {
   DealData,
   formatDateForCalendarLabel,
@@ -13,6 +13,24 @@ import { QuotationCustomFieldData } from '../../data/factories/quotationFactory'
 import { generateTaskData } from '../../data/factories/taskFactory';
 import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import { recordKnownIssue } from '../../utils/knownIssue';
+
+/**
+ * KI-66: after a product attach in deal edit, Estimated changed but the part-payments Actual Total did not follow and no
+ * "Distribute Equally" banner appeared. A class of its own so the one test that expects this app race
+ * (deals.spec.ts D51) can recognise it without matching message text.
+ */
+export class DealEditActualNotFollowedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DealEditActualNotFollowedError';
+  }
+}
+
+interface DealFormTotals {
+  estimated: number;
+  actual: number;
+}
 
 export class DealsPage extends BasePage {
   // ──────────────────────────────────────────────────────────
@@ -477,6 +495,13 @@ export class DealsPage extends BasePage {
   }
 
   private async captureDealIdFromResponse(): Promise<{ id: number | null; detail: string }> {
+    // WHY (KI-71, 2026-11-19): the timeout could not say "sent, no answer" from "never sent". Diagnostics only.
+    const createWatch = this.watchRequests(
+      (r) =>
+        r.method() === 'POST' &&
+        (r.url().includes('/v1/deals') || r.url().includes('/v1/deal')) &&
+        !r.url().includes('/reports/')
+    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -520,31 +545,29 @@ export class DealsPage extends BasePage {
       };
     } catch (error) {
       logger.warn(`Unable to capture deal ID: ${String(error)}`);
-      return { id: null, detail: this.describeMissedResponse(error, config.timeouts.navigation) };
+      return { id: null, detail: this.describeMissedResponse(error, config.timeouts.navigation, createWatch) };
+    } finally {
+      createWatch.stop();
     }
   }
 
   private async retryFindDeal(name: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is the deal's row in the search results after a fresh list + search (a new deal
-    // can lag in the search index); toPass repeats that with its own backoff inside the budget the fixed
+    // can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the fixed
     // retries x (5 s results wait + pause) took. Same shape as ContactsPage.retryFindContact().
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Searching deal: ${name}`);
-          await this.goToDealsList();
-          await this.performSearch(name);
-          if (!(await this.waitForSearchResults(name))) {
-            throw new Error(`Deal "${name}" is not in the search results yet`);
-          }
-        }).toPass({ timeout: retries * (5000 + wait) })
-      );
-      logger.success('Deal found');
-      return true;
-    } catch {
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Deal "${name}" search`, async () => {
+        logger.info(`Searching deal: ${name}`);
+        await this.goToDealsList();
+        await this.performSearch(name);
+        if (!(await this.waitForSearchResults(name))) {
+          throw new Error(`Deal "${name}" is not in the search results yet`);
+        }
+      })
+    );
+    logger.success('Deal found');
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -715,21 +738,50 @@ export class DealsPage extends BasePage {
   // answer for THIS text is the signal the filtered list is ready; it replaces the 800 ms pauses. Armed before
   // the fill; fails by name when it is missing or not 2xx.
   private async fillAndAwaitLookup(inputLocator: Locator, text: string): Promise<void> {
-    const lookup = this.armResponseWaitWithRecovery(
-      (res) => {
-        const url = new URL(res.url());
-        return (
-          res.request().method() === 'GET' &&
-          /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(url.pathname) &&
-          url.searchParams.get('name') === text
-        );
-      },
-      `Associated lookup for "${text}"`,
-      15000
-    );
-    lookup.catch(() => undefined);
-    await inputLocator.fill(text);
-    const response = await lookup;
+    // WHY (sandbox 44464192762, meetings.rbac:189): the timeout could not say whether the lookup was sent. The watcher
+    // lists every associated lookup with its `name`, so the error shows sent/answered, or a different name. Error text only.
+    const isLookup = (r: Request): boolean =>
+      r.method() === 'GET' && /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(new URL(r.url()).pathname);
+    const lookupWatch = this.watchRequests(isLookup, (r) => {
+      const url = new URL(r.url());
+      return `GET ${url.pathname} name="${url.searchParams.get('name') ?? ''}"`;
+    });
+    try {
+      const lookup = this.armResponseWaitWithRecovery(
+        (res) => {
+          const url = new URL(res.url());
+          return (
+            res.request().method() === 'GET' &&
+            /^\/v1\/search\/(contacts\/lookup|companies-lookup)\/?$/.test(url.pathname) &&
+            url.searchParams.get('name') === text
+          );
+        },
+        `Associated lookup for "${text}"`,
+        15000
+      );
+      lookup.catch(() => undefined);
+      await inputLocator.fill(text);
+      await this.assertAssociatedLookupAnswered(lookup, text, lookupWatch);
+    } finally {
+      lookupWatch.stop();
+    }
+  }
+
+  private async assertAssociatedLookupAnswered(
+    lookup: Promise<Response>,
+    text: string,
+    lookupWatch: RequestWatch
+  ): Promise<void> {
+    let response: Response;
+    try {
+      response = await lookup;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      err.message = `${err.message}\n[associated lookups] expected name="${text}": ${
+        lookupWatch.sentCount() === 0 ? 'no lookup request was sent' : lookupWatch.describe()
+      }`;
+      throw err;
+    }
     if (!response.ok()) {
       throw new Error(`Associated lookup for "${text}": ${await this.describeMatchedResponse(response)}`);
     }
@@ -1565,6 +1617,60 @@ export class DealsPage extends BasePage {
     logger.success(`Math verified: ${total} - ${received} = ${remaining} (diff: ${difference})`);
   }
 
+  // KI-66 guard (prepared 2026-11-18, NOT yet run against the app: the Estimated locator, the id of the input in the
+  // EDIT form, must still be verified live): the failing run (staging productsAndServices.rbac.spec.ts:161) changed
+  // Estimated 17,308 -> 42,308 while Actual stayed 17,308 and no banner came, then Save returned 400 01001091 and the
+  // test reported the symptom (a rejected PUT) instead of the cause. When the attached product DID change Estimated and
+  // the banner never came, Actual must have followed it; if it did not, fail by name here, before Save. An unchanged
+  // Estimated is the legitimate "product did not change the total" case and stays a no-op. A value that cannot be read
+  // fails by name too: a guard that skips itself would turn the next KI-66 into the same unexplained 400.
+  private async readDealFormTotals(when: string): Promise<DealFormTotals> {
+    const toNumber = (text: string, what: string): number => {
+      const digits = text.replace(/[^0-9.]/g, '');
+      if (digits === '') {
+        throw new Error(`Deal edit (KI-66 guard): ${what} ${when} has no number in "${text}"`);
+      }
+      return Number(digits);
+    };
+    const estimatedText = await this.estimatedValueInput()
+      .inputValue({ timeout: config.timeouts.expect })
+      .catch((error: unknown) => {
+        throw new Error(
+          `Deal edit (KI-66 guard): the Estimated Value input ([id="1_21_input_estimatedValue"]) could not be read ${when}: ${String(error)}`
+        );
+      });
+    const actualText = await this.partPaymentSummaryActualTotal()
+      .textContent({ timeout: config.timeouts.expect })
+      .catch((error: unknown) => {
+        throw new Error(
+          `Deal edit (KI-66 guard): the part-payments Actual Total (.part-payments-summary row 1) could not be read ${when}: ${String(error)}`
+        );
+      });
+    return {
+      estimated: toNumber(estimatedText, 'the Estimated Value'),
+      actual: toNumber(actualText ?? '', 'the part-payments Actual Total'),
+    };
+  }
+
+  private async assertActualFollowedEstimated(before: DealFormTotals | null): Promise<void> {
+    if (!before) {
+      throw new Error(
+        'Deal edit (KI-66 guard): the part-payments summary was not on the form before the product attach but is now, ' +
+          'so there is no baseline to compare Actual against'
+      );
+    }
+    const after = await this.readDealFormTotals('after the product attach');
+    if (after.estimated === before.estimated) return;
+    if (after.actual === before.actual) {
+      throw new DealEditActualNotFollowedError(
+        `Deal edit: Estimated changed ${before.estimated} -> ${after.estimated} after the product attach, but the part-payments ` +
+          `Actual Total stayed ${after.actual} and no "Distribute Equally" banner appeared; Save would be rejected ` +
+          '(PUT /v1/deals/{id} 400 01001091, installments no longer sum to the actual value). KI-66: app edit-form race ' +
+          '(formFieldIndex not built when the layout and the deal GET land together, so isActualValueFieldPresent stays false).'
+      );
+    }
+  }
+
   /**
    * Resolves the "unallocated amount" state a deal enters when a product is
    * added/changed after its part-payment installments were already
@@ -1575,7 +1681,7 @@ export class DealsPage extends BasePage {
    * appears for them, and this method must be a clean no-op in that case,
    * not assume it's always present.
    */
-  private async handleDistributeUnallocatedAmountIfPresent(): Promise<void> {
+  private async handleDistributeUnallocatedAmountIfPresent(before: DealFormTotals | null = null): Promise<void> {
     // WHY waitFor(), not isVisible({timeout}): confirmed via Playwright's own
     // type definitions — isVisible()'s timeout option is documented as
     // ignored, resolving instantly against current DOM state regardless of
@@ -1602,6 +1708,7 @@ export class DealsPage extends BasePage {
       .then(() => true)
       .catch(() => false);
     if (!bannerPresent) {
+      if (hasInstallments) await this.assertActualFollowedEstimated(before);
       if (hasInstallments) {
         logger.warn(
           `No "Distribute Equally" banner within ${bannerWaitMs}ms although the deal has part-payment installments — saving without distributing (expected only if the attached product did not change the total)`
@@ -1799,6 +1906,10 @@ export class DealsPage extends BasePage {
       await this.clickEditIcon();
       await this.fillEditForm(newData);
       if (productNameToAttach) {
+        const totalsBefore =
+          (await this.page.locator('.part-payments-summary').count()) > 0
+            ? await this.readDealFormTotals('before the product attach')
+            : null;
         await this.addProductRowAndSearchByName(
           this.addNewProductButton(),
           this.latestProductRowInput(),
@@ -1813,7 +1924,7 @@ export class DealsPage extends BasePage {
         // silently no-ops (no network request attempted) until this is
         // resolved. Conditional and safe for deals with no installments at
         // all — see the method's own doc comment.
-        await this.handleDistributeUnallocatedAmountIfPresent();
+        await this.handleDistributeUnallocatedAmountIfPresent(totalsBefore);
       }
       // WHY: Assert payment status and summary BEFORE saving —
       // verifies the UI reflects the Received status change in the edit modal.
@@ -1841,6 +1952,28 @@ export class DealsPage extends BasePage {
       await this.assertPaymentReceivedAfterEdit(Boolean(productNameToAttach));
       await this.saveEditedDeal();
     }, 'updateDeal');
+  }
+
+  // KI-66: updateDeal() with a product attach, classifying the app's edit-form race. While the race exists, a stuck attach
+  // (Estimated changed, Actual did not, no banner) is recorded as a known issue and the test is marked an expected failure
+  // at run time, so it shows as expected, not red. Any other error (a rejected Save, a missing product, ...) is rethrown
+  // untouched and fails the test. Mechanism (probe 2026-11-18): the form's formFieldIndex is not built when the layout
+  // read and the deal GET land together, so isActualValueFieldPresent stays false and Actual is never recalculated.
+  async updateDealAttachingProduct(
+    newData: DealData,
+    originalName: string,
+    dealId: number,
+    productNameToAttach: string
+  ): Promise<void> {
+    try {
+      await this.updateDeal(newData, originalName, dealId, productNameToAttach);
+    } catch (error) {
+      if (error instanceof DealEditActualNotFollowedError) {
+        recordKnownIssue('KI-66', 'app edit-form race (formFieldIndex not built when layout and deal GET land together)');
+        test.fail(true, 'KI-66: app edit-form race (formFieldIndex not built when layout and deal GET land together)');
+      }
+      throw error;
+    }
   }
 
   async assertDealCreated(data: DealData, dealId?: number): Promise<void> {

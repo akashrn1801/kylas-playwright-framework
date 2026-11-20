@@ -1,14 +1,14 @@
 import { Page, expect, Locator, Response } from '@playwright/test';
 import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
-import { BasePage } from '../../core/BasePage';
+import { BasePage, SaveAnswerMissedError } from '../../core/BasePage';
 import {
   ContactData,
   CONTACT_CUSTOM_FIELD_NAMES,
   ContactCustomFieldKey,
   RANDOM_EXISTING_COMPANY,
 } from '../../data/factories/contactFactory';
-import { config } from '../../../config/config';
+import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
 import { QuotationsPage } from '../quotations/QuotationsPage';
 import { QuotationCustomFieldData } from '../../data/factories/quotationFactory';
@@ -578,27 +578,23 @@ export class ContactsPage extends BasePage {
   }
 
   private async retryFindContact(firstName: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
+    const { retries } = this.retryConfig;
     // B6: the real condition is the contact's row in the search results after a fresh list + search (a new
-    // contact can lag in the search index); toPass repeats that with its own backoff inside the budget the
+    // contact can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the
     // fixed retries x (5 s results wait + pause) took, instead of a fixed pause between attempts. Same shape
     // as CompaniesPage.retryFindCompany().
-    try {
-      await this.withSessionExpiryRecovery(() =>
-        expect(async () => {
-          logger.info(`Searching contact: ${firstName}`);
-          await this.goToContactsList();
-          await this.performSearch(firstName);
-          if (!(await this.waitForSearchResults(firstName))) {
-            throw new Error(`Contact "${firstName}" is not in the search results yet`);
-          }
-        }).toPass({ timeout: retries * (5000 + wait) })
-      );
-      logger.success('Contact found');
-      return true;
-    } catch {
-      return false;
-    }
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Contact "${firstName}" search`, async () => {
+        logger.info(`Searching contact: ${firstName}`);
+        await this.goToContactsList();
+        await this.performSearch(firstName);
+        if (!(await this.waitForSearchResults(firstName))) {
+          throw new Error(`Contact "${firstName}" is not in the search results yet`);
+        }
+      })
+    );
+    logger.success('Contact found');
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -735,6 +731,11 @@ export class ContactsPage extends BasePage {
     transient: boolean;
     detail: string;
   }> {
+    // WHY (2026-11-19, sandbox 44361216176 contacts.spec:619: no create response in 45 s, during a staging-wide stall):
+    // the timeout could not say "sent, no answer" from "never sent". The watcher records the create request itself.
+    const createWatch = this.watchRequests(
+      (r) => r.method() === 'POST' && r.url().includes('/v1/contacts') && !r.url().includes('/reports/')
+    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -777,7 +778,9 @@ export class ContactsPage extends BasePage {
       // logged at debug level, so the thrown error could not say whether the
       // wait timed out or the session expired. Still classified non-transient.
       logger.debug(`Contact create response not captured (${String(error)}) — treating as non-transient`);
-      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000) };
+      return { id: null, transient: false, detail: this.describeMissedResponse(error, 45000, createWatch) };
+    } finally {
+      createWatch.stop();
     }
   }
 
@@ -988,16 +991,57 @@ export class ContactsPage extends BasePage {
     // ADR 0016 (B3, KI-22 / plan section 11 #2): the modal closes only after the update is answered, so
     // wait for that answer first (status checked) and only then for the modal; the 15 s no longer
     // includes a slow save.
-    const saved = await this.saveAndAwait(() => this.click(this.saveButton(), 'save button'), {
+    const expected = {
       method: ['PUT', 'PATCH'],
       urlRe: /\/v1\/contacts\/\d+$/,
       description: 'Contact update (PUT /v1/contacts/{id})',
-    });
+    };
+    const clickSave = (): Promise<void> => this.click(this.saveButton(), 'save button');
+    const contactId = /\/contacts\/details\/(\d+)/.exec(this.page.url())?.[1] ?? null;
+    const before = contactId ? await this.contactSnapshot(contactId) : null;
+    let saved: Response | undefined;
+    try {
+      saved = await this.saveAndAwait(clickSave, expected);
+    } catch (error) {
+      if (!(error instanceof SaveAnswerMissedError)) throw error;
+      saved = await this.recoverMissedContactSave(error, contactId, before, clickSave, expected);
+    }
     await this.assertNoFormErrors('contact edit form', saved);
     await this.withSessionExpiryRecovery(() =>
       expect(this.editModal()).toBeHidden({ timeout: 15000 })
     );
     logger.success('Contact updated');
+  }
+
+  // The contact as the API holds it, to tell "saved, answer not seen" from "not saved" (null: unreadable).
+  private async contactSnapshot(contactId: string): Promise<string | null> {
+    const data = await this.fetchAuthenticatedApiData(buildApiUrl(`/contacts/${contactId}`));
+    return data ? JSON.stringify(data) : null;
+  }
+
+  // ADR 0017: check first, then decide (sandbox 44533064234, contacts.rbac:839: the PUT got no answer in 30 s during a
+  // staging-wide stall). The modal closes only after the app has its answer, so a closed modal means saved. Otherwise
+  // the contact is read back: changed means saved, unchanged means not (yet) saved, and a PUT repeats safely, so the
+  // save is clicked once more. A contact that cannot be read back is not guessed at: the missed answer is rethrown.
+  private async recoverMissedContactSave(
+    missed: SaveAnswerMissedError,
+    contactId: string | null,
+    before: string | null,
+    clickSave: () => Promise<void>,
+    expected: { method: string[]; urlRe: RegExp; description: string }
+  ): Promise<Response | undefined> {
+    if (!(await this.editModal().isVisible().catch(() => true))) {
+      logger.warn(`Contact update answer not captured, but the edit modal closed (the app got its answer): ${missed.message.split('\n')[0]}`);
+      return undefined;
+    }
+    const after = contactId ? await this.contactSnapshot(contactId) : null;
+    if (before === null || after === null) throw missed;
+    if (after !== before) {
+      logger.warn(`Contact update answer not captured, but the contact changed on the server (saved): ${missed.message.split('\n')[0]}`);
+      return undefined;
+    }
+    logger.warn(`Contact update not saved after a missed answer (${missed.sentCount} request(s) sent) — saving once more: ${missed.message.split('\n')[0]}`);
+    return this.saveAndAwait(clickSave, expected);
   }
 
   async deleteContact(): Promise<void> {

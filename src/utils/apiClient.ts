@@ -61,6 +61,11 @@ export abstract class ApiClient {
     await this.context.dispose();
   }
 
+  // WHY overridable: every helper so far talks to `/v1/...`; the reports API lives under `/v3/...` (ReportApi).
+  protected resolveUrl(path: string): string {
+    return buildApiUrl(path);
+  }
+
   // WHY no default Content-Type header: an object passed as `data` is sent as JSON with the right header
   // automatically, and a `multipart` body (call logs) needs its own boundary header, which a fixed
   // application/json header would break.
@@ -82,14 +87,14 @@ export abstract class ApiClient {
     let response;
     for (let attempt = 1; ; attempt++) {
       try {
-        response = await this.context.fetch(buildApiUrl(path), multipart ? { method, multipart } : { method, data });
+        response = await this.context.fetch(this.resolveUrl(path), multipart ? { method, multipart } : { method, data });
         break;
       } catch (error) {
         if (!idempotent || attempt >= 2 || !/socket hang up|ECONNRESET|ETIMEDOUT/i.test(String(error))) {
           throw new Error(redactTokens(String(error)));
         }
         logger.warn(
-          `API ${method} ${buildApiUrl(path)}: connection dropped before a response (attempt ${attempt}/2) — retrying once`
+          `API ${method} ${this.resolveUrl(path)}: connection dropped before a response (attempt ${attempt}/2) — retrying once`
         );
       }
     }
