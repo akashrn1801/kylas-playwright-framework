@@ -10,11 +10,11 @@ All figures in tables below are generated (`npm run docs:refresh`), never hand-t
 ## 1. Suite size right now
 
 <!-- GEN:suite-totals:START -->
-**955 tests** in **35 spec files** (UI 524 · RBAC 431)
+**957 tests** in **35 spec files** (UI 525 · RBAC 432)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 923 · `@prodSafe` 54
+`@smoke` 51 · `@regression` 925 · `@prodSafe` 54
 <!-- GEN:tag-counts:END -->
 
 ## 2. Pipeline matrix (generated from the workflow / Jenkinsfile text)
@@ -75,11 +75,12 @@ flowchart LR
 | Job | Needs | Runs when | `timeout-minutes` |
 |---|---|---|---|
 | `plan` (`detect` in sandbox) | none | always | 15 (`plan`); sandbox `detect`: none set (GitHub's default applies) |
-| `run-tests` | `plan` / `detect` | all plan outputs present (sandbox: also `run_scoped_tests == 'true'`, i.e. skipped when only formFields was selected) | 180 |
-| `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`, `rerun-failed`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `run_formfields_track == 'true'` | 180 |
+| `renew-session` (sandbox only) | `detect` | always (needs `detect`) | 15 |
+| `run-tests` | `plan` / `detect` (sandbox: also `renew-session`) | all plan outputs present (sandbox: also `run_scoped_tests == 'true'`, i.e. skipped when only formFields was selected) | 180 |
+| `run-formfields-tests` | `run-tests` (sandbox: `detect`, `run-tests`, `rerun-failed`) | `!cancelled()`, i.e. after core shards finish in ANY result; sandbox also requires `renew-session` succeeded and `run_formfields_track == 'true'` | 180 |
 | `reset-field-config` | `run-tests`, `run-formfields-tests` | `always()` (sandbox: also `run_formfields_track == 'true'`) | 35 job / 25 step |
 | `merge-and-report` | all of the above incl. `reset-field-config` (sandbox also `rerun-failed`) | `always()` | 30 |
-| `rerun-failed` (sandbox only) | `detect`, `run-tests` | `!cancelled()`, `vars.RERUN_SHARD == 'on'`, `run_scoped_tests == 'true'` | 180 |
+| `rerun-failed` (sandbox only) | `detect`, `renew-session`, `run-tests` | `!cancelled()`, `renew-session` succeeded, `vars.RERUN_SHARD == 'on'`, `run_scoped_tests == 'true'` | 180 |
 
 - **Rerun shard (`sandbox.yml` only, 2026-11-03, [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), not yet run):** job `rerun-failed` (`playwright-rerun (failed+flaky)`) sits between the core shards and formFields (`detect → run-tests → rerun-failed → run-formfields-tests → reset → merge`). Only with repo variable `RERUN_SHARD == 'on'` (any other value = skipped, run as before; `RERUN_MAX_TESTS` 60, `RERUN_RETRIES` 0, `RERUN_INCLUDE_FLAKY` true). It picks failed, flaky, timed-out, cut-off and did-not-run core tests from the shard blobs (`scripts/rerun-select.ts`; serial files whole; formFields never), reruns them once, uploads `rerun-*` artifacts (never named like `blob-report-*` / `misc-errors-*`), and `merge-and-report` combines them (`scripts/combine-rerun.ts`) into one report and one email. Manual: `.github/workflows/rerun-failed.yml` (`run_id`, `env`, `include_flaky`; group `kylas-<env>`; sandbox runs with `run-meta-sandbox` only). Kill switch and rollback: [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md).
 - **Re-run of a core shard in `sandbox.yml` (2026-11-03, [ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md), not yet run):** GitHub re-runs the dependent formFields, reset and merge jobs. Each formFields job first runs `.github/scripts/formfields-attempt-gate.sh ff` and skips its remaining steps in seconds if the same job passed in an earlier attempt of this run (log "formFields <entity> already passed in attempt N — skipped"); `reset-field-config` skips when no formFields job ran tests in this attempt; both run normally in attempt 1, in "Re-run all jobs" and on any doubt. All uploads in `sandbox.yml` use `overwrite: true`; `merge-and-report` reads the earlier attempt's artifacts for skipped jobs (UNVERIFIED on GitHub). qa/stage/main unchanged.
@@ -101,8 +102,8 @@ Replaces Playwright's blind count-based `--shard=N/M`. It runs `playwright test 
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 123 / 125 / 123 / 28 | 6 |
-| full suite (stage, main) | 5 | 124 / 123 / 125 / 124 / 42 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 122 / 123 / 32 | 6 |
+| full suite (stage, main) | 5 | 125 / 123 / 125 / 124 / 43 | 6 |
 <!-- GEN:shard-plan:END -->
 
 Run it locally with `npx ts-node scripts/plan-shards.ts --grep @regression` (read-only). Decision record: [ADR 0003](./adr/0003-file-atomic-shard-planner.md).

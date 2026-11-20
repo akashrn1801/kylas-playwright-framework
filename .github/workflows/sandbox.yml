@@ -338,15 +338,70 @@ jobs:
           echo "formFields matrix: track=$RUN_FORMFIELDS_TRACK entities=$FF_ENTITIES_JSON"
           echo "run_scoped_tests=$RUN_SCOPED_TESTS" >> "$GITHUB_OUTPUT"
 
+  # WHY ONE job here (ADR 0017, amended 2026-11-20): run 44664301850 (same code as green build #227) failed 4 of 5 shards
+  # near a session end, the app's token-refresh cascade. A login inside a live session returns the SAME token, so only a
+  # logout can give a run a fresh 12 h. Doing it once, before any test job, is safe because the workflow-level
+  # `kylas-staging` concurrency group (cancel-in-progress: false) allows one staging CI run at a time: no other job
+  # holds the old token. API only (PUT /v1/users/login, expiry read from the JWT): no browser, no install step. Less
+  # than the full run window (4 h) left = DELETE /v1/tokens/logout once + fresh login; else untouched. Shards, rerun and formFields then log in
+  # from globalSetup and get this session's token. Nothing secret is uploaded: only role/end times, for the email.
+  # Local runs stay opt-in (SESSION_RENEW=1).
+  renew-session:
+    name: renew session if under the run window
+    needs: detect
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Renew the sessions when under the run window
+        env:
+          ENV: staging
+          CI: true
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+        run: npx ts-node scripts/renew-session.ts
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: session-info-sandbox
+          overwrite: true
+          path: reports/staging/session-info.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
-    needs: detect
+    needs: [detect, renew-session]
     # WHY (2026-10-07): skipped when the selection was formFields-only — all of
     # it runs in run-formfields-tests, so nothing is left here and a "no tests
     # found" failure cannot happen. Skipped (not failed) lets
     # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
     if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
     # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
@@ -378,6 +433,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -519,9 +575,15 @@ jobs:
   # fails the run for a rerun failure: results are data (merge-and-report combines them).
   rerun-failed:
     name: playwright-rerun (failed+flaky)
-    needs: [detect, run-tests]
-    if: ${{ !cancelled() && vars.RERUN_SHARD == 'on' && needs.detect.outputs.run_scoped_tests == 'true' }}
+    needs: [detect, renew-session, run-tests]
+    if: ${{ !cancelled() && needs.renew-session.result == 'success' && vars.RERUN_SHARD == 'on' && needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -569,7 +631,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.select.outputs.run == 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.select.outputs.run == 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -683,9 +745,15 @@ jobs:
     # formFields run.
     # rerun-failed (2026-11-03, ADR 0015) sits between the core shards and this job; it may be skipped (kill switch
     # off) or fail, and `!cancelled()` still lets formFields run.
-    needs: [detect, run-tests, rerun-failed]
-    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
+    needs: [detect, renew-session, run-tests, rerun-failed]
+    if: ${{ !cancelled() && needs.renew-session.result == 'success' && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -739,7 +807,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.gate.outputs.skip != 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -840,6 +908,12 @@ jobs:
     needs: [detect, run-tests, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
     timeout-minutes: 35
     continue-on-error: true
     permissions:
@@ -876,7 +950,7 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
-        if: steps.gate.outputs.skip != 'true'
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
@@ -920,7 +994,7 @@ jobs:
   # Build #167 false-"PASSED" incident.
   merge-and-report:
     name: merge report + notify
-    needs: [detect, run-tests, rerun-failed, run-formfields-tests, reset-field-config]
+    needs: [detect, renew-session, run-tests, rerun-failed, run-formfields-tests, reset-field-config]
     if: always()
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 30
@@ -1038,6 +1112,14 @@ jobs:
       # partial reset shows as a line in the email. continue-on-error + the
       # reader's own graceful absence mean a skipped/missing artifact just omits
       # the line; it can never fail this job or touch the verdict.
+      - name: Download session info (renewal line for the email)
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: session-info-sandbox
+          path: reports/staging
+
       - name: Download field-config reset result
         if: always()
         continue-on-error: true
