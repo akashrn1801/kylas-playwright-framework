@@ -1,3 +1,4 @@
+import type { Request } from '@playwright/test';
 import { test, expect } from '../../src/fixtures/index';
 import { safeWaitForURL } from '../../src/utils/navigation';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
@@ -98,35 +99,41 @@ async function logCallFromDealPanel(
   // WHY: Matches a documented known issue — CallLogsPage's entity search
   // silently falls back to unfiltered options when the filtered pool is
   // empty. Search explicitly for the SAME contact we just shared.
-  if (associatedContactName) {
-    const words = associatedContactName.trim().split(' ');
-    const validWord =
-      words.find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
-    await restrictedPage.locator('#associatedEntity').fill(validWord);
+  // WHY no fallback to "the first option" (sandbox 44683950030 review): that picked a contact the restricted user may
+  // not be able to use, and the save then failed with "necessary permission" far from the cause. The call log's
+  // Associated Contact must be the contact this test shared (its name carries a unique first word), found by its
+  // search, or the step fails by name with the lookups the page sent.
+  if (!associatedContactName) {
+    throw new Error('logCallFromDealPanel needs the name of the shared associated contact');
   }
   const contactOptions = restrictedPage.locator('.is-invalid__option');
-  // WHY: Exact match via anchored regex — a substring match against
-  // "<name> Copy" clones from earlier tests can select the wrong,
-  // inaccessible contact (confirmed live root cause of a "necessary
-  // permission" save failure).
-  const matchingContactOption = associatedContactName
-    ? contactOptions.filter({
-        hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`),
-      })
-    : contactOptions;
-  let selectedContactOption = matchingContactOption.first();
-  let contactOptionFound = await selectedContactOption.isVisible().catch(() => false);
-  if (!contactOptionFound) {
-    selectedContactOption = contactOptions.first();
-    contactOptionFound = await selectedContactOption
-      .waitFor({ state: 'visible', timeout: 10000 })
-      .then(() => true)
-      .catch(() => false);
+  const lookups: string[] = [];
+  const onRequest = (r: Request): void => {
+    const url = new URL(r.url());
+    if (r.method() === 'GET' && /lookup|search/.test(url.pathname)) {
+      lookups.push(`GET ${url.pathname}${url.search ? ` ${decodeURIComponent(url.search).slice(0, 80)}` : ''}`);
+    }
+  };
+  restrictedPage.on('request', onRequest);
+  try {
+    const searchWord =
+      associatedContactName.trim().split(' ').find((w) => w.length >= 3) ?? associatedContactName.trim().substring(0, 3);
+    const matchingContactOption = contactOptions
+      .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(associatedContactName)}\\s*$`) })
+      .first();
+    await restrictedPage.locator('#associatedEntity').fill(searchWord);
+    try {
+      await expect(matchingContactOption).toBeVisible({ timeout: config.timeouts.expect });
+    } catch (error) {
+      throw new Error(
+        `Associated Contact "${associatedContactName}" (searched "${searchWord}") was not listed on the call log form: ` +
+          `${await contactOptions.count()} option(s). Lookups seen: ${lookups.length ? lookups.join('; ') : 'none'}. ${String(error).split('\n')[0]}`
+      );
+    }
+    await matchingContactOption.click();
+  } finally {
+    restrictedPage.off('request', onRequest);
   }
-  if (!contactOptionFound) {
-    throw new Error('Associated Contact options never appeared on the call log form');
-  }
-  await selectedContactOption.click();
 
   await callLogsPage.fillOutcome('Connected');
   await callLogsPage.fillPhoneNumber();
@@ -167,13 +174,16 @@ async function createFreshContactAndCompany(
   // for exactly this purpose) so the contact's own Company field and the
   // company this function returns are now guaranteed to be the same record.
   const adminCompaniesPage = new CompaniesPage(adminPage);
-  const companyData = generateCompanyData();
+  // WHY a run-stamped first word (sandbox 44683950030, meetings.rbac:189): the deal form's Associated search types
+  // the name's first word, and a faker name ("Ron") is slow and ambiguous across all staging records
+  const stamp = `DLR${Date.now()}`;
+  const companyData = generateCompanyData({ name: `${stamp} Company` });
   await adminCompaniesPage.goToCompaniesList();
   const companyId = await adminCompaniesPage.createCompany(companyData);
   if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
 
   const adminContactsPage = new ContactsPage(adminPage);
-  const contactData = generateContactData({ company: companyData.name });
+  const contactData = generateContactData({ company: companyData.name, firstName: stamp, lastName: 'Contact' });
   await adminContactsPage.goToContactsList();
   const contactId = await adminContactsPage.createContact(contactData);
   if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
@@ -361,7 +371,7 @@ test.describe('Deals RBAC', () => {
     // restricted user first (ownership = creator, per this codebase's own
     // factory convention) and pin the deal to it by exact name.
     const restrictedContactsPage = new ContactsPage(restrictedPage);
-    const contactData = generateContactData();
+    const contactData = generateContactData({ firstName: `DLR${Date.now()}`, lastName: 'Contact' });
     await restrictedContactsPage.goToContactsList();
     const ownContactId = await restrictedContactsPage.createContact(contactData);
     if (!ownContactId) throw new Error('Restricted-owned contact ID not captured — cannot proceed');

@@ -36,13 +36,17 @@ async function createSharedMeetingRecords(
   adminPage: ConstructorParameters<typeof ContactsPage>[0]
 ): Promise<{ contactName: string; companyName: string; dealName: string }> {
   const companiesPage = new CompaniesPage(adminPage);
-  const companyData = generateCompanyData();
+  // WHY unique names (sandbox 44683950030, meetings.rbac:189): the Associated and Related To searches type the name's
+  // first word, and a faker first name ("Ron", "James") is slow and ambiguous across every staging contact. A
+  // run-stamped first word is unique, so the search returns this run's record and nothing else.
+  const stamp = `MTG${Date.now()}`;
+  const companyData = generateCompanyData({ name: `${stamp} Company` });
   await companiesPage.goToCompaniesList();
   const companyId = await companiesPage.createCompany(companyData);
   if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
 
   const contactsPage = new ContactsPage(adminPage);
-  const contactData = generateContactData({ company: companyData.name });
+  const contactData = generateContactData({ company: companyData.name, firstName: stamp, lastName: 'Contact' });
   await contactsPage.goToContactsList();
   const contactId = await contactsPage.createContact(contactData);
   if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
