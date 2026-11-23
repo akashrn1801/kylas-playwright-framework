@@ -135,8 +135,9 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.assertMeetingInList(originalData.title, originalId);
 
     // Reschedule first
-    await meetingsPage.rescheduleMeeting(originalData.title);
+    const outcome = await meetingsPage.rescheduleMeeting(originalData.title, originalId);
     await meetingsPage.assertMeetingInList(originalData.title, originalId);
+    await meetingsPage.assertMeetingRescheduled(originalId, outcome);
 
     // Then Edit
     await meetingsPage.updateMeeting(
@@ -270,8 +271,9 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.goToMeetingsList();
     const meetingId1 = await meetingsPage.createMeeting(meetingData, 'Restricted');
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
-    await meetingsPage.rescheduleMeeting(meetingData.title);
+    const outcome = await meetingsPage.rescheduleMeeting(meetingData.title, meetingId1);
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
+    await meetingsPage.assertMeetingRescheduled(meetingId1, outcome);
     logger.success('M13 passed');
   });
 

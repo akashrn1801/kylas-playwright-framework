@@ -3,14 +3,31 @@ import { BasePage } from '@core/BasePage';
 import { getTaskRelationTargets } from '../tasks/TaskRelationTargets';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
+import { MeetingApi } from '@utils/meetingApi';
 import {
   MeetingData,
   MeetingTimeConfig,
   MeetingCustomFieldData,
   MEETING_CUSTOM_FIELD_NAMES,
   formatDateForCalendarLabel,
+  generateTimeConfig,
 } from '@data/factories/meetingFactory';
 
+
+// What the server holds for a meeting: the instants and the zone it saves them in.
+export interface MeetingTimes {
+  fromMs: number;
+  toMs: number;
+  timeZone: string;
+}
+
+// What rescheduleMeeting did, for assertMeetingRescheduled: the calendar date it picked, the slot it set again
+// (null = the form's own To was already after From, so the app kept the duration), and the times before.
+export interface RescheduleOutcome {
+  pickedDate: Date;
+  slot: MeetingTimeConfig | null;
+  before: MeetingTimes;
+}
 
 export type SelectedMedium = 'GOOGLE_MEET' | 'OUTLOOK' | 'OFFLINE';
 
@@ -90,6 +107,7 @@ export class MeetingsPage extends BasePage {
     this.page.locator(
       '.col-6 > #from > div:nth-child(2) > .col-5 > .rc-time-picker > .rc-time-custom-styles'
     );
+  private readonly fromTimeInput = () => this.page.locator('[id="1_31_input_from_time"]');
   private readonly toTimeInput = () => this.page.locator('[id="1_32_input_to_time"]');
   private readonly timezoneInput = () => this.page.locator('[id="1_41_input_timezone"]');
   private readonly statusInput = () => this.page.locator('[id="1_42_input_status"]');
@@ -1071,8 +1089,101 @@ export class MeetingsPage extends BasePage {
     );
   }
 
-  async rescheduleMeeting(title: string): Promise<void> {
+  // The edit form has ONE date and a From and a To time, and Save sends date + each time. The times are shown in
+  // the browser's zone but saved in the meeting's zone, so when the two differ (CI is UTC, the meeting is Asia/Calcutta)
+  // an evening From can show a To on the next day; with one date that To is before the From and the API answers 422
+  // "cannot end before it starts". Reproduced on staging with TZ=UTC (PUT from 2026-11-27T18:15Z, to 2026-11-26T20:15Z,
+  // form showed 11:45 pm -> 1:45 am); the same test passes with the machine in IST. When the shown To is not after the
+  // From, both are set again like Add does, with the factory's 2 h duration that never crosses midnight.
+  private async ensureEndAfterStart(): Promise<MeetingTimeConfig | null> {
+    const fromText = await this.fromTimeInput().inputValue();
+    const toText = await this.toTimeInput().inputValue();
+    const fromMinutes = MeetingsPage.minutesOfDay(fromText);
+    const toMinutes = MeetingsPage.minutesOfDay(toText);
+    if (toMinutes > fromMinutes) return null;
+    const timeConfig = generateTimeConfig();
+    logger.info(`Reschedule form shows From ${fromText} and To ${toText} (To not after From); setting a 2 h slot`);
+    await this.fillTimePicker(timeConfig, 'from');
+    await this.fillTimePicker(timeConfig, 'to');
+    const newFrom = MeetingsPage.minutesOfDay(await this.fromTimeInput().inputValue());
+    const newTo = MeetingsPage.minutesOfDay(await this.toTimeInput().inputValue());
+    if (newTo <= newFrom) {
+      throw new Error(
+        `Reschedule: the To time is still not after the From time (From ${await this.fromTimeInput().inputValue()}, To ${await this.toTimeInput().inputValue()})`
+      );
+    }
+    return timeConfig;
+  }
+
+  private static minutesOfDay(text: string): number {
+    const m = /^\s*(\d{1,2}):(\d{2})\s*(am|pm)\s*$/i.exec(text);
+    if (!m) throw new Error(`Unexpected time text in the meeting form: "${text}"`);
+    return ((Number(m[1]) % 12) + (m[3].toLowerCase() === 'pm' ? 12 : 0)) * 60 + Number(m[2]);
+  }
+
+  // The server's own record (GET /v1/meetings/{id}) for from/to and the zone they are saved in; the form shows them in
+  // the browser's zone, so it cannot be used to compare dates. The detail panel does not re-request a meeting it
+  // already loaded, so its GET cannot be waited for twice (first try: no response in 30 s).
+  async readMeetingTimes(meetingId: number): Promise<MeetingTimes> {
+    const api = await MeetingApi.forPage(this.page);
+    try {
+      const body = await api.getMeeting(meetingId);
+      if (!body.from || !body.to || !body.timezone?.name) {
+        throw new Error(`Meeting ${meetingId} details lack from/to/timezone: ${JSON.stringify(body).slice(0, 300)}`);
+      }
+      return { fromMs: Date.parse(body.from), toMs: Date.parse(body.to), timeZone: body.timezone.name };
+    } finally {
+      await api.dispose();
+    }
+  }
+
+  private static zonedParts(ms: number, timeZone: string): { date: string; minutes: number } {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(new Date(ms))
+        .map((part) => [part.type, part.value])
+    );
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
+  }
+
+  // After a reschedule: the server holds the picked date (in the meeting's own zone), To is after From, and the
+  // duration is the old one (the app kept it) or exactly 2 h at the clock time ensureEndAfterStart set.
+  async assertMeetingRescheduled(meetingId: number | null, outcome: RescheduleOutcome): Promise<void> {
+    if (!meetingId) throw new Error('Reschedule check: no meeting id was captured, so the new date cannot be read back');
+    const after = await this.readMeetingTimes(meetingId);
+    const d = outcome.pickedDate;
+    const pickedDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const from = MeetingsPage.zonedParts(after.fromMs, after.timeZone);
+    const to = MeetingsPage.zonedParts(after.toMs, after.timeZone);
+    const context = `meeting ${meetingId}: from ${new Date(after.fromMs).toISOString()}, to ${new Date(after.toMs).toISOString()} (${after.timeZone}: ${from.date} ${from.minutes} min -> ${to.date} ${to.minutes} min)`;
+    if (from.date !== pickedDate) throw new Error(`Reschedule: expected the new date ${pickedDate}, saved ${context}`);
+    if (after.toMs <= after.fromMs) throw new Error(`Reschedule: To is not after From, saved ${context}`);
+    if (outcome.slot) {
+      const hour24 = (outcome.slot.fromHour % 12) + (outcome.slot.amPmFrom === 'pm' ? 12 : 0);
+      const expectedFrom = hour24 * 60 + outcome.slot.fromMinute;
+      if (from.minutes !== expectedFrom || after.toMs - after.fromMs !== 2 * 60 * 60 * 1000) {
+        throw new Error(`Reschedule: expected a 2 h slot starting at minute ${expectedFrom} of the day, saved ${context}`);
+      }
+    } else if (after.toMs - after.fromMs !== outcome.before.toMs - outcome.before.fromMs) {
+      throw new Error(
+        `Reschedule: the duration changed from ${(outcome.before.toMs - outcome.before.fromMs) / 60000} min, saved ${context}`
+      );
+    }
+    logger.success(`Meeting ${meetingId} rescheduled to ${pickedDate}, ${context}`);
+  }
+
+  async rescheduleMeeting(title: string, meetingId: number | null): Promise<RescheduleOutcome> {
     logger.info(`Rescheduling meeting: "${title}"`);
+    if (!meetingId) throw new Error(`Cannot reschedule "${title}": no meeting id was captured at create`);
+    const before = await this.readMeetingTimes(meetingId);
     const found = await this.retryFindMeetingInList(title);
     if (!found) throw new Error(`Cannot reschedule: meeting "${title}" not found`);
     await this.openMeetingFromList(title);
@@ -1112,8 +1223,11 @@ export class MeetingsPage extends BasePage {
     await dayCell.click();
     logger.success(`Reschedule date selected: ${d.toDateString()}`);
 
+    const slot = await this.ensureEndAfterStart();
+
     await this.saveMeetingUpdate(() => this.editMeetingSaveButton().click(), 'Meeting reschedule');
     logger.success(`Meeting "${title}" rescheduled`);
+    return { pickedDate: d, slot, before };
   }
 
   // ──────────────────────────────────────────────────────────

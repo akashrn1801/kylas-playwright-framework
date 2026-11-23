@@ -136,8 +136,9 @@ test.describe('Meetings', () => {
     await meetingsPage.goToMeetingsList();
     const rescheduleMeetingId = await meetingsPage.createMeeting(meetingData, 'Admin');
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
-    await meetingsPage.rescheduleMeeting(meetingData.title);
+    const outcome = await meetingsPage.rescheduleMeeting(meetingData.title, rescheduleMeetingId);
     await meetingsPage.assertMeetingInList(meetingData.title, rescheduleMeetingId);
+    await meetingsPage.assertMeetingRescheduled(rescheduleMeetingId, outcome);
     logger.success('M5 passed');
   });
 
