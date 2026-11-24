@@ -655,6 +655,9 @@ jobs:
           npx playwright test --project=chromium --workers=2 --retries="$RERUN_RETRIES" --timeout=120000 \
             "${TARGETS[@]}" --reporter=blob,list,./src/reporters/MiscErrorReporter.ts || RC=$?
           echo "rerun exit code: $RC (a failing rerun is data, not a gate: merge-and-report combines the results)"
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning title=Rerun shard::some rerun tests still failed (playwright exit $RC). This job stays green by design (ADR 0015); merge-and-report counts them as failed."
+          fi
           exit 0
 
       - name: Merge the rerun blob into one JSON
@@ -1083,6 +1086,26 @@ jobs:
         env:
           ENV: staging
         run: npx ts-node scripts/combine-rerun.ts --first reports/playwright-report/results.json --rerun reports/rerun/rerun-run.json --list reports/rerun/rerun-list.json --summary reports/staging/rerun-summary.json || true
+
+      # Makes "the rerun job is green" readable: the rerun step always exits 0 (ADR 0015), so a test that failed again
+      # showed only as a green job. Reads the summary combine-rerun just wrote; annotation and step summary only,
+      # never changes the job result.
+      - name: Annotate tests still failing after the rerun
+        if: always()
+        run: |
+          SUMMARY=reports/staging/rerun-summary.json
+          if [ -f "$SUMMARY" ]; then
+            STILL=$(node -e "const s=require('./$SUMMARY'); process.stdout.write(String(s.ran ? s.stillFailing : 0))")
+            REC=$(node -e "const s=require('./$SUMMARY'); process.stdout.write(String(s.ran ? s.recovered : 0))")
+            if [ "$STILL" -gt 0 ]; then
+              echo "::warning title=Rerun::$STILL test(s) still failing after the rerun ($REC recovered). The run stays red (ADR 0015, option A)."
+              {
+                echo "### Rerun result"
+                echo "- recovered on rerun: $REC"
+                echo "- still failing after the rerun: $STILL"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
 
       # WHY: see qa.yml for the full explanation. NOTE: sandbox runs a different,
       # dynamically-selected test subset each time (see the detect job above),

@@ -2,6 +2,7 @@ import type { Request } from '@playwright/test';
 import { test, expect } from '../../src/fixtures/index';
 import { safeWaitForURL } from '../../src/utils/navigation';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
+import { getTaskRelationTargets } from '../../src/modules/tasks/TaskRelationTargets';
 import {
   generateDealData,
   generateAdminDealData,
@@ -1207,6 +1208,7 @@ test.describe('Deals RBAC', () => {
     if (!dealId) throw new Error('Deal ID not captured — cannot reassign');
     await adminDealsPage.goToDealDetailsById(dealId);
     const restrictedUserName = await adminDealsPage.getLoggedInUserName('restricted');
+
     await adminDealsPage.reassignDeal(restrictedUserName);
 
     const restrictedDealsPage = new DealsPage(restrictedPage);
@@ -1227,16 +1229,33 @@ test.describe('Deals RBAC', () => {
       'Original associated contact should be inaccessible after reassign, not auto-shared'
     ).toContainText('No Contacts found', { timeout: 10000 });
 
-    // WHY: But the restricted user, now the deal's owner, should be able to
+    // WHY the original contact is shared NOW, after the check above (sandbox 45122485029 :1194, failed in the run and
+    // the rerun; staging probe 2026-11-23 as the restricted owner on the reassigned deal): the edit form cannot show a
+    // contact the user cannot read, so Add Contact sends the new contact alone, and the backend answers PUT
+    // /v1/deals/{id} -> 404 01001036 ("no permission ... associated Contact") when that list drops a stored contact
+    // the user cannot access. The same PUT with the stored contact kept, or after it was gone, answered 200; the
+    // deal's company was not the cause (shared or not, same result). The restricted user must be able to read every
+    // record it edits, so the contact is shared; "not auto-shared by the reassign" is already proven above.
+    const associatedContactId = await adminDealsPage.getAssociatedContactId();
+    if (!associatedContactId) throw new Error('D26: the deal has no associated contact id to share');
+    const adminContactsPage = new ContactsPage(adminPage);
+    await adminContactsPage.goToContactDetailsById(associatedContactId);
+    await adminContactsPage.shareContact(restrictedUserName, []);
+
+    // WHY: The restricted user, now the deal's owner, should be able to
     // add a brand-new contact to it instead.
-    const baselineContactCount = await restrictedDealsPage.getAssociatedContactsCount();
+    // WHY the check is "the new contact is on the deal", not a count of baseline + 1 (staging probe 2026-11-23): this
+    // form's Add Contact REPLACES the deal's contact list on save. After the PUT both users saw only the new contact,
+    // the shared original was gone, so the count stays 1. The +1 only held while the original was hidden from the
+    // restricted user, which is the state that made the PUT fail.
+    const addedContactName = (await getTaskRelationTargets(restrictedPage)).secondContact;
+    await restrictedDealsPage.goToDealDetailsById(dealId);
     await restrictedDealsPage.addContactToDeal();
     await restrictedDealsPage.goToDealDetailsById(dealId);
-    const afterContactCount = await restrictedDealsPage.getAssociatedContactsCount();
     expect(
-      afterContactCount,
+      await restrictedDealsPage.getAssociatedContactNames(),
       'Restricted user should be able to add a new contact after reassign'
-    ).toBe(baselineContactCount + 1);
+    ).toContain(addedContactName);
 
     await expect(restrictedPage.locator('#edit-action-btn')).toBeVisible({ timeout: 10000 });
     const updatedData = generateDealData();

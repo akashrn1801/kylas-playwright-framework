@@ -580,8 +580,17 @@ export class CallLogsPage extends BasePage {
         await this.withSessionExpiryRecovery(() =>
           this.retryAttempts(retries, `Associated ${description} lookup`, async () => {
             logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}")`);
-            await this.page.keyboard.press('Control+A');
-            await this.page.keyboard.press('Backspace');
+            // Backspace only when the box holds text: on an EMPTY single-select input react-select calls
+            // onChange(null), and the app then sends POST /v1/search/contact?sort=stakeholder with the rule
+            // {equal, associatedDeals} and no value -> HTTP 400 003020 "Value field can not be missing for equal
+            // operator" plus a pageerror (trace 2026-11-23, sandbox 45122485029: 6 Deal call-log tests).
+            const boxHasText = await this.page.evaluate(
+              () => ((document.activeElement as HTMLInputElement | null)?.value ?? '') !== ''
+            );
+            if (boxHasText) {
+              await this.page.keyboard.press('Control+A');
+              await this.page.keyboard.press('Backspace');
+            }
             await this.page.keyboard.type(searchQuery, { delay: 50 });
             await matching.first().waitFor({ state: 'visible', timeout: 5000 });
           })

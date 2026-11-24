@@ -514,7 +514,24 @@ export class MeetingsPage extends BasePage {
     }
   }
 
-  // B6 (staging trace 2026-11-17: typing in the Related To search sends GET /v1/search/<entity>/lookup/?view=meeting&q=firstName:<text>):
+  // The request behind the Related To list of each entity type (staging probe 2026-11-23, Add Meeting form, admin: the
+  // opening list and the typed search use the same request): Lead = GET /v1/search/lead/lookup/?view=meeting&q=firstName:<text>;
+  // Contact, Deal and Company = POST /v1/search/<entity>/associated-with-entity?view=meeting&q=name:<text>. The watcher and
+  // the answer wait used to know only the Lead shape, so for the other three they saw 0 requests and every typed search
+  // failed with "no matching response within 10 s" (sandbox 45122485029 shard 3) although the app had answered.
+  private static isRelatedToSearch(request: Request, entityType: string): boolean {
+    const path = new URL(request.url()).pathname;
+    const entity = entityType.toLowerCase();
+    return entityType === 'Lead'
+      ? request.method() === 'GET' && path === `/v1/search/${entity}/lookup/`
+      : request.method() === 'POST' && path === `/v1/search/${entity}/associated-with-entity`;
+  }
+
+  private static relatedToQueryHas(request: Request, text: string): boolean {
+    return decodeURIComponent(new URL(request.url()).search).includes(text);
+  }
+
+  // B6 (staging trace 2026-11-17; request shapes per MeetingsPage.isRelatedToSearch):
   // open the Related To search of one entity type on the open Add form...
   async openRelatedToSearch(entityType: string): Promise<void> {
     await this.entitiesDropdown().click();
@@ -536,18 +553,13 @@ export class MeetingsPage extends BasePage {
 
   // ...and search it: returns the lookup's own answer (body text) for that text, failing by name when the answer
   // is missing or not 2xx, so an absence check on it is made on a real answer, not on a list that had not loaded.
-  async lookupRelatedTo(text: string): Promise<string> {
+  async lookupRelatedTo(text: string, entityType = 'Lead'): Promise<string> {
     await this.relatedToInput().fill('');
     const answered = this.armResponseWaitWithRecovery(
-      (res) => {
-        const url = new URL(res.url());
-        return (
-          res.request().method() === 'GET' &&
-          /^\/v1\/search\/[a-z]+\/lookup\/?$/.test(url.pathname) &&
-          decodeURIComponent(url.search).includes(`q=firstName:${text}`)
-        );
-      },
-      `Related To lookup for "${text}"`,
+      (res) =>
+        MeetingsPage.isRelatedToSearch(res.request(), entityType) &&
+        MeetingsPage.relatedToQueryHas(res.request(), `q=${entityType === 'Lead' ? 'firstName' : 'name'}:${text}`),
+      `Related To ${entityType} lookup for "${text}"`,
       config.timeouts.expect
     );
     answered.catch(() => undefined);
@@ -1543,8 +1555,8 @@ export class MeetingsPage extends BasePage {
   // (sandbox 44683950030, meetings.rbac:189 retry: "Ward Gislason" gave 0 results for the list, "Ward" and
   // "Gislason", a just-created contact the search index had not caught up with). Each poll attempt clears the
   // box, types the word, awaits the answer of THAT lookup (`GET /v1/search/<entity>/lookup`) and then the option;
-  // count-bounded (`config.searchRetry`), no pause: the answer wait is the pacing. The Lead and Contact lookups
-  // query `firstName:<text>`, so the first word is the one that can match, and the records this is called with are
+  // count-bounded (`config.searchRetry`), no pause: the answer wait is the pacing. The Lead lookup queries
+  // `firstName:<text>` and the Contact, Deal and Company searches `name:<text>` (see isRelatedToSearch), so the first word is the one that can match, and the records this is called with are
   // run-owned with a unique first word (a common name such as "Ron" is slow across all staging contacts). The full
   // two-word name returns 0 results, so it is never typed. Related To is search-only (results carry id and name),
   // so the option is matched by its text. No other fallback: a miss throws with every lookup the page sent.
@@ -1554,32 +1566,45 @@ export class MeetingsPage extends BasePage {
     match: 'exact' | 'contains' = 'exact'
   ): Promise<void> {
     logger.info(`Relating ${entityType} "${name}"`);
-    await this.entitiesDropdown().click();
-    await this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: entityType })
-      .first()
-      .click();
-    const searchPlaceholder = this.page.getByText('Search ...').last();
-    await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
-    await searchPlaceholder.click();
-
+    // An Add form opened from a record's panel (meetings.spec:327, a deal panel) already relates that record and the
+    // records it links, and the entity's search excludes them (trace 2026-11-23: POST .../company/associated-with-entity
+    // with `idToExclude:[<the deal's own company>]` answered 200 with no match for it). The deal there is created with
+    // this account's run-owned company, so that company is already listed and cannot be picked a second time.
+    const alreadyListed = this.editModal().getByText(
+      new RegExp(match === 'exact' ? `^\\s*${this.escapeRegExp(name)}\\s*$` : this.escapeRegExp(name))
+    );
+    if (await alreadyListed.first().isVisible()) {
+      logger.success(`Related ${entityType}: "${name}" (already on the form)`);
+      return;
+    }
+    // armed before the first click so the opening list's own request is counted too
+    const isLookup = (r: Request): boolean => MeetingsPage.isRelatedToSearch(r, entityType);
+    const lookupWatch = this.watchRequests(isLookup, (r) => {
+      const u = new URL(r.url());
+      return `${r.method()} ${u.pathname} q="${(u.searchParams.get('q') ?? '').slice(0, 40)}"`;
+    });
     // 'contains' is for run-owned records, whose unique stamp makes a substring match safe (a Lead option may carry more than its name)
     const exactName = new RegExp(match === 'exact' ? `^\\s*${this.escapeRegExp(name)}\\s*$` : this.escapeRegExp(name));
     const option = this.relationOptions().filter({ hasText: exactName }).first();
     const firstWord = name.trim().split(/\s+/)[0];
-    const isLookup = (r: Request): boolean =>
-      r.method() === 'GET' && /^\/v1\/search\/[a-z]+\/lookup\/?$/.test(new URL(r.url()).pathname);
-    const lookupWatch = this.watchRequests(isLookup, (r) => {
-      const u = new URL(r.url());
-      return `GET ${u.pathname} q="${(u.searchParams.get('q') ?? u.searchParams.get('name') ?? '').slice(0, 40)}"`;
-    });
     let via = 'opening list';
     try {
-      const inOpeningList = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
-        () => true,
-        () => false
-      );
+      await this.entitiesDropdown().click();
+      await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();
+      const searchPlaceholder = this.page.getByText('Search ...').last();
+      await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
+      await searchPlaceholder.click();
+
+      // Verification switch: RELATED_TO_FORCE_SEARCH=1 skips the opening-list match so the typed search runs on every
+      // pick (the opening list holds a page of 10, so a run-owned record only needs the typed search once newer records
+      // exist, which a short local run never reaches). Off by default; CI never sets it.
+      const inOpeningList =
+        process.env.RELATED_TO_FORCE_SEARCH === '1'
+          ? false
+          : await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+              () => true,
+              () => false
+            );
       if (!inOpeningList) {
         via = `search "${firstWord}"`;
         try {
@@ -1587,7 +1612,7 @@ export class MeetingsPage extends BasePage {
             this.retryAttempts(config.searchRetry[config.env as keyof typeof config.searchRetry].retries, `Related To ${entityType} search for "${firstWord}"`, async () => {
               await this.relatedToInput().fill('');
               const answered = this.armResponseWaitWithRecovery(
-                (res) => isLookup(res.request()) && decodeURIComponent(new URL(res.url()).search).includes(firstWord),
+                (res) => isLookup(res.request()) && MeetingsPage.relatedToQueryHas(res.request(), firstWord),
                 `Related To lookup for "${firstWord}"`,
                 config.timeouts.expect
               );

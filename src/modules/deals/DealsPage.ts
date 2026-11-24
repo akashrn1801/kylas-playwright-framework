@@ -2700,6 +2700,10 @@ export class DealsPage extends BasePage {
     return (await this.getAssociatedContacts()).length;
   }
 
+  async getAssociatedContactNames(): Promise<string[]> {
+    return (await this.getAssociatedContacts()).map((contact) => contact.name);
+  }
+
   // WHY this is a SEPARATE method from getAssociatedContactsCount() above,
   // not a shared one (2026-07-27): D35 (deals.spec.ts) exists specifically
   // to verify a contact becomes visible in the "Associated Contacts" UI
