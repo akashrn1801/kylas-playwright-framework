@@ -38,6 +38,7 @@
     "check:fail-fast": "ts-node scripts/check-fail-fast-waits.ts",
     "check:run-window": "ts-node scripts/check-run-window.ts",
     "check:playwright-image": "ts-node scripts/check-playwright-image.ts",
+    "check:apt-mirror": "bash .github/scripts/test-install-playwright-browsers.sh",
     "check:rerun": "ts-node scripts/check-rerun.ts && ts-node scripts/check-rerun-scenarios.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
     "reset:field-config": "ts-node scripts/reset-field-config.ts",

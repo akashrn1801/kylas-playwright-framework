@@ -86,6 +86,9 @@ jobs:
     name: container canary (${{ matrix.image || 'host, no image' }})
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     container: ${{ matrix.image && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', matrix.image)) || null }}
     strategy:
       fail-fast: false
@@ -94,7 +97,44 @@ jobs:
           - { image: '', expect: host }
           - { image: 'mcr.microsoft.com/playwright:v1.60.0-noble', expect: container }
     steps:
+      # BEFORE checkout and setup-node on purpose: these are the tools the image itself must provide (the pipelines'
+      # container jobs call gh and jq in formfields-attempt-gate.sh, git in estimateDuration.ts and checkout with
+      # fetch-depth 0, node/npm per package.json "engines"). Nothing here installs anything.
+      - name: Tools the image must provide (container row only)
+        if: matrix.expect == 'container'
+        run: |
+          echo "image tools check started: $(date -u +%FT%TZ)"
+          missing=0
+          for tool in gh jq git node npm; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "  found $tool: $(command -v "$tool")"; else echo "::error title=container canary::the image has no $tool"; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          gh --version | head -1
+          jq --version
+          git --version
+          echo "image node $(node --version), npm $(npm --version)"
+          node_major=$(node --version | sed 's/^v//; s/\..*//')
+          npm_major=$(npm --version | sed 's/\..*//')
+          [ "$node_major" -ge 20 ] || { echo "::error title=container canary::image node $(node --version) is below package.json engines >=20"; exit 1; }
+          [ "$npm_major" -ge 10 ] || { echo "::error title=container canary::image npm $(npm --version) is below package.json engines >=10"; exit 1; }
+          echo "image tools check finished: $(date -u +%FT%TZ)"
+
+      # fetch-depth 0 like the sandbox jobs that call estimateDuration.ts and the checkout below it.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: git in the image (full history, fetch with the checkout's credentials)
+        if: matrix.expect == 'container'
+        run: |
+          echo "git check started: $(date -u +%FT%TZ)"
+          shallow=$(git rev-parse --is-shallow-repository)
+          echo "is-shallow-repository=$shallow, commits reachable: $(git rev-list --count HEAD)"
+          [ "$shallow" = "false" ] || { echo "::error title=container canary::fetch-depth 0 left a shallow clone in the container"; exit 1; }
+          # the same shape as estimateDuration.ts: a shallow fetch of one ref from origin
+          git fetch --no-tags --depth=1 origin "$GITHUB_REF" || { echo "::error title=container canary::git fetch origin $GITHUB_REF failed inside the container"; exit 1; }
+          echo "git fetch origin $GITHUB_REF ok (FETCH_HEAD $(git rev-parse --short FETCH_HEAD))"
+          echo "git check finished: $(date -u +%FT%TZ)"
 
       - uses: actions/setup-node@v5
         with:
@@ -110,13 +150,40 @@ jobs:
           echo "VERDICT job runs in: $where (expected ${{ matrix.expect }})"
           grep PRETTY_NAME /etc/os-release
           git --version
-          node --version
+          echo "node $(node --version), npm $(npm --version) (after setup-node)"
+          [ "$(node --version | sed 's/^v//; s/\..*//')" = "22" ] || { echo "::error title=container canary::node after setup-node is not the pipelines' major 22"; exit 1; }
           echo "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-unset}"
           [ "$where" = "${{ matrix.expect }}" ] || { echo "::error title=container canary::the container expression put this job on the $where, expected ${{ matrix.expect }}"; exit 1; }
 
       - name: Launch the preinstalled Chromium (container row only)
         if: matrix.expect == 'container'
+        env:
+          IMAGE: ${{ matrix.image }}
         run: |
+          echo "chromium launch started: $(date -u +%FT%TZ)"
           pw=$(npx --no-install playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          case "$IMAGE" in *":v$pw-"*) echo "image tag matches the locked Playwright $pw" ;; *) echo "::error title=container canary::image $IMAGE does not carry the locked Playwright $pw"; exit 1 ;; esac
           node -e "const { chromium } = require('@playwright/test'); (async () => { const b = await chromium.launch(); const p = await b.newPage(); await p.goto('data:text/html,<title>ok</title>'); console.log('VERDICT Chromium launched, title=' + await p.title()); await b.close(); })().catch((e) => { console.error(e); process.exit(1); });"
           echo "VERDICT Playwright $pw runs on the preinstalled image with no apt-get"
+          echo "chromium launch finished: $(date -u +%FT%TZ)"
+
+      # The image pull happens before the first step, so no step can time it. The run's own job list does: GitHub
+      # records "Set up job" and "Initialize containers" (the pull and the container start) with timestamps. Soft on
+      # purpose (a warning, never a failure): the step names are GitHub's, not ours, and this was not run when written.
+      - name: Image pull and container start time (container row only)
+        if: always() && matrix.expect == 'container'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "pull-time step started: $(date -u +%FT%TZ)"
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" >"$RUNNER_TEMP/jobs.json"; then
+            echo "::warning title=container canary::could not read the run's job list, pull time not measured"; exit 0
+          fi
+          rows=$(jq -r --arg r "$RUNNER_NAME" '.jobs[] | select(.runner_name == $r) | .steps[] | select(.name == "Set up job" or .name == "Initialize containers") | "\(.name)|\(.started_at)|\(.completed_at)"' "$RUNNER_TEMP/jobs.json")
+          if [ -z "$rows" ]; then
+            echo "::warning title=container canary::no 'Set up job' / 'Initialize containers' step found for runner $RUNNER_NAME, pull time not measured"; exit 0
+          fi
+          while IFS='|' read -r name started completed; do
+            if [ "$completed" = "null" ] || [ -z "$completed" ]; then echo "VERDICT $name: started $started, not finished"; continue; fi
+            echo "VERDICT $name: $started -> $completed = $(( $(date -u -d "$completed" +%s) - $(date -u -d "$started" +%s) ))s"
+          done <<<"$rows"
