@@ -3,12 +3,13 @@
 > **Purpose:** Newest-first, one line per significant change to the framework, CI and docs.
 > **Read when:** You need to know when something changed, or you finished work (Definition of Done step 2: add one line).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-11-24 @ 0ea5149
+> **Last verified:** 2026-11-24 @ aaabf9f
 
 Format: `- YYYY-MM-DD — <type>: <what> (<hash>)`. Detail lives in git history and in `docs/known-issues/`, `docs/adr/`. Older months are compressed to one line per theme.
 
 ## Unreleased
 
+- 2026-11-24 — ci: container canary run #10 green on `mcr.microsoft.com/playwright:v1.60.0-noble` (bash/git/node/npm, git ownership, bash, Playwright 1.60.0, Chromium launch; image pull about 18 s); `PLAYWRIGHT_IMAGE` still not set, no sandbox run has used the container yet (aaabf9f)
 - 2026-11-24 — ci: container steps run under `sh -e {0}` (canary: `Syntax error: redirection unexpected` on a `<<<`; the sandbox rerun step's `mapfile`/arrays would have failed the same way) -> `defaults.run.shell: bash -e {0}` on the four containerized `sandbox.yml` jobs and `container-canary` (same as the host's implicit default, no `pipefail` added); canary tools step stays `sh -e {0}` and now requires `bash` in the image; the ownership check no longer uses a here-string; all 30 run steps of those jobs audited with `shellcheck -s sh` (only the rerun step's bash-isms and `SECONDS` flagged)
 - 2026-11-24 — ci: container canary failed `fatal: detected dubious ownership` (exit 128, right after checkout) -> `sandbox.yml` run-tests / rerun-failed / run-formfields-tests / reset-field-config get a `Trust the workspace for git (container jobs)` step right after checkout (`git config --global --add safe.directory "$GITHUB_WORKSPACE"`, only when `job.container.id` is set; the only later git calls are `estimateDuration.ts`'s, in run-tests); the canary has the same step plus a check that fails if git still reports dubious ownership. Canary `Initialize containers` (image pull): 18 s
 - 2026-11-24 — ci: the Playwright image has no gh/jq (canary run 45379221092) -> `formfields-attempt-gate.sh` is now a wrapper around `.github/scripts/formfields-attempt-gate.js` (Node fetch + job token, same API calls and `skip=` output, always exit 0, fail open; no gh/jq/curl left in the containerized sandbox jobs); new `npm run check:formfields-gate` (30 checks: decision table, pagination, auth header, errors, wrapper); canary: gh/jq/curl informational, git/node/npm/Chromium required, pull-time step uses Node fetch (it failed with `gh: command not found`, not permissions)
