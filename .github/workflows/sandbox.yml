@@ -402,6 +402,13 @@ jobs:
     # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
     # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
     container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
     # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
@@ -593,6 +600,13 @@ jobs:
     # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
     # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
     container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -775,6 +789,13 @@ jobs:
     # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
     # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
     container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -944,6 +965,13 @@ jobs:
     # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
     # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
     container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     timeout-minutes: 35
     continue-on-error: true
     permissions:

@@ -90,6 +90,13 @@ jobs:
       contents: read
       actions: read
     container: ${{ matrix.image && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', matrix.image)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     strategy:
       fail-fast: false
       matrix:
@@ -98,16 +105,18 @@ jobs:
           - { image: 'mcr.microsoft.com/playwright:v1.60.0-noble', expect: container }
     steps:
       # BEFORE checkout and setup-node on purpose: these are the tools the image itself must provide. REQUIRED: git
-      # (checkout with fetch-depth 0, estimateDuration.ts), node and npm per package.json "engines". INFORMATIONAL:
+      # (checkout with fetch-depth 0, estimateDuration.ts), bash (every step runs under `bash -e {0}`, see defaults), node and npm per package.json "engines". INFORMATIONAL:
       # gh, jq and curl, which the Playwright image lacks (canary run 45379221092): no pipeline step may depend on
       # them inside the container (formfields-attempt-gate.js uses Node's fetch; nothing else in the containerized
       # sandbox jobs calls gh, jq or curl). Nothing here installs anything.
       - name: Tools the image must provide (container row only)
         if: matrix.expect == 'container'
+        # POSIX sh on purpose (overrides the job's bash default): this step must run, and report, even if the image had no bash.
+        shell: sh -e {0}
         run: |
           echo "image tools check started: $(date -u +%FT%TZ)"
           missing=0
-          for tool in git node npm; do
+          for tool in bash git node npm; do
             if command -v "$tool" >/dev/null 2>&1; then echo "  required, found $tool: $(command -v "$tool")"; else echo "::error title=container canary::the image has no $tool"; missing=1; fi
           done
           for tool in gh jq curl; do
@@ -142,7 +151,7 @@ jobs:
             echo "after the fix: git status ok"
           else
             echo "$after"
-            if grep -qi "dubious ownership" <<<"$after"; then
+            if printf '%s\n' "$after" | grep -qi "dubious ownership"; then
               echo "::error title=container canary::git still reports dubious ownership after safe.directory $GITHUB_WORKSPACE"
             else
               echo "::error title=container canary::git status failed after safe.directory: ${after}"
