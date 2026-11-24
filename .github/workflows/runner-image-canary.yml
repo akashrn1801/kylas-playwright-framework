@@ -97,22 +97,26 @@ jobs:
           - { image: '', expect: host }
           - { image: 'mcr.microsoft.com/playwright:v1.60.0-noble', expect: container }
     steps:
-      # BEFORE checkout and setup-node on purpose: these are the tools the image itself must provide (the pipelines'
-      # container jobs call gh and jq in formfields-attempt-gate.sh, git in estimateDuration.ts and checkout with
-      # fetch-depth 0, node/npm per package.json "engines"). Nothing here installs anything.
+      # BEFORE checkout and setup-node on purpose: these are the tools the image itself must provide. REQUIRED: git
+      # (checkout with fetch-depth 0, estimateDuration.ts), node and npm per package.json "engines". INFORMATIONAL:
+      # gh, jq and curl, which the Playwright image lacks (canary run 45379221092): no pipeline step may depend on
+      # them inside the container (formfields-attempt-gate.js uses Node's fetch; nothing else in the containerized
+      # sandbox jobs calls gh, jq or curl). Nothing here installs anything.
       - name: Tools the image must provide (container row only)
         if: matrix.expect == 'container'
         run: |
           echo "image tools check started: $(date -u +%FT%TZ)"
           missing=0
-          for tool in gh jq git node npm; do
-            if command -v "$tool" >/dev/null 2>&1; then echo "  found $tool: $(command -v "$tool")"; else echo "::error title=container canary::the image has no $tool"; missing=1; fi
+          for tool in git node npm; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "  required, found $tool: $(command -v "$tool")"; else echo "::error title=container canary::the image has no $tool"; missing=1; fi
+          done
+          for tool in gh jq curl; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "  informational, found $tool: $(command -v "$tool")"; else echo "  informational, NOT found: $tool (no containerized pipeline step may call it)"; fi
           done
           [ "$missing" -eq 0 ] || exit 1
-          gh --version | head -1
-          jq --version
           git --version
           echo "image node $(node --version), npm $(npm --version)"
+          node -e "if (typeof fetch !== 'function') { console.error('::error title=container canary::this node has no built-in fetch (formfields-attempt-gate.js needs it)'); process.exit(1); } console.log('built-in fetch: ok')"
           node_major=$(node --version | sed 's/^v//; s/\..*//')
           npm_major=$(npm --version | sed 's/\..*//')
           [ "$node_major" -ge 20 ] || { echo "::error title=container canary::image node $(node --version) is below package.json engines >=20"; exit 1; }
@@ -168,22 +172,34 @@ jobs:
           echo "chromium launch finished: $(date -u +%FT%TZ)"
 
       # The image pull happens before the first step, so no step can time it. The run's own job list does: GitHub
-      # records "Set up job" and "Initialize containers" (the pull and the container start) with timestamps. Soft on
-      # purpose (a warning, never a failure): the step names are GitHub's, not ours, and this was not run when written.
+      # records "Set up job" and "Initialize containers" (the pull and the container start) with timestamps.
+      # Node's built-in fetch, not gh/jq: the image has neither (the first version of this step used `gh api`,
+      # which is why canary run 45379221092 printed "could not read the run's job list": `gh: command not found`,
+      # not permissions or the API path). Soft on purpose: a warning, never a failure.
       - name: Image pull and container start time (container row only)
         if: always() && matrix.expect == 'container'
         env:
           GH_TOKEN: ${{ github.token }}
+          THIS_JOB_NAME: container canary (${{ matrix.image || 'host, no image' }})
         run: |
           echo "pull-time step started: $(date -u +%FT%TZ)"
-          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" >"$RUNNER_TEMP/jobs.json"; then
-            echo "::warning title=container canary::could not read the run's job list, pull time not measured"; exit 0
-          fi
-          rows=$(jq -r --arg r "$RUNNER_NAME" '.jobs[] | select(.runner_name == $r) | .steps[] | select(.name == "Set up job" or .name == "Initialize containers") | "\(.name)|\(.started_at)|\(.completed_at)"' "$RUNNER_TEMP/jobs.json")
-          if [ -z "$rows" ]; then
-            echo "::warning title=container canary::no 'Set up job' / 'Initialize containers' step found for runner $RUNNER_NAME, pull time not measured"; exit 0
-          fi
-          while IFS='|' read -r name started completed; do
-            if [ "$completed" = "null" ] || [ -z "$completed" ]; then echo "VERDICT $name: started $started, not finished"; continue; fi
-            echo "VERDICT $name: $started -> $completed = $(( $(date -u -d "$completed" +%s) - $(date -u -d "$started" +%s) ))s"
-          done <<<"$rows"
+          node - <<'NODE'
+          const { GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_API_URL, THIS_JOB_NAME, RUNNER_NAME } = process.env;
+          const warn = (m) => console.log(`::warning title=container canary::${m}, pull time not measured`);
+          (async () => {
+            const url = `${GITHUB_API_URL || 'https://api.github.com'}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100`;
+            const res = await fetch(url, { headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'kylas-container-canary' }, signal: AbortSignal.timeout(30000) });
+            if (!res.ok) return warn(`GET ${url} answered ${res.status}`);
+            const { jobs = [] } = await res.json();
+            const job = jobs.find((j) => j.name === THIS_JOB_NAME) || jobs.find((j) => j.runner_name === RUNNER_NAME);
+            if (!job) return warn(`no job named '${THIS_JOB_NAME}' (or running on ${RUNNER_NAME}) among ${jobs.length} job(s) of the run`);
+            const steps = job.steps || [];
+            const wanted = steps.filter((s) => s.name === 'Set up job' || s.name === 'Initialize containers');
+            console.log(`job '${job.name}' started ${job.started_at}; its first steps: ${steps.slice(0, 4).map((s) => s.name).join(' | ')}`);
+            if (wanted.length === 0) return warn("no 'Set up job' / 'Initialize containers' step found");
+            for (const s of wanted) {
+              const secs = s.started_at && s.completed_at ? `${Math.round((Date.parse(s.completed_at) - Date.parse(s.started_at)) / 1000)}s` : 'not finished';
+              console.log(`VERDICT ${s.name}: ${s.started_at} -> ${s.completed_at} = ${secs}`);
+            }
+          })().catch((e) => warn(`${e.message}`));
+          NODE
