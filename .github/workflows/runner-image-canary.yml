@@ -128,6 +128,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # actions/checkout puts safe.directory only in its own temporary HOME, so in the container the next git call
+      # fails with "detected dubious ownership" (canary 2026-11-24, exit 128). The pipelines add this same step
+      # (sandbox.yml, "Trust the workspace for git"); here it is proven: the probe before it is informational, the
+      # check after it fails the job if git STILL reports dubious ownership.
+      - name: Trust the workspace for git, then prove it (container row only)
+        if: matrix.expect == 'container'
+        run: |
+          echo "git ownership check started: $(date -u +%FT%TZ)"
+          if before=$(git rev-parse --git-dir 2>&1); then echo "before the fix: git works already (no dubious ownership)"; else echo "before the fix (informational): ${before}"; fi
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if after=$(git status --porcelain 2>&1); then
+            echo "after the fix: git status ok"
+          else
+            echo "$after"
+            if grep -qi "dubious ownership" <<<"$after"; then
+              echo "::error title=container canary::git still reports dubious ownership after safe.directory $GITHUB_WORKSPACE"
+            else
+              echo "::error title=container canary::git status failed after safe.directory: ${after}"
+            fi
+            exit 1
+          fi
+
       - name: git in the image (full history, fetch with the checkout's credentials)
         if: matrix.expect == 'container'
         run: |
