@@ -1,5 +1,6 @@
 /**
- * Scenario suite for the rerun shard end to end, offline (ADR 0015): first-run report -> selection -> rerun results ->
+ * Scenario suite for the rerun shard end to end, offline (ADR 0015, amended 2026-11-24: a test that passes on the rerun counts as
+ * Passed after the rerun, Failed or Flaky in the first run alike; history keeps the first-run counts): first-run report -> selection -> rerun results ->
  * combined report -> the REAL ReportParser / AutomationHealth / EmailTemplate / history record builder -> assertions on
  * what the email shows (status label and colour, both table columns, per-test lines) and what history stores.
  *
@@ -128,11 +129,12 @@ function pipeline(firstDefs: Def[], rerunDefs: Def[] | null, o: PipelineOpts = {
   const used = new Set<string>();
   const clusters = enrichClusters(clusterFailures(parsed.failedTests, []), enrichCtx, used);
   const flaky = buildFlakyFailureDetails(parsed.flakyTests, enrichCtx, used);
+  const rerunPassed = buildFlakyFailureDetails(parsed.passedOnRerunTests, enrichCtx, used);
   const health = computeHealthScore(parsed, null, misc, null, [], [], false);
   const verdict = computeOverallVerdict(parsed, health, null, o.shard ?? null);
   const ctx = {
     report: parsed, env: 'staging', branch: 'sandbox', buildNumber: '7', buildUrl: 'https://example.invalid/run/100', gitCommit: 'abc1234', triggeredBy: 't',
-    runSource: 'github-actions', miscErrors: misc, health, verdict, clusters, flakyFailureDetails: flaky, shardCompleteness: o.shard ?? null,
+    runSource: 'github-actions', miscErrors: misc, health, verdict, clusters, flakyFailureDetails: flaky, rerunPassedDetails: rerunPassed, shardCompleteness: o.shard ?? null,
     ...(summary ? { rerun: summary } : {}),
   } as EmailContext;
   const tpl = new EmailTemplate();
@@ -207,17 +209,23 @@ function expectCountsAddUp(p: Pipeline, name: string): void {
   // The parser counts a test that never ran as skipped; the table splits those into Skipped (deliberate) and Did not run.
   check(t.Failed[1] === p.parsed.failed && t.Skipped[1] + t['Did not run'][1] === p.parsed.skipped, `${name}: after-rerun Failed equals the parsed failed; Skipped + Did not run equal the parsed skipped`, `${t.Failed[1]}/${t.Skipped[1] + t['Did not run'][1]} vs ${p.parsed.failed}/${p.parsed.skipped}`);
 }
-function expectHistory(p: Pipeline, want: { failed: number; flaky: number; passed?: number; firstFailed?: number; firstFlaky?: number; recovered?: string[]; flakyTitlesInclude?: string[] }, name: string): void {
+/**
+ * History keeps the FIRST-RUN counts (passed/failed/flaky/skipped and the per-module counts), plus `afterRerun` when a rerun ran
+ * (ADR 0015 amendment, 2026-11-24). `failed`/`flaky`/`passed` here are the first-run counts.
+ */
+function expectHistory(p: Pipeline, want: { failed: number; flaky: number; passed?: number; after?: { passed: number; failed: number; flaky: number }; recovered?: string[]; flakyTitlesInclude?: string[] }, name: string): void {
   const h = p.history;
-  check(h.failed === want.failed && h.flaky === want.flaky, `${name}: history final failed/flaky = ${want.failed}/${want.flaky}`, `${h.failed}/${h.flaky}`);
-  if (want.passed !== undefined) check(h.passed === want.passed, `${name}: history passed = ${want.passed}`, String(h.passed));
+  check(h.failed === want.failed && h.flaky === want.flaky, `${name}: history first-run failed/flaky = ${want.failed}/${want.flaky}`, `${h.failed}/${h.flaky}`);
+  if (want.passed !== undefined) check(h.passed === want.passed, `${name}: history first-run passed = ${want.passed}`, String(h.passed));
   check(h.total === p.parsed.total && h.passed + h.failed + h.flaky + h.skipped === h.total, `${name}: history counts add up to total`, `${h.passed}+${h.failed}+${h.flaky}+${h.skipped} vs ${h.total}`);
-  if (want.firstFailed !== undefined) check(h.firstRunFailed === want.firstFailed && h.firstRunFlaky === want.firstFlaky, `${name}: history keeps the first-run counts ${want.firstFailed}/${want.firstFlaky}`, `${h.firstRunFailed}/${h.firstRunFlaky}`);
+  if (want.after) eq(h.afterRerun, want.after, `${name}: history afterRerun counts`);
+  else if (!p.summary?.ran) check(h.afterRerun === undefined, `${name}: no rerun, no afterRerun field`);
+  if (p.summary?.ran) check(h.firstRunFailed === h.failed && h.firstRunFlaky === h.flaky, `${name}: firstRunFailed/firstRunFlaky equal the first-run counts`, `${h.firstRunFailed}/${h.firstRunFlaky}`);
   if (want.recovered) eq([...(h.recoveredOnRerunTitles ?? [])].sort(), [...want.recovered].sort(), `${name}: history recoveredOnRerunTitles`);
   for (const t of want.flakyTitlesInclude ?? want.recovered ?? []) check(h.flakyTestTitles.includes(t), `${name}: "${t}" is in history flakyTestTitles`);
 }
 
-const labels = { recovered: 'Flaky - recovered on rerun', ranOnly: 'Passed (did not run → passed on rerun)' };
+const labels = { recovered: 'Passed on rerun', ranOnly: 'Passed (did not run → passed on rerun)' };
 const filler = (n = 5): Def[] => many(n, 'passed', 'filler', 'ui/ok/ok.spec.ts', 1);
 
 function main(): void {
@@ -236,51 +244,52 @@ function main(): void {
     const p = pipeline([...filler(5), ...f], many(5, 'passed', 'flaky'));
     check(p.list.decision === 'run' && p.list.candidates.length === 5, 'S2: no failed/timed-out/did-not-run test: the 5 flaky tests are rerun');
     expectStatus(p, 'green', 'Passed', 'S2');
-    eq(summaryTable(p.html), { Passed: [5, 5], Failed: [0, 0], Flaky: [5, 5], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S2: table: 5 Flaky in both columns');
+    eq(summaryTable(p.html), { Passed: [5, 10], Failed: [0, 0], Flaky: [5, 0], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S2: table: 5 Flaky -> 0 Flaky, Passed 5 -> 10 (a rerun pass is a pass)');
     const tt = testTable(p.html);
-    check(Object.keys(tt).length === 5 && Object.values(tt).every((r) => r[0] === 'Flaky' && r[1] === 'Passed' && r[2] === 'Flaky - passed on rerun'), 'S2: every row Flaky -> Passed -> "Flaky - passed on rerun"', JSON.stringify(tt));
-    check(p.parsed.flaky === 5 && p.parsed.flakyPassedOnRerun === 5 && p.parsed.status === 'passed' && p.parsed.flakyTests.length === 5, 'S2: the parser still lists 5 flaky tests, all resolved on rerun, run status passed');
-    check((p.html.match(/final <strong[^>]*>Flaky - passed on rerun/g) ?? []).length >= 5 && p.html.includes('id="section-flaky-tests"'), 'S2: the flaky section lists each test with the tag "Flaky - passed on rerun"');
+    check(Object.keys(tt).length === 5 && Object.values(tt).every((r) => r[0] === 'Flaky' && r[1] === 'Passed' && r[2] === 'Passed on rerun'), 'S2: every row Flaky -> Passed -> "Passed on rerun"', JSON.stringify(tt));
+    check(p.parsed.flaky === 0 && p.parsed.flakyPassedOnRerun === 5 && p.parsed.recoveredOnRerun === 0 && p.parsed.status === 'passed' && p.parsed.flakyTests.length === 0 && p.parsed.passedOnRerunTests.length === 5, 'S2: the parser counts the 5 as Passed (resolved on rerun), lists them as passed-on-rerun, run status passed');
+    check((p.html.match(/final <strong[^>]*>Passed on rerun/g) ?? []).length >= 5 && p.html.includes('id="section-passed-on-rerun"') && !p.html.includes('id="section-flaky-tests"'), 'S2: the "Passed on rerun" section lists each test with the tag "Passed on rerun"; there is no Flaky section any more');
     check(!text(rerunSection(p.html) ?? '').includes('recovered on rerun)'), 'S2: nothing is "recovered on rerun" (they were flaky, not failed)');
     expectCountsAddUp(p, 'S2');
-    expectHistory(p, { failed: 0, flaky: 5, passed: 5, firstFailed: 0, firstFlaky: 5, recovered: [], flakyTitlesInclude: ['flaky 1', 'flaky 2', 'flaky 3', 'flaky 4', 'flaky 5'] }, 'S2');
+    expectHistory(p, { failed: 0, flaky: 5, passed: 5, after: { passed: 10, failed: 0, flaky: 0 }, recovered: [], flakyTitlesInclude: ['flaky 1', 'flaky 2', 'flaky 3', 'flaky 4', 'flaky 5'] }, 'S2');
   }
   // ── 3. only flaky tests, 2 fail in the rerun: AMBER, still Flaky, rerun failures only evidence ──
   {
     const rr = [...many(3, 'passed', 'flaky'), def('ui/many/many.spec.ts', 'flaky 4', 103, 'failed'), def('ui/many/many.spec.ts', 'flaky 5', 104, 'failed')];
     const p = pipeline([...filler(5), ...many(5, 'flaky', 'flaky')], rr);
     expectStatus(p, 'amber', 'Unstable', 'S3');
-    eq(summaryTable(p.html), { Passed: [5, 5], Failed: [0, 0], Flaky: [5, 5], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S3: table: still 5 Flaky, 0 Failed');
+    eq(summaryTable(p.html), { Passed: [5, 8], Failed: [0, 0], Flaky: [5, 2], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S3: table: 3 of 5 flaky passed on rerun (Passed 5 -> 8), 2 stay Flaky, 0 Failed');
     const tt = testTable(p.html);
     eq(tt['flaky 4'], ['Flaky', 'Failed', 'Flaky'], 'S3: flaky 4 shows Flaky -> Failed -> Flaky');
-    eq(tt['flaky 1'], ['Flaky', 'Passed', 'Flaky - passed on rerun'], 'S3: flaky 1 shows Flaky -> Passed -> Flaky - passed on rerun');
-    check(p.parsed.flaky === 5 && p.parsed.flakyPassedOnRerun === 3 && p.parsed.status === 'unstable', 'S3: 3 of 5 resolved: the 2 that failed on rerun keep the run Unstable');
-    check(p.summary.stillFailing === 0 && p.summary.recovered === 0, 'S3: summary counts no recovered and no still-failing');
+    eq(tt['flaky 1'], ['Flaky', 'Passed', 'Passed on rerun'], 'S3: flaky 1 shows Flaky -> Passed -> Passed on rerun');
+    check(p.parsed.flaky === 2 && p.parsed.flakyPassedOnRerun === 3 && p.parsed.status === 'unstable', 'S3: 3 of 5 resolved: the 2 that failed on rerun stay flaky and keep the run Unstable');
+    check(p.summary.stillFailing === 0 && p.summary.recovered === 3, 'S3: summary: 3 passed on the rerun, none still failing');
     expectCountsAddUp(p, 'S3');
-    expectHistory(p, { failed: 0, flaky: 5, firstFailed: 0, firstFlaky: 5, recovered: [] }, 'S3');
+    expectHistory(p, { failed: 0, flaky: 5, passed: 5, after: { passed: 8, failed: 0, flaky: 2 }, recovered: [] }, 'S3');
   }
   // ── 4. 3 failed, all pass in the rerun: amber, recovered ──
   {
     const p = pipeline([...filler(7), ...many(3, 'failed', 'broken')], many(3, 'passed', 'broken'));
     expectStatus(p, 'amber', 'Unstable', 'S4');
-    eq(summaryTable(p.html), { Passed: [7, 7], Failed: [3, 0], Flaky: [0, 3], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S4: table: 3 failed -> 3 flaky, passed stays 7');
-    check(text(rerunSection(p.html) ?? '').includes('3 recovered on rerun'), 'S4: table says "3 recovered on rerun"');
+    eq(summaryTable(p.html), { Passed: [7, 10], Failed: [3, 0], Flaky: [0, 0], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S4: table: 3 failed -> 0 failed, Passed 7 -> 10');
+    check(text(rerunSection(p.html) ?? '').includes('3 passed on rerun'), 'S4: table says "3 passed on rerun"');
+    check(p.parsed.recoveredOnRerun === 3 && p.parsed.status === 'unstable', 'S4: ... and the run is Unstable, never a clean pass, because 3 tests failed every first attempt');
     const tt = testTable(p.html);
-    check(Object.values(tt).length === 3 && Object.values(tt).every((r) => r[0] === 'Failed' && r[1] === 'Passed' && r[2] === labels.recovered), 'S4: rows Failed -> Passed -> Flaky - recovered on rerun', JSON.stringify(tt));
-    check(p.html.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Passed</strong>'), 'S4: the flaky card of a recovered test carries the first -> rerun -> final line');
+    check(Object.values(tt).length === 3 && Object.values(tt).every((r) => r[0] === 'Failed' && r[1] === 'Passed' && r[2] === labels.recovered), 'S4: rows Failed -> Passed -> Passed on rerun', JSON.stringify(tt));
+    check(p.html.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Passed</strong>'), 'S4: the card of a test that passed on the rerun carries the first -> rerun -> final line');
     expectCountsAddUp(p, 'S4');
-    expectHistory(p, { failed: 0, flaky: 3, passed: 7, firstFailed: 3, firstFlaky: 0, recovered: ['broken 1', 'broken 2', 'broken 3'] }, 'S4');
+    expectHistory(p, { failed: 3, flaky: 0, passed: 7, after: { passed: 10, failed: 0, flaky: 0 }, recovered: ['broken 1', 'broken 2', 'broken 3'] }, 'S4');
   }
   // ── 5. 3 failed, 1 recovers, 2 fail again: red ──
   {
     const p = pipeline([...filler(7), ...many(3, 'failed', 'broken')], [def('ui/many/many.spec.ts', 'broken 1', 100, 'passed'), def('ui/many/many.spec.ts', 'broken 2', 101, 'failed'), def('ui/many/many.spec.ts', 'broken 3', 102, 'timedOut')]);
     expectStatus(p, 'red', 'Failed', 'S5');
-    eq(summaryTable(p.html), { Passed: [7, 7], Failed: [3, 2], Flaky: [0, 1], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S5: table: 2 failed, 1 flaky');
+    eq(summaryTable(p.html), { Passed: [7, 8], Failed: [3, 2], Flaky: [0, 0], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S5: table: 2 failed, 1 passed on rerun (Passed 7 -> 8)');
     const tt = testTable(p.html);
-    eq(tt['broken 1'], ['Failed', 'Passed', labels.recovered], 'S5: broken 1 recovered');
+    eq(tt['broken 1'], ['Failed', 'Passed', labels.recovered], 'S5: broken 1 passed on rerun');
     eq(tt['broken 2'], ['Failed', 'Failed', 'Failed'], 'S5: broken 2 failed again');
     expectCountsAddUp(p, 'S5');
-    expectHistory(p, { failed: 2, flaky: 1, firstFailed: 3, firstFlaky: 0, recovered: ['broken 1'] }, 'S5');
+    expectHistory(p, { failed: 3, flaky: 0, passed: 7, after: { passed: 8, failed: 2, flaky: 0 }, recovered: ['broken 1'] }, 'S5');
     check(p.history.failedTestTitles.length === 2 && !p.history.failedTestTitles.includes('broken 1'), 'S5: history failedTestTitles = the 2 still failing');
   }
   // ── 6. mix: flaky + failed + timed out + did-not-run (serial) ──
@@ -300,16 +309,16 @@ function main(): void {
     ];
     const p = pipeline(firstDefs, rerunDefs);
     expectStatus(p, 'red', 'Failed', 'S6');
-    eq(summaryTable(p.html), { Passed: [4, 5], Failed: [4, 2], Flaky: [2, 5], Skipped: [0, 0], 'Did not run': [2, 0], Total: [12, 12] }, 'S6: first run: 4 failed, 2 did not run (not failed); after rerun: q2 is Passed, 2 failed, 5 flaky');
+    eq(summaryTable(p.html), { Passed: [4, 8], Failed: [4, 2], Flaky: [2, 2], Skipped: [0, 0], 'Did not run': [2, 0], Total: [12, 12] }, 'S6: first run: 4 failed, 2 did not run (not failed); after rerun: 3 passed on rerun and q2 ran only on rerun = Passed 8, 2 failed, the 2 untouched flaky tests stay flaky');
     const tt = testTable(p.html);
-    eq(tt['timeout A'], ['Failed', 'Passed', labels.recovered], 'S6: timed out, passes on rerun = recovered');
+    eq(tt['timeout A'], ['Failed', 'Passed', labels.recovered], 'S6: timed out, passes on rerun = Passed on rerun');
     eq(tt['q2 dependent'], ['Did not run', 'Passed', labels.ranOnly], 'S6: did-not-run, passes on rerun = Passed ("did not run → passed on rerun"), not Flaky');
     check(text(rerunSection(p.html) ?? '').includes('1 ran only on rerun'), 'S6: Passed column says "1 ran only on rerun"');
     eq(tt['q3 dependent'], ['Did not run', 'Failed', 'Failed'], 'S6: did-not-run, fails on rerun = failed');
     check(!('flaky A' in tt) && !('flaky B' in tt), 'S6: the run has failed tests, so the flaky tests are NOT rerun (no rows)');
-    check(p.parsed.flaky === 5 && p.parsed.flakyPassedOnRerun === 0, 'S6: the 2 untouched flaky tests keep the run at least amber');
+    check(p.parsed.flaky === 2 && p.parsed.flakyPassedOnRerun === 0 && p.parsed.recoveredOnRerun === 3, 'S6: the 2 untouched flaky tests stay flaky; 3 tests passed only on the rerun');
     expectCountsAddUp(p, 'S6');
-    expectHistory(p, { failed: 2, flaky: 5, passed: 5, firstFailed: 4, firstFlaky: 2, recovered: ['failed A', 'timeout A', 'q1 fails'] }, 'S6');
+    expectHistory(p, { failed: 4, flaky: 2, passed: 4, after: { passed: 8, failed: 2, flaky: 2 }, recovered: ['failed A', 'timeout A', 'q1 fails'] }, 'S6');
     check(p.history.rerun?.ranOnlyOnRerun === 1 && !p.history.flakyTestTitles.includes('q2 dependent'), 'S6: history: q2 ran only on rerun, is not flaky');
     check(p.parsed.skippedTests.length === 0, 'S6: no did-not-run placeholder is left as "skipped" in the combined report');
   }
@@ -355,17 +364,17 @@ function main(): void {
     // run 1: A failed, C flaky. Automatic rerun reruns A only (failed tests first); A recovers, so the run has no failed test left.
     const firstDefs = [...filler(5), def(L, 'A', 10, 'failed'), def(L, 'C', 12, 'flaky')];
     const auto = pipeline(firstDefs, [def(L, 'A', 10, 'passed')]);
-    eq(auto.summary.rows.map((r) => [r.title, r.final]), [['A', 'recovered']], 'S11: automatic rerun: only A rerun, recovered; C (flaky) not rerun');
+    eq(auto.summary.rows.map((r) => [r.title, r.final]), [['A', 'passed']], 'S11: automatic rerun: only A rerun, passed on rerun; C (flaky) not rerun');
     // manual rerun of the combined report: nothing failed any more, so A (now flaky) and C are rerun; both fail this time
     const m = stacked(auto, true, [def(L, 'A', 10, 'failed'), def(L, 'C', 12, 'failed')]);
-    eq(Object.fromEntries(m.summary.rows.map((r) => [r.title, r.final]).sort()), { A: 'recovered', C: 'flaky' }, 'S11: A recovered in rerun 1 stays Flaky though rerun 2 fails it; C stays Flaky');
+    eq(Object.fromEntries(m.summary.rows.map((r) => [r.title, r.final]).sort()), { A: 'passed', C: 'flaky' }, 'S11: A passed in rerun 1 stays Passed (never selected again); C is rerun, fails, and stays Flaky');
     const arow = m.summary.rows.find((r) => r.title === 'A');
-    check(arow?.first === 'failed' && arow.rerun === 'failed', 'S11: A row: first Failed, latest rerun Failed (evidence), final recovered');
+    check(arow?.first === 'failed' && arow.rerun === 'passed' && arow.final === 'passed', 'S11: A row is carried over from rerun 1: first Failed, rerun Passed, final Passed on rerun');
     expectStatus(m, 'amber', 'Unstable', 'S11');
-    eq(summaryTable(m.html), { Passed: [5, 5], Failed: [1, 0], Flaky: [1, 2], Skipped: [0, 0], 'Did not run': [0, 0], Total: [7, 7] }, 'S11: counts do not double: first run stays 1 failed / 1 flaky, after = 2 flaky');
+    eq(summaryTable(m.html), { Passed: [5, 6], Failed: [1, 0], Flaky: [1, 1], Skipped: [0, 0], 'Did not run': [0, 0], Total: [7, 7] }, 'S11: counts do not double: first run stays 1 failed / 1 flaky, after = A passed on rerun, C still flaky');
     check(text(rerunSection(m.html) ?? '').includes('Manual rerun of run #12'), 'S11: email says Manual rerun of run #12');
     expectCountsAddUp(m, 'S11');
-    expectHistory(m, { failed: 0, flaky: 2, firstFailed: 1, firstFlaky: 1, recovered: ['A'] }, 'S11');
+    expectHistory(m, { failed: 1, flaky: 1, passed: 5, after: { passed: 6, failed: 0, flaky: 1 }, recovered: ['A'] }, 'S11');
     // the same manual rerun where both pass: C resolved, A stays recovered (amber), no failure
     const ok = stacked(auto, true, [def(L, 'A', 10, 'passed'), def(L, 'C', 12, 'passed')]);
     check(ok.parsed.flakyPassedOnRerun === 1 && ok.parsed.status === 'unstable', 'S11: A (recovered) keeps the run Unstable even when C resolves');
@@ -377,7 +386,7 @@ function main(): void {
     const f2 = [...filler(5), def(L, 'A', 10, 'failed'), def(L, 'B', 11, 'failed')];
     const auto2 = pipeline(f2, [def(L, 'A', 10, 'passed'), def(L, 'B', 11, 'failed')]);
     const m2 = stacked(auto2, true, [def(L, 'B', 11, 'passed')]);
-    eq(Object.fromEntries(m2.summary.rows.map((r) => [r.title, r.final]).sort()), { A: 'recovered', B: 'recovered' }, 'S11: B recovers on the manual rerun, A is carried over');
+    eq(Object.fromEntries(m2.summary.rows.map((r) => [r.title, r.final]).sort()), { A: 'passed', B: 'passed' }, 'S11: B passes on the manual rerun, A is carried over');
     eq(m2.summary.firstRun.failed, 2, 'S11: first-run counts stay those of the original run');
   }
   // ── 12. serial whole-file rerun, parameterised tests on one line, deliberate skips ──
@@ -399,11 +408,11 @@ function main(): void {
     check(p.list.targets.includes('tests/ui/quotations/quotations.spec.ts') && p.list.targets.filter((t) => t.includes('p.spec.ts')).length === 1 && p.list.targets.includes('tests/ui/p/p.spec.ts:8'), 'S12: serial file targeted whole, parameterised line targeted once');
     const tt = testTable(p.html);
     check(!('q0 passed' in tt) && !('param B' in tt) && !('declared skip' in tt) && !('annotated skip' in tt), 'S12: passed and deliberately skipped tests have no rerun row');
-    eq(tt['param A'], ['Failed', 'Passed', labels.recovered], 'S12: param A recovered');
+    eq(tt['param A'], ['Failed', 'Passed', labels.recovered], 'S12: param A passed on rerun');
     eq(tt['param C'], ['Failed', 'Failed', 'Failed'], 'S12: param C failed again');
     eq(tt['q2 dependent'], ['Did not run', 'Passed', labels.ranOnly], 'S12: serial dependent passes on rerun = Passed');
     eq(p.parsed.skipped, 2, 'S12: the 2 deliberate skips stay skipped (a failure in the whole-file rerun of q0 and param B is ignored)');
-    eq(summaryTable(p.html), { Passed: [5, 6], Failed: [3, 1], Flaky: [0, 2], Skipped: [2, 2], 'Did not run': [1, 0], Total: [11, 11] }, 'S12: table');
+    eq(summaryTable(p.html), { Passed: [5, 8], Failed: [3, 1], Flaky: [0, 0], Skipped: [2, 2], 'Did not run': [1, 0], Total: [11, 11] }, 'S12: table');
     expectCountsAddUp(p, 'S12');
     expectStatus(p, 'red', 'Failed', 'S12');
   }
@@ -414,7 +423,7 @@ function main(): void {
     check(p.parsed.status === 'unstable', 'S13: without the shard check the combined report would only be unstable');
     expectStatus(p, 'red', 'Incomplete Run', 'S13');
     check(p.html.includes('id="section-incomplete-run"') && text(p.html).includes('6 of 7'), 'S13: the incomplete-run banner is still there');
-    check(summaryTable(p.html)?.Flaky?.[1] === 2, 'S13: the rerun table is still shown (it explains the counts, it does not hide the banner)');
+    check(summaryTable(p.html)?.Passed?.[1] === 9, 'S13: the rerun table is still shown (it explains the counts, it does not hide the banner)');
     const cap = pipeline([...filler(7), ...many(61, 'failed', 'broken')], null, { shard });
     expectStatus(cap, 'red', 'Incomplete Run', 'S13 (cap)');
   }
@@ -427,7 +436,7 @@ function main(): void {
     eq(tt['cut 2'], ['Did not run', 'Failed', 'Failed'], 'S16: cut 2 did not run -> failed on rerun');
     expectStatus(p, 'red', 'Failed', 'S16');
     expectCountsAddUp(p, 'S16');
-    expectHistory(p, { failed: 1, flaky: 0, firstFailed: 0, firstFlaky: 0, recovered: [] }, 'S16');
+    expectHistory(p, { failed: 0, flaky: 0, passed: 6, after: { passed: 7, failed: 1, flaky: 0 }, recovered: [] }, 'S16');
     const ok = pipeline([...filler(6), ...many(2, 'cut-off', 'cut')], many(2, 'passed', 'cut'));
     check(ok.parsed.flaky === 0 && ok.parsed.failed === 0 && ok.parsed.passed === 8, 'S16: both cut-off tests pass on rerun: 8 passed, none flaky', `${ok.parsed.passed}/${ok.parsed.flaky}`);
     const notRerun = pipeline([...filler(6), ...many(2, 'cut-off', 'cut')], null, { select: { maxTests: 1 } });
@@ -466,8 +475,8 @@ function main(): void {
     const rec = pipeline(first, [def('ui/f/f.spec.ts', 'broken', 3, 'passed')]);
     check(rec.list.candidates.length === 1 && rec.list.candidates[0].title === 'broken', 'S19: only the failed test is a candidate');
     expectStatus(rec, 'amber', 'Unstable', 'S19 (recovered)');
-    eq(summaryTable(rec.html), { Passed: [6, 6], Failed: [1, 0], Flaky: [2, 3], Skipped: [0, 0], 'Did not run': [0, 0], Total: [9, 9] }, 'S19: table: failed 1 -> 0, flaky 2 -> 3 (1 recovered on rerun)');
-    expectHistory(rec, { failed: 0, flaky: 3, firstFailed: 1, firstFlaky: 2, recovered: ['broken'], flakyTitlesInclude: ['flaky 1', 'flaky 2', 'broken'] }, 'S19');
+    eq(summaryTable(rec.html), { Passed: [6, 7], Failed: [1, 0], Flaky: [2, 2], Skipped: [0, 0], 'Did not run': [0, 0], Total: [9, 9] }, 'S19: table: failed 1 -> 0 (it passed on the rerun: Passed 6 -> 7), the 2 flaky tests are not rerun');
+    expectHistory(rec, { failed: 1, flaky: 2, passed: 6, after: { passed: 7, failed: 0, flaky: 2 }, recovered: ['broken'], flakyTitlesInclude: ['flaky 1', 'flaky 2', 'broken'] }, 'S19');
     const still = pipeline(first, [def('ui/f/f.spec.ts', 'broken', 3, 'failed')]);
     expectStatus(still, 'red', 'Failed', 'S19 (still failing)');
     check(text(still.html).includes('were not rerun'), 'S19: the email says the flaky tests were not rerun');
@@ -526,9 +535,10 @@ function render(combined: JsonReport, summary: RerunSummary, list: RerunList): P
   const used = new Set<string>();
   const clusters = enrichClusters(clusterFailures(parsed.failedTests, []), enrichCtx, used);
   const flaky = buildFlakyFailureDetails(parsed.flakyTests, enrichCtx, used);
+  const rerunPassed = buildFlakyFailureDetails(parsed.passedOnRerunTests, enrichCtx, used);
   const health = computeHealthScore(parsed, null, misc, null, [], [], false);
   const verdict = computeOverallVerdict(parsed, health, null, null);
-  const ctx = { report: parsed, env: 'staging', branch: 'sandbox', buildNumber: '12', buildUrl: 'https://example.invalid/run/200', gitCommit: 'abc1234', triggeredBy: 't', runSource: 'github-actions', miscErrors: misc, health, verdict, clusters, flakyFailureDetails: flaky, rerun: summary } as EmailContext;
+  const ctx = { report: parsed, env: 'staging', branch: 'sandbox', buildNumber: '12', buildUrl: 'https://example.invalid/run/200', gitCommit: 'abc1234', triggeredBy: 't', runSource: 'github-actions', miscErrors: misc, health, verdict, clusters, flakyFailureDetails: flaky, rerunPassedDetails: rerunPassed, rerun: summary } as EmailContext;
   const tpl = new EmailTemplate();
   const cwd = process.cwd();
   process.chdir(dir);
@@ -573,7 +583,7 @@ function scriptScenarios(): void {
     const sum = parseRerunSummary(fs.readFileSync(path.join(dir, 'out', 'rerun-summary.json'), 'utf-8'));
     check(r.status === 0 && !!sum && sum.ran, 'S10: combine-rerun runs for the current attempt\'s list', r.log);
     eq(sum?.rows.map((x) => x.title).sort(), ['still failing'], 'S10: only the failed test of the LATEST blobs is rerun (not an attempt-1 failure that now passes; the flaky one waits because the run has a failure)');
-    check(sum?.afterRerun.total === 9 && sum.afterRerun.passed === 7 && sum.afterRerun.flaky === 2 && sum.afterRerun.failed === 0, 'S10: formFields results from attempt 1 are counted (9 tests: 7 passed incl. 2 formFields, 2 flaky)', JSON.stringify(sum?.afterRerun));
+    check(sum?.afterRerun.total === 9 && sum.afterRerun.passed === 8 && sum.afterRerun.flaky === 1 && sum.afterRerun.failed === 0, 'S10: formFields results from attempt 1 are counted (9 tests: 8 passed incl. 2 formFields and the one that passed on rerun, 1 flaky)', JSON.stringify(sum?.afterRerun));
     check(fs.existsSync(path.join(dir, 'results.first-run.json')) && fs.readFileSync(path.join(dir, 'results.first-run.json'), 'utf-8') === before, 'S10: the first-run report is kept as results.first-run.json');
     check(!sum?.rows.some((x) => x.file.includes('formFields')), 'S10: formFields never in the rerun rows');
   }
@@ -594,81 +604,14 @@ function scriptScenarios(): void {
   }
 }
 
-// ── 14: the formFields attempt gate script against a stub `gh` ─────────────────────────────────────────────────
+// ── 14: the formFields attempt gate ─────────────────────────────────────────────────────────────────────────────
+// The gate is now .github/scripts/formfields-attempt-gate.js (Node fetch, no gh/jq: the Playwright image has neither).
+// Its decision table, the REST client and the .sh wrapper are tested against a local stub server in
+// scripts/check-formfields-gate.ts (the old stub `gh` of this scenario no longer applies); this runs that check here.
 function gateScenarios(): void {
-  const root = path.join(SCRATCH, 'gate');
-  const bin = path.join(root, 'bin');
-  const fx = path.join(root, 'fx');
-  fs.mkdirSync(bin, { recursive: true });
-  fs.mkdirSync(fx, { recursive: true });
-  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/bash
-path=""; jq_expr=""; while [ $# -gt 0 ]; do case "$1" in api|--paginate) ;; --jq) shift; jq_expr="$1";; *) path="$1";; esac; shift; done
-[ -n "\${GH_FAIL:-}" ] && { echo "boom" >&2; exit 1; }
-case "$path" in
- *attempts/*/jobs*) n=$(echo "$path" | sed -E 's#.*attempts/([0-9]+)/jobs.*#\\1#'); f="$FX/jobs-$n.json";;
- *artifacts*) f="$FX/artifacts.json";;
-esac
-[ -f "$f" ] || { echo '{"jobs":[],"artifacts":[]}' | jq -c "$jq_expr"; exit 0; }
-jq -c "$jq_expr" "$f"
-`, { mode: 0o755 });
-  const JOB = 'playwright-formFields (lead)';
-  const ffJob = (name: string, conclusion: string, attempt: number, testConclusion: string | null) => ({
-    name, conclusion, run_attempt: attempt, steps: [{ name: 'Set up job', conclusion: 'success' }, ...(testConclusion ? [{ name: `Run formFields tests for ${name.replace(/.*\((.*)\)/, '$1')}`, conclusion: testConclusion }] : [])],
-  });
-  const detect = (attempt: number) => ({ name: 'detect target + shard plan', conclusion: 'success', run_attempt: attempt, steps: [] });
-  const write = (n: number, jobs: unknown[]): void => fs.writeFileSync(path.join(fx, `jobs-${n}.json`), JSON.stringify({ jobs }));
-  const artifacts = (expired: boolean): void => fs.writeFileSync(path.join(fx, 'artifacts.json'), JSON.stringify({ artifacts: [{ name: 'blob-report-sandbox-ff-lead', expired }] }));
-  const runGate = (mode: string, attempt: number, extra: Record<string, string> = {}): { skip: string; log: string } => {
-    const outFile = path.join(root, 'gh-output');
-    fs.writeFileSync(outFile, '');
-    const r = spawnSync('bash', [path.join(ROOT, '.github/scripts/formfields-attempt-gate.sh'), mode], {
-      encoding: 'utf-8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, FX: fx, GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: String(attempt), GITHUB_OUTPUT: outFile, JOB_NAME: JOB, ARTIFACT_NAME: 'blob-report-sandbox-ff-lead', LABEL: 'lead', GH_FAIL: '', ...extra },
-    });
-    const skip = (fs.readFileSync(outFile, 'utf-8').match(/skip=(\w+)/) ?? [])[1] ?? 'none';
-    check(r.status === 0, `S14 [${mode} attempt ${attempt}]: gate exits 0`, String(r.status));
-    return { skip, log: `${r.stdout}${r.stderr}` };
-  };
-  for (const f of fs.readdirSync(fx)) fs.rmSync(path.join(fx, f));
-  // attempt 1 passed the lead job; attempt 2 re-ran only a core shard (detect not re-run: its entry stays attempt 1)
-  write(1, [detect(1), ffJob(JOB, 'success', 1, 'success')]);
-  write(2, [detect(1), ffJob(JOB, 'success', 1, 'success')]);
-  artifacts(false);
-  let g = runGate('ff', 2);
-  check(g.skip === 'true' && /already passed in attempt 1 — skipped/.test(g.log), 'S14: passed in an earlier attempt -> skip, with the log line', `${g.skip} ${g.log}`);
-  // failed earlier
-  write(1, [detect(1), ffJob(JOB, 'failure', 1, 'failure')]);
-  g = runGate('ff', 2);
-  check(g.skip === 'false', 'S14: failed in the earlier attempt -> run', g.skip);
-  // job passed but its test step did not run (setup-only success)
-  write(1, [detect(1), ffJob(JOB, 'success', 1, null)]);
-  g = runGate('ff', 2);
-  check(g.skip === 'false', 'S14: no passed test step in the earlier attempt -> run', g.skip);
-  // artifact expired
-  write(1, [detect(1), ffJob(JOB, 'success', 1, 'success')]);
-  artifacts(true);
-  g = runGate('ff', 2);
-  check(g.skip === 'false', 'S14: artifact of the earlier attempt expired -> run', g.skip);
-  artifacts(false);
-  // API error
-  g = runGate('ff', 2, { GH_FAIL: '1' });
-  check(g.skip === 'false' && /running normally/.test(g.log), 'S14: API error -> run (fail open, warning logged)', `${g.skip} ${g.log}`);
-  // Re-run all jobs: detect runs again in attempt 2
-  write(2, [detect(2), ffJob(JOB, 'success', 2, 'success')]);
-  g = runGate('ff', 2);
-  check(g.skip === 'false' && /Re-run all jobs/.test(g.log), 'S14: "Re-run all jobs" (detect re-run) -> run', `${g.skip} ${g.log}`);
-  // first attempt
-  g = runGate('ff', 1);
-  check(g.skip === 'false', 'S14: first attempt -> run', g.skip);
-  // reset: all formFields jobs skipped in attempt 2 -> skip; one ran -> run; API error -> run
-  write(2, [detect(1), ffJob('playwright-formFields (lead)', 'skipped', 2, null), ffJob('playwright-formFields (deal)', 'skipped', 2, null)]);
-  g = runGate('reset', 2);
-  check(g.skip === 'true', 'S14: reset skips when no formFields job ran tests in this attempt', g.skip);
-  write(2, [detect(1), ffJob('playwright-formFields (lead)', 'success', 2, 'success'), ffJob('playwright-formFields (deal)', 'skipped', 2, null)]);
-  g = runGate('reset', 2);
-  check(g.skip === 'false', 'S14: reset runs when a formFields job ran tests', g.skip);
-  g = runGate('reset', 2, { GH_FAIL: '1' });
-  check(g.skip === 'false', 'S14: reset on API error -> run', g.skip);
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'node_modules/ts-node/dist/bin.js'), path.join(ROOT, 'scripts/check-formfields-gate.ts')], { encoding: 'utf-8' });
+  const lines = `${r.stdout}${r.stderr}`.split('\n');
+  check(r.status === 0, 'S14: scripts/check-formfields-gate.ts (gate decisions, REST client, wrapper) passes', lines.filter((l) => l.startsWith('FAIL')).join(' | ') || String(r.status));
 }
 
 main();

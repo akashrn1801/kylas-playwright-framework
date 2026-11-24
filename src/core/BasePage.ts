@@ -663,6 +663,7 @@ export class BasePage {
         // and can repeat a write; the page is the app's answer to a failed request or an uncaught render
         // error, so fail now and name both. (Only the 429 page is reload-fixable: the app asks to retry.)
         const failedRequest = recentFailedWrite(this.page, 60000) ?? recentFailedRead(this.page, 60000)?.summary;
+        ErrorCollector.recordRecoveryEvent({ kind: 'error-boundary-page', outcome: 'failed' });
         throw new Error(
           `The app showed its error page ("Something is broken") while: ${String(error).split('\n')[0]}. ` +
             `Last failed request: ${failedRequest ?? 'none seen'}. Not reloading (a reload would hide the cause).`
@@ -704,10 +705,14 @@ export class BasePage {
    */
   protected async explainAppErrorPage(description: string, error: unknown): Promise<unknown> {
     const original = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    // WHY recorded here (2026-11-24): this fail-fast path (2026-11-04) throws instead of reloading, so withRateLimitRecovery()'s
+    // own recording never ran for these and the email's Load Signals said none had happened. recordRecoveryEvent() never throws.
     if (await isRateLimitedPage(this.page).catch(() => false)) {
+      ErrorCollector.recordRecoveryEvent({ kind: 'rate-limit-page', outcome: 'failed', detail: description });
       return new Error(`${description}: the app is showing its rate-limit page ("Too many requests at once"), not the expected UI — backend 429. Original: ${original}`);
     }
     if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+      ErrorCollector.recordRecoveryEvent({ kind: 'error-boundary-page', outcome: 'failed', detail: description });
       return new Error(`${description}: the app is showing its error screen ("Something is broken") over the page — an app/backend failure, not a missing element. Original: ${original}`);
     }
     return error;

@@ -383,7 +383,10 @@ jobs:
         with:
           name: session-info-sandbox
           overwrite: true
-          path: reports/staging/session-info.json
+          # renew-session-failed.json (2026-11-24) says WHY the job failed; merge-and-report downloads this artifact for the email
+          path: |
+            reports/staging/session-info.json
+            reports/staging/renew-session-failed.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1115,6 +1118,8 @@ jobs:
         # counts as a shard.
         env:
           FF_ENTITIES_JSON: ${{ needs.detect.outputs.formfields_entities_json }}
+          # the renew-session job's result: a failure there skips every test job (2026-11-24); the cause is named, not "Incomplete run"
+          RENEW_SESSION_RESULT: ${{ needs.renew-session.result }}
         run: |
           FORMFIELDS_SHARDS=0
           if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
@@ -1130,6 +1135,18 @@ jobs:
         with:
           pattern: misc-errors-sandbox-*
           path: all-misc-errors
+
+      # WHY (2026-11-24, build #235 email): the rerun shard's misc-errors artifact (rerun-misc-errors-sandbox) does not match the
+      # pattern above on purpose (that pattern counts shards), so its background errors and load events never reached the
+      # email and its Load Signals row read "(no shard data)". It is downloaded into a directory named like a shard
+      # ("misc-errors-sandbox-rerun" -> label "sandbox-rerun") so merge-misc-errors.ts includes it. No rerun job: no artifact,
+      # the step is skipped by continue-on-error.
+      - name: Download the rerun shard's misc-errors report
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: rerun-misc-errors-sandbox
+          path: all-misc-errors/misc-errors-sandbox-rerun
 
       - name: Aggregate misc-errors.json across all shards
         run: npx ts-node scripts/merge-misc-errors.ts staging all-misc-errors

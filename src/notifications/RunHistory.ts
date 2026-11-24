@@ -236,11 +236,15 @@ export interface RunHistoryRecord {
   // same branch and `workers`, so computeDurationEstimate() skips any record
   // that carries it. Optional: every existing record lacks it (= unsharded).
   lanes?: string;
-  // WHY (ADR 0015): set only when the rerun shard ran for this build. `failed`/`flaky` are the FINAL counts (a test that
-  // recovered on the rerun is counted as flaky, its title is in flakyTestTitles, and it is never in `passed`), so
-  // trends and recurring-flaky stay honest; these fields keep the first-attempt view. Optional: every older record
-  // lacks them (= no rerun) and every reader ignores them.
+  // WHY (ADR 0015): set only when the rerun shard ran for this build (see `afterRerun` below for which counts `passed`/
+  // `failed`/`flaky` hold). A test that passed only on the rerun has its title in flakyTestTitles (and in
+  // recoveredOnRerunTitles when it had failed every first attempt), never in failedTestTitles. Optional: every older
+  // record lacks them (= no rerun) and every reader ignores them.
   rerun?: { candidates: number; recovered: number; stillFailing: number; ranOnlyOnRerun?: number };
+  // The counts after the rerun (a rerun pass is a pass). `passed`/`failed`/`flaky`/`skipped` and the per-module counts of a
+  // record are the FIRST-RUN counts (ADR 0015, amended 2026-11-24); records written before that stored the after-rerun
+  // counts there (a recovered test counted flaky) and have no `afterRerun`.
+  afterRerun?: { passed: number; failed: number; flaky: number };
   firstRunFailed?: number;
   firstRunFlaky?: number;
   recoveredOnRerunTitles?: string[];
@@ -834,9 +838,16 @@ export function buildPassRateSeries(
   // comparableHistory()'s WHY comment. Not scope-filtered: this is a
   // deliberately branch-wide pass-rate series.
   const currentKey = buildKey(current);
+  // WHY the branch and run-source filter, and the sort (2026-11-24, build #235 listed "#221 ... #227 #231 #214 #235"): the
+  // history file is keyed by environment, so it also holds another workflow's runs (#214 was a `stage` run, whose build
+  // numbers are that workflow's own counter), and the series used the file's append order. Now only this branch and run
+  // source count, oldest first by run start (build number breaks a tie). Still not scope-filtered, as before.
+  const byBuildNumber = (a: RunHistoryRecord, b: RunHistoryRecord): number => (Number(a.buildNumber) || 0) - (Number(b.buildNumber) || 0);
   const prior = dedupeByBuild(historyBeforeAppend)
+    .filter((r) => r.branch === current.branch && r.runSource === current.runSource)
     .filter((r) => !r.incomplete)
-    .filter((r) => currentKey === null || buildKey(r) !== currentKey);
+    .filter((r) => currentKey === null || buildKey(r) !== currentKey)
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || byBuildNumber(a, b));
   return [...prior.slice(-(n - 1)), current].map(toPoint);
 }
 
@@ -900,5 +911,34 @@ export function computeDurationEstimate(
     minMs: Math.min(...durations),
     maxMs: Math.max(...durations),
     sampleSize: recent.length,
+  };
+}
+
+/** Everything the email reads from reports/<env>/history-delta.json. */
+export interface HistoryDeltaOutput {
+  delta: RunDelta | null;
+  recurringFlaky: RecurringIssue[];
+  recurringFailures: RecurringIssue[];
+  moduleTrend: ModuleTrend[];
+  moduleStabilityTrend: ModuleStabilityTrend[];
+  slowTestTrend: SlowTestTrend[];
+  suiteDrift: SuiteDrift | null;
+  passRateSeries: PassRatePoint[];
+}
+
+/**
+ * The trend inputs of one run against the history before it (extracted from syncHistory.ts, 2026-11-24, no behaviour
+ * change, so the replay of a past build renders through the same calls the pipeline makes).
+ */
+export function computeHistoryDeltaOutput(historyBeforeAppend: RunHistoryRecord[], current: RunHistoryRecord): HistoryDeltaOutput {
+  return {
+    delta: computeDelta(historyBeforeAppend, current),
+    recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
+    recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
+    moduleTrend: computeModuleTrend(historyBeforeAppend, current),
+    moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
+    slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
+    suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
+    passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
   };
 }

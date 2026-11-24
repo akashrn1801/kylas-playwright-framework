@@ -242,7 +242,13 @@ const newSpread = (): Spread => ({ tests: 0, failedTests: 0, retryTests: 0, reru
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /**
- * "N failed outright, M passed on retry, K recovered on rerun" (a zero part is left out) — the one wording the cards,
+ * A test that is unstable but did not end failed: flaky (passed on an in-job retry) or passed on the rerun shard (ADR 0015,
+ * amended 2026-11-24: its status is then 'passed'). Failure analysis treats both alike.
+ */
+export const isFlakyLike = (t: { status: string; passedOnRerun?: boolean }): boolean => t.status === 'flaky' || t.passedOnRerun === true;
+
+/**
+ * "N failed outright, M passed on retry, K passed only on the rerun" (a zero part is left out) — the one wording the cards,
  * banner and summary share. `retry` counts ALL flaky tests; `rerun` is the part of them that passed only on the rerun
  * shard, so "passed on retry" is retry - rerun. With rerun = 0 the text is exactly the pre-rerun one.
  */
@@ -250,7 +256,7 @@ export function splitText(failed: number, retry: number, rerun = 0): string {
   const parts: string[] = [];
   if (failed > 0) parts.push(`${failed} failed outright`);
   if (retry - rerun > 0) parts.push(`${retry - rerun} passed on retry`);
-  if (rerun > 0) parts.push(`${rerun} recovered on rerun`);
+  if (rerun > 0) parts.push(`${rerun} passed only on the rerun`);
   return parts.join(', ');
 }
 
@@ -282,7 +288,7 @@ export function assessCauses(
       m.set(sig.id, hit);
       const s = spread.get(sig.id) ?? newSpread();
       s.tests += 1;
-      if (f.test.status === 'flaky') {
+      if (isFlakyLike(f.test)) {
         s.retryTests += 1;
         if (f.test.recoveredOnRerun) s.rerunTests += 1;
       }
@@ -328,8 +334,8 @@ export function assessCauses(
     }
 
     let assessment: CauseAssessment;
-    if (t.status === 'flaky') {
-      const lines = [t.recoveredOnRerun ? `recovered on rerun (failed ${t.retries} time${t.retries === 1 ? '' : 's'} first) — flaky this run` : `passed on retry (${t.retries} retry${t.retries === 1 ? '' : 's'}) — flaky this run`, ...evidence];
+    if (isFlakyLike(t)) {
+      const lines = [t.recoveredOnRerun ? `passed only on the rerun (failed ${t.retries} time${t.retries === 1 ? '' : 's'} first) — unstable this run` : `passed on retry (${t.retries} retry${t.retries === 1 ? '' : 's'}) — flaky this run`, ...evidence];
       if (chosen) {
         const s = spread.get(chosen.sig.id)!;
         lines.push(`failing attempt matched ${chosen.sig.id} — ${chosen.sig.title}: ${chosen.hit.how}; ${breadthText(s)}; see ${chosen.sig.kiRef}`);

@@ -155,14 +155,21 @@ export interface TestResult {
   retries: number;
   // How many of those `retries` are the rerun shard's attempt (results flagged `rerun`), not in-job retries.
   rerunAttempts?: number;
-  // True for a flaky test that failed every first-run attempt and passed only on the rerun shard (ADR 0015), so the
-  // email can say "recovered on rerun" instead of "passed on retry". A test that passed on an in-job retry is false.
+  // What the FIRST run (every in-job attempt, before any rerun) made of the test. Equal to `status` for a test the rerun
+  // shard did not touch; for one it did, `status` is the result after the rerun and this keeps the first view (ADR 0015,
+  // amended 2026-11-24). 'skipped' = it did not run (or was skipped) in the first run. Absent = same as `status`.
+  firstRunStatus?: 'passed' | 'flaky' | 'failed' | 'skipped';
+  // Passed on the rerun shard after failing every first-run attempt or passing only on an in-job retry: `status` is
+  // 'passed' (a rerun pass counts as Passed after the rerun), `firstRunStatus` says what it was before.
+  passedOnRerun?: boolean;
+  // passedOnRerun, and it had failed EVERY first-run attempt (firstRunStatus 'failed'): worded "recovered on rerun"
+  // instead of "passed on retry". A test that passed on an in-job retry is false.
   recoveredOnRerun?: boolean;
   // Status 'skipped' without a skip/fixme annotation or declared skip: the test never ran (serial dependent after a
   // failure, tests of a cut-off shard). It never failed, but the run did not verify it, so the run is never green.
   didNotRun?: boolean;
-  // Flaky in the first run (passed on an in-job retry) and passed again on the rerun shard: still flaky for history and
-  // trends and listed in the email, but resolved: it does not by itself keep the run from being green.
+  // passedOnRerun, and it had passed on an in-job retry in the first run (firstRunStatus 'flaky'): resolved, it does not
+  // by itself keep the run from being green. (A recoveredOnRerun test does: it had failed every first attempt.)
   flakyPassedOnRerun?: boolean;
   // Passed, but only on the rerun shard: it never ran in the first run (did not run -> passed on rerun). Also never green.
   ranOnlyOnRerun?: boolean;
@@ -242,6 +249,10 @@ export interface ModuleStats {
   // shape the report-level `slowestTests`/`slowestTestsTop20` already use,
   // for consistency rather than a lighter, separate display-only type.
   slowestTests: TestResult[];
+  // The first run's view of this module (before any rerun) and how many of its tests passed only on the rerun. `passed`,
+  // `failed` and `flaky` above are the counts AFTER the rerun; history trends and "unstable this run" use these.
+  firstRun: { passed: number; failed: number; flaky: number };
+  passedOnRerun: number;
   // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 4a): the
   // whole-run `totalRetries`/`retriesFromNonCleanTests`/
   // `retriesFromCleanSweeps` split (see ParsedReport's own WHY comment for
@@ -267,8 +278,14 @@ export interface ParsedReport {
   // Of `skipped`, the tests that were not deliberately skipped (see TestResult.didNotRun); and tests that passed only on the rerun.
   didNotRun: number;
   ranOnlyOnRerun: number;
-  // Of `flaky`, the tests that passed again on the rerun (see TestResult.flakyPassedOnRerun).
+  // Tests that passed on the rerun shard (counted in `passed`): those that had failed every first attempt, and those that
+  // had passed on an in-job retry (flakyPassedOnRerun). See TestResult.passedOnRerun. ADR 0015, amended 2026-11-24.
+  recoveredOnRerun: number;
   flakyPassedOnRerun: number;
+  passedOnRerunTests: TestResult[];
+  // The first run's counts, before any rerun. `passed`/`failed`/`flaky` are the counts AFTER the rerun (a rerun pass is a
+  // pass); `firstRun.passed` is "passed first time" and drives the pass-rate tile, its delta and the history trends.
+  firstRun: { passed: number; failed: number; flaky: number; skipped: number; didNotRun: number };
   flaky: number;
   duration: number;
   startTime: string;
@@ -447,6 +464,17 @@ export class ReportParser {
     const didNotRun = results.filter((r) => r.didNotRun).length;
     const ranOnlyOnRerun = results.filter((r) => r.ranOnlyOnRerun).length;
     const flakyPassedOnRerun = results.filter((r) => r.flakyPassedOnRerun).length;
+    const recoveredOnRerun = results.filter((r) => r.recoveredOnRerun).length;
+    const passedOnRerunTests = results.filter((r) => r.passedOnRerun);
+    // First-run view; without a rerun it is exactly the counts above.
+    const firstOf = (r: TestResult): NonNullable<TestResult['firstRunStatus']> => r.firstRunStatus ?? (r.status === 'failed' ? 'failed' : r.status === 'flaky' ? 'flaky' : r.status === 'passed' ? 'passed' : 'skipped');
+    const firstRun = {
+      passed: results.filter((r) => firstOf(r) === 'passed').length,
+      failed: results.filter((r) => firstOf(r) === 'failed').length,
+      flaky: results.filter((r) => firstOf(r) === 'flaky').length,
+      skipped: results.filter((r) => firstOf(r) === 'skipped' && !(r.didNotRun || r.ranOnlyOnRerun)).length,
+      didNotRun: results.filter((r) => firstOf(r) === 'skipped' && (r.didNotRun || r.ranOnlyOnRerun)).length,
+    };
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
     const skippedTests = results.filter((r) => r.status === 'skipped');
@@ -469,10 +497,12 @@ export class ReportParser {
         ? 'no-tests-executed'
         : failed > 0
           ? 'failed'
-          : flaky - flakyPassedOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
-            ? 'unstable' // green only when every test passed on its first try: not-run and rerun-only tests are never clean
+          : flaky > 0 || recoveredOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
+            ? 'unstable' // green only when nothing failed all first attempts: flaky, recovered-on-rerun, not-run and rerun-only tests are never clean
             : 'passed';
-    const passRate = passRatePercent(passed, total);
+    // WHY first-time, not after the rerun (e700d3a: a run with any test that did not pass first time never reads 100%): a
+    // rerun pass is Passed in `passed`, but this tile says "Passed first time".
+    const passRate = passRatePercent(firstRun.passed, total);
     // WHY: Confirmed live (same incident) — raw.startTime does not exist at
     // the top level of Playwright's JSON report, only raw.stats.startTime.
     // The old fallback to "now" silently produced the run's real END time
@@ -502,6 +532,8 @@ export class ReportParser {
           skipped: 0,
           duration: 0,
           slowestTests: [],
+          firstRun: { passed: 0, failed: 0, flaky: 0 },
+          passedOnRerun: 0,
           totalRetries: 0,
           retriesFromNonCleanTests: 0,
           retriesFromCleanSweeps: 0,
@@ -515,12 +547,15 @@ export class ReportParser {
       if (r.status === 'failed') mod.failed++;
       if (r.status === 'flaky') mod.flaky++;
       if (r.status === 'skipped') mod.skipped++;
+      const first = firstOf(r);
+      if (first === 'passed' || first === 'failed' || first === 'flaky') mod.firstRun[first]++;
+      if (r.passedOnRerun) mod.passedOnRerun++;
       // WHY the identical genuine-vs-swept split as the whole-run
       // totalRetries/retriesFromNonCleanTests/retriesFromCleanSweeps
       // computed further below, just per-module (2026-09-29, Phase 3 item
       // 4a) — see ModuleStats.totalRetries' own WHY comment.
       mod.totalRetries += r.retries;
-      if (r.status === 'failed' || r.status === 'flaky') {
+      if (r.status === 'failed' || r.status === 'flaky' || r.passedOnRerun) {
         mod.retriesFromNonCleanTests += r.retries;
       }
       moduleTestsMap.get(key)!.push(r);
@@ -545,7 +580,7 @@ export class ReportParser {
     const rbacCount = results.filter((r) => r.file?.includes('rbac')).length;
     const totalRetries = results.reduce((sum, r) => sum + r.retries, 0);
     const retriesFromNonCleanTests = results
-      .filter((r) => r.status === 'failed' || r.status === 'flaky')
+      .filter((r) => r.status === 'failed' || r.status === 'flaky' || r.passedOnRerun)
       .reduce((sum, r) => sum + r.retries, 0);
     const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
     const retriesFromRerun = results.reduce((sum, r) => sum + (r.rerunAttempts ?? 0), 0);
@@ -559,7 +594,10 @@ export class ReportParser {
       skipped,
       didNotRun,
       ranOnlyOnRerun,
+      recoveredOnRerun,
       flakyPassedOnRerun,
+      passedOnRerunTests,
+      firstRun,
       flaky,
       duration,
       startTime,
@@ -610,11 +648,19 @@ export class ReportParser {
             // test's serial-block retry" — false for a test that did not run — and inflated the Retries tile.
             const retries = status === 'skipped' ? 0 : allResults.length - 1;
             const rerunAttempts = status === 'skipped' ? 0 : allResults.filter((r) => r.rerun === true).length;
-            const recoveredOnRerun =
-              status === 'flaky' &&
+            // What the first run made of it: the results that are not the rerun shard's own attempt.
+            // 'skipped' and 'interrupted' attempts are a test that did not run (serial dependent, cut-off shard), not a failure.
+            const ranFirst = allResults.filter((r) => r.rerun !== true && r.status !== 'skipped' && r.status !== 'interrupted');
+            const firstRunStatus: NonNullable<TestResult['firstRunStatus']> =
+              ranFirst.length === 0 ? 'skipped' : ranFirst.some((r) => r.status === 'passed') ? (ranFirst.some((r) => r.status !== 'passed') ? 'flaky' : 'passed') : 'failed';
+            // A rerun pass counts as Passed (ADR 0015, amended 2026-11-24): combine-rerun sets the test status to
+            // 'expected', and these flags keep what it was before.
+            const passedOnRerun =
+              status === 'passed' &&
               lastResult?.rerun === true &&
               lastResult.status === 'passed' &&
-              !allResults.some((r) => r.status === 'passed' && r.rerun !== true);
+              (firstRunStatus === 'failed' || firstRunStatus === 'flaky');
+            const recoveredOnRerun = passedOnRerun && firstRunStatus === 'failed';
             // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) —
             // for a flaky test, lastResult is the PASSING retry, which has no
             // trace attachment (trace: 'retain-on-failure' only keeps traces
@@ -624,7 +670,7 @@ export class ReportParser {
             // Verified against real data: all 4 flaky tests in that run had a
             // trace on their failing attempt(s), none on the passing one.
             const traceSourceResult =
-              status === 'flaky'
+              status === 'flaky' || passedOnRerun
                 ? [...allResults].reverse().find((r) => r.status !== 'passed')
                 : lastResult;
             // WHY error/errorStack/errorLocation source from traceSourceResult,
@@ -657,16 +703,18 @@ export class ReportParser {
             const deliberateSkip =
               test.expectedStatus === 'skipped' || (test.annotations ?? []).some((a) => a.type === 'skip' || a.type === 'fixme');
             // Flaky first (it passed on an in-job retry), and the last result is a passing rerun result.
-            const flakyPassedOnRerun =
-              status === 'flaky' &&
-              lastResult?.rerun === true &&
-              lastResult.status === 'passed' &&
-              allResults.some((r) => r.status === 'passed' && r.rerun !== true);
+            const flakyPassedOnRerun = passedOnRerun && firstRunStatus === 'flaky';
             const didNotRun = status === 'skipped' && !deliberateSkip;
             const ranOnlyOnRerun = status === 'passed' && allResults.length > 0 && allResults.every((r) => r.rerun === true);
+            // WHY three sources (2026-11-24, build #235: "No reason given" for an unconditional test.skip('title', fn)): the
+            // conditional form and a describe-level skip carry the reason in the `skip` annotation's description, but
+            // test.skip('title', fn) / test.fixme('title', fn) carry none. Checked with Playwright 1.60 (--list): the details form
+            // test.skip('title', { annotation: { type: 'skip-reason', description } }, fn) adds a `skip-reason` annotation, which
+            // scripts/check-test-conventions.ts now requires for every unconditional skip/fixme.
             const skipReason =
               status === 'skipped'
-                ? test.annotations?.find((a) => a.type === 'skip')?.description
+                ? (test.annotations ?? []).find((a) => (a.type === 'skip' || a.type === 'fixme') && a.description)?.description ??
+                  (test.annotations ?? []).find((a) => a.type === 'skip-reason' && a.description)?.description
                 : undefined;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
@@ -679,6 +727,8 @@ export class ReportParser {
               allErrors,
               retries,
               ...(rerunAttempts > 0 ? { rerunAttempts } : {}),
+              firstRunStatus,
+              ...(passedOnRerun ? { passedOnRerun } : {}),
               ...(recoveredOnRerun ? { recoveredOnRerun } : {}),
               ...(didNotRun ? { didNotRun } : {}),
               ...(flakyPassedOnRerun ? { flakyPassedOnRerun } : {}),

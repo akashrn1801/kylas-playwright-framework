@@ -11,6 +11,7 @@
 import { ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
+import { RenewalFailure, describeRenewalFailure, renewalFailureLabel } from '../auth/renewalFailure';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 
 // WHY these constants (2026-10-06, sandbox Build #186: 0 failed, 906 passed,
@@ -119,13 +120,19 @@ export function computeHealthScore(
     factors.push({ name: 'Failures', impact: -failPenalty, note: `${report.failed} failed test(s)` });
   }
 
-  const flakyPenalty = Math.min(report.flaky * 1.5, 15);
+  // WHY recoveredOnRerun is added (ADR 0015 amendment, 2026-11-24): a test that failed every first attempt and passed
+  // only on the rerun is Passed in the counts, but it is the least stable kind of test there is, so it keeps weighing here
+  // (it did before the amendment, as a flaky test). A flaky test that passed again on the rerun is resolved and does not.
+  const recovered = report.recoveredOnRerun ?? 0;
+  const unstable = report.flaky + recovered;
+  const flakyPenalty = Math.min(unstable * 1.5, 15);
   if (flakyPenalty > 0) {
     score -= flakyPenalty;
+    const parts = [report.flaky > 0 ? `${report.flaky} flaky` : '', recovered > 0 ? `${recovered} passed only on the rerun` : ''].filter(Boolean);
     factors.push({
       name: 'Flakiness',
       impact: -flakyPenalty,
-      note: `${report.flaky} flaky test(s)${report.flaky > FLAKY_BUDGET ? ` — above the budget of ${FLAKY_BUDGET}` : ''}`,
+      note: `${parts.join(', ')} test(s)${unstable > FLAKY_BUDGET ? ` — above the budget of ${FLAKY_BUDGET}` : ''}`,
     });
   }
 
@@ -253,8 +260,28 @@ export function computeOverallVerdict(
   report: ParsedReport,
   health: HealthScore,
   suiteDrift: SuiteDrift | null,
-  shardCompleteness?: ShardCompleteness | null
+  shardCompleteness?: ShardCompleteness | null,
+  renewalFailure?: RenewalFailure | null
 ): VerdictResult {
+  // WHY first of all (2026-11-24, sandbox run 45420781016): when the renew-session job fails every test job is skipped, no shard
+  // reports, and the run used to read "Incomplete run — 0 of N shards", which says a job crashed. No test ran, and the cause is
+  // known (renew-session-failed.json, or the job result recorded in shard-completeness.json): the verdict names it.
+  if (renewalFailure) {
+    return {
+      verdict: 'blocked',
+      bannerLabel: `🚫 ${renewalFailureLabel(renewalFailure)}`,
+      bannerTone: 'danger',
+      headline: `No test ran — ${describeRenewalFailure(renewalFailure)}`,
+    };
+  }
+  if (isIncompleteRun(shardCompleteness) && shardCompleteness.cause?.startsWith('renew-session')) {
+    return {
+      verdict: 'blocked',
+      bannerLabel: '🚫 BLOCKED — renew-session job failed',
+      bannerTone: 'danger',
+      headline: `No test ran — the renew-session job did not succeed (${shardCompleteness.cause.replace(/^renew-session:\s*/, '')}), so every test job was skipped; see that job's summary`,
+    };
+  }
   // WHY checked before everything else (2026-10-08, sandbox build #189, run
   // 37669596623): 2 of 6 formFields jobs hung in the browser install and were
   // cancelled, yet the 4 that finished produced "277 passed, 0 failed" and a
@@ -329,9 +356,11 @@ export function computeOverallVerdict(
   // WHY (2026-11-03, rule "green only when every test passed on its first try"): a test that never ran (serial
   // dependent after a failure, cut-off shard; no skip annotation) or that ran only on the rerun was not verified by
   // the first run. It never failed, so the run is not red, but it is never a clean Passed either.
-  // A flaky test that passed again on the rerun shard is resolved: it stays flaky in the counts, history and the list,
-  // but when it is the only issue the run is green.
-  const unresolvedFlaky = report.flaky - (report.flakyPassedOnRerun ?? 0);
+  // A flaky test that passed again on the rerun shard is resolved (Passed after the rerun): when it is the only issue the
+  // run is green. A test that failed every first attempt and passed only on the rerun is Passed in the counts but is NOT
+  // resolved for the verdict (ADR 0015 amendment, 2026-11-24): the run stays amber, never a clean green.
+  const recoveredOnRerun = report.recoveredOnRerun ?? 0;
+  const unresolvedFlaky = report.flaky + recoveredOnRerun;
   const notVerified = (report.didNotRun ?? 0) + (report.ranOnlyOnRerun ?? 0);
   if (unresolvedFlaky === 0 && notVerified > 0) {
     const parts = [
@@ -346,13 +375,14 @@ export function computeOverallVerdict(
     };
   }
   if (unresolvedFlaky > 0) {
-    const aboveBudget = report.flaky > FLAKY_BUDGET;
+    const aboveBudget = unresolvedFlaky > FLAKY_BUDGET;
+    const parts = [report.flaky > 0 ? `${report.flaky} flaky` : '', recoveredOnRerun > 0 ? `${recoveredOnRerun} passed only on rerun` : ''].filter(Boolean);
     return {
       verdict: 'caution',
-      bannerLabel: `⚠️ Unstable — ${report.flaky} flaky`,
+      bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
       bannerTone: 'warning',
       headline: aboveBudget
-        ? `Deployment likely safe — but ${report.flaky} flaky tests is above the budget of ${FLAKY_BUDGET}; review them`
+        ? `Deployment likely safe — but ${unresolvedFlaky} unstable tests is above the budget of ${FLAKY_BUDGET}; review them`
         : 'Deployment likely safe — review flaky tests',
     };
   }

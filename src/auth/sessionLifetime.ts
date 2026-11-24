@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 
 // WHY this exists (2026-07-23, for AuthManager.ensureFreshSession()):
@@ -103,4 +104,37 @@ export function describeSessionEnd(rawToken: string): { endIso: string; minutesL
   const remaining = getTokenRemainingMs(rawToken);
   if (remaining === null) return null;
   return { endIso: new Date(Date.now() + remaining).toISOString(), minutesLeft: Math.floor(remaining / 60000) };
+}
+
+export interface TokenDescription {
+  // Short SHA-256 prefixes, never the token: `jwt` of the whole stored token, `access` of the Bearer value inside it
+  // (payload.data.accessToken, what the API accepts and what logout revokes). Two logins gave the same session when both match.
+  jwtFingerprint: string;
+  accessFingerprint: string | null;
+  iatIso: string | null;
+  expiryIso: string | null;
+  minutesLeft: number | null;
+}
+
+const fingerprintOf = (value: string): string => crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
+
+/**
+ * What can be said about a token without printing it (renew-session logs this before logout, after logout and after the
+ * fresh login, 2026-11-24): fingerprints, issued-at and expiry from the payload, minutes left. Never returns the token.
+ */
+export function describeToken(rawToken: string, nowMs: number = Date.now()): TokenDescription {
+  let payload: { iat?: number; data?: { accessToken?: string; expiry?: number } } = {};
+  try {
+    payload = JSON.parse(Buffer.from(rawToken.split('.')[1] ?? '', 'base64').toString('utf-8')) as typeof payload;
+  } catch {
+    /* not a JWT: fingerprint only */
+  }
+  const expiry = payload.data?.expiry;
+  return {
+    jwtFingerprint: fingerprintOf(rawToken),
+    accessFingerprint: payload.data?.accessToken ? fingerprintOf(payload.data.accessToken) : null,
+    iatIso: typeof payload.iat === 'number' ? new Date(payload.iat * 1000).toISOString() : null,
+    expiryIso: typeof expiry === 'number' ? new Date(expiry).toISOString() : null,
+    minutesLeft: typeof expiry === 'number' ? Math.floor((expiry - nowMs) / 60000) : null,
+  };
 }

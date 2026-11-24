@@ -16,7 +16,12 @@ import * as path from 'path';
 export type RerunFirstStatus = 'failed' | 'flaky' | 'not-run';
 /** What the rerun made of it ('not-rerun' = it was selected but produced no result). */
 export type RerunOutcome = 'passed' | 'failed' | 'not-rerun';
-/** Final status: 'passed' on a row whose first status is 'not-run' = it ran only on the rerun (never failed, so not flaky). 'recovered' = failed on every first-run attempt, passed on the rerun (counts as FLAKY, never as clean). */
+/**
+ * Final status after the rerun. 'passed' = passed on the rerun (ADR 0015, amended 2026-11-24: a rerun pass is a pass,
+ * whether the first run had it Failed or Flaky); on a row whose first status is 'not-run' it ran only on the rerun.
+ * 'recovered' is only READ from summaries written before the amendment (failed on every first attempt, passed on the
+ * rerun, counted Flaky): parseRerunSummary() turns it into 'passed'.
+ */
 export type RerunFinalStatus = 'passed' | 'recovered' | 'flaky' | 'failed' | 'not-run';
 
 export interface RerunTestRow {
@@ -57,6 +62,7 @@ export interface RerunSummary {
   recovered: number;
   stillFailing: number;
   durationMs?: number;
+  // recovered = tests that passed on the rerun after being Failed or Flaky in the first run (not the did-not-run ones).
   // First run = what Playwright reported before any rerun; afterRerun = the combined report (ReportParser counts).
   firstRun: RerunCounts;
   afterRerun: RerunCounts;
@@ -81,6 +87,10 @@ export function parseRerunSummary(raw: string): RerunSummary | null {
     if (p.version !== 1 || typeof p.ran !== 'boolean' || !isCounts(p.firstRun) || !isCounts(p.afterRerun) || !Array.isArray(p.rows)) {
       return null;
     }
+    // Summaries written before the 2026-11-24 amendment: a rerun pass was 'recovered' (failed first) or stayed 'flaky'.
+    const rows = p.rows.map((r) =>
+      r.rerun === 'passed' && (r.final === 'recovered' || (r.final === 'flaky' && r.first === 'flaky')) ? { ...r, final: 'passed' as const } : r
+    );
     return {
       excluded: [],
       candidates: 0,
@@ -90,6 +100,7 @@ export function parseRerunSummary(raw: string): RerunSummary | null {
       retries: 0,
       includeFlaky: true,
       ...p,
+      rows,
     } as RerunSummary;
   } catch {
     return null;
@@ -109,16 +120,16 @@ export function loadRerunSummary(env: string): RerunSummary | null {
 export const FIRST_LABEL: Record<RerunFirstStatus, string> = { failed: 'Failed', flaky: 'Flaky', 'not-run': 'Did not run' };
 export const RERUN_LABEL: Record<RerunOutcome, string> = { passed: 'Passed', failed: 'Failed', 'not-rerun': 'Not rerun' };
 export const FINAL_LABEL: Record<RerunFinalStatus, string> = {
-  passed: 'Passed',
-  recovered: 'Flaky - recovered on rerun',
+  passed: 'Passed on rerun',
+  recovered: 'Passed on rerun',
   flaky: 'Flaky',
   failed: 'Failed',
   'not-run': 'Did not run',
 };
 
-/** First-run flaky test that passed again on the rerun: still flaky (history, trends, list) but resolved. */
+/** First-run flaky test that passed again on the rerun: Passed after the rerun, still listed as passed on rerun. */
 export const isFlakyPassedOnRerun = (r: { first: RerunFirstStatus; rerun: RerunOutcome; final: RerunFinalStatus }): boolean =>
-  r.first === 'flaky' && r.rerun === 'passed' && r.final === 'flaky';
+  r.first === 'flaky' && r.rerun === 'passed' && r.final === 'passed';
 
 /** Row lookup key used by the email: the title as ReportParser shows it, plus its file. */
 export const rerunRowKey = (file: string, title: string): string => `${file}::${title}`;

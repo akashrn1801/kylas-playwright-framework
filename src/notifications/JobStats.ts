@@ -227,6 +227,8 @@ export interface JobRecoveryRow {
   completedAt: string;
   durationMs: number;
   rateLimitPages: number;
+  // API responses with status 429 (not the page): kind 'api-429'.
+  rateLimitApi: number;
   errorBoundaryPages: number;
   setupRetries: number;
   // recoveries whose own retried action threw again (the recovery did NOT save the test)
@@ -250,6 +252,8 @@ function jobMatchesShardLabel(jobName: string, label: string): boolean {
   if (formFields) {
     return jobName.toLowerCase().includes('formfields') && jobName.includes(`(${formFields[1]})`);
   }
+  // The rerun shard (2026-11-24): its misc-errors artifact is merged under "<env>-rerun".
+  if (/^[a-z]+-rerun$/i.test(label)) return /rerun/i.test(jobName);
   const core = label.match(/^[a-z]+-(\d+)$/i);
   if (core) {
     return !/formfields/i.test(jobName) && new RegExp(`\\(shard ${core[1]}/`).test(jobName);
@@ -292,6 +296,7 @@ export function buildJobRecoveryRows(
       completedAt: job.completedAt,
       durationMs: job.durationMs,
       rateLimitPages: events.filter((e) => e.kind === 'rate-limit-page').length,
+      rateLimitApi: events.filter((e) => e.kind === 'api-429').length,
       errorBoundaryPages: events.filter((e) => e.kind === 'error-boundary-page').length,
       setupRetries: events.filter((e) => e.kind === 'globalsetup-transient-retry').length,
       failedAfterRecovery: events.filter((e) => e.outcome === 'failed').length,

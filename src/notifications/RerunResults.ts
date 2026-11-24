@@ -4,6 +4,9 @@
  * report. No fs, no network, no clock: scripts/rerun-select.ts and
  * scripts/combine-rerun.ts do the file work, scripts/check-rerun.ts tests this.
  *
+ * ADR 0015 amendment (2026-11-24): a test that passes on the rerun counts as Passed after the rerun (Failed or Flaky in the
+ * first run alike); the first-run view is kept by ReportParser (firstRunStatus) and by the summary's `firstRun` counts.
+ *
  * Facts this relies on (Playwright 1.60.0, checked 2026-11-03 with a throwaway
  * project, see ADR 0015):
  *  - `.last-run.json` lists only hard failures, so it is NOT used: flaky tests
@@ -208,13 +211,16 @@ function rerunOutcome(t: JsonTest | undefined): RerunOutcome {
 }
 
 // `base` = where the test stands before this rerun: its first-run status, or (stacked reruns) the final status the
-// earlier rerun gave it. A did-not-run test never failed: passing on the rerun makes it simply Passed (it ran only on
-// the rerun), failing makes it Failed, and without a rerun result it stays 'not-run'.
+// earlier rerun gave it. ADR 0015, amended 2026-11-24: a test that passes on the rerun is Passed after the rerun, whether
+// it was Failed or Flaky in the first run (the first-run columns and "Passed first time" keep the first attempt). A
+// did-not-run test passing on the rerun is also simply Passed (it ran only on the rerun); failing makes it Failed, and
+// without a rerun result it stays 'not-run'.
 function finalStatus(base: RerunFirstStatus | RerunFinalStatus, rerun: RerunOutcome): RerunFinalStatus {
+  if (base === 'passed' || base === 'recovered') return 'passed'; // passed in an earlier rerun: it never turns back
+  if (rerun === 'passed') return 'passed';
   if (base === 'flaky') return 'flaky'; // it passed once in the first run: extra executions never turn it into a failure
-  if (base === 'recovered') return 'recovered'; // already recovered in an earlier rerun: stays flaky, never failed, never clean
-  if (base === 'not-run') return rerun === 'passed' ? 'passed' : rerun === 'failed' ? 'failed' : 'not-run';
-  return rerun === 'passed' ? 'recovered' : 'failed';
+  if (base === 'not-run') return rerun === 'failed' ? 'failed' : 'not-run';
+  return 'failed';
 }
 
 export function countStatuses(report: JsonReport): RerunCounts {
@@ -330,7 +336,7 @@ export function combineRerun(
       durationMs: rerun.stats?.duration,
       afterRerun: countStatuses(combined),
       rows: allRows,
-      recovered: allRows.filter((r) => r.final === 'recovered').length,
+      recovered: allRows.filter((r) => r.final === 'passed' && r.first !== 'not-run').length,
       stillFailing: allRows.filter((r) => r.final === 'failed').length,
     },
   };

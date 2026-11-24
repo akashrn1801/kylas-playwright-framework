@@ -150,13 +150,13 @@ function main(): void {
   check(JSON.stringify(firstReport) === frozen, 'combine: the first-run report object is not mutated');
   const row = (t: string) => summary.rows.find((r) => r.title === t);
   const stat = (t: string): string => { let s = ''; walkTests(combined, (x) => { if (x.title === t) s = x.test.status; }); return s; };
-  check(row('hard fail')?.first === 'failed' && row('hard fail')?.rerun === 'passed' && row('hard fail')?.final === 'recovered' && stat('hard fail') === 'flaky', 'combine: failed first, passed on rerun = recovered, test status flaky (never a clean pass)');
+  check(row('hard fail')?.first === 'failed' && row('hard fail')?.rerun === 'passed' && row('hard fail')?.final === 'passed' && stat('hard fail') === 'expected', 'combine: failed first, passed on rerun = Passed after the rerun, test status expected (ADR 0015 amended: a rerun pass is a pass)');
   check(row('times out')?.final === 'failed' && stat('times out') === 'unexpected', 'combine: failed first, failed on rerun = failed');
   check(!row('flaky one') && stat('flaky one') === 'flaky', 'combine: a flaky test of a run with failures is not rerun (no row, stays flaky even if the rerun report has it)');
   const fl = selectRerun(report(flakyOnly), OPTS, META);
   const flc = combineRerun(report(flakyOnly), report([{ file: 'ui/a.spec.ts', title: 'flaky x', line: 2, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'flaky y', line: 3, kind: 'failed' }], 100), fl, {});
-  check(flc.summary.rows.find((r) => r.title === 'flaky x')?.final === 'flaky' && flc.summary.rows.find((r) => r.title === 'flaky y')?.final === 'flaky' && flc.summary.afterRerun.flaky === 2, 'combine: flaky first stays flaky whatever the rerun does (passed or failed)');
-  check(row('q1 fails')?.final === 'recovered' && row('q2 did not run')?.first === 'not-run' && row('q2 did not run')?.final === 'passed' && stat('q2 did not run') === 'expected', 'combine: serial dependent that did not run never failed: passing on rerun = Passed (ran only on rerun), not flaky');
+  check(flc.summary.rows.find((r) => r.title === 'flaky x')?.final === 'passed' && flc.summary.rows.find((r) => r.title === 'flaky y')?.final === 'flaky' && flc.summary.afterRerun.flaky === 1 && flc.summary.afterRerun.passed === 2, 'combine: flaky first passes on the rerun = Passed; flaky first failing on the rerun stays Flaky (extra executions never turn it into a failure)');
+  check(row('q1 fails')?.final === 'passed' && row('q2 did not run')?.first === 'not-run' && row('q2 did not run')?.final === 'passed' && stat('q2 did not run') === 'expected', 'combine: serial dependent that did not run never failed: passing on rerun = Passed (ran only on rerun), not flaky');
   check(row('q3 did not run')?.final === 'failed' && stat('q3 did not run') === 'unexpected', 'combine: a dependent that did not run and fails on rerun = failed');
   check(row('cut off')?.first === 'not-run' && row('cut off')?.final === 'passed', 'combine: cut-off (interrupted) test that passes on rerun = Passed (it never failed)');
   let hardResults = 0; walkTests(combined, (x) => { if (x.title === 'hard fail') hardResults = x.test.results.length; });
@@ -165,7 +165,7 @@ function main(): void {
   check(q2Results === 1, 'combine: "did not run" placeholders are replaced by the rerun result');
   check(summary.recovered === 2 && summary.stillFailing === 2 && summary.rows.length === 6 && summary.ran, 'combine: recovered 2 (hard fail, q1; q2 and cut off ran only on rerun), still failing 2 (times out, q3)', `${summary.recovered}/${summary.stillFailing}/${summary.rows.length}`);
   check(JSON.stringify(summary.firstRun) === JSON.stringify({ passed: 1, failed: 4, flaky: 1, skipped: 2, didNotRun: 3, total: 11 }), 'combine: first-run counts come from the report before the rerun (did-not-run counted apart from failed)', JSON.stringify(summary.firstRun));
-  check(JSON.stringify(summary.afterRerun) === JSON.stringify({ passed: 3, failed: 3, flaky: 3, skipped: 2, didNotRun: 0, total: 11 }), 'combine: after-rerun counts: recovered tests count as flaky; q2 and cut off count as passed; failed = times out, q3 and the excluded formFields test', JSON.stringify(summary.afterRerun));
+  check(JSON.stringify(summary.afterRerun) === JSON.stringify({ passed: 5, failed: 3, flaky: 1, skipped: 2, didNotRun: 0, total: 11 }), 'combine: after-rerun counts: hard fail and q1 passed on rerun = Passed, q2 and cut off ran only on rerun = Passed; failed = times out, q3 and the excluded formFields test; the flaky test of a failing run is not rerun', JSON.stringify(summary.afterRerun));
   check(combined.stats?.duration === 690000, 'combine: rerun wall-clock time is added to the run duration', String(combined.stats?.duration));
   check(!summary.rows.some((r) => r.title === 'ff fails') && summary.excluded.length === 2, 'combine: excluded tests (formFields, flaky of a failing run) stay untouched and are listed');
 
@@ -199,11 +199,20 @@ function main(): void {
   const stacked = combineRerun(combined, secondRerun, second, { previous: summary, rerunOf: { runId: '99', runNumber: '12' } });
   const srow = (t: string) => stacked.summary.rows.find((r) => r.title === t);
   check(JSON.stringify(stacked.summary.firstRun) === JSON.stringify(summary.firstRun), 'stacked: first-run counts stay those of the original run');
-  check(srow('times out')?.first === 'failed' && srow('times out')?.final === 'recovered', 'stacked: failed -> failed -> passed is recovered (first stays "failed")');
+  check(srow('times out')?.first === 'failed' && srow('times out')?.final === 'passed', 'stacked: failed -> failed -> passed is Passed on the later rerun (first stays "failed")');
+  check(srow('hard fail')?.first === 'failed' && srow('hard fail')?.rerun === 'passed' && srow('hard fail')?.final === 'passed', 'stacked: a test that passed in rerun 1 is not selected again; its row is carried over and a failing result for it in rerun 2 is ignored (a rerun pass never turns back)');
   check(stacked.summary.rerunOf?.runNumber === '12', 'stacked: rerunOf is recorded');
 
   // ── the real ReportParser on a combined report ──
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'check-rerun-'));
+  const parse2 = (r: JsonReport) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'check-rerun2-'));
+    const f = path.join(d, 'r.json');
+    fs.writeFileSync(f, JSON.stringify(r));
+    const parsed = new ReportParser().parse(f);
+    fs.rmSync(d, { recursive: true, force: true });
+    return parsed;
+  };
   const parse = (r: JsonReport) => { const f = path.join(tmp, `r${Math.random()}.json`); fs.writeFileSync(f, JSON.stringify(r)); return new ReportParser().parse(f); };
   const only: Def[] = [{ file: 'ui/a.spec.ts', title: 'ok', line: 1, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'was failing', line: 2, kind: 'failed' }];
   const firstOnly = parse(report(only));
@@ -211,11 +220,31 @@ function main(): void {
   const l1 = selectRerun(report(only), OPTS, META);
   const rec = combineRerun(report(only), report([{ file: 'ui/a.spec.ts', title: 'was failing', line: 2, kind: 'passed' }]), l1, {});
   const parsedRec = parse(rec.combined);
-  check(parsedRec.status === 'unstable' && parsedRec.failed === 0 && parsedRec.flaky === 1 && parsedRec.passed === 1, 'parser: a run whose only failure recovered on rerun is "unstable" (never "passed"), recovered counts as flaky', `${parsedRec.status} ${parsedRec.failed}/${parsedRec.flaky}/${parsedRec.passed}`);
-  check(parsedRec.flakyTests[0]?.title === 'was failing' && parsedRec.flakyTests[0].retries === 2, 'parser: the recovered test is listed as flaky with its failed attempts and the rerun');
-  const key = rerunRowKey(parsedRec.flakyTests[0].file, parsedRec.flakyTests[0].title);
+  check(parsedRec.status === 'unstable' && parsedRec.failed === 0 && parsedRec.flaky === 0 && parsedRec.passed === 2 && parsedRec.recoveredOnRerun === 1, 'parser: a run whose only failure passed on the rerun counts it as Passed but is "unstable" (never a clean "passed")', `${parsedRec.status} ${parsedRec.passed}/${parsedRec.failed}/${parsedRec.flaky} recovered ${parsedRec.recoveredOnRerun}`);
+  check(parsedRec.firstRun.passed === 1 && parsedRec.firstRun.failed === 1 && parsedRec.firstRun.flaky === 0 && parsedRec.passRate === 50, 'parser: the first-run view keeps the failure (passed first time = 1 of 2 = 50%, never 100%)', JSON.stringify(parsedRec.firstRun));
+  check(parsedRec.flakyTests.length === 0 && parsedRec.passedOnRerunTests[0]?.title === 'was failing' && parsedRec.passedOnRerunTests[0].retries === 2 && parsedRec.passedOnRerunTests[0].recoveredOnRerun === true && parsedRec.passedOnRerunTests[0].firstRunStatus === 'failed', 'parser: the test that passed on the rerun is listed as passed-on-rerun with its failed attempts and the rerun, not as flaky');
+  const key = rerunRowKey(parsedRec.passedOnRerunTests[0].file, parsedRec.passedOnRerunTests[0].title);
   check(rec.summary.rows.some((r) => rerunRowKey(r.file, r.title) === key), 'summary rows are found by the file and title the email gets from ReportParser');
   fs.rmSync(tmp, { recursive: true, force: true });
+
+  // ── flaky first, passed on the rerun: Passed, resolved (a green run), still visible as passed-on-rerun ──
+  const flakyFirst: Def[] = [{ file: 'ui/a.spec.ts', title: 'ok', line: 1, kind: 'passed' }, { file: 'ui/a.spec.ts', title: 'was flaky', line: 2, kind: 'flaky' }];
+  const lf = selectRerun(report(flakyFirst), OPTS, META);
+  const rf = combineRerun(report(flakyFirst), report([{ file: 'ui/a.spec.ts', title: 'was flaky', line: 2, kind: 'passed' }]), lf, {});
+  const parsedFlaky = parse2(rf.combined);
+  check(parsedFlaky.status === 'passed' && parsedFlaky.flaky === 0 && parsedFlaky.passed === 2 && parsedFlaky.flakyPassedOnRerun === 1 && parsedFlaky.recoveredOnRerun === 0, 'parser: a flaky test that passed again on the rerun is Passed and resolved: the run is a clean "passed"', `${parsedFlaky.status} ${parsedFlaky.passed}/${parsedFlaky.failed}/${parsedFlaky.flaky}`);
+  check(parsedFlaky.firstRun.flaky === 1 && parsedFlaky.firstRun.passed === 1 && parsedFlaky.passRate === 50 && parsedFlaky.passedOnRerunTests[0]?.firstRunStatus === 'flaky', 'parser: ... and the first-run view still has it flaky, so "passed first time" is 50%, not 100%');
+  check(parsedFlaky.passedOnRerunTests[0]?.error !== undefined, 'parser: a passed-on-rerun test keeps the error of its failing first-run attempt (the card shows it)');
+
+  // ── summary written before the amendment (2026-11-24): recovered / flaky final are read as Passed ──
+  const oldSummary = JSON.parse(JSON.stringify(summary)) as typeof summary;
+  oldSummary.rows = [
+    { key: 'k1', file: 'ui/a.spec.ts', line: 1, title: 'old recovered', first: 'failed', rerun: 'passed', final: 'recovered' as unknown as 'passed' },
+    { key: 'k2', file: 'ui/a.spec.ts', line: 2, title: 'old flaky passed', first: 'flaky', rerun: 'passed', final: 'flaky' },
+    { key: 'k3', file: 'ui/a.spec.ts', line: 3, title: 'old flaky failed', first: 'flaky', rerun: 'failed', final: 'flaky' },
+  ];
+  const oldRead = parseRerunSummary(JSON.stringify(oldSummary));
+  check(!!oldRead && oldRead.rows[0].final === 'passed' && oldRead.rows[1].final === 'passed' && oldRead.rows[2].final === 'flaky', 'summary reader: an older summary (recovered / flaky after a rerun pass) reads as Passed, a flaky test that failed on the rerun stays Flaky');
 
   // ── summary reader ──
   check(parseRerunSummary('{ nope') === null && parseRerunSummary('{"version":2}') === null && parseRerunSummary('{"version":1,"ran":true}') === null, 'summary reader: garbage, wrong version or missing parts = null (email behaves as before)');

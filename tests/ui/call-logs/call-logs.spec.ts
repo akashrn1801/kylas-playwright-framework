@@ -579,9 +579,16 @@ test.describe('Call Logs', () => {
   // validation on the backend (unlike Meeting/Quotation/Task which do enforce it).
   // This test will be re-enabled once backend validation is introduced for Call Log
   // custom fields. See docs/known-issues/README.md for details. (2026-08-03)
-  test.skip('@regression admin should see validation errors for invalid call log custom field values and not save the call log', async ({
-    adminPage,
-  }) => {
+  test.skip(
+    '@regression admin should see validation errors for invalid call log custom field values and not save the call log',
+    {
+      annotation: {
+        type: 'skip-reason',
+        description:
+          'Call Log custom fields are not validated by the backend yet (Meeting, Quotation and Task are); re-enable once backend validation exists (docs/known-issues/README.md, 2026-08-03)',
+      },
+    },
+    async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
 

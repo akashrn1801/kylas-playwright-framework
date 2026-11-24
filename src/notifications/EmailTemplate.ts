@@ -18,7 +18,7 @@ import { redactSensitiveText } from './redact';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
-import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey, isFlakyPassedOnRerun } from './RerunSummary';
+import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
@@ -113,6 +113,8 @@ export interface EmailContext {
   // sequence, snippet, stack, classification), rendered inside the existing
   // Flaky Tests section, not a new section.
   flakyFailureDetails?: FailureDetail[];
+  // Tests that passed on the rerun shard (Passed after the rerun; their first-run failure is the evidence). ADR 0015 amendment.
+  rerunPassedDetails?: FailureDetail[];
   // WHY optional: suspected-cause hints (FailureClassifier.ts). Rendered only; nothing here feeds the verdict, health
   // score, counts, dedup key, subject or history.
   causeSummary?: CauseSummary;
@@ -216,7 +218,7 @@ export class EmailTemplate {
     // flaky/failing" test names and Action Required's items deep-link to a
     // specific test's own card in Failed/Flaky Tests when that test actually
     // appears in THIS run's output — see buildTestAnchorLookup()'s own WHY.
-    const testAnchors = this.buildTestAnchorLookup(clusters, ctx.flakyFailureDetails ?? []);
+    const testAnchors = this.buildTestAnchorLookup(clusters, [...(ctx.flakyFailureDetails ?? []), ...(ctx.rerunPassedDetails ?? [])]);
 
     const body = [
       this.buildIncompleteRunBanner(ctx.shardCompleteness),
@@ -239,6 +241,7 @@ export class EmailTemplate {
       this.buildModuleSlowestTestsSection(ctx),
       this.buildJobStatsSection(ctx),
       this.buildFlakyTestsSection(ctx),
+      this.buildPassedOnRerunSection(ctx),
       this.buildSkippedTestsSection(ctx),
       this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl, ctx.rerun),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
@@ -313,6 +316,16 @@ ${body}
   private buildIncompleteRunBanner(completeness: ShardCompleteness | null | undefined): string {
     if (!isIncompleteRun(completeness)) return '';
     const missing = completeness.expected - completeness.reported;
+    // WHY (2026-11-24, sandbox 45420781016): when the renew-session job failed, every test job was SKIPPED (nothing crashed or hung);
+    // the cause comes from shard-completeness.json / renew-session-failed.json via NotificationService.
+    if (completeness.cause?.startsWith('renew-session')) {
+      const why = completeness.cause.replace(/^renew-session:\s*/, 'The renew-session job did not succeed: ');
+      return `
+<tr><td id="section-incomplete-run" style="background:${FAIL};padding:14px 28px;text-align:center;">
+  <div style="font-size:14px;font-weight:700;color:#ffffff;">Incomplete run: ${completeness.reported} of ${completeness.expected} shards reported — no test job started</div>
+  <div style="font-size:12px;color:#ffffff;margin-top:4px;">${this.esc(why)} The test jobs need that job, so all ${missing} were skipped, not crashed. Nothing below is a pass.</div>
+</td></tr>`;
+    }
     return `
 <tr><td id="section-incomplete-run" style="background:${FAIL};padding:14px 28px;text-align:center;">
   <div style="font-size:14px;font-weight:700;color:#ffffff;">Incomplete run: ${completeness.reported} of ${completeness.expected} shards reported</div>
@@ -404,7 +417,7 @@ ${body}
 
     return `
 <tr><td id="section-suspected-environment" style="background:#EEF1FF;padding:12px 28px;border-bottom:1px solid #C9D2F5;">
-  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failures share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.esc(d.kiRef)}</div>
+  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failed or flaky tests share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.esc(d.kiRef)}</div>
   <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal, d.rerunTotal))}. A flaky test (${d.rerunTotal > 0 ? 'passed on retry or recovered on rerun' : 'passed on retry'}) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.</div>
   ${ask}
 </td></tr>`;
@@ -414,6 +427,15 @@ ${body}
     if (!summary || summary.total === 0) return '';
     const c = summary.counts;
     const note = summary.incompleteRun ? ' Run incomplete: counts cover only the shards that reported.' : '';
+    // WHY worded by what each group is (2026-11-24, build #235 said "the 10 failures" for 2 failed and 8 flaky tests):
+    // `total` is failed plus flaky (and passed-on-rerun) tests, and only the first group failed.
+    const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const heading =
+      summary.failedTotal > 0 && summary.retryTotal > 0
+        ? `${plural(summary.failedTotal, 'failure')} and ${plural(summary.retryTotal, 'flaky test')}`
+        : summary.failedTotal > 0
+          ? plural(summary.failedTotal, 'failure')
+          : plural(summary.retryTotal, 'flaky test');
     const failedPart =
       summary.failedTotal > 0
         ? `of the ${summary.failedTotal} that failed outright, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
@@ -421,11 +443,11 @@ ${body}
     const retryOnly = summary.retryTotal - summary.rerunTotal;
     const retryPart =
       summary.retryTotal > 0
-        ? `; ${[retryOnly > 0 ? `${retryOnly} passed on retry` : '', summary.rerunTotal > 0 ? `${summary.rerunTotal} recovered on rerun` : ''].filter(Boolean).join(', ')} (flaky)`
+        ? `; of the ${plural(summary.retryTotal, 'flaky test')}, ${[retryOnly > 0 ? `${retryOnly} passed on a retry` : '', summary.rerunTotal > 0 ? `${summary.rerunTotal} passed only on the rerun` : ''].filter(Boolean).join(' and ')}`
         : '';
     return `
 <tr><td id="section-failure-causes" style="padding:4px 28px 8px;">
-  <div style="font-size:12px;color:${SLATE};">Suspected cause of the ${summary.total} failures (hints, not verdicts): ${failedPart}${retryPart}.${this.esc(note)}</div>
+  <div style="font-size:12px;color:${SLATE};">Suspected cause of the ${heading} (hints, not verdicts): ${failedPart}${retryPart}.${this.esc(note)}</div>
 </td></tr>`;
   }
 
@@ -519,6 +541,9 @@ ${body}
       sentences.push('No test failures this run.');
     }
     if (report.flaky > 0) sentences.push(`${report.flaky} flaky test${report.flaky === 1 ? '' : 's'} observed.`);
+    if (report.recoveredOnRerun > 0) {
+      sentences.push(`${report.recoveredOnRerun} more failed every first attempt and passed on the rerun (counted as Passed; see Passed on rerun).`);
+    }
     if (drift?.occurred) {
       sentences.push(
         `Test count dropped by ${drift.decreaseBy} vs. ${this.driftComparisonLabel(drift)} — confirm this was intentional (see Action Required).`
@@ -685,7 +710,7 @@ ${body}
 
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
-      { value: String(report.passed), label: 'Passed', variant: 'success' },
+      { value: String(report.passed), label: 'Passed', variant: 'success', subtext: report.passedOnRerunTests.length > 0 ? `${report.passedOnRerunTests.length} of them passed on the rerun` : undefined },
       { value: String(report.flaky), label: 'Flaky', variant: report.flaky > 0 ? 'warn' : 'neutral', anchor: report.flaky > 0 ? '#section-flaky-tests' : undefined },
       { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral', anchor: report.failed > 0 ? '#section-failed-tests' : undefined },
       // Skipped = deliberate skips only; tests that never ran have their own tile (same split as the rerun table), so
@@ -970,40 +995,36 @@ ${body}
               ? `background:${SUCCESS_BG};color:${SUCCESS};`
               : `background:${CANVAS_TINT};color:${SLATE};`;
         const trend = trendByKey.get(`${m.type}:${m.name}`);
-        // WHY rewritten 2026-08-24 (item 2 fix): a bare "–" used to render
-        // identically whether the ledger simply has no history at all
-        // (which was true on EVERY real run so far — the run-history branch
-        // has never been successfully written to, see
-        // .claude/ci-reporting-history-fix-proposal.md) or a real comparison
-        // found no change. Those are different facts and must look
-        // different — "–" is now reserved for an ACTUAL confirmed-stable
-        // comparison; the no-data case says so honestly instead.
+        // WHY words next to every glyph (2026-11-24, item 21 started here): "▼" alone says nothing without the colour.
+        // "vs last run" is the single comparison with the previous comparable run; "no history yet" / "new module" stay
+        // distinct from a real "same", as before.
         const trendGlyph = !ctx.hasHistoryEverExisted
           ? `<span style="color:${MUTED};font-size:10px;">no history yet</span>`
           : !trend
             ? `<span style="color:${MUTED};font-size:10px;">new module</span>`
             : trend.direction === 'improving'
-              ? `<span style="color:${SUCCESS};">▲</span>`
+              ? `<span style="color:${SUCCESS};">▲ better</span>`
               : trend.direction === 'worsening'
-                ? `<span style="color:${FAIL};">▼</span>`
-                : `<span style="color:${MUTED};">–</span>`;
-        // WHY only rendered when direction !== 'insufficient-data' (2026-09-29,
-        // Phase 3 item 5): fewer than 4 matching-scope runs in history isn't a
-        // real trend to report — rendering nothing there is more honest than
-        // a misleadingly confident "stable" on too little data.
+                ? `<span style="color:${FAIL};">▼ worse</span>`
+                : `<span style="color:${MUTED};">same</span>`;
+        // WHY two separate lines in the stability column (2026-11-24, build #235: Meetings RBAC with 3 of 12 tests unstable
+        // read "– stable (4% unstable / last 10)"): the badge is the direction of the last N runs averaged, so one bad run
+        // is diluted into "stable". This run's own instability (the FIRST run's failed + flaky, before the rerun) comes
+        // first, in words, and the rolling window follows under its own label.
+        const unstableNow = m.firstRun.failed + m.firstRun.flaky;
+        const thisRun =
+          unstableNow > 0
+            ? `<div style="font-size:10px;font-weight:700;color:${m.firstRun.failed > 0 ? FAIL : WARN};">unstable this run: ${unstableNow} of ${m.total} (${[m.firstRun.failed > 0 ? `${m.firstRun.failed} failed first` : '', m.firstRun.flaky > 0 ? `${m.firstRun.flaky} flaky` : ''].filter(Boolean).join(', ')})</div>`
+            : `<div style="font-size:10px;color:${MUTED};">clean this run</div>`;
         const stability = stabilityByKey.get(`${m.type}:${m.name}`);
         const stabilityBadge =
           !stability || stability.direction === 'insufficient-data'
             ? ''
             : `<div style="font-size:9px;margin-top:2px;color:${
                 stability.direction === 'worsening' ? FAIL : stability.direction === 'improving' ? SUCCESS : MUTED
-              };">${
-                stability.direction === 'worsening'
-                  ? '⚠ worsening'
-                  : stability.direction === 'improving'
-                    ? '✓ improving'
-                    : '– stable'
-              } (${stability.failRate + stability.flakyRate}% unstable / last ${stability.runsConsidered})</div>`;
+              };">last ${stability.runsConsidered} runs: ${stability.failRate + stability.flakyRate}% unstable, ${
+                stability.direction === 'worsening' ? 'getting worse' : stability.direction === 'improving' ? 'getting better' : 'no clear trend'
+              }</div>`;
         const flakyCell = m.flaky > 0
           ? `<a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${m.flaky}</a>`
           : String(m.flaky);
@@ -1033,9 +1054,10 @@ ${body}
         <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${m.passed}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
-        <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div></td>
+        <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div><div style="font-size:9px;color:${MUTED};margin-top:2px;">${passRate}% passed</div></td>
         <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
-        <td style="padding:8px;text-align:center;">${trendGlyph}${stabilityBadge}</td>
+        <td style="padding:8px;text-align:center;font-size:11px;">${trendGlyph}</td>
+        <td style="padding:8px;text-align:left;">${thisRun}${stabilityBadge}</td>
       </tr>`;
       })
       .join('');
@@ -1054,7 +1076,8 @@ ${body}
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Progress</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Trend</th>
+      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">vs last run</th>
+      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Stability</th>
     </tr>
     ${rows}
   </table>
@@ -1224,7 +1247,7 @@ ${body}
     // see JobStats.buildJobRecoveryRows()'s own WHY comment for what it measures.
     const recoveryRows = buildJobRecoveryRows(stats.jobs, ctx.miscErrors?.recoveryByShard);
     const hasAnyRecovery = recoveryRows.some(
-      (r) => r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0
+      (r) => r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0
     );
     const hhmm = (iso: string): string => new Date(iso).toISOString().slice(11, 16);
     const recoverySection =
@@ -1234,26 +1257,28 @@ ${body}
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
       hasAnyRecovery
-        ? 'Times the app showed its 429 page / "Something is broken" error screen, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (UTC times). "Failed" = the retried action threw again after recovery.'
-        : 'No 429 pages, error-boundary screens or globalSetup retries were recorded in any shard this run.'
+        ? 'Times the app showed its 429 page / "Something is broken" error screen, answered an API call with HTTP 429, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (UTC times). "Failed" = the retried action threw again after recovery.'
+        : 'No 429 pages, HTTP 429 API answers, error-boundary screens or globalSetup retries were recorded in any shard this run (counted: the 429 and error pages a wait ran into, every API response with status 429, and globalSetup retries).'
     }</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr style="border-bottom:1px solid ${BORDER};">
         <th align="left" style="padding:4px 0;font-size:10px;color:${MUTED};">Job</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End</th>
-        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 page</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 API</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Boundary</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
         <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
       </tr>${recoveryRows
         .map((r) => {
-          const hot = r.rateLimitPages + r.errorBoundaryPages + r.setupRetries > 0;
+          const hot = r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0;
           return `
       <tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:5px 0;font-size:11.5px;color:${INK};">${this.esc(r.jobName)}${r.attributed ? '' : ` <span style="color:${MUTED};">(no shard data)</span>`}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitApi > 0 ? FAIL : SLATE};">${r.rateLimitApi}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};">${r.errorBoundaryPages}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};">${r.setupRetries}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
@@ -1445,7 +1470,6 @@ ${body}
   // A test that did not run first and passed on the rerun never failed: it is Passed, labelled by how it got there.
   private finalLabel(row: RerunTestRow): string {
     if (row.first === 'not-run' && row.final === 'passed') return 'Passed (did not run → passed on rerun)';
-    if (isFlakyPassedOnRerun(row)) return 'Flaky - passed on rerun';
     return FINAL_LABEL[row.final];
   }
 
@@ -1487,15 +1511,16 @@ ${body}
     const f = rerun.firstRun;
     const a = rerun.afterRerun;
     const ranOnly = rerun.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length;
+    const passedOnRerun = rerun.rows.filter((r) => r.first !== 'not-run' && r.final === 'passed').length;
     const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
     const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
     const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
     const summaryTable = `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
       <tr>${th('', 'left')}${th('First run')}${th('After rerun')}</tr>
-      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${ranOnly} ran only on rerun)</span>` : ''}`, SUCCESS)}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[passedOnRerun > 0 ? `${passedOnRerun} passed on rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`, SUCCESS)}</tr>
       <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
-      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${rerun.recovered > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${rerun.recovered} recovered on rerun)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
+      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(String(a.flaky), a.flaky > 0 ? WARN : INK)}</tr>
       ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
       <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
       <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
@@ -1517,16 +1542,25 @@ ${body}
       <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
     </table>`
         : '';
+    // WHY one line per reason with the tests named (2026-11-24, item 11): the old sentence listed every possible reason, so
+    // a reader could not tell which one applied to which test. The reasons are the selector's own, per test.
+    const byReason = new Map<string, string[]>();
+    for (const e of rerun.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) ?? []), e.title]);
     const excluded =
       rerun.excluded.length > 0
-        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun (form-field suites are never rerun; when the run has failed tests only those are rerun; or flaky tests are switched off); their first-run result stands.</div>`
+        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun; their first-run result stands:${[...byReason]
+            .map(([reason, titles]) => {
+              const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
+              return `<div style="margin-top:3px;">${titles.length} &mdash; ${this.esc(reason)}: ${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}</div>`;
+            })
+            .join('')}</div>`
         : '';
     const took = rerun.durationMs !== undefined ? ` in ${this.formatDuration(rerun.durationMs)}` : '';
     return `
 <tr><td id="section-rerun" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
     ${heading}
-    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} recovered, ${rerun.stillFailing} still failing. A test that passes only on the rerun is counted as Flaky, never as Passed.${origin}</div>
+    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. A test that passes on the rerun counts as Passed in "After rerun", whether it was Failed or Flaky in the first run; "First run" and the "Passed first time" tile keep the first attempt.${origin}</div>
     ${summaryTable}
     ${testTable}
     ${excluded}
@@ -1552,12 +1586,32 @@ ${body}
   }
 
   private buildFlakyTestsSection(ctx: EmailContext): string {
-    const { report } = ctx;
-    if (report.flakyTests.length === 0) return '';
+    return this.buildUnstableTestsSection(ctx, {
+      id: 'section-flaky-tests',
+      heading: 'Flaky Tests',
+      tests: ctx.report.flakyTests,
+      details: ctx.flakyFailureDetails ?? [],
+    });
+  }
+
+  // Tests that failed every first attempt (or passed only on an in-job retry) and passed on the rerun shard: Passed in the
+  // counts (ADR 0015, amended 2026-11-24), listed here with their first-run failure so the evidence is not lost.
+  private buildPassedOnRerunSection(ctx: EmailContext): string {
+    return this.buildUnstableTestsSection(ctx, {
+      id: 'section-passed-on-rerun',
+      heading: 'Passed on rerun',
+      tests: ctx.report.passedOnRerunTests,
+      details: ctx.rerunPassedDetails ?? [],
+      note: 'Counted as Passed after the rerun; each failed on every first attempt or passed only on an in-job retry, so the run is not a clean pass.',
+    });
+  }
+
+  private buildUnstableTestsSection(ctx: EmailContext, opts: { id: string; heading: string; tests: TestResult[]; details: FailureDetail[]; note?: string }): string {
+    if (opts.tests.length === 0) return '';
     const recurringByTitle = new Map((ctx.recurringFlaky ?? []).map((r) => [r.title, r]));
-    const detailByTitle = new Map((ctx.flakyFailureDetails ?? []).map((d) => [d.test.title, d]));
+    const detailByTitle = new Map(opts.details.map((d) => [d.test.title, d]));
     const rerunRows = this.rerunRowMap(ctx.rerun);
-    const rows = report.flakyTests
+    const rows = opts.tests
       .map((t: TestResult) => {
         const recurring = recurringByTitle.get(t.title);
         const ratio = recurring ? recurring.countInLastNRuns / recurring.ofLastNRuns : 0;
@@ -1586,9 +1640,10 @@ ${body}
       })
       .join('');
     return `
-<tr><td id="section-flaky-tests" style="padding:8px 28px;">
+<tr><td id="${opts.id}" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:${WARN_BG};border-radius:6px;padding:16px;">
-    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${WARN};margin-bottom:10px;">Flaky Tests (${report.flakyTests.length})</div>
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${WARN};margin-bottom:${opts.note ? '4' : '10'}px;">${opts.heading} (${opts.tests.length})</div>${opts.note ? `
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${this.esc(opts.note)}</div>` : ''}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
   </div>
 </td></tr>`;
@@ -1744,6 +1799,7 @@ ${body}
       (e) => !e.expectedReason && (e.statusCode ?? 0) >= 500
     ).length;
     const unexpectedApp = Math.max(0, miscErrors.unexpectedErrors - unexpectedInfra);
+    const noiseCount = miscErrors.errors.filter((e) => e.expectedReason === 'background-noise').length;
 
     return `
 <tr><td id="section-background-errors" style="padding:8px 28px;">
@@ -1754,8 +1810,10 @@ ${body}
       ${unexpectedApp > 0 ? this.signalChip(`${unexpectedApp} app-level`, 'fail') : ''}
       ${unexpectedInfra > 0 ? this.signalChip(`${unexpectedInfra} infra-level (5xx)`, 'warn') : ''}
       ${miscErrors.expectedRbacErrors > 0 ? this.signalChip(`${miscErrors.expectedRbacErrors} expected RBAC`, 'warn') : ''}
+      ${noiseCount > 0 ? this.signalChip(`${noiseCount} known background noise`, 'warn') : ''}
     </div>
-    <div style="font-size:11px;color:${SLATE};margin-bottom:12px;">Unexpected = review and raise bugs (app-level = likely a real app bug; infra-level = a 5xx from a dependency, often transient). Expected RBAC = correct app security behaviour.</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:4px;">${miscErrors.unexpectedErrors} unexpected + ${miscErrors.expectedRbacErrors} expected RBAC + ${noiseCount} known background noise = ${miscErrors.totalErrors} total. Only the unexpected ones count towards the health score and the "background errors" figures above; the other two are shown for completeness.</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:12px;">Unexpected = review and raise bugs (app-level = likely a real app bug; infra-level = a 5xx from a dependency, often transient). Expected RBAC = correct app security behaviour. Known background noise = a side widget or a deliberate validation error the suite already knows about.</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:12px;font-weight:600;color:${INK};margin-bottom:6px;">By Error Type</div>
       <table role="presentation" width="220" cellpadding="0" cellspacing="0">${byTypeRows}</table>

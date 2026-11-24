@@ -25,23 +25,10 @@ import { loadRerunSummary } from '../RerunSummary';
 import {
   appendAndPrune,
   parseHistory,
-  computeDelta,
-  computeRecurringFlaky,
-  computeRecurringFailures,
-  computeModuleTrend,
-  computeModuleStabilityTrend,
-  computeSlowTestTrend,
-  computeSuiteDrift,
-  buildPassRateSeries,
+  computeHistoryDeltaOutput,
+  HistoryDeltaOutput,
   deriveTestScope,
   RunHistoryRecord,
-  RunDelta,
-  RecurringIssue,
-  ModuleTrend,
-  ModuleStabilityTrend,
-  SlowTestTrend,
-  SuiteDrift,
-  PassRatePoint,
 } from '../RunHistory';
 
 // WHY: must load before reading process.env.ENV below — see loadDotEnv.ts for
@@ -557,17 +544,20 @@ export function buildCurrentRecord(
   // branch/workflow/Jenkinsfile with zero per-pipeline configuration.
   const { scope, basis } = deriveTestScope(report.allTestTitlesRaw, report.modules);
   log(`[syncHistory] Derived test scope: "${scope}" (basis: ${basis})`);
-  // WHY (ADR 0015): with a rerun, `report` is the COMBINED report, so failed/flaky below are the final counts and a
-  // test that recovered on the rerun is already a flaky one (title in flakyTestTitles). The first-attempt view is
-  // kept in extra optional fields. No summary (or ran:false) = no fields = a record exactly as before.
+  // WHY (ADR 0015, amended 2026-11-24): with a rerun, `report` is the COMBINED report, where a test that passed on the
+  // rerun is Passed. History keeps the FIRST-RUN counts (passed/failed/flaky/skipped and the per-module counts), so trends
+  // and "passed first time" compare like with like; the after-rerun counts are in `afterRerun`. A test that passed only
+  // on the rerun stays in flakyTestTitles (it was unstable), so recurring-flaky keeps counting it, and never in the
+  // failed titles. No summary (or ran:false) = no extra fields and a record exactly as before.
   const rerunSummary = loadRerunSummary(env);
   const rerunFields: Partial<RunHistoryRecord> =
     rerunSummary && rerunSummary.ran
       ? {
           rerun: { candidates: rerunSummary.candidates, recovered: rerunSummary.recovered, stillFailing: rerunSummary.stillFailing, ranOnlyOnRerun: rerunSummary.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length },
+          afterRerun: { passed: report.passed, failed: report.failed, flaky: report.flaky },
           firstRunFailed: rerunSummary.firstRun.failed,
           firstRunFlaky: rerunSummary.firstRun.flaky,
-          recoveredOnRerunTitles: rerunSummary.rows.filter((r) => r.final === 'recovered').map((r) => r.title),
+          recoveredOnRerunTitles: rerunSummary.rows.filter((r) => r.first === 'failed' && r.final === 'passed').map((r) => r.title),
         }
       : {};
   return {
@@ -583,12 +573,12 @@ export function buildCurrentRecord(
     ...(workers !== undefined ? { workers } : {}),
     ...(lanes !== undefined ? { lanes } : {}),
     total: report.total,
-    passed: report.passed,
-    failed: report.failed,
-    flaky: report.flaky,
-    skipped: report.skipped,
+    passed: report.firstRun.passed,
+    failed: report.firstRun.failed,
+    flaky: report.firstRun.flaky,
+    skipped: report.firstRun.skipped + report.firstRun.didNotRun,
     duration: report.duration,
-    flakyTestTitles: report.flakyTests.map((t) => t.title),
+    flakyTestTitles: [...report.flakyTests, ...report.passedOnRerunTests].map((t) => t.title),
     // WHY: added 2026-07-14 — mirrors flakyTestTitles; without this, "has this
     // test failed before" was structurally unanswerable from history.
     failedTestTitles: report.failedTests.map((t) => t.title),
@@ -603,26 +593,15 @@ export function buildCurrentRecord(
       // module pair collides on lookup.
       type: m.type,
       total: m.total,
-      passed: m.passed,
-      failed: m.failed,
-      flaky: m.flaky,
+      passed: m.firstRun.passed,
+      failed: m.firstRun.failed,
+      flaky: m.firstRun.flaky,
       // WHY: previously hardcoded to 0 — "ReportParser's ModuleStats doesn't
       // track per-module duration today." Fixed 2026-07-14: ReportParser now
       // sums each result's duration into its module bucket.
       duration: m.duration,
     })),
   };
-}
-
-interface HistoryDeltaOutput {
-  delta: RunDelta | null;
-  recurringFlaky: RecurringIssue[];
-  recurringFailures: RecurringIssue[];
-  moduleTrend: ModuleTrend[];
-  moduleStabilityTrend: ModuleStabilityTrend[];
-  slowTestTrend: SlowTestTrend[];
-  suiteDrift: SuiteDrift | null;
-  passRateSeries: PassRatePoint[];
 }
 
 const EMPTY_DELTA_OUTPUT: HistoryDeltaOutput = {
@@ -811,16 +790,7 @@ async function main() {
 
       deltaOutput = current.incomplete
         ? EMPTY_DELTA_OUTPUT
-        : {
-            delta: computeDelta(historyBeforeAppend, current),
-            recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
-            recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
-            moduleTrend: computeModuleTrend(historyBeforeAppend, current),
-            moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
-            slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
-            suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
-            passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
-          };
+        : computeHistoryDeltaOutput(historyBeforeAppend, current);
 
       const updatedJsonl = appendAndPrune(existingJsonl, current);
       fs.mkdirSync(path.dirname(historyFilePath), { recursive: true });
