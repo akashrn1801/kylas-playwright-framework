@@ -1,7 +1,7 @@
 /**
  * `npm run check:email-size` (commit 2 of the email review, 2026-11-25): the rendered email must stay under Gmail's clipping limit
- * (about 100 KB; build #235 was 456 KB, so readers never reached the bottom sections), on the real build #235 replay, its blocked-by-session
- * variant and the worst case (60 failed, 80 flaky, 790 background errors). Also checks the structural rules behind the size: every
+ * (about 100 KB; build #235 was 456 KB, so readers never reached the bottom sections), on the real build #235 replay and its blocked-by-session
+ * variant; the worst case (60 failed, 80 flaky, 790 background errors) is only reported, nothing is capped for size. Also checks the structural rules behind the size: every
  * error once, no unopenable artifact paths, the grouped background errors with the full list in a page, the plain-text part.
  * Nothing is sent and nothing touches the network.
  */
@@ -28,12 +28,31 @@ const real = replayBuild235({ withSkipReason: true });
 const blocked = replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } });
 const worst = replayBuild235({ fixture: buildWorstCaseFixture() });
 
-for (const [name, r] of [['build #235', real], ['build #235 blocked by renew-session', blocked], ['worst case (60 failed, 80 flaky, 790 background errors)', worst]] as const) {
-  const bytes = Buffer.byteLength(r.html);
+// Nothing is capped for size (2026-11-25): the normal runs must fit, the worst case is only REPORTED (Gmail shows "View entire message" past ~102 KB), and what
+// must always be above the clip is the essentials, so those are checked by position.
+for (const [name, r] of [['build #235', real], ['build #235 blocked by renew-session', blocked]] as const) {
+  const bytes = Buffer.byteLength(r.sent);
   check(bytes < LIMIT, `size: ${name} is under 100 KiB (${kib(bytes)})`, `${kib(bytes)} (${bytes} B) is over ${kib(LIMIT)}`);
 }
-check(Buffer.byteLength(real.html) < LIMIT * 0.97, `size: build #235 keeps a 3% margin below the limit (${kib(Buffer.byteLength(real.html))})`, `${kib(Buffer.byteLength(real.html))}`);
-
+const worstBytes = Buffer.byteLength(worst.sent);
+process.stdout.write(`INFO  worst case (60 failed, 80 flaky, 790 background errors) is ${kib(worstBytes)} as sent (${kib(Buffer.byteLength(worst.html))} readable); not a failure\n`);
+const CLIP = 102 * 1024;
+for (const [name, r] of [['build #235', real], ['worst case', worst]] as const) {
+  const sent = r.sent;
+  const at = (needle: string): number => Buffer.byteLength(sent.slice(0, Math.max(0, sent.indexOf(needle))));
+  const essentialsEnd = at('Slowest Tests');
+  check(sent.includes('Slowest Tests') && essentialsEnd < CLIP, `size: ${name}: verdict, tiles, How the run ended, Action Required and Module Analytics all end before the clip (${kib(essentialsEnd)})`, `${kib(essentialsEnd)}`);
+  const order = ['>Result<', 'How the run ended', 'Action Required (Automation Health', 'Module Analytics</div>'].map((n) => sent.indexOf(n));
+  check(order.every((o, k) => o >= 0 && (k === 0 || o > order[k - 1])), `size: ${name}: the essentials come in order (Result, How the run ended, Action Required, Module Analytics)`, order.join(','));
+  const firstCard = sent.indexOf('id="section-failed-tests"') >= 0 ? sent.indexOf('id="section-failed-tests"') : sent.indexOf('id="section-flaky-tests"');
+  check(firstCard < 0 || firstCard > order[3], `size: ${name}: the cards come after the essentials`, `${firstCard} vs ${order[3]}`);
+}
+for (const [name, r] of [['build #235', real], ['worst case', worst]] as const) {
+  const ids = (r.html.match(/id="(?:section-failed-tests|section-flaky-tests|section-passed-on-rerun)"/g) ?? []).length;
+  check(ids >= 1, `no cap: ${name} has its failed/flaky sections`, '');
+  const more = /more, not shown in full here|more failed tests?, not shown in full|shorter jobs \(each|more rerun tests|more modules? with failures/.test(r.html);
+  check(!more, `no cap: ${name} has no "+N more, not shown" line`, 'a size cap is still in the template');
+}
 // item 8: no path that only exists inside a CI runner
 for (const [name, r] of [['build #235', real], ['worst case', worst]] as const) {
   check(!/all-blob-reports\/resources|blob-report\/resources|test-results\/[^"<\s]*\.zip|error-context\.md/.test(r.html), `item 8: ${name} has no trace/snapshot paths from inside the runner`, 'a runner-relative artifact path is still in the email');
@@ -65,8 +84,8 @@ fs.rmSync(dir, { recursive: true, force: true });
 check(!/Job Time Overlaps<\/div>/.test(real.html) ? /Job time overlaps:<\/strong> none that matter/.test(real.html) : true, 'item 9: with no same-module overlap the email says so in one line');
 
 // item 10: slowest by module limited
-const modBlocks = (real.html.match(/Slowest Tests by Module \(5 slowest modules/g) ?? []).length;
-check(modBlocks === 1, 'item 10: "Slowest Tests by Module" is limited to the 5 slowest modules');
+const modBlocks = (real.html.match(/Slowest Tests by Module \(every module, top 3 each\)/g) ?? []).length;
+check(modBlocks === 1, 'item 10: "Slowest Tests by Module" lists every module, top 3 each (main lists them all; the 5-module cap is gone)');
 
 // item 14: three lines on top
 const top = /Result<\/strong>[^<]*<\/div> <div[^>]*><strong[^>]*>Action<\/strong>[^<]*<\/div> <div[^>]*><strong[^>]*>Run<\/strong>/.test(real.html.replace(/\s+/g, ' '));
@@ -78,10 +97,10 @@ const tpl = new EmailTemplate();
 const text = tpl.text(real.ctx);
 check(text.startsWith(real.subject) && /\nResult: /.test(text) && /\nAction: /.test(text) && /\nRun: /.test(text), 'item 24: the text part starts with the subject and has Result, Action and Run');
 check(!/<[a-z][^>]*>/i.test(text), 'item 24: the text part has no HTML');
-check(Buffer.byteLength(text) < 12 * 1024, `item 24: the text part is small (${kib(Buffer.byteLength(text))})`);
+check(Buffer.byteLength(text) < 12 * 1024, `item 24: the text part is small on a normal run (${kib(Buffer.byteLength(text))})`);
 check(/FAILED \(2\)/.test(text) && /FLAKY \/ PASSED ON RERUN \(8\)/.test(text), 'item 24: the text part lists the failed and the flaky tests');
 const worstText = tpl.text(worst.ctx);
-check(Buffer.byteLength(worstText) < 12 * 1024, `item 24: the text part stays small in the worst case (${kib(Buffer.byteLength(worstText))})`);
+process.stdout.write(`INFO  worst case plain-text part is ${kib(Buffer.byteLength(worstText))} (every failed and flaky test is listed)\n`);
 
 // ── commit 3 (items 15-23) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const flat = real.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');

@@ -54,9 +54,9 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '22-flaky-above-budget', title: 'Four flaky tests (budget is 3); the rerun is off', expect: 'amber: flaky above the budget; the subject names 4 flaky', first: [...base(25), ...many(4, 'flaky', 'flaky')], rerun: false },
   { name: '23-flaky-at-budget-plus-rerun-recovery', title: 'Three flaky tests plus one that failed every attempt and passed on the rerun (D2)', expect: 'amber because of the D2 test, not because of the flaky ones', first: [...base(25), ...many(3, 'flaky', 'flaky'), def('ui/d2/d2.spec.ts', 'd2 failing test', 5, 'failed')], rerun: true },
   { name: '24-flaky-at-budget-not-rerun-by-default', title: 'Three flaky tests; the flaky rerun is off by default (RERUN_INCLUDE_FLAKY=false)', expect: 'green, "(3 flaky)" in the subject; no rerun table', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: true, includeFlaky: false },
-  { name: '25-many-flaky-over-the-card-cap', title: 'Fourteen flaky tests and ten background-error groups; no rerun', expect: 'amber (above the flaky budget); full cards for at most 10, the others listed by title; background errors grouped', first: [...base(30), ...many(14, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: false, unexpectedErrors: 60 },
+  { name: '25-many-flaky-over-the-card-cap', title: 'Fourteen flaky tests and ten background-error groups; no rerun', expect: 'amber (above the flaky budget); a full card for every flaky test; background errors grouped', first: [...base(30), ...many(14, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: false, unexpectedErrors: 60 },
   { name: '26-big-failure-cluster', title: 'Twenty failures with the same error message (one cluster)', expect: 'red; one full card for the cluster, the others one line each ("same cause")', first: [...base(30), ...many(20, 'failed', 'same cause', 'ui/same/same.spec.ts', 10)], rerun: true, rerunResult: () => 'failed' },
-  { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; the email must stay under 100 KB', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
+  { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; nothing is capped, so the size is only reported (it may pass Gmail\'s clip)', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
   { name: '42-known-bug-tests', title: 'Three known-bug tests (test.fail()) fail as expected, one flaky test', expect: 'green or amber by the flaky budget; the 3 expected failures are Passed first time, never "failed first"', first: [...base(25), ...many(3, 'known-bug', 'known bug', 'rbac/known.rbac.spec.ts', 50), ...many(1, 'flaky', 'flaky')], rerun: true },
 ];
 
@@ -164,6 +164,37 @@ export function tileStyles(html: string): Record<string, { fill: string; text: s
   }
   return out;
 }
+/** Every tag with its attributes sorted (and class tokens sorted): two HTML strings that differ only in attribute order compare equal. */
+export function normalizeTags(html: string): string {
+  return html.replace(/<([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z-]+(?:="[^"]*")?)*)\s*>/g, (_m, tag: string, attrs: string) => {
+    const list = [...attrs.matchAll(/\s+([a-zA-Z-]+)(?:="([^"]*)")?/g)].map((a) => [a[1], a[0].includes('=') ? a[2] : null] as const);
+    const norm = list.map(([k, v]) => (k === 'class' && v ? `class="${v.split(/\s+/).sort().join(' ')}"` : v === null ? k : k === 'style' ? `style="${v.replace(/;\s*$/, '')}"` : `${k}="${v}"`)).sort();
+    return `<${tag}${norm.length ? ' ' + norm.join(' ') : ''}>`;
+  });
+}
+
+/** The all-modules table: per entity, the UI and RBAC cells as numbers (null for a missing side), and each cell's background. */
+export interface ModuleRow { name: string; UI: number[] | null; RBAC: number[] | null; bgs: string[] }
+export function allModulesTable(html: string): ModuleRow[] | null {
+  const i = html.indexOf('id="all-modules"');
+  if (i < 0) return null;
+  const end = html.indexOf('</table>', html.indexOf('<table', i));
+  const rows: ModuleRow[] = [];
+  for (const tr of html.slice(i, end).split('<tr style="border-bottom').slice(1)) {
+    const cells = [...tr.matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/g)].map((c) => ({ attrs: c[1], t: text(c[2]) }));
+    const name = cells[0].t;
+    const rest = cells.slice(1);
+    const side = (): number[] | null => {
+      if (rest[0] && /colspan="7"/.test(rest[0].attrs)) { rest.shift(); return null; }
+      const seven = rest.splice(0, 7); // tests, first, retry, rerun, failed, skipped, then the stability text
+      return seven.slice(0, 6).map((c) => parseInt(c.t, 10));
+    };
+    const bgs: string[] = [];
+    for (const c of cells.slice(1)) bgs.push(/background:(#[0-9A-Fa-f]{6})/.exec(c.attrs)?.[1]?.toUpperCase() ?? '');
+    rows.push({ name, UI: side(), RBAC: side(), bgs });
+  }
+  return rows;
+}
 export interface RerunRow { first: number; final: number; note: string }
 export function rerunTable(html: string): Record<string, RerunRow> | null {
   const i = html.indexOf('id="section-rerun"');
@@ -225,8 +256,8 @@ const incomplete = (s: ScenarioResult): boolean => !!s.spec.completeness && s.sp
 export function invariants(s: ScenarioResult): Violation[] {
   const v: Violation[] = [];
   const bad = (id: string, message: string): void => void v.push({ scenario: s.spec.name, id, message });
-  const sizeBytes = Buffer.byteLength(s.html);
-  if (sizeBytes > 100 * 1024) bad('size', `the email is ${(sizeBytes / 1024).toFixed(1)} KiB, over Gmail's 100 KiB clipping limit`);
+  const sizeBytes = Buffer.byteLength(s.sent);
+  if (sizeBytes > 100 * 1024 && s.spec.name !== '21-very-bad-run') bad('size', `the email is ${(sizeBytes / 1024).toFixed(1)} KiB, over Gmail's 100 KiB clipping limit`);
   if (s.kind === 'unavailable') {
     if (/passed|✅/i.test(s.subject)) bad('no-pass-claim', `a run with no report claims a pass: ${s.subject}`);
     if (!/REPORT NOT AVAILABLE/.test(s.subject)) bad('says-what-it-is', `the subject does not say the report is unavailable: ${s.subject}`);
@@ -384,6 +415,34 @@ export function invariants(s: ScenarioResult): Violation[] {
     if ((bar && bar[1].toUpperCase() !== RETRY.bg.toUpperCase()) || (dot && dot[1].toUpperCase() !== RETRY.bg.toUpperCase())) bad('retry-yellow', `the Passed on retry bar / legend dot is not ${RETRY.bg}`);
   }
 
+  // E6 (2026-11-25): every module, UI and RBAC side by side; per side the five outcomes add up to Tests; the totals are the run's; problems are highlighted
+  const modRows = allModulesTable(s.html);
+  if (!blockedLike || r.modules.length > 0) {
+    const names = [...new Set(r.modules.map((m) => m.name))];
+    if (!modRows) bad('all-modules-present', 'the all-modules table is missing');
+    else {
+      if (modRows.length !== names.length || !names.every((n) => modRows.some((x) => x.name === n))) bad('all-modules-complete', `the table has ${modRows.length} rows, the run has ${names.length} modules: every module must be shown`);
+      let totalTests = 0;
+      for (const row of modRows) {
+        for (const side of [row.UI, row.RBAC]) {
+          if (!side) continue;
+          totalTests += side[0];
+          if (side[1] + side[2] + side[3] + side[4] + side[5] !== side[0]) bad('all-modules-adds-up', `${row.name}: first ${side[1]} + retry ${side[2]} + rerun ${side[3]} + failed ${side[4]} + skipped ${side[5]} != tests ${side[0]}`);
+        }
+      }
+      if (totalTests !== r.total) bad('all-modules-total', `the table's tests add up to ${totalTests}, the run has ${r.total}`);
+      const fails = modRows.reduce((n, x) => n + (x.UI?.[4] ?? 0) + (x.RBAC?.[4] ?? 0), 0);
+      const retries = modRows.reduce((n, x) => n + (x.UI?.[2] ?? 0) + (x.RBAC?.[2] ?? 0), 0);
+      if (fails !== r.failed || retries !== r.firstRun.flaky) bad('all-modules-match-run', `table failed ${fails} / retry ${retries} vs the run ${r.failed} / ${r.firstRun.flaky}`);
+      const firstProblem = modRows.findIndex((x) => [x.UI, x.RBAC].every((sd) => !sd || (sd[2] + sd[3] + sd[4] === 0)));
+      const lastProblem = modRows.map((x) => [x.UI, x.RBAC].some((sd) => sd && sd[2] + sd[3] + sd[4] > 0)).lastIndexOf(true);
+      if (firstProblem >= 0 && lastProblem > firstProblem) bad('all-modules-problems-first', 'a module with a problem comes after one without');
+      for (const row of modRows) if ((row.UI?.[4] ?? 0) + (row.RBAC?.[4] ?? 0) > 0 && !row.bgs.includes('#FFEBE9')) bad('all-modules-highlight', `${row.name} has failed tests but no red cell`);
+    }
+  }
+  // E7: moving the repeated styles into classes loses nothing: the sent email, with its classes expanded, is the readable one
+  if (s.kind === 'email' && normalizeTags(EmailTemplate.expandStyles(s.sent)) !== normalizeTags(s.html)) bad('styles-roundtrip', 'the sent email (classes expanded) differs from the readable one: the style compaction lost or changed something');
+
   // 5-6: verdict, colour and icon
   if (r.failed > 0 && (verdict.verdict === 'clear' || verdict.bannerTone === 'success' || subjectIcon === 'green')) bad('failure-never-green', `a run with ${r.failed} failed tests is shown green (${verdict.bannerLabel})`);
   if (subjectIcon === 'green' && verdict.verdict !== 'clear') bad('icon-matches-verdict', `the subject is green but the verdict is ${verdict.verdict}`);
@@ -455,9 +514,10 @@ export function invariants(s: ScenarioResult): Violation[] {
   const iExec = s.html.indexOf('Executive Summary');
   if (iResult < 0 || !s.html.includes('>Action<') || !s.html.includes('>Run<') || (iExec >= 0 && iResult > iExec)) bad('top-summary', 'the Result / Action / Run lines are missing or come after the Executive Summary');
   if (!plain.startsWith(s.subject) || /<[a-z][^>]*>/i.test(plain) || !/\nResult: /.test(plain)) bad('text-part', 'the plain-text part does not start with the subject, has HTML in it or has no Result line');
-  if (Buffer.byteLength(plain) > 12 * 1024) bad('text-part-size', `the plain-text part is ${(Buffer.byteLength(plain) / 1024).toFixed(1)} KiB`);
+  if (Buffer.byteLength(plain) > 12 * 1024 && s.spec.name !== '21-very-bad-run') bad('text-part-size', `the plain-text part is ${(Buffer.byteLength(plain) / 1024).toFixed(1)} KiB`);
   const cardCount = (s.html.match(/<div id="test-/g) ?? []).length;
-  if (cardCount > 12 + (s.html.match(/<tr id="test-/g)?.length ?? 0)) bad('cards-capped', `${cardCount} detail cards in one email`);
+  if (/more, not shown in full|more failed tests?, not shown in full|shorter jobs \(each|more rerun tests|more modules? with failures/.test(s.html)) bad('no-size-cap', 'a size cap is still in the email: nothing is capped for size');
+  void cardCount;
   if (/all-blob-reports\/resources|blob-report\/resources|error-context\.md|test-results\/[^"<\s]*\.zip/.test(flat)) bad('no-runner-paths', 'a runner-relative trace/snapshot path is in the email');
   if (!/Result<\/strong>/.test(s.html.replace(/\s+/g, ' ')) && s.html.includes('>Result<')) bad('top-summary-shape', 'the Result line is not in the expected markup');
   if (ctx.miscErrors && ctx.miscErrors.totalErrors > 0 && !s.html.includes('Top errors, grouped by request')) bad('background-errors-grouped', 'background errors are not shown as grouped');
@@ -513,7 +573,7 @@ function main(): void {
     ['41-build-235-blocked', 'Build #235 data with the renew-session failure injected', 'BLOCKED naming renew-session', true],
   ] as const) {
     const rp = replayBuild235({ blockedBySession: blocked ? { renewalFailure: renewal, cause: 'renew-session:failure' } : undefined });
-    results.push({ spec: { name, title, expect, first: [], completeness: blocked ? { expected: 11, reported: 0, cause: 'renew-session:failure' } : undefined }, env: 'staging', branch: 'sandbox', html: rp.html, subject: rp.subject, report: rp.report, ctx: rp.ctx, summary: rp.summary, list: rp.list, record: rp.record, kind: 'email' });
+    results.push({ spec: { name, title, expect, first: [], completeness: blocked ? { expected: 11, reported: 0, cause: 'renew-session:failure' } : undefined }, env: 'staging', branch: 'sandbox', html: rp.html, sent: rp.sent, subject: rp.subject, report: rp.report, ctx: rp.ctx, summary: rp.summary, list: rp.list, record: rp.record, kind: 'email' });
   }
 
   const rows = results.map(row);
@@ -529,7 +589,7 @@ function main(): void {
     // the real message refers to the donut as cid:<id> (an inline attachment); a browser cannot, so the review files carry the same PNG as a data URI
     const review = (r: ScenarioResult): string => {
       const png = r.ctx ? new EmailTemplate().chartAttachment(r.ctx) : null;
-      return png ? r.html.split(`cid:${DONUT_CID}`).join(`data:image/png;base64,${png.content.toString('base64')}`) : r.html;
+      return png ? r.sent.split(`cid:${DONUT_CID}`).join(`data:image/png;base64,${png.content.toString('base64')}`) : r.sent;
     };
     for (const s of results) fs.writeFileSync(path.join(outDir, `${s.spec.name}.html`), review(s));
     fs.writeFileSync(path.join(outDir, 'matrix.md'), `${md}\n\n## Findings (known, not failing)\n${known.map((k) => `- ${k.scenario}: [${k.id}] ${k.message}`).join('\n')}\n`);
