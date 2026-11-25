@@ -3,7 +3,7 @@
 > **Purpose:** Records how the run email shows its outcome chart (piece B of the 2026-11-25 email polish) and why no image library was added.
 > **Read when:** You change the chart, add another image to the email, or the email arrives without its donut.
 > **Size budget:** 6k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ eff835a
+> **Last verified:** 2026-11-25 @ 00e069d
 
 ## Status
 Accepted — 2026-11-25 (owner asked for a donut next to the Run Summary and for the smallest dependency that works on the CI runners and in the Playwright container).

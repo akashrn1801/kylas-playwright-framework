@@ -3,7 +3,7 @@
 > **Purpose:** Resolved incidents where the Kylas app replaced a screen with its own HTTP-429 page or generic error-boundary page, and the `globalSetup` 429 absorption.
 > **Read when:** A test fails with an element-not-found / timeout on a screen that "should" be there, or you are adding navigation/list-readiness code that could meet an app-rendered error page.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 8070159
+> **Last verified:** 2026-11-25 @ 00e069d
 
 The staging `GET /products/layout?view=create` `HTTP 400` in `globalSetup` is still OPEN — see `docs/KNOWN_ISSUES_ACTIVE.md`. The proposal to centralise 429 recovery is decision-record material: see `docs/adr/` (error-page recovery).
 

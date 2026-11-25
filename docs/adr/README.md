@@ -3,7 +3,7 @@
 > **Purpose:** Index of ADRs and the template to write a new one.
 > **Read when:** You made or reversed a design decision (Definition of Done step 4).
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 9a42db6
+> **Last verified:** 2026-11-25 @ 00e069d
 
 One page per decision, max about 3.5k chars. Never edit an accepted ADR's decision silently: add a new ADR and mark the old one Superseded.
 
