@@ -187,7 +187,7 @@ const WARN_BORDER = '#F2E29B';
 // inside that already-double-quoted attribute terminates the attribute value
 // early at the first inner quote, corrupting every element that used it —
 // confirmed by inspecting real rendered output, not just by reading the code.
-const MONO_FONT = "ui-monospace,'SF Mono','Cascadia Code',Consolas,monospace";
+const MONO_FONT = "ui-monospace,Consolas,monospace"; // short on purpose: it is repeated about 90 times in a message that must stay under Gmail's clipping limit
 const SANS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 export class EmailTemplate {
@@ -389,27 +389,37 @@ export class EmailTemplate {
       this.buildFooter(ctx),
     ].join('');
 
+    // Styles (2026-11-25): progressive enhancement only; every visual has an inline fallback for clients that strip <style>. Dark mode: the email is
+    // designed light and keeps its own light surfaces (the older rules painted the page dark while the text stayed dark-on-dark); clients that
+    // invert colours themselves (Gmail app, Outlook mobile) start from a readable light design. Mobile: tiles go two per row, side padding
+    // shrinks, code blocks scroll inside themselves.
     const page = `<!DOCTYPE html><html><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="light dark">
-<meta name="supported-color-schemes" content="light dark">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
 <style>
-  /* Progressive enhancement only — every visual below has a fully functional
-     inline-style fallback for clients that strip <style> (e.g. Outlook
-     desktop). Real email-client dark-mode support varies significantly and
-     this has not been verified against live Outlook/Gmail dark rendering —
-     treat this block as best-effort, not a tested guarantee. */
-  @media (prefers-color-scheme: dark) {
-    .email-bg { background:#0E1116 !important; }
-    .email-card { background:#0E1116 !important; border-color:#2B3440 !important; }
-    .email-text { color:#E6EDF3 !important; }
-    .email-muted { color:#9BA5B1 !important; }
+  @media only screen and (max-width: 480px) {
+    .kpi { display: inline-block !important; width: 44% !important; box-sizing: border-box; vertical-align: top; }
+    .sx { padding-left: 16px !important; padding-right: 16px !important; }
+    table { width: 100% !important; max-width: 100% !important; }
+    .mh { display: none !important; }
+    .wr { white-space: normal !important; }
+    td, div, a { overflow-wrap: break-word; }
+    a { overflow-wrap: anywhere; }
   }
+  pre { width: 0; min-width: 100%; box-sizing: border-box; overflow-x: auto; }
+  code { font-size: inherit; }
+  .tv { line-height: 1; }
+  .tl { margin-top: 6px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .ts { margin-top: 3px; line-height: 1.3; color: #F0F3F6; }
+  .h { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding-bottom: 6px; border-bottom: 1px solid #D0D7DE; }
+  .cmd { padding: 3px 8px; background: #F6F8FA; border: 1px solid #D0D7DE; border-radius: 6px; }
+  tr[style*="border-bottom"]:nth-child(even) td { background: #FAFBFC; }
 </style>
 </head>
 <body style="margin:0;padding:0;background:#ffffff;font-family:${SANS_FONT};">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;table-layout:fixed;">
 <tr><td align="center">
 <!-- WHY: reverted to fully fluid, no width cap (2026-07-14) — matches the
      original (pre-overhaul) template's actual behavior exactly, per explicit
@@ -421,7 +431,7 @@ export class EmailTemplate {
      tile spacing stretch out rather than staying at a comfortable reading
      width. Confirmed acceptable — this is what the old template already did,
      unconditionally, in every client including Outlook desktop. -->
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="email-bg" style="background:#ffffff;width:100%;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="email-bg" style="background:#ffffff;width:100%;table-layout:fixed;">
 ${body}
 </table>
 </td></tr>
@@ -430,7 +440,28 @@ ${body}
     // Size (item 13): the template's indentation and line breaks between tags are about 15% of the message. Only whitespace that sits between
     // a '>' and a '<' is collapsed to one space (text inside <pre> and pre-wrap blocks has no tags between its characters).
     // The newline in front of a top-level section row (`\n<tr><td`) stays: tests and tooling split the email on it.
-    return page.replace(/>(\s+)</g, (m, ws: string, off: number) => (ws === '\n' && page.startsWith('tr><td', off + m.length) ? '>\n<' : '> <'));
+    const polished = this.polish(page);
+    return polished.replace(/>(\s+)</g, (m, ws: string, off: number) => (ws === '\n' && polished.startsWith('tr><td', off + m.length) ? '>\n<' : '> <'));
+  }
+
+  /**
+   * Visual polish applied to the finished page (2026-11-25), so every section gets the same treatment without touching its builder: section
+   * headings get a small icon and a thin divider, and top-level section cells get the `sx` class the mobile rule shrinks. Pure styling: no
+   * text, number or id changes (the icon is its own span before the heading text).
+   */
+  private polish(page: string): string {
+    const ICONS: Array<[RegExp, string]> = [
+      [/^Executive Summary/, '📝'], [/^Run Details/, '🗂️'], [/^Rerun Summary/, '🔁'], [/^Run Summary/, '📊'], [/^Rerun of/, '🔁'], [/^Trend/, '📈'], [/^Flakiest/, '🔥'],
+      [/^Module Analytics/, '🧩'], [/^Slowest/, '🐢'], [/^CI Job Stats/, '⚙️'], [/^Load Signals/, '📡'], [/^Flaky Tests/, '🧪'], [/^Passed on rerun/, '✅'],
+      [/^Skipped/, '⏭️'], [/^Action Required/, '🎯'], [/^Environment/, '🖥️'], [/^CI\/CD/, '🚀'], [/^Background/, '⚠️'], [/^Failed/, '❌'],
+    ];
+    const heading = /<div style="(font-size:10\.5px;font-weight:700;letter-spacing:0\.08em;text-transform:uppercase;color:#[0-9A-Fa-f]{6};margin(?:-bottom)?:[^;"]+;)">([^<]+)<\/div>/g;
+    const withHeadings = page.replace(heading, (_m, style: string, text: string) => {
+      const icon = ICONS.find(([re]) => re.test(text))?.[1];
+      // the shared type and divider live in the .h class; only the colour and spacing stay inline
+      return `<div class="h" style="${style.replace('font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;', '')}">${icon ? `${icon} ` : ''}${text}</div>`;
+    });
+    return withHeadings.replace(/<td ((?:id="[^"]*" )?)style="([^"]*padding:[^";]*28px[^"]*)">/g, '<td $1style="$2" class="sx">');
   }
 
   // ===================== Masthead + status =====================
@@ -512,7 +543,7 @@ ${body}
     const bg = verdict.bannerTone === 'success' ? SUCCESS : verdict.bannerTone === 'warning' ? WARN : FAIL;
     return `
 <tr><td style="background:${bg};padding:12px 28px;text-align:center;">
-  <span style="font-size:14px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${this.esc(verdict.bannerLabel)}</span>
+  <span style="font-size:16px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${this.esc(verdict.bannerLabel)}</span>
 </td></tr>`;
   }
 
@@ -642,7 +673,7 @@ ${body}
       chip('SOURCE', this.esc(sourceLabel), SOURCE_COLORS[ctx.runSource ?? 'local'] ?? NEUTRAL),
     ].join(' ');
     return `
-<tr><td style="background:${INK};padding:0 28px 18px;">
+<tr><td style="padding:12px 28px 4px;">
   ${chips}
 </td></tr>`;
   }
@@ -731,14 +762,14 @@ ${body}
     return `
 <tr><td style="padding:20px 28px 8px;">
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">Executive Summary</div>
-  <div style="border:1px solid ${cardBorder};background:${cardBg};border-radius:6px;padding:14px 16px;display:table;width:100%;">
-    <div style="display:table-cell;width:3px;background:${stripeColor};border-radius:2px;"></div>
-    <div style="display:table-cell;padding-left:12px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${cardBorder};background:${cardBg};border-radius:6px;"><tr>
+    <td width="4" style="background:${stripeColor};border-radius:6px 0 0 6px;font-size:0;">&nbsp;</td>
+    <td style="padding:14px 16px;">
       <div style="font-size:13.5px;font-weight:700;color:${INK};">${this.esc(verdict.headline)}</div>
       <div style="font-size:12.5px;color:#424A53;line-height:1.55;margin-top:4px;">${this.esc(sentences.join(' '))}</div>
       ${actionLine}
-    </div>
-  </div>
+    </td>
+  </tr></table>
 </td></tr>`;
   }
 
@@ -885,7 +916,7 @@ ${body}
       { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral', anchor: report.failed > 0 ? '#section-failed-tests' : undefined },
       // Skipped = deliberate skips only; tests that never ran have their own tile (same split as the rerun table), so
       // Passed + Failed + Skipped + Did not run = Total. Flaky is a signal inside Passed and sits in the second row.
-      { value: String(report.skipped - report.didNotRun), label: 'Skipped', variant: report.skipped - report.didNotRun > 0 ? 'warn' : 'neutral' },
+      { value: String(report.skipped - report.didNotRun), label: 'Skipped', variant: 'muted' },
       ...(report.didNotRun > 0 ? [{ value: String(report.didNotRun), label: 'Did not run', variant: 'warn' as const }] : []),
     ]);
 
@@ -942,12 +973,37 @@ ${body}
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Run Summary</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${primaryRow}</table>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${secondaryRow}</table>
+  ${this.buildRerunSummaryRow(ctx)}
   ${signalChips ? `<div style="margin-top:10px;">${signalChips}</div>` : ''}
 </td></tr>`;
   }
 
+  /**
+   * "Rerun Summary" tiles under the Run Summary tiles, same tile design (2026-11-25): Rerun (tests rerun), Passed on rerun, Still failing, Not rerun (the
+   * reason as subtext: a flaky test passed on its retry and is not rerun, a failed test of a shared-config suite is never rerun), Rerun duration.
+   * Only when a rerun ran; nothing otherwise. The numbers are the rerun summary's own, the same rows the Rerun table below lists.
+   */
+  private buildRerunSummaryRow(ctx: EmailContext): string {
+    const rr = ctx.rerun;
+    if (!rr || !rr.ran) return '';
+    // from the rows themselves, so they agree with the Rerun table (a test that did not run first and passed on the rerun is a pass too)
+    const passedOnRerun = rr.rows.filter((x) => x.rerun === 'passed').length;
+    const stillFailing = rr.rows.filter((x) => x.rerun === 'failed').length;
+    const flakyTitles = new Set(ctx.report.flakyTests.map((t) => t.title));
+    const reasons = [...new Set(rr.excluded.map((e) => (flakyTitles.has(e.title) ? 'passed on retry' : e.reason)))].join('; ');
+    return `
+  <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:12px 0 8px;">Rerun Summary</div>
+  <table id="section-rerun-summary" role="presentation" width="100%" cellpadding="0" cellspacing="0">${this.kpiRow([
+      { value: String(rr.rows.length), label: 'Rerun' },
+      { value: String(passedOnRerun), label: 'Passed on rerun', variant: passedOnRerun > 0 ? 'success' : 'neutral' },
+      { value: String(stillFailing), label: 'Still failing', variant: stillFailing > 0 ? 'fail' : 'neutral' },
+      { value: String(rr.excluded.length), label: 'Not rerun', subtext: rr.excluded.length > 0 ? this.esc(this.truncate(reasons, 60)) : undefined },
+      { value: this.formatDuration(rr.durationMs ?? 0), label: 'Rerun duration' },
+    ])}</table>`;
+  }
+
   private kpiRow(
-    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn'; subtext?: string; anchor?: string }>
+    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn' | 'muted'; subtext?: string; anchor?: string }>
   ): string {
     const widthPct = Math.floor(100 / tiles.length);
     return `<tr>${tiles.map((t) => this.kpiTile(t.value, t.label, t.variant ?? 'neutral', t.subtext, widthPct, t.anchor)).join('')}</tr>`;
@@ -963,28 +1019,22 @@ ${body}
   private kpiTile(
     value: string,
     label: string,
-    variant: 'neutral' | 'success' | 'fail' | 'warn',
+    tileVariant: 'neutral' | 'success' | 'fail' | 'warn' | 'muted',
     subtext: string | undefined,
     widthPct: number,
     anchor?: string
   ): string {
-    const stripe = variant === 'success' ? SUCCESS : variant === 'fail' ? FAIL : variant === 'warn' ? WARN : BORDER;
-    // WHY: brought back 2026-07-14 (Part A) — a subtle semantic-tinted
-    // background (reusing the same light bg tokens already used for badges/
-    // borders elsewhere, not a new saturated color) instead of flat white,
-    // so status reads at a glance without needing to read the number color.
-    const tileBg = variant === 'success' ? SUCCESS_BG : variant === 'fail' ? FAIL_BG : variant === 'warn' ? WARN_BG : '#ffffff';
-    const tileBorder = variant === 'success' ? SUCCESS_BORDER : variant === 'fail' ? FAIL_BORDER : variant === 'warn' ? WARN_BORDER : BORDER;
-    const valueHtml = anchor
-      ? `<a href="${this.escAttr(anchor)}" style="color:${INK};text-decoration:none;">${this.mono(value)}</a>`
-      : this.mono(value);
+    // Solid colour-filled tiles (2026-11-25): big white number, small label, one line of subtext. One semantic system: green passed, amber
+    // retry / rerun / flaky / skipped, red failed, blue information (totals, durations, counts), grey = zero or not applicable (a problem tile
+    // with nothing in it must not shout). White text on each fill is at least 4.5:1.
+    const grey = value === '0' || value === 'n/a';
+    const fill = grey || tileVariant === 'muted' ? '#6E7781' : tileVariant === 'success' ? SUCCESS : tileVariant === 'fail' ? FAIL : tileVariant === 'warn' ? WARN : ACCENT;
+    const valueHtml = anchor ? `<a href="${this.escAttr(anchor)}" style="color:#ffffff;text-decoration:none;">${this.esc(value)}</a>` : this.esc(value);
     return `
-  <td style="width:${widthPct}%;padding:0 3px;">
-    <div style="background:${tileBg};border:1px solid ${tileBorder};border-top:3px solid ${stripe};border-radius:6px;padding:10px 4px 8px;text-align:center;">
-      <div style="font-size:19px;font-weight:700;color:${INK};line-height:1;">${valueHtml}</div>
-      <div style="margin-top:4px;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:${MUTED};">${this.esc(label)}</div>
-      ${subtext ? `<div style="margin-top:2px;font-size:9px;color:${SLATE};">${subtext}</div>` : ''}
-    </div>
+  <td style="width:${widthPct}%;background:${fill};border:3px solid #ffffff;border-radius:10px;padding:12px 4px 10px;text-align:center;color:#ffffff;" class="kpi">
+    <div class="tv" style="font-size:22px;font-weight:700;">${valueHtml}</div>
+    <div class="tl" style="font-size:9px;">${this.esc(label)}</div>
+    ${subtext ? `<div class="ts" style="font-size:10px;">${subtext.replace(/color:#[0-9A-Fa-f]{6};?/g, '')}</div>` : ''}
   </td>`;
   }
 
@@ -1136,9 +1186,7 @@ ${body}
         const h = Math.max(2, Math.round((p.passRate / 100) * barHeight));
         const color = p.passRate >= 90 ? SUCCESS : p.passRate >= 75 ? WARN : FAIL;
         return `<td style="vertical-align:bottom;text-align:center;padding:0 2px;">
-          <div style="height:${barHeight}px;display:flex;align-items:flex-end;justify-content:center;">
-            <div style="width:16px;height:${h}px;background:${color};border-radius:2px;" title="${p.passRate}%"></div>
-          </div>
+          <div style="width:16px;height:${h}px;margin:${barHeight - h}px auto 0;background:${color};border-radius:2px;" title="${p.passRate}%"></div>
           <div style="font-size:8px;color:${MUTED};margin-top:2px;">${this.mono(`#${p.buildNumber}`)}</div>
         </td>`;
       })
@@ -1282,11 +1330,11 @@ ${body}
               }`;
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
-        <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
+        <td style="padding:8px;" class="mh"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${finalPassed}<div style="font-size:9px;font-weight:400;color:${barColor};">${passRate}% of ${m.total}</div>${neededNote}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
-        <td style="padding:8px;text-align:center;font-size:11px;">${trendGlyph}</td>
+        <td style="padding:8px;text-align:center;font-size:11px;" class="mh">${trendGlyph}</td>
         <td style="padding:8px;text-align:left;">${thisRun}${stabilityBadge}</td>
       </tr>`;
       })
@@ -1300,11 +1348,11 @@ ${body}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
     <tr style="background:${CANVAS_TINT};">
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Module</th>
-      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Type</th>
+      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;" class="mh">Type</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SUCCESS};font-weight:600;">Pass (final)</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">vs last run</th>
+      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;" class="mh">vs last run</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Stability</th>
     </tr>
     ${rows}
@@ -1333,7 +1381,7 @@ ${body}
       <tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
         <td style="padding:6px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(this.formatDuration(t.duration))}</td>
-        <td style="padding:6px 0 6px 12px;font-size:11px;white-space:nowrap;">${trendCell}</td>
+        <td style="padding:6px 0 6px 12px;font-size:11px;white-space:nowrap;" class="wr">${trendCell}</td>
       </tr>`;
       })
       .join('');
@@ -1495,10 +1543,10 @@ ${body}
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End (IST)</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 page</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 API</th>
-        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Boundary</th>
-        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};" class="mh">Boundary</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};" class="mh">Setup retry</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
-        <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
+        <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};" class="mh">Jobs running (window / at events)</th>
       </tr>${hotRows
         .map((r) => {
           const hot = r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0;
@@ -1508,10 +1556,10 @@ ${body}
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitApi > 0 ? FAIL : SLATE};">${r.rateLimitApi}</td>
-        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};">${r.errorBoundaryPages}</td>
-        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};">${r.setupRetries}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};" class="mh">${r.errorBoundaryPages}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};" class="mh">${r.setupRetries}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
-        <td style="padding:5px 0 5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${r.peakConcurrentInWindow} / ${r.maxConcurrentAtEvents ?? '—'}</td>
+        <td style="padding:5px 0 5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;" class="mh">${r.peakConcurrentInWindow} / ${r.maxConcurrentAtEvents ?? '—'}</td>
       </tr>`;
         })
         .join('')}
@@ -1549,12 +1597,9 @@ ${body}
     const rows = deliberate
       .map((t: TestResult) => {
         const { name, type } = deriveModuleFromFile(t.file);
-        const typeStyle =
-          type === 'UI'
-            ? `background:#EFF3FE;color:${ACCENT};`
-            : type === 'RBAC'
-              ? `background:${SUCCESS_BG};color:${SUCCESS};`
-              : `background:${CANVAS_TINT};color:${SLATE};`;
+        // Skipped is deliberate, not a problem: its pills are slate grey (amber is for retry, rerun and flaky, "needs a look").
+        void type;
+        const typeStyle = `background:${CANVAS_TINT};color:${SLATE};border:1px solid ${BORDER};`;
         const reason = t.skipReason
           ? `<span style="color:${SLATE};">${this.esc(t.skipReason)}</span>`
           : `<span style="color:${MUTED};font-style:italic;">No reason given</span>`;
@@ -1637,7 +1682,7 @@ ${body}
 
   private rerunCommandHtml(env: string | undefined, test: { file: string; line?: number }): string {
     const cmd = this.rerunCommand(env, test);
-    return cmd ? `<div style="margin-top:6px;font-size:10px;color:${SLATE};font-family:${MONO_FONT};word-break:break-all;">${this.esc(cmd)}</div>` : '';
+    return cmd ? `<div style="margin-top:8px;"><span class="cmd" style="display:inline-block;font-size:10.5px;color:${INK};font-family:${MONO_FONT};word-break:break-all;">${this.esc(cmd)}</span></div>` : '';
   }
 
   private buildFailureDetailCard(
@@ -1682,7 +1727,7 @@ ${body}
           ${showTitle ? `<div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(d.test.title)}</div>` : ''}
           <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}${this.causeBadge(d.cause)}</div>
           ${this.rerunCommand(env, d.test) ? '' : `<div style="font-size:10.5px;color:${SLATE};margin-bottom:4px;">${this.esc(d.test.file.split('/').pop() || '')}</div>`}
-          <div style="font-size:11.5px;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(this.errorMessageOnly(d.primaryError))}</div>
+          <div style="font-size:12.5px;font-weight:600;line-height:1.45;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(this.errorMessageOnly(d.primaryError))}</div>
           ${earlierErrorsHtml}
           ${snippetHtml}
           ${stackHtml}
@@ -1706,6 +1751,12 @@ ${body}
   private finalLabel(row: RerunTestRow): string {
     if (row.first === 'not-run' && row.final === 'passed') return 'Passed (did not run → passed on rerun)';
     return FINAL_LABEL[row.final];
+  }
+
+  /** A status pill: soft tint of the colour with the colour as text (green passed, amber retry/rerun, red failed). */
+  private pill(text: string, color: string): string {
+    const bg = color === SUCCESS ? SUCCESS_BG : color === FAIL ? FAIL_BG : color === WARN ? WARN_BG : CANVAS_TINT;
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${bg};color:${color};font-size:10.5px;font-weight:700;">${this.esc(text)}</span>`;
   }
 
   private rerunColor(final: RerunTestRow['final']): string {
@@ -1777,7 +1828,7 @@ ${body}
         <td style="padding:5px 8px 5px 0;font-size:11.5px;color:${INK};">${this.esc(r.title)}<div style="font-size:10px;color:${MUTED};">${this.esc(r.file.split('/').pop() ?? r.file)}${r.reason ? ` &middot; ${this.esc(r.reason)}` : ''}</div></td>
         <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(FIRST_LABEL[r.first])}</td>
         <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(RERUN_LABEL[r.rerun])}</td>
-        <td style="padding:5px 0 5px 8px;font-size:11.5px;font-weight:700;color:${this.rerunColor(r.final)};white-space:nowrap;">${this.esc(this.finalLabel(r))}</td>
+        <td style="padding:5px 0 5px 8px;font-size:11.5px;white-space:nowrap;">${this.pill(this.finalLabel(r), this.rerunColor(r.final))}</td>
       </tr>`
       )
       .join('');
@@ -2283,8 +2334,8 @@ ${body}
   private buildFooter(ctx: EmailContext): string {
     const generatedAt = `${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' })}`;
     return `
-<tr><td style="padding:16px 28px;text-align:center;border-top:1px solid ${CANVAS_TINT};">
-  <div style="font-size:11px;color:${MUTED};">Sent by Kylas ${this.esc(ctx.env.toUpperCase())} Automation System</div>
+<tr><td style="padding:20px 28px;text-align:center;border-top:1px solid ${BORDER};">
+  <div style="font-size:10.5px;color:${MUTED};">Sent by Kylas ${this.esc(ctx.env.toUpperCase())} Automation System</div>
   <div style="font-size:10px;color:${MUTED};margin-top:4px;">Generated ${generatedAt} · Report engine v${REPORT_ENGINE_VERSION}</div>
 </td></tr>`;
   }
@@ -2332,7 +2383,8 @@ ${body}
   }
 
   private mono(text: string): string {
-    return `<span style="font-family:${MONO_FONT};">${this.esc(text)}</span>`;
+    // <code> is monospace in every client without any inline font (the span with a font stack was repeated about 90 times)
+    return `<code>${this.esc(text)}</code>`;
   }
 
   private truncate(text: string, max: number): string {

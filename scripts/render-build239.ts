@@ -3,7 +3,9 @@
  *
  *   npx ts-node scripts/render-build239.ts --out ~/build239-render [--before <real-email.html>]
  *
- * Writes after.html + after.txt (build #239), build235-after.html (build #235), before.html (a copy of the real email, when given), and prints sizes.
+ * Writes after.html + after.txt + after-mobile.html (build #239; the mobile file is the same email in a 375 px wide frame, so its media queries
+ * apply), build235-after.html (build #235), blocked.html (the run whose renew-session job failed), before.html (a copy of the real email, when
+ * given), and prints sizes.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -25,6 +27,16 @@ fs.writeFileSync(path.join(out, 'after.html'), r239.html);
 fs.writeFileSync(path.join(out, 'after.txt'), `Subject: ${r239.subject}\n\n${new EmailTemplate().text(r239.ctx)}`);
 const before = arg('--before');
 if (before) fs.copyFileSync(before, path.join(out, 'before.html'));
+const phone = (html: string): string =>
+  `<!doctype html><meta charset="utf-8"><title>375 px</title><body style="margin:0;background:#E5E9EE"><div style="width:375px;margin:16px auto;box-shadow:0 0 0 1px #B8C0CC"><iframe style="width:375px;height:5200px;border:0;display:block;background:#fff" srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe></div></body>`;
+fs.writeFileSync(path.join(out, 'after-mobile.html'), phone(r239.html));
 const r235 = replayBuild235();
+const blocked = replayBuild235({
+  blockedBySession: {
+    cause: 'renew-session:failure',
+    renewalFailure: { version: 1 as const, role: 'admin', kind: 'not-renewed-after-logout' as const, minutesLeft: 37, endIso: '2026-11-24T15:42:07.402Z', windowMin: 240, sameSession: true, oldTokenStatusAfterLogout: 200, message: 'The admin session has only 37 min left after logout and a fresh login', at: '2026-11-24T15:05:00.000Z' },
+  },
+});
+fs.writeFileSync(path.join(out, 'blocked.html'), blocked.html);
 fs.writeFileSync(path.join(out, 'build235-after.html'), r235.html);
-process.stdout.write(`#239 after.html ${kib(r239.html)}  subject: ${r239.subject}\n#235 build235-after.html ${kib(r235.html)}  subject: ${r235.subject}\n-> ${out}\n`);
+process.stdout.write(`blocked.html ${kib(blocked.html)}\n#239 after.html ${kib(r239.html)}  subject: ${r239.subject}\n#235 build235-after.html ${kib(r235.html)}  subject: ${r235.subject}\n-> ${out}\n`);

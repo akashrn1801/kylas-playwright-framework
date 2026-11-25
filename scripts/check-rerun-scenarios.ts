@@ -178,7 +178,7 @@ function testTable(html: string): Record<string, string[]> {
   return m;
 }
 const bannerOf = (html: string): { label: string; color: string } => {
-  const m = html.match(/<tr><td style="background:(#[0-9A-Fa-f]{6});padding:12px 28px;text-align:center;">\s*<span[^>]*>([^<]*)<\/span>/);
+  const m = html.match(/<tr><td style="background:(#[0-9A-Fa-f]{6});padding:12px 28px;text-align:center;"(?: class="sx")?>\s*<span[^>]*>([^<]*)<\/span>/);
   return { color: m?.[1] ?? '', label: m?.[2] ?? '' };
 };
 const colorOf = (tone: 'green' | 'amber' | 'red'): string => {

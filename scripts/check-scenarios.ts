@@ -87,6 +87,28 @@ export function execFirstLine(html: string): string {
   const m = /<div style="font-size:12\.5px;color:#424A53;line-height:1\.55;margin-top:4px;">([^<]*)<\/div>/.exec(html);
   return m ? text(m[1]) : '';
 }
+/** The Rerun Summary tiles (under the Run Summary tiles; only when a rerun ran): label -> { value, sub }. Null when the email has none. */
+export function rerunTiles(html: string): Record<string, Tile> | null {
+  const i = html.indexOf('id="section-rerun-summary"');
+  if (i < 0) return null;
+  const end = html.indexOf('</table>', i);
+  const out: Record<string, Tile> = {};
+  for (const chunk of html.slice(i, end).split('<td style="width:').slice(1)) {
+    const m = /^(.+?)\s+(Rerun duration|Passed on rerun|Still failing|Not rerun|Rerun)\b\s*(.*)$/.exec(text(chunk.slice(chunk.indexOf('>') + 1, chunk.indexOf('</td>'))));
+    if (m) out[m[2]] = { value: m[1], sub: m[3] };
+  }
+  return out;
+}
+/** The per-test rows of the Rerun table: [title, first run, rerun, final]. */
+export function rerunTestRows(html: string): string[][] {
+  const i = html.indexOf('id="section-rerun"');
+  if (i < 0) return [];
+  const end = html.indexOf('\n<tr><td', i);
+  const section = html.slice(i, end < 0 ? undefined : end);
+  return [...section.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+    .map((m) => [...m[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) => text(c[1])))
+    .filter((c) => c.length === 4 && c[0] !== 'Test');
+}
 export interface RerunRow { first: number; final: number; note: string }
 export function rerunTable(html: string): Record<string, RerunRow> | null {
   const i = html.indexOf('id="section-rerun"');
@@ -184,6 +206,22 @@ export function invariants(s: ScenarioResult): Violation[] {
     if (table.Passed.first !== r.firstRun.passed || table.Flaky.first !== r.firstRun.flaky || table.Failed.first !== r.firstRun.failed) bad('table-first-run', `the First run column does not match the parsed first run`);
   }
 
+  // The Rerun Summary tiles (2026-11-25): shown only when a rerun ran, and their numbers are the Rerun table's own rows
+  const rt = rerunTiles(s.html);
+  if (!!rt !== !!(s.summary && s.summary.ran)) bad('rerun-tiles-presence', `the Rerun Summary tiles are ${rt ? 'shown' : 'missing'} but the rerun ${s.summary?.ran ? 'ran' : 'did not run'}`);
+  if (rt && s.summary) {
+    const shown = rerunTestRows(s.html); // the table lists at most 8 tests; the tiles count them all
+    const all = s.summary.rows;
+    const passedAll = all.filter((x) => x.rerun === 'passed').length;
+    const failedAll = all.filter((x) => x.rerun === 'failed').length;
+    const n = (l: string): number => parseInt(rt[l]?.value ?? 'NaN', 10);
+    if (n('Rerun') !== all.length || n('Passed on rerun') !== passedAll || n('Still failing') !== failedAll) bad('rerun-tiles-match-summary', `Rerun Summary tiles ${n('Rerun')}/${n('Passed on rerun')}/${n('Still failing')} vs the rerun summary's rows ${all.length}/${passedAll}/${failedAll}`);
+    const shownPassed = shown.filter((c) => c[2] === 'Passed').length;
+    const shownFailed = shown.filter((c) => c[2] === 'Failed').length;
+    if (shown.length > all.length || shownPassed > passedAll || shownFailed > failedAll || (all.length <= 8 && (shown.length !== all.length || shownPassed !== passedAll || shownFailed !== failedAll))) bad('rerun-tiles-match-table', `the Rerun table lists ${shown.length}/${shownPassed}/${shownFailed} (rows/passed/failed) of the tiles' ${all.length}/${passedAll}/${failedAll} (it lists up to 8)`);
+    if (n('Not rerun') !== s.summary.excluded.length) bad('rerun-tiles-not-rerun', `the Not rerun tile shows ${n('Not rerun')}, the rerun summary excluded ${s.summary.excluded.length}`);
+  }
+
   // 4: subject, tiles, table and executive summary quote the same numbers
   if (Object.keys(t).length > 0) {
     const n = (l: string): number => parseInt(t[l]?.value ?? 'NaN', 10);
@@ -193,6 +231,10 @@ export function invariants(s: ScenarioResult): Violation[] {
     const sub = t['Passed']?.sub ?? '';
     const subSum = [...sub.matchAll(/(\d+) (?:after a retry|after the rerun|ran only on rerun)/g)].reduce((n2, m) => n2 + parseInt(m[1], 10), 0);
     if (r.firstRun.passed + subSum !== r.finalPassed) bad('tile-parts-add-up', `Passed ${r.finalPassed} = clean ${r.firstRun.passed} + the tile's breakdown ${subSum} ("${sub}")`);
+    // the subject says what the tiles say (one source of truth: the parsed report)
+    const sp2 = /(\d+) passed/.exec(s.subject);
+    const sf2 = /(\d+) failed/.exec(s.subject);
+    if (!/BLOCKED|INCOMPLETE|NO TESTS|DRIFT/i.test(s.subject) && (!sp2 || parseInt(sp2[1], 10) !== n('Passed') || (sf2 ? parseInt(sf2[1], 10) : 0) !== n('Failed'))) bad('subject-matches-tiles', `subject "${s.subject}" vs tiles Passed ${n('Passed')} / Failed ${n('Failed')}`);
     const tileSum = n('Passed') + n('Failed') + n('Skipped') + (t['Did not run'] ? n('Did not run') : 0);
     if (tileSum !== n('Total')) bad('tiles-add-up', `Passed + Failed + Skipped + Did not run = ${tileSum}, Total ${n('Total')}`);
   } else if (!blockedLike) bad('tiles-present', 'no Run Summary tiles found');

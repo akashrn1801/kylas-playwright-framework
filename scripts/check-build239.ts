@@ -4,10 +4,13 @@
  *
  * Run: npm run check:build239
  */
+import * as fs from 'fs';
+import * as path from 'path';
 import { isExpectedBackgroundNoise } from '../src/error-collector/errorFilters';
 import { isMergeCommit, mergeTargetBranch, parseCommitFacts } from '../src/notifications/CommitInfo';
 import { RunHistoryRecord, computeSlowTestTrend } from '../src/notifications/RunHistory';
 import { be, nounFor, plural, wasWere } from '../src/notifications/wording';
+import { rerunTiles } from './check-scenarios';
 import { loadFixture239, replayBuild239 } from './lib/build239Fixture';
 
 let failed = 0;
@@ -73,6 +76,33 @@ function main(): void {
   check(!isExpectedBackgroundNoise('HTTP 500 [GET] https://api.example.test/v1/deals/1/pipeline', 'https://api.example.test/v1/deals/1/pipeline', '{"message":"Internal error"}') && !isExpectedBackgroundNoise('HTTP 400 [GET] https://api.example.test/v1/leads/1/other', 'https://api.example.test/v1/leads/1/other', body400), 'A7: a 5xx on the same endpoint, or the same message on another URL, stays unexpected');
   check(fx.misc.unexpectedErrors === 27 && fx.misc.expectedBackgroundNoiseErrors === 103, 'A7: build #239 has 27 unexpected errors (it was 120) and 103 known noise (it was 10)', `${fx.misc.unexpectedErrors} / ${fx.misc.expectedBackgroundNoiseErrors}`);
   check(/27 unexpected/.test(t), 'A7: the email reports 27 unexpected background errors');
+
+  const rt = rerunTiles(r.html);
+  check(!!rt && rt['Rerun']?.value === '1' && rt['Passed on rerun']?.value === '1' && rt['Still failing']?.value === '0' && rt['Not rerun']?.value === '1' && rt['Not rerun']?.sub === 'passed on retry' && rt['Rerun duration']?.value === '1m 4s', 'Rerun Summary tiles for #239: Rerun 1 | Passed on rerun 1 | Still failing 0 | Not rerun 1 (passed on retry) | 1m 4s', JSON.stringify(rt));
+  check(r.html.indexOf('Run Summary</div>') < r.html.indexOf('Rerun Summary</div>') && r.html.indexOf('Rerun Summary</div>') < r.html.indexOf('id="section-rerun"'), 'Rerun Summary tiles sit directly under the Run Summary tiles');
+
+  // ── piece A (visual polish): the colour system, contrast, mobile rules ──
+  const src = fs.readFileSync(path.join(__dirname, '../src/notifications/EmailTemplate.ts'), 'utf8');
+  const hex = (n: string): string => src.match(new RegExp(`const ${n} = '(#[0-9A-Fa-f]{6})'`))?.[1] ?? '';
+  const lum = (h: string): number => {
+    const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const contrast = (a: string, b: string): number => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const fills: Record<string, string> = { green: hex('SUCCESS'), amber: hex('WARN'), red: hex('FAIL'), blue: hex('ACCENT'), grey: '#6E7781' };
+  check(Object.entries(fills).every(([, c]) => contrast(c, '#FFFFFF') >= 4.5), 'polish: white text on every tile fill (green, amber, red, blue, grey) is at least 4.5:1 (WCAG AA)', Object.entries(fills).map(([k, c]) => `${k} ${contrast(c, '#FFFFFF').toFixed(2)}`).join(', '));
+  const tileFill = (label: string): string => {
+    for (const chunk of r.html.split('<td style="width:').slice(1)) {
+      if (new RegExp(`<div class="tl"[^>]*>${label}</div>`).test(chunk)) return /background:(#[0-9A-Fa-f]{6})/.exec(chunk)?.[1] ?? '';
+    }
+    return '';
+  };
+  check(tileFill('Failed') === '#6E7781' && tileFill('Still failing') === '#6E7781', 'polish: a zero Failed / Still failing tile is grey, not red', `${tileFill('Failed')} / ${tileFill('Still failing')}`);
+  check(tileFill('Passed') === fills.green && tileFill('Total') === fills.blue && tileFill('Flaky') === fills.amber, 'polish: Passed is green, Total is blue (information), Flaky is amber', `${tileFill('Passed')} ${tileFill('Total')} ${tileFill('Flaky')}`);
+  check(tileFill('Skipped') === '#6E7781' && tileFill('Skipped') !== fills.amber, 'polish: the Skipped tile (1 skipped test) is slate grey, not amber: skipped is deliberate, amber is for retry, rerun and flaky');
+  check(!/class="tv"[^>]*><code>/.test(r.html) && !/class="tv"[^>]*><a[^>]*><code>/.test(r.html) && (r.html.match(/class="tv"/g) ?? []).length >= 14, 'polish: tile numbers are bold sans-serif text, not <code> / monospace');
+  check(/@media only screen and \(max-width: 480px\)/.test(r.html) && (r.html.match(/class="kpi"/g) ?? []).length >= 14 && /class="mh"/.test(r.html), 'polish: the mobile rules are there (tiles two per row, side padding, secondary table columns hidden at 375 px)');
+  check(!/<script|display:flex|display:grid|position:(?:absolute|fixed)/i.test(r.html), 'polish: no script, flex, grid or absolute positioning in the email');
 
   process.stdout.write(`\ncheck:build239 — ${total - failed}/${total} checks pass\n`);
   if (failed > 0) process.exit(1);
