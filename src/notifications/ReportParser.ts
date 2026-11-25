@@ -159,6 +159,9 @@ export interface TestResult {
   // shard did not touch; for one it did, `status` is the result after the rerun and this keeps the first view (ADR 0015,
   // amended 2026-11-24). 'skipped' = it did not run (or was skipped) in the first run. Absent = same as `status`.
   firstRunStatus?: 'passed' | 'flaky' | 'failed' | 'skipped';
+  // It did not run in the first run (serial dependent, cut-off shard) and was not skipped on purpose; it may have run on the rerun
+  // (then `status` is passed or failed). `firstRun.didNotRun` counts these, so a dependent that fails on the rerun is not a skip.
+  notRunInFirstRun?: boolean;
   // Passed on the rerun shard after failing every first-run attempt or passing only on an in-job retry: `status` is
   // 'passed' (a rerun pass counts as Passed after the rerun), `firstRunStatus` says what it was before.
   passedOnRerun?: boolean;
@@ -272,7 +275,13 @@ export interface ModuleStats {
 
 export interface ParsedReport {
   total: number;
+  // Tests that passed without an in-job retry, plus those that passed on the rerun shard. A flaky test (passed on an in-job
+  // retry) is counted in `flaky`, not here; `finalPassed` adds them.
   passed: number;
+  // FINAL outcome (ADR 0015, second amendment 2026-11-24): every test that ultimately passed, whether clean, after an in-job retry
+  // (flaky) or on the rerun = passed + flaky. The Passed tile, the "Final result" column, the health pass-rate factor and the
+  // subject read it; `flaky` and `passedOnRerunTests` stay as instability signals INSIDE it.
+  finalPassed: number;
   failed: number;
   skipped: number;
   // Of `skipped`, the tests that were not deliberately skipped (see TestResult.didNotRun); and tests that passed only on the rerun.
@@ -453,6 +462,7 @@ export class ReportParser {
     const failed = results.filter((r) => r.status === 'failed').length;
     const skipped = results.filter((r) => r.status === 'skipped').length;
     const flaky = results.filter((r) => r.status === 'flaky').length;
+    const finalPassed = passed + flaky;
     // WHY: Confirmed live (2026-07-07 sandbox Build, commit c82d9d2) — summing
     // every test's own duration double-counts time whenever workers run tests
     // concurrently (each overlapping test's time gets added, not overlapped).
@@ -472,8 +482,8 @@ export class ReportParser {
       passed: results.filter((r) => firstOf(r) === 'passed').length,
       failed: results.filter((r) => firstOf(r) === 'failed').length,
       flaky: results.filter((r) => firstOf(r) === 'flaky').length,
-      skipped: results.filter((r) => firstOf(r) === 'skipped' && !(r.didNotRun || r.ranOnlyOnRerun)).length,
-      didNotRun: results.filter((r) => firstOf(r) === 'skipped' && (r.didNotRun || r.ranOnlyOnRerun)).length,
+      skipped: results.filter((r) => firstOf(r) === 'skipped' && !r.notRunInFirstRun).length,
+      didNotRun: results.filter((r) => r.notRunInFirstRun).length,
     };
     const failedTests = results.filter((r) => r.status === 'failed');
     const flakyTests = results.filter((r) => r.status === 'flaky');
@@ -590,6 +600,7 @@ export class ReportParser {
     return {
       total,
       passed,
+      finalPassed,
       failed,
       skipped,
       didNotRun,
@@ -705,6 +716,7 @@ export class ReportParser {
             // Flaky first (it passed on an in-job retry), and the last result is a passing rerun result.
             const flakyPassedOnRerun = passedOnRerun && firstRunStatus === 'flaky';
             const didNotRun = status === 'skipped' && !deliberateSkip;
+            const notRunInFirstRun = firstRunStatus === 'skipped' && !deliberateSkip;
             const ranOnlyOnRerun = status === 'passed' && allResults.length > 0 && allResults.every((r) => r.rerun === true);
             // WHY three sources (2026-11-24, build #235: "No reason given" for an unconditional test.skip('title', fn)): the
             // conditional form and a describe-level skip carry the reason in the `skip` annotation's description, but
@@ -728,6 +740,7 @@ export class ReportParser {
               retries,
               ...(rerunAttempts > 0 ? { rerunAttempts } : {}),
               firstRunStatus,
+              ...(notRunInFirstRun ? { notRunInFirstRun } : {}),
               ...(passedOnRerun ? { passedOnRerun } : {}),
               ...(recoveredOnRerun ? { recoveredOnRerun } : {}),
               ...(didNotRun ? { didNotRun } : {}),

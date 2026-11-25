@@ -223,13 +223,20 @@ function finalStatus(base: RerunFirstStatus | RerunFinalStatus, rerun: RerunOutc
   return 'failed';
 }
 
-export function countStatuses(report: JsonReport): RerunCounts {
+/**
+ * Counts a report's tests by outcome. `finalOutcome` (second amendment of ADR 0015, 2026-11-24): a flaky test passed in the end, so
+ * it counts as Passed and Flaky is 0; without it (the first run) flaky stays its own count.
+ */
+export function countStatuses(report: JsonReport, finalOutcome = false): RerunCounts {
   const counts: RerunCounts = { passed: 0, failed: 0, flaky: 0, skipped: 0, didNotRun: 0, total: 0 };
   walkTests(report, (t) => {
     const c = classifyTest(t.test).cls;
     counts.total = (counts.total ?? 0) + 1;
     if (c === 'passed') counts.passed += 1;
-    else if (c === 'flaky') counts.flaky += 1;
+    else if (c === 'flaky') {
+      if (finalOutcome) counts.passed += 1;
+      else counts.flaky += 1;
+    }
     else if (c === 'skipped') counts.skipped = (counts.skipped ?? 0) + 1;
     else if (c === 'not-run') counts.didNotRun = (counts.didNotRun ?? 0) + 1;
     else counts.failed += 1; // failed, timed out
@@ -286,8 +293,8 @@ export function combineRerun(
   const noRun = (reason: string): { combined: JsonReport; summary: RerunSummary } => ({
     combined,
     summary: carried
-      ? { ...base, ran: true, afterRerun: countStatuses(combined), rows: carried.rows, recovered: carried.recovered, stillFailing: carried.stillFailing, durationMs: carried.durationMs }
-      : { ...base, ran: false, reason, afterRerun: countStatuses(combined), rows: [], recovered: 0, stillFailing: 0 },
+      ? { ...base, ran: true, afterRerun: countStatuses(combined, true), rows: carried.rows, recovered: carried.recovered, stillFailing: carried.stillFailing, durationMs: carried.durationMs }
+      : { ...base, ran: false, reason, afterRerun: countStatuses(combined, true), rows: [], recovered: 0, stillFailing: 0 },
   });
   if (list.decision !== 'run') return noRun(list.decision);
   if (!rerun) return noRun('no-results');
@@ -334,7 +341,7 @@ export function combineRerun(
       ...base,
       ran: true,
       durationMs: rerun.stats?.duration,
-      afterRerun: countStatuses(combined),
+      afterRerun: countStatuses(combined, true),
       rows: allRows,
       recovered: allRows.filter((r) => r.final === 'passed' && r.first !== 'not-run').length,
       stillFailing: allRows.filter((r) => r.final === 'failed').length,

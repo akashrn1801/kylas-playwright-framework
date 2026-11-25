@@ -202,7 +202,20 @@ export class EmailTemplate {
     // WHY a separate "Health:" segment (2026-10-06, sandbox Build #186): the
     // verdict word and icon above come only from this run's own results;
     // health is its own labeled value, never folded into the headline status.
-    return `${scopedPrefix}${stalePrefix}${icon} [${ctx.env.toUpperCase()}] Kylas Automation — ${status} | Health: ${health.label} ${health.score}/100 | Branch: ${ctx.branch} | Build #${ctx.buildNumber}`;
+    // WHY a factual subject (2026-11-24, build #235 review, items 15 and the second amendment of ADR 0015): the counts first, in the same
+    // terms as the email (Passed = final outcome, with the instability named inside it), and no health score (it is in the body).
+    // A run that is not a count-based result says what it is instead: BLOCKED, INCOMPLETE RUN, NO TESTS EXECUTED, SUITE DRIFT.
+    const report = ctx.report;
+    const marks = [report.firstRun.flaky > 0 ? `${report.firstRun.flaky} flaky` : '', report.recoveredOnRerun > 0 ? `${report.recoveredOnRerun} on rerun` : '', report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : ''].filter(Boolean);
+    const counts = [
+      report.failed > 0 ? `${report.failed} failed` : '',
+      `${report.finalPassed} passed${marks.length > 0 ? ` (${marks.join(', ')})` : ''}`,
+      report.didNotRun > 0 ? `${report.didNotRun} did not run` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const summary = verdict.bannerLabel.startsWith('🚫') || verdict.bannerLabel.includes('Suite Drift') ? status : `${counts} of ${report.total}`;
+    return `${scopedPrefix}${stalePrefix}${icon} ${ctx.env.toUpperCase()} ${ctx.branch} #${ctx.buildNumber}: ${summary}`;
   }
 
   html(ctx: EmailContext): string {
@@ -540,9 +553,16 @@ ${body}
     } else {
       sentences.push('No test failures this run.');
     }
-    if (report.flaky > 0) sentences.push(`${report.flaky} flaky test${report.flaky === 1 ? '' : 's'} observed.`);
-    if (report.recoveredOnRerun > 0) {
-      sentences.push(`${report.recoveredOnRerun} more failed every first attempt and passed on the rerun (counted as Passed; see Passed on rerun).`);
+    // WHY (second amendment of ADR 0015, 2026-11-24): the table's "Final result" and the Passed tile count every test that
+    // ultimately passed, so the instability is stated INSIDE that number, not as a second count that contradicts it.
+    // Disjoint buckets (the matrix check:scenarios found the same tests counted twice): clean + after an in-job retry (flaky, whether or not the
+    // rerun confirmed it) + after the rerun (failed every first attempt) + ran only on the rerun = Passed.
+    const afterRetry = report.firstRun.flaky;
+    const afterRerun = report.recoveredOnRerun;
+    const ranOnly = report.ranOnlyOnRerun;
+    if (afterRetry + afterRerun + ranOnly > 0) {
+      const parts = [afterRetry > 0 ? `${afterRetry} after an in-job retry (flaky)` : '', afterRerun > 0 ? `${afterRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} that did not run in the first run, only on the rerun` : ''].filter(Boolean);
+      sentences.push(`${report.finalPassed} of ${report.total} tests passed in the end: ${parts.join(' and ')} — not clean the first time.`);
     }
     if (drift?.occurred) {
       sentences.push(
@@ -710,11 +730,11 @@ ${body}
 
     const primaryRow = this.kpiRow([
       { value: String(report.total), label: 'Total', variant: ctx.suiteDrift?.occurred ? 'fail' : 'neutral', subtext: totalSubtext },
-      { value: String(report.passed), label: 'Passed', variant: 'success', subtext: report.passedOnRerunTests.length > 0 ? `${report.passedOnRerunTests.length} of them passed on the rerun` : undefined },
-      { value: String(report.flaky), label: 'Flaky', variant: report.flaky > 0 ? 'warn' : 'neutral', anchor: report.flaky > 0 ? '#section-flaky-tests' : undefined },
+      // Passed = the FINAL outcome (second amendment of ADR 0015, 2026-11-24): clean + after an in-job retry + after the rerun.
+      { value: String(report.finalPassed), label: 'Passed', variant: 'success', subtext: report.firstRun.flaky + report.recoveredOnRerun + report.ranOnlyOnRerun > 0 ? [report.firstRun.flaky > 0 ? `${report.firstRun.flaky} after a retry` : '', report.recoveredOnRerun > 0 ? `${report.recoveredOnRerun} after the rerun` : '', report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : ''].filter(Boolean).join(', ') : undefined },
       { value: String(report.failed), label: 'Failed', variant: report.failed > 0 ? 'fail' : 'neutral', anchor: report.failed > 0 ? '#section-failed-tests' : undefined },
       // Skipped = deliberate skips only; tests that never ran have their own tile (same split as the rerun table), so
-      // Passed + Flaky + Failed + Skipped + Did not run = Total.
+      // Passed + Failed + Skipped + Did not run = Total. Flaky is a signal inside Passed and sits in the second row.
       { value: String(report.skipped - report.didNotRun), label: 'Skipped', variant: report.skipped - report.didNotRun > 0 ? 'warn' : 'neutral' },
       ...(report.didNotRun > 0 ? [{ value: String(report.didNotRun), label: 'Did not run', variant: 'warn' as const }] : []),
     ]);
@@ -727,6 +747,14 @@ ${body}
         label: 'Passed first time',
         variant: report.passRate >= 90 ? 'success' : report.passRate >= 75 ? 'warn' : 'fail',
         subtext: passRateSubtext,
+      },
+      {
+        // A signal INSIDE Passed, not an outcome (it is not in the sum above): tests that passed only on an in-job retry.
+        value: String(report.firstRun.flaky),
+        label: 'Flaky',
+        variant: report.firstRun.flaky > 0 ? 'warn' : 'neutral',
+        anchor: report.flaky > 0 ? '#section-flaky-tests' : report.passedOnRerunTests.length > 0 ? '#section-passed-on-rerun' : undefined,
+        subtext: report.firstRun.flaky > 0 || report.recoveredOnRerun > 0 ? `passed on an in-job retry (inside Passed)${report.recoveredOnRerun > 0 ? `; +${report.recoveredOnRerun} passed only on the rerun` : ''}` : undefined,
       },
       { value: this.formatDuration(report.duration), label: 'Duration' },
       { value: String(report.modules.length), label: 'Modules' },
@@ -986,8 +1014,12 @@ ${body}
 
     const rows = scored
       .map((m) => {
-        const passRate = m.total > 0 ? Math.round((m.passed / m.total) * 100) : 0;
-        const barColor = m.failed > 0 ? FAIL : m.flaky > 0 ? WARN : SUCCESS;
+        // Pass = the FINAL outcome (second amendment of ADR 0015, 2026-11-24): clean + after an in-job retry + after the rerun. The tests
+        // that needed a retry or the rerun are counted INSIDE it and said so under the number.
+        const finalPassed = m.passed + m.flaky;
+        const needed = m.flaky + m.passedOnRerun;
+        const passRate = m.total > 0 ? Math.round((finalPassed / m.total) * 100) : 0;
+        const barColor = m.failed > 0 ? FAIL : needed > 0 ? WARN : SUCCESS;
         const typeStyle =
           m.type === 'UI'
             ? `background:#EFF3FE;color:${ACCENT};`
@@ -1025,9 +1057,10 @@ ${body}
               };">last ${stability.runsConsidered} runs: ${stability.failRate + stability.flakyRate}% unstable, ${
                 stability.direction === 'worsening' ? 'getting worse' : stability.direction === 'improving' ? 'getting better' : 'no clear trend'
               }</div>`;
-        const flakyCell = m.flaky > 0
-          ? `<a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${m.flaky}</a>`
-          : String(m.flaky);
+        const neededNote =
+          needed > 0
+            ? `<div style="font-size:9px;font-weight:400;margin-top:2px;"><a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${needed} needed a retry or rerun</a></div>`
+            : '';
         const failedCell = m.failed > 0
           ? `<a href="#section-failed-tests" style="color:${FAIL};text-decoration:none;">${m.failed}</a>`
           : String(m.failed);
@@ -1051,8 +1084,7 @@ ${body}
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${m.passed}</td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${m.flaky > 0 ? WARN : MUTED};font-weight:${m.flaky > 0 ? '700' : '400'};">${flakyCell}</td>
+        <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${finalPassed}${neededNote}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
         <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div><div style="font-size:9px;color:${MUTED};margin-top:2px;">${passRate}% passed</div></td>
         <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
@@ -1071,8 +1103,7 @@ ${body}
     <tr style="background:${CANVAS_TINT};">
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Module</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Type</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SUCCESS};font-weight:600;">Pass</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${WARN};font-weight:600;">Flaky</th>
+      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SUCCESS};font-weight:600;">Pass (final)</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Progress</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
@@ -1494,8 +1525,12 @@ ${body}
       : '';
     const heading = `<div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${INK};margin-bottom:8px;">Rerun of failed and flaky tests</div>`;
     if (!rerun.ran) {
+      // WHY (2026-11-24, scenario matrix): "no test failed or was flaky" was printed for a run whose only failures were in suites that are
+      // never rerun (formFields); the excluded list says what happened to them.
       const why =
-        rerun.reason === 'none'
+        rerun.reason === 'none' && rerun.excluded.length > 0
+          ? `${rerun.excluded.length} failed/flaky test(s) could not be rerun (${[...new Set(rerun.excluded.map((e) => e.reason))].join('; ')}): ${rerun.excluded.slice(0, 5).map((e) => this.esc(this.truncate(e.title, 90))).join('; ')}${rerun.excluded.length > 5 ? ` and ${rerun.excluded.length - 5} more` : ''}`
+          : rerun.reason === 'none'
           ? 'no test failed or was flaky, so no rerun was needed'
           : rerun.reason === 'cap'
             ? `${rerun.candidates} failed/flaky tests is more than the limit of ${rerun.maxTests}: that points at the environment, so nothing was rerun`
@@ -1511,16 +1546,17 @@ ${body}
     const f = rerun.firstRun;
     const a = rerun.afterRerun;
     const ranOnly = rerun.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length;
-    const passedOnRerun = rerun.rows.filter((r) => r.first !== 'not-run' && r.final === 'passed').length;
+    // failed on every first attempt, passed on the rerun (the flaky ones that also passed on the rerun are inside f.flaky)
+    const passedOnRerun = rerun.rows.filter((r) => r.first === 'failed' && r.final === 'passed').length;
     const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
     const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
     const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
     const summaryTable = `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-      <tr>${th('', 'left')}${th('First run')}${th('After rerun')}</tr>
-      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[passedOnRerun > 0 ? `${passedOnRerun} passed on rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`, SUCCESS)}</tr>
+      <tr>${th('', 'left')}${th('First run')}${th('Final result')}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${f.flaky + passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[f.flaky > 0 ? `${f.flaky} after a retry` : '', passedOnRerun > 0 ? `${passedOnRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`, SUCCESS)}</tr>
       <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
-      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(String(a.flaky), a.flaky > 0 ? WARN : INK)}</tr>
+      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${f.flaky > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(the ${f.flaky} ended Passed)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
       ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
       <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
       <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
@@ -1560,7 +1596,7 @@ ${body}
 <tr><td id="section-rerun" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
     ${heading}
-    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. A test that passes on the rerun counts as Passed in "After rerun", whether it was Failed or Flaky in the first run; "First run" and the "Passed first time" tile keep the first attempt.${origin}</div>
+    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. "Final result" counts every test that ultimately passed as Passed: clean, after an in-job retry (flaky) or on the rerun. "First run" and the "Passed first time" tile keep the first attempt, and the Flaky Tests section still lists each flaky test with its error.${origin}</div>
     ${summaryTable}
     ${testTable}
     ${excluded}

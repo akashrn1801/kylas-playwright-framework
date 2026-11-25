@@ -241,9 +241,10 @@ export interface RunHistoryRecord {
   // recoveredOnRerunTitles when it had failed every first attempt), never in failedTestTitles. Optional: every older
   // record lacks them (= no rerun) and every reader ignores them.
   rerun?: { candidates: number; recovered: number; stillFailing: number; ranOnlyOnRerun?: number };
-  // The counts after the rerun (a rerun pass is a pass). `passed`/`failed`/`flaky`/`skipped` and the per-module counts of a
-  // record are the FIRST-RUN counts (ADR 0015, amended 2026-11-24); records written before that stored the after-rerun
-  // counts there (a recovered test counted flaky) and have no `afterRerun`.
+  // The FINAL result (ADR 0015, second amendment 2026-11-24): every test that ultimately passed (clean, after an in-job retry or
+  // on the rerun) is passed, flaky is 0, the same as the email's "Final result" column. `passed`/`failed`/`flaky`/`skipped` and the
+  // per-module counts of a record are the FIRST-RUN counts; records written before 2026-11-24 stored after-rerun counts there (a
+  // recovered test counted flaky) and have no `afterRerun`; those of the first amendment day hold passed 934 style counts.
   afterRerun?: { passed: number; failed: number; flaky: number };
   firstRunFailed?: number;
   firstRunFlaky?: number;

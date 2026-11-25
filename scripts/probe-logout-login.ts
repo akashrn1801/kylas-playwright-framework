@@ -1,4 +1,10 @@
 /**
+ * ############################################################################################################
+ * # WARNING: THIS SCRIPT LOGS OUT THE SHARED STAGING ADMIN SESSION. IT REVOKES THE TOKEN FOR EVERY HOLDER OF  #
+ * # THE ACCOUNT (CI runs, Jenkins, laptops, a browser tab). NEVER RUN IT WHILE ANY TEST RUN USES THIS         #
+ * # ENVIRONMENT. Run it only when staging is idle and the maintainer has said so.                            #
+ * ############################################################################################################
+ *
  * Staging probe for the renew-session question (2026-11-24, sandbox 45420781016): after `DELETE /v1/tokens/logout`, does a fresh
  * `PUT /v1/users/login` give a NEW 12 h session, immediately or after a delay, or the old one until it expires naturally?
  *

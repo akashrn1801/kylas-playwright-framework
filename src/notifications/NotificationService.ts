@@ -445,8 +445,11 @@ export class NotificationService {
   // #167's false "PASSED") was about. This alert is deliberately simple and
   // unambiguous instead: state plainly that no report could be parsed, why,
   // and where to look — never implying a pass or a fail either way.
-  private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
-    const recipients = getRecipients(input.env, input.branch);
+  /**
+   * The "no report available" message (subject and HTML) without sending it: extracted from sendReportUnavailableAlert()
+   * (2026-11-24, no behaviour change) so the scenario matrix can render it. Reads reports/<env>/ under the current directory.
+   */
+  buildReportUnavailableMessage(input: NotificationInput, err: unknown): { subject: string; html: string } {
     const reason = err instanceof Error ? err.message : String(err);
     const renewalFailure = loadRenewalFailure(input.env);
     const completeness = withRenewalCause(loadShardCompleteness(input.env), renewalFailure);
@@ -479,6 +482,12 @@ export class NotificationService {
     <p>Common causes: the job was cancelled or killed before finishing (e.g. a platform timeout), or a real infrastructure failure prevented tests from running at all.</p>
   </div>
 </div>`;
+    return { subject, html };
+  }
+
+  private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
+    const recipients = getRecipients(input.env, input.branch);
+    const { subject, html } = this.buildReportUnavailableMessage(input, err);
     try {
       await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
       logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} recipient(s)`);

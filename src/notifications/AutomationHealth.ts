@@ -107,7 +107,7 @@ export function computeHealthScore(
   // A run where nothing executed still scores 0% here.
   const executed = report.total - report.skipped;
   const effectivePassRate =
-    executed > 0 ? Math.round(((report.passed + report.flaky) / executed) * 100) : 0;
+    executed > 0 ? Math.round((report.finalPassed / executed) * 100) : 0;
   const passRatePenalty = Math.round((100 - effectivePassRate) * 0.6);
   if (passRatePenalty > 0) {
     score -= passRatePenalty;

@@ -35,17 +35,17 @@ function main(): void {
   check(JSON.stringify(r.summary.firstRun) === JSON.stringify(original.firstRun), 'fixture: first-run counts equal the run\'s own rerun-summary.json (932 / 4 / 6 / 1 skipped)', JSON.stringify(r.summary.firstRun));
   check(JSON.stringify(r.summary.rows.map((x) => x.key).sort()) === JSON.stringify(original.rows.map((x) => x.key).sort()), 'fixture: the 4 rerun rows have the same keys (file, line, suite path, title) as the run\'s own summary');
   check(r.summary.excluded.length === original.excluded.length && r.summary.candidates === original.candidates, 'fixture: 4 candidates and 6 excluded flaky tests, as in the run');
-  check(t.includes('Needs Attention') && r.subject.includes('Health: Needs Attention 74/100') && r.subject.includes('FAILED'), 'replay: subject and health score are those of the real email (Needs Attention 74/100, FAILED)', r.subject);
+  check(r.subject === '❌ STAGING sandbox #235: 2 failed, 940 passed (6 flaky, 2 on rerun) of 943' && r.ctx.health?.score === 74 && r.ctx.health.label === 'Needs Attention', 'replay: the subject is the factual form (2 failed, 940 passed (6 flaky, 2 on rerun) of 943) and the health score is that of the real email (Needs Attention 74/100), now in the body', r.subject);
 
   // ── item 1: after the rerun, a rerun pass is a pass ──
-  check(JSON.stringify([r.summary.afterRerun.passed, r.summary.afterRerun.failed, r.summary.afterRerun.flaky]) === JSON.stringify([934, 2, 6]), 'item 1: after rerun Passed 934 / Failed 2 / Flaky 6', JSON.stringify(r.summary.afterRerun));
+  check(JSON.stringify([r.summary.afterRerun.passed, r.summary.afterRerun.failed, r.summary.afterRerun.flaky]) === JSON.stringify([940, 2, 0]), 'Final result: Passed 940 / Failed 2 / Flaky 0 (every test that ultimately passed is Passed: 932 clean + 6 after an in-job retry + 2 after the rerun)', JSON.stringify(r.summary.afterRerun));
   check(r.report.passed === 934 && r.report.failed === 2 && r.report.flaky === 6 && r.report.skipped === 1, 'item 1: the parsed report (email tiles, verdict, health) uses the after-rerun counts', `${r.report.passed}/${r.report.failed}/${r.report.flaky}`);
   check(r.report.firstRun.passed === 932 && r.report.firstRun.failed === 4 && r.report.firstRun.flaky === 6, 'item 1: the first-run view is kept in the parsed report (932 / 4 / 6)', JSON.stringify(r.report.firstRun));
   check(r.report.passRate === 98.8, 'item 1: "Passed first time" stays the first-run figure, 932 of 943 = 98.8% (e700d3a: never 100% while a test did not pass first time)', String(r.report.passRate));
   const rows = Object.fromEntries(r.summary.rows.map((x) => [x.title, x]));
   check(rows['restricted user should reschedule their own meeting']?.final === 'passed' && rows['restricted should verify meeting report count matches actual filtered entity count on own reports']?.final === 'passed', 'item 1: the two tests that failed first and passed on the rerun are Passed (final)');
-  check(/Passed \| 932 \| 934 \(2 passed on rerun\)|Passed 932 934 \(2 passed on rerun\)/.test(t), 'item 1: the rerun table shows First run 932 -> After rerun 934 (2 passed on rerun)');
-  check(t.includes('Failed 4 2') && t.includes('Flaky 6 6'), 'item 1: ... Failed 4 -> 2 and Flaky 6 -> 6');
+  check(t.includes('First run Final result') && /Passed 932 940 \(6 after a retry, 2 after the rerun\)/.test(t), 'Final result: the rerun table says First run 932 -> Final result 940 (6 after a retry, 2 after the rerun)');
+  check(t.includes('Failed 4 2') && /Flaky 6 0 \(the 6 ended Passed\)/.test(t), 'Final result: ... Failed 4 -> 2 and Flaky 6 -> 0 "(the 6 ended Passed)"');
   check((t.match(/Passed on rerun/g) ?? []).length >= 4, 'item 1: per-test Final says "Passed on rerun"');
   check(!t.includes('recovered on rerun') && !t.includes('Flaky - recovered'), 'item 1: no "recovered on rerun" / "Flaky - recovered" wording is left');
   check(r.report.status === 'failed' && r.ctx.verdict?.verdict === 'blocked', 'item 1: the run is still red (2 tests failed after the rerun)');
@@ -54,7 +54,7 @@ function main(): void {
   check(r.ctx.health?.score === 74, 'item 1 / D3: the health score stays 74 (a test that passed only on the rerun still weighs in the Flakiness factor)', String(r.ctx.health?.score));
   const rec = r.record;
   check(rec.passed === 932 && rec.failed === 4 && rec.flaky === 6 && rec.skipped === 1, 'item 1 / D4: the history record keeps the FIRST-RUN counts (932 / 4 / 6 / 1)', `${rec.passed}/${rec.failed}/${rec.flaky}/${rec.skipped}`);
-  check(JSON.stringify(rec.afterRerun) === JSON.stringify({ passed: 934, failed: 2, flaky: 6 }), 'item 1 / D4: ... and the after-rerun counts are in afterRerun', JSON.stringify(rec.afterRerun));
+  check(JSON.stringify(rec.afterRerun) === JSON.stringify({ passed: 940, failed: 2, flaky: 0 }), 'item 1 / D4: ... and the Final result is in afterRerun (940 / 2 / 0)', JSON.stringify(rec.afterRerun));
   check(rec.flakyTestTitles.length === 8 && rec.failedTestTitles.length === 2 && (rec.recoveredOnRerunTitles ?? []).length === 2, 'item 1 / D4: flakyTestTitles keeps the 2 that passed only on the rerun (8), failedTestTitles = the 2 still failing');
   const meetingsRbac = rec.modules.find((m) => m.name === 'Meetings' && m.type === 'RBAC');
   check(!!meetingsRbac && meetingsRbac.passed === 9 && meetingsRbac.flaky === 2 && meetingsRbac.failed === 1, 'item 1 / D4: per-module history counts are the first run too (Meetings RBAC 9 passed, 2 flaky, 1 failed)', JSON.stringify(meetingsRbac));
@@ -83,6 +83,18 @@ function main(): void {
   check(/last \d+ runs: \d+% unstable, /.test(mr), 'item 4: the rolling window has its own label ("last N runs: N% unstable, ...")', mr);
   check(/clean this run/.test(rowOf('Call-logs', 'RBAC')), 'item 4: a module with nothing unstable says "clean this run"');
   check(html.includes('>vs last run</th>') && html.includes('>Stability</th>'), 'item 4: the Trend column is split into "vs last run" and "Stability"');
+
+  // ── Final result rule (second amendment of ADR 0015, 2026-11-24): tiles, executive summary, modules, subject ──
+  const tileText = (label: string): string => (t.match(new RegExp(`(\\d+) ${label}.{0,90}`)) ?? [])[0] ?? '';
+  check(r.report.finalPassed === 940 && /^940 Passed 6 after a retry, 2 after the rerun/.test(tileText('Passed')), 'tiles: Passed 940 "6 after a retry, 2 after the rerun"', tileText('Passed'));
+  check(/Total.*943/.test(t) || t.includes('943 Total'), 'tiles: Total 943');
+  check(/\b2 Failed\b/.test(t) && /\b1 Skipped\b/.test(t), 'tiles: Failed 2 and Skipped 1');
+  check(940 + 2 + 1 === 943 && r.report.finalPassed + r.report.failed + (r.report.skipped - r.report.didNotRun) + r.report.didNotRun === r.report.total, 'tiles: Passed + Failed + Skipped (+ Did not run) add up to the total');
+  check(/\b6 Flaky passed on an in-job retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
+  check(/940 of 943 tests passed in the end: 6 after an in-job retry \(flaky\) and 2 after the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
+  const mr2 = rowOf('Meetings', 'RBAC');
+  check(/Meetings RBAC 12 3 needed a retry or rerun/.test(mr2) && !html.includes('>Flaky</th>') && html.includes('>Pass (final)</th>'), 'modules: Meetings RBAC Pass (final) 12 with "3 needed a retry or rerun" inside it; no separate Flaky column', mr2);
+  check(r.report.passRate === 98.8 && /98\.8%/.test(t) && /Passed first time/.test(t), 'signals kept: "Passed first time" 98.8%, and the Flaky Tests section still lists each flaky test with its error');
 
   // ── item 5: background errors reconcile ──
   check(fx.misc.totalErrors === 158 && fx.misc.unexpectedErrors === 123 && fx.misc.expectedRbacErrors === 26 && fx.misc.expectedBackgroundNoiseErrors === 9, 'item 5: the run\'s misc errors are 158 = 123 unexpected + 26 expected RBAC + 9 known background noise');
@@ -160,7 +172,7 @@ function main(): void {
   check(causeOnly.ctx.verdict?.bannerLabel === '🚫 BLOCKED — renew-session job failed' && causeOnly.subject.includes('BLOCKED — RENEW-SESSION JOB FAILED') && text(causeOnly.html).includes('The renew-session job did not succeed: failure'), 'renew-session failure with only the job result (artifact missing): still BLOCKED, naming the job');
   const crashed = replayBuild235({ blockedBySession: {} });
   check(crashed.ctx.verdict?.bannerLabel.startsWith('🚫 Incomplete Run') === true && text(crashed.html).includes('crashed, hung or was cancelled') && !text(crashed.html).includes('renew-session'), 'a real incomplete run (no renew-session cause) keeps the old "Incomplete run ... crashed, hung or was cancelled" wording');
-  check(!r.html.includes('no test job started') && r.subject.includes('FAILED'), 'a normal run (build #235) is unchanged by the renew-session wording');
+  check(!r.html.includes('no test job started') && r.subject.includes('2 failed'), 'a normal run (build #235) is unchanged by the renew-session wording');
 
   process.stdout.write(failed === 0 ? `\ncheck:build235 — all ${total} checks passed\n` : `\ncheck:build235 — ${failed} of ${total} check(s) FAILED\n`);
   process.exitCode = failed === 0 ? 0 : 1;

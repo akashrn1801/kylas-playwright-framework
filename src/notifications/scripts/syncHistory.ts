@@ -554,7 +554,7 @@ export function buildCurrentRecord(
     rerunSummary && rerunSummary.ran
       ? {
           rerun: { candidates: rerunSummary.candidates, recovered: rerunSummary.recovered, stillFailing: rerunSummary.stillFailing, ranOnlyOnRerun: rerunSummary.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length },
-          afterRerun: { passed: report.passed, failed: report.failed, flaky: report.flaky },
+          afterRerun: { passed: report.finalPassed, failed: report.failed, flaky: 0 },
           firstRunFailed: rerunSummary.firstRun.failed,
           firstRunFlaky: rerunSummary.firstRun.flaky,
           recoveredOnRerunTitles: rerunSummary.rows.filter((r) => r.first === 'failed' && r.final === 'passed').map((r) => r.title),

@@ -514,8 +514,8 @@ function main(): void {
   const rerunHtml = tpl.html(withRerun);
   check(normHtml(tpl.html({ ...rr, rerun: null })) === normHtml(baseHtml) && normHtml(tpl.html({ ...rr, rerun: undefined })) === normHtml(baseHtml), 'rerun: no summary (kill switch off, old run) = the email is exactly as before');
   check(snapshot(withRerun) === snapshot(rr) && tpl.subject(withRerun) === tpl.subject(rr), 'rerun: verdict, health, counts, dedup key and subject do not change with the rerun section');
-  check(/First run<\/th>/.test(rerunHtml) && /After rerun<\/th>/.test(rerunHtml), 'rerun: summary table has the columns "First run" and "After rerun"');
-  check(rerunHtml.includes('(1 passed on rerun)') && rerunHtml.includes('Passed on rerun') && !rerunHtml.includes('recovered on rerun'), 'rerun: a test that passed on the rerun is counted as Passed and named "Passed on rerun" (ADR 0015 amendment)');
+  check(/First run<\/th>/.test(rerunHtml) && /Final result<\/th>/.test(rerunHtml) && !/After rerun<\/th>/.test(rerunHtml), 'rerun: summary table has the columns "First run" and "Final result"');
+  check(rerunHtml.includes('1 after the rerun') && rerunHtml.includes('Passed on rerun') && !rerunHtml.includes('recovered on rerun'), 'rerun: a test that passed on the rerun is counted as Passed ("1 after the rerun") and named "Passed on rerun"');
   check(rerunHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final');
   check((rerunHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
   check(rerunHtml.includes('were not rerun') && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');

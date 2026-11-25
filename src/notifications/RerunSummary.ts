@@ -63,7 +63,8 @@ export interface RerunSummary {
   stillFailing: number;
   durationMs?: number;
   // recovered = tests that passed on the rerun after being Failed or Flaky in the first run (not the did-not-run ones).
-  // First run = what Playwright reported before any rerun; afterRerun = the combined report (ReportParser counts).
+  // First run = what Playwright reported before any rerun; afterRerun = the FINAL result of the combined report (second amendment
+  // of ADR 0015, 2026-11-24): every test that ultimately passed (clean, after an in-job retry, or on the rerun) is Passed, flaky is 0.
   firstRun: RerunCounts;
   afterRerun: RerunCounts;
   rows: RerunTestRow[];
@@ -122,7 +123,7 @@ export const RERUN_LABEL: Record<RerunOutcome, string> = { passed: 'Passed', fai
 export const FINAL_LABEL: Record<RerunFinalStatus, string> = {
   passed: 'Passed on rerun',
   recovered: 'Passed on rerun',
-  flaky: 'Flaky',
+  flaky: 'Passed after an in-job retry',
   failed: 'Failed',
   'not-run': 'Did not run',
 };
