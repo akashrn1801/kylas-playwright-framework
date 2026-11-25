@@ -22,6 +22,8 @@ import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardComplete
 import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 import { be, nounFor, plural, wasWere } from './wording';
+import { DonutSegment, renderDonutPng } from './DonutChart';
+import { logger } from '../utils/logger';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -165,6 +167,9 @@ const MAX_SLOW_MODULES = 5;
 const MAX_JOB_ROWS = 5;
 const MAX_ERROR_GROUPS = 8;
 
+/** Content-ID of the donut PNG the notify step attaches inline (nodemailer `cid`). */
+export const DONUT_CID = 'run-outcome@kylas-report';
+
 const INK = '#1B1F24';
 const SLATE = '#57606A';
 const MUTED = '#8C959F';
@@ -191,6 +196,12 @@ const MONO_FONT = "ui-monospace,Consolas,monospace"; // short on purpose: it is 
 const SANS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 export class EmailTemplate {
+  // The donut PNG is made once per context (the HTML and the attachment must agree) and never lets a failure reach the send: see chartPng().
+  private readonly chartCache = new WeakMap<EmailContext, Buffer | null>();
+
+  /** `donut` is injectable so a test can make the image fail (the email must still be sent, without the image). */
+  constructor(private readonly donut: (segments: DonutSegment[]) => Buffer = (segments) => renderDonutPng(segments)) {}
+
   // Set at the start of each render (rendering is synchronous): what kiLinked() needs to turn a KI number into a link.
   private kiLocations: Record<string, { file: string; line: number }> = {};
   private kiBase: string | null = null;
@@ -401,7 +412,7 @@ export class EmailTemplate {
 <style>
   @media only screen and (max-width: 480px) {
     .kpi { display: inline-block !important; width: 44% !important; box-sizing: border-box; vertical-align: top; }
-    .sx { padding-left: 16px !important; padding-right: 16px !important; }
+    td[style*="28px"] { padding-left: 16px !important; padding-right: 16px !important; }
     table { width: 100% !important; max-width: 100% !important; }
     .mh { display: none !important; }
     .wr { white-space: normal !important; }
@@ -409,6 +420,7 @@ export class EmailTemplate {
     a { overflow-wrap: anywhere; }
   }
   pre { width: 0; min-width: 100%; box-sizing: border-box; overflow-x: auto; }
+  .sw { border-radius: 2px; }
   code { font-size: inherit; }
   .tv { line-height: 1; }
   .tl { margin-top: 6px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
@@ -446,7 +458,7 @@ ${body}
 
   /**
    * Visual polish applied to the finished page (2026-11-25), so every section gets the same treatment without touching its builder: section
-   * headings get a small icon and a thin divider, and top-level section cells get the `sx` class the mobile rule shrinks. Pure styling: no
+   * headings get a small icon and a thin divider. Pure styling: no
    * text, number or id changes (the icon is its own span before the heading text).
    */
   private polish(page: string): string {
@@ -461,7 +473,7 @@ ${body}
       // the shared type and divider live in the .h class; only the colour and spacing stay inline
       return `<div class="h" style="${style.replace('font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;', '')}">${icon ? `${icon} ` : ''}${text}</div>`;
     });
-    return withHeadings.replace(/<td ((?:id="[^"]*" )?)style="([^"]*padding:[^";]*28px[^"]*)">/g, '<td $1style="$2" class="sx">');
+    return withHeadings;
   }
 
   // ===================== Masthead + status =====================
@@ -974,8 +986,89 @@ ${body}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${primaryRow}</table>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${secondaryRow}</table>
   ${this.buildRerunSummaryRow(ctx)}
+  ${this.buildOutcomeChart(ctx)}
   ${signalChips ? `<div style="margin-top:10px;">${signalChips}</div>` : ''}
 </td></tr>`;
+  }
+
+  // ===================== Outcome donut + segmented bar (2026-11-25) =====================
+
+  /** The five outcomes the chart shows; they partition the total and are the tiles' numbers (Passed = first + retry + rerun, Flaky = retry, Failed, Skipped + Did not run). */
+  outcomeShares(report: ParsedReport): { first: number; retry: number; rerun: number; failed: number; skipped: number; total: number; passRate: number } {
+    return { first: report.firstRun.passed, retry: report.firstRun.flaky, rerun: report.recoveredOnRerun + report.ranOnlyOnRerun, failed: report.failed, skipped: report.skipped, total: report.total, passRate: report.passRate };
+  }
+
+  private chartSegments(o: ReturnType<EmailTemplate['outcomeShares']>): Array<{ key: string; label: string; value: number; color: string }> {
+    return [
+      { key: 'first', label: 'Passed first time', value: o.first, color: SUCCESS },
+      { key: 'retry', label: 'Passed on retry', value: o.retry, color: WARN },
+      { key: 'rerun', label: 'Passed on rerun', value: o.rerun, color: '#57AB5A' },
+      { key: 'failed', label: 'Failed', value: o.failed, color: FAIL },
+      { key: 'skipped', label: 'Skipped', value: o.skipped, color: '#8C959F' },
+    ];
+  }
+
+  /** The alt text states the same numbers the tiles show; a check reads it back (invariant donut-matches-tiles). */
+  private chartAlt(o: ReturnType<EmailTemplate['outcomeShares']>): string {
+    return `Outcome of ${o.total} tests: ${o.first} passed first time, ${o.retry} passed on retry, ${o.rerun} passed on rerun, ${o.failed} failed, ${o.skipped} skipped. ${o.passRate}% passed first time.`;
+  }
+
+  private chartShown(ctx: EmailContext): boolean {
+    return ctx.report.total > 0 && !(ctx.health ?? this.fallbackHealth(ctx.report)).notApplicable;
+  }
+
+  /**
+   * The donut PNG, or null when the email shows no chart or the image could not be made. A failure here (any error) is logged as a warning and
+   * the email is sent without the image: the legend and the segmented bar stay, so nothing about the numbers is lost.
+   */
+  private chartPng(ctx: EmailContext): Buffer | null {
+    if (!this.chartShown(ctx)) return null;
+    if (this.chartCache.has(ctx)) return this.chartCache.get(ctx) ?? null;
+    let png: Buffer | null = null;
+    try {
+      png = this.donut(this.chartSegments(this.outcomeShares(ctx.report)).map((x) => ({ value: x.value, color: x.color })));
+    } catch (err) {
+      logger.warn(`[Email] The outcome donut could not be made (${err instanceof Error ? err.message : String(err)}): sending the email without the image, the bar and the legend stay`);
+    }
+    this.chartCache.set(ctx, png);
+    return png;
+  }
+
+  /** The donut as the message's inline (CID) attachment; null when there is none (nothing to chart, or the image failed). */
+  chartAttachment(ctx: EmailContext): { filename: string; cid: string; contentType: string; content: Buffer } | null {
+    const png = this.chartPng(ctx);
+    return png ? { filename: 'run-outcome.png', cid: DONUT_CID, contentType: 'image/png', content: png } : null;
+  }
+
+  /** A thin bar of coloured table cells (email-safe, shown even when images are blocked); every non-zero part gets at least 1%. */
+  private segmentedBar(parts: Array<{ label: string; value: number; color: string }>, total: number): string {
+    const live = parts.filter((x) => x.value > 0);
+    if (total <= 0 || live.length === 0) return '';
+    const pct = live.map((x) => Math.max(1, Math.round((x.value / total) * 100)));
+    const big = pct.indexOf(Math.max(...pct));
+    pct[big] -= pct.reduce((n, v) => n + v, 0) - 100;
+    const cells = live.map((x, i) => `<td width="${pct[i]}%" title="${this.escAttr(`${x.label}: ${x.value}`)}" style="background:${x.color};height:8px;line-height:8px;font-size:0;">&nbsp;</td>`).join('');
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;border-radius:4px;"><tr>${cells}</tr></table>`;
+  }
+
+  private buildOutcomeChart(ctx: EmailContext): string {
+    if (!this.chartShown(ctx)) return '';
+    const o = this.outcomeShares(ctx.report);
+    const segs = this.chartSegments(o);
+    const png = this.chartPng(ctx);
+    const legend = segs
+      .map((x) => `<tr style="font-size:12px;${x.value === 0 ? `color:${MUTED};` : ''}"><td style="padding:3px 0;"><span class="sw" style="display:inline-block;width:10px;height:10px;background:${x.color};"></span>&nbsp; ${x.label}</td><td style="padding:3px 0 3px 14px;font-weight:700;text-align:right;">${x.value}</td></tr>`)
+      .join('');
+    // "99.7% first time" is text, not part of the image: readable, selectable, and still there when images are blocked
+    const figureColor = o.passRate >= 90 ? SUCCESS : o.passRate >= 75 ? WARN : FAIL;
+    const image = png
+      ? `<td width="186" valign="middle" style="padding:0 16px 0 0;"><img src="cid:${DONUT_CID}" width="170" height="170" alt="${this.escAttr(this.chartAlt(o))}" style="display:block;border:0;width:170px;height:170px;"></td>`
+      : '';
+    return `
+  <table id="section-outcome-chart" role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;"><tr>
+    ${image}<td valign="middle"><div style="font-size:30px;font-weight:700;line-height:1;color:${figureColor};">${o.passRate}%</div><div style="font-size:11px;color:${SLATE};margin:2px 0 8px;">first time</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${legend}</table></td>
+  </tr></table>
+  ${this.segmentedBar(segs, o.total)}`;
   }
 
   /**
@@ -2102,13 +2195,19 @@ ${body}
 <tr><td id="section-background-errors" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:#FFFAF3;border-radius:6px;padding:16px;">
     <div style="font-size:13px;font-weight:700;color:${INK};margin-bottom:4px;">Background Errors Captured — ${miscErrors.totalErrors} total</div>
-    <div style="margin-bottom:8px;">
-      ${miscErrors.unexpectedErrors > 0 ? this.signalChip(`${miscErrors.unexpectedErrors} unexpected`, 'fail') : ''}
-      ${unexpectedApp > 0 ? this.signalChip(`${unexpectedApp} app-level`, 'fail') : ''}
-      ${unexpectedInfra > 0 ? this.signalChip(`${unexpectedInfra} infra-level (5xx)`, 'warn') : ''}
-      ${miscErrors.expectedRbacErrors > 0 ? this.signalChip(`${miscErrors.expectedRbacErrors} expected RBAC`, 'warn') : ''}
-      ${noiseCount > 0 ? this.signalChip(`${noiseCount} known background noise`, 'warn') : ''}
-    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:6px;">${this.kpiRow([
+      { value: String(miscErrors.unexpectedErrors), label: 'Unexpected', variant: 'fail', subtext: [unexpectedApp > 0 ? `${unexpectedApp} app-level` : '', unexpectedInfra > 0 ? `${unexpectedInfra} infra-level (5xx)` : ''].filter(Boolean).join(', ') || undefined },
+      { value: String(miscErrors.expectedRbacErrors), label: 'Expected RBAC', variant: 'neutral' },
+      { value: String(noiseCount), label: 'Known noise', variant: 'muted', subtext: noiseCount > 0 ? 'known background noise' : undefined },
+    ])}</table>
+    ${this.segmentedBar(
+      [
+        { label: 'Unexpected', value: miscErrors.unexpectedErrors, color: FAIL },
+        { label: 'Expected RBAC', value: miscErrors.expectedRbacErrors, color: ACCENT },
+        { label: 'Known noise', value: noiseCount, color: '#6E7781' },
+      ],
+      miscErrors.totalErrors
+    )}
     <div style="font-size:11px;color:${SLATE};margin-bottom:4px;">${miscErrors.unexpectedErrors} unexpected + ${miscErrors.expectedRbacErrors} expected RBAC + ${noiseCount} known background noise = ${miscErrors.totalErrors} total. Only the unexpected ones count towards the health score and the "background errors" figures above; the other two are shown for completeness.</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">By type: ${Object.entries(miscErrors.byType as Record<string, number>).map(([type, count]) => `${this.esc(type)} ${count}`).join(', ')}. Unexpected = review (infra-level = a 5xx, often transient); expected RBAC and known noise are normal.</div>
     <div>

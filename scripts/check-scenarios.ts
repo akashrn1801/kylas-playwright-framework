@@ -109,6 +109,37 @@ export function rerunTestRows(html: string): string[][] {
     .map((m) => [...m[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) => text(c[1])))
     .filter((c) => c.length === 4 && c[0] !== 'Test');
 }
+/** The outcome chart block: legend numbers, the image's alt text numbers (null when the image is absent), the bar's numbers and the "N% first time" figure. */
+export interface ChartRead { legend: Record<string, number>; alt: number[] | null; bar: Record<string, number>; figure: number | null }
+export function outcomeChart(html: string): ChartRead | null {
+  const i = html.indexOf('id="section-outcome-chart"');
+  if (i < 0) return null;
+  const end = html.indexOf('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px', i);
+  const block = html.slice(i, end < 0 ? undefined : end);
+  const legend: Record<string, number> = {};
+  for (const m of block.matchAll(/<span class="sw"[^>]*><\/span>(?:&nbsp;|\s)+([^<]+)<\/td><td[^>]*>(\d+)<\/td>/g)) legend[text(m[1])] = parseInt(m[2], 10);
+  const alt = /alt="Outcome of (\d+) tests: (\d+) passed first time, (\d+) passed on retry, (\d+) passed on rerun, (\d+) failed, (\d+) skipped\. ([\d.]+)% passed first time\./.exec(block);
+  const bar: Record<string, number> = {};
+  const barHtml = end < 0 ? '' : html.slice(end, html.indexOf('</table>', end));
+  for (const m of barHtml.matchAll(/title="([^":]+): (\d+)"/g)) bar[m[1]] = parseInt(m[2], 10);
+  const fig = /font-weight:700;line-height:1;color:#[0-9A-Fa-f]{6};">([\d.]+)%<\/div>/.exec(block);
+  return { legend, alt: alt ? alt.slice(1, 7).map(Number) : null, bar, figure: fig ? parseFloat(fig[1]) : null };
+}
+/** The Background Errors tiles (Unexpected, Expected RBAC, Known noise) and the bar under them. */
+export function errorTiles(html: string): { tiles: Record<string, number>; bar: Record<string, number> } | null {
+  const i = html.indexOf('id="section-background-errors"');
+  if (i < 0 || html.indexOf('<div class="tl"', i) < 0) return null;
+  const end = html.indexOf('\n<tr><td', i + 10);
+  const section = html.slice(i, end < 0 ? undefined : end);
+  const tiles: Record<string, number> = {};
+  for (const chunk of section.split('<td style="width:').slice(1)) {
+    const m = /^(\d+)\s+(Unexpected|Expected RBAC|Known noise)\b/.exec(text(chunk.slice(chunk.indexOf('>') + 1, chunk.indexOf('</td>'))));
+    if (m) tiles[m[2]] = parseInt(m[1], 10);
+  }
+  const bar: Record<string, number> = {};
+  for (const m of section.matchAll(/title="([^":]+): (\d+)"/g)) bar[m[1]] = parseInt(m[2], 10);
+  return { tiles, bar };
+}
 export interface RerunRow { first: number; final: number; note: string }
 export function rerunTable(html: string): Record<string, RerunRow> | null {
   const i = html.indexOf('id="section-rerun"');
@@ -238,6 +269,37 @@ export function invariants(s: ScenarioResult): Violation[] {
     const tileSum = n('Passed') + n('Failed') + n('Skipped') + (t['Did not run'] ? n('Did not run') : 0);
     if (tileSum !== n('Total')) bad('tiles-add-up', `Passed + Failed + Skipped + Did not run = ${tileSum}, Total ${n('Total')}`);
   } else if (!blockedLike) bad('tiles-present', 'no Run Summary tiles found');
+
+  // Piece B (2026-11-25): the donut's legend, alt text and the segmented bar are the tiles' numbers; the Background Errors tiles and bar are the error counts
+  const ch = outcomeChart(s.html);
+  const chartExpected = !blockedLike && r.total > 0 && !ctx.health?.notApplicable;
+  if (!!ch !== chartExpected) bad('chart-presence', `the outcome chart is ${ch ? 'shown' : 'missing'} but ${chartExpected ? 'tests ran' : 'nothing is verified (blocked, incomplete or empty run)'}`);
+  if (ch) {
+    const tv = (l: string): number => parseInt(t[l]?.value ?? '0', 10);
+    const L = ch.legend;
+    const parts = [L['Passed first time'], L['Passed on retry'], L['Passed on rerun'], L['Failed'], L['Skipped']];
+    if (parts.some((x) => typeof x !== 'number')) bad('chart-legend', `the chart legend is incomplete: ${JSON.stringify(L)}`);
+    else {
+      const [first, retry, rerun, failedN, skippedN] = parts;
+      if (first + retry + rerun + failedN + skippedN !== r.total) bad('chart-adds-up', `the chart's five outcomes add up to ${first + retry + rerun + failedN + skippedN}, total ${r.total}`);
+      if (first + retry + rerun !== tv('Passed') || failedN !== tv('Failed') || retry !== tv('Flaky') || skippedN !== tv('Skipped') + tv('Did not run')) bad('chart-matches-tiles', `chart ${JSON.stringify(L)} vs tiles Passed ${tv('Passed')} / Failed ${tv('Failed')} / Flaky ${tv('Flaky')} / Skipped + Did not run ${tv('Skipped') + tv('Did not run')}`);
+      if (ch.figure !== r.passRate || `${r.passRate}%` !== t['Passed first time']?.value) bad('chart-figure', `the chart says ${ch.figure}% first time, the tile ${t['Passed first time']?.value}, the report ${r.passRate}%`);
+      if (ch.alt && ch.alt.join() !== [r.total, first, retry, rerun, failedN, skippedN].join()) bad('chart-alt-matches', `the image's alt text says ${ch.alt.join('/')} but the tiles say ${[r.total, first, retry, rerun, failedN, skippedN].join('/')}`);
+      const live = Object.entries(L).filter(([, v]) => v > 0);
+      if (JSON.stringify(live.map(([k, v]) => [k, v])) !== JSON.stringify(Object.entries(ch.bar))) bad('bar-matches-chart', `the segmented bar ${JSON.stringify(ch.bar)} differs from the legend's non-zero parts ${JSON.stringify(live)}`);
+    }
+  }
+  const et = errorTiles(s.html);
+  const mc = ctx.miscErrors;
+  if (mc && mc.totalErrors > 0) {
+    if (!et) bad('error-tiles-present', 'background errors were captured but the Background Errors tiles are missing');
+    else {
+      const noise = mc.errors.filter((e) => e.expectedReason === 'background-noise').length;
+      if (et.tiles['Unexpected'] !== mc.unexpectedErrors || et.tiles['Expected RBAC'] !== mc.expectedRbacErrors || et.tiles['Known noise'] !== noise || mc.unexpectedErrors + mc.expectedRbacErrors + noise !== mc.totalErrors) bad('error-tiles-match', `error tiles ${JSON.stringify(et.tiles)} vs the captured ${mc.unexpectedErrors} / ${mc.expectedRbacErrors} / ${noise} of ${mc.totalErrors}`);
+      const want = [['Unexpected', mc.unexpectedErrors], ['Expected RBAC', mc.expectedRbacErrors], ['Known noise', noise]].filter(([, v]) => (v as number) > 0);
+      if (JSON.stringify(want) !== JSON.stringify(Object.entries(et.bar))) bad('error-bar-matches-tiles', `the error bar ${JSON.stringify(et.bar)} differs from the tiles ${JSON.stringify(want)}`);
+    }
+  }
   const exec = execFirstLine(s.html);
   const countBased = !/BLOCKED|INCOMPLETE|NO TESTS|DRIFT/i.test(s.subject);
   if (countBased) {

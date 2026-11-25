@@ -436,12 +436,13 @@ export class NotificationService {
     const subject = this.template.subject(ctx);
     const html = this.template.html(ctx);
     const text = this.template.text(ctx);
+    const chart = this.template.chartAttachment(ctx); // null when the image could not be made: the email goes out without it
     // the full background-error list, next to the HTML report (it goes into the report artifact); the email carries only the top groups
     writeBackgroundErrorsPage(path.dirname(input.jsonReportPath), ctx.miscErrors, { env: input.env, branch: input.branch, buildNumber: input.buildNumber });
 
     logger.info(`[Notification] Sending email — Subject: ${subject}`);
     try {
-      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, text, env: input.env });
+      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, text, ...(chart ? { attachments: [chart] } : {}), env: input.env });
       logger.success('[Notification] Email sent successfully');
       // WHY only marked "sent" here, after a confirmed-successful send: see
       // markNotified()'s own WHY comment — a failed attempt must remain

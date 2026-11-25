@@ -8,6 +8,8 @@ export interface EmailPayload {
   html: string;
   // plain-text alternative (multipart/alternative); optional so older callers keep working
   text?: string;
+  // inline images (CID): the run-outcome donut is a PNG attachment the HTML refers to as cid:<cid>
+  attachments?: Array<{ filename: string; cid: string; contentType: string; content: Buffer }>;
   env: string;
 }
 
@@ -45,6 +47,7 @@ export class EmailAdapter {
       subject: payload.subject,
       html: payload.html,
       ...(payload.text ? { text: payload.text } : {}),
+      ...(payload.attachments && payload.attachments.length > 0 ? { attachments: payload.attachments } : {}),
     });
     console.log(
       // WHY a count, not the addresses: recipients are CI secrets, and GitHub masks only the exact secret

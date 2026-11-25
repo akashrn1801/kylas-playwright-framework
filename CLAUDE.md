@@ -3,7 +3,7 @@
 > **Purpose:** The only file loaded into every session: standing rules, key commands, a "task → read this" table, and the Definition of Done. Everything else is read on demand.
 > **Read when:** always (it is auto-loaded). Keep it a router — detail belongs in `docs/`.
 > **Size budget:** 10k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 1b5d74a
+> **Last verified:** 2026-11-25 @ 9a42db6
 
 Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Claude Code and every agent never run any `git` or `gh` command, read-only ones included (`status`, `log`, `diff`, `gh pr list`); this is enforced by `Bash(git *)` / `Bash(gh *)` deny rules in `.claude/settings.json`. Ask the user for any git information needed. Project scripts that call git internally (e.g. `npm run check:docs`) still run.
 
@@ -34,7 +34,7 @@ Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). B
 
 ## Key commands
 
-`npx tsc --noEmit` · `npm run lint` · `npm run check:conventions` · `npm run check:rerun` · `npm run check:build235` (email replay of a real build) · `npm run check:scenarios` (reporting scenario matrix) · `npm run check:app-time` · `npm run check:email-size` (email under Gmail's 100 KB) · `npm run check:fail-fast` · `npm run check:test-counts` (baseline: `npm run generate:test-counts`) · `npm run docs:refresh` · `npm run check:docs` · `ENV=qa npx playwright test <path> --project=chromium --workers=1` · `npm run new:module`. Use `npx playwright test <paths> <flags>` — not `npm run test:<module> -- <flags>` (args attach to the trailing `npm run notify`).
+`npx tsc --noEmit` · `npm run lint` · `npm run check:conventions` · `npm run check:rerun` · `npm run check:build235` (email replay of a real build) · `npm run check:scenarios` (reporting scenario matrix) · `npm run check:app-time` · `npm run check:email-size` (email under Gmail's 100 KB) · `npm run check:donut` (the outcome donut and its fallback) · `npm run check:fail-fast` · `npm run check:test-counts` (baseline: `npm run generate:test-counts`) · `npm run docs:refresh` · `npm run check:docs` · `ENV=qa npx playwright test <path> --project=chromium --workers=1` · `npm run new:module`. Use `npx playwright test <paths> <flags>` — not `npm run test:<module> -- <flags>` (args attach to the trailing `npm run notify`).
 
 **Verification runs stop at the first failure:** always `--max-failures=1 --retries=0` (max 4 workers). If anything fails, for any reason, stop; find the root cause from the trace (a 429 during a failing step is reported with that step, not dismissed); fix; then re-run. Never let a run continue past a failure.
 

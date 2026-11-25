@@ -3,7 +3,7 @@
 > **Purpose:** Index of ADRs and the template to write a new one.
 > **Read when:** You made or reversed a design decision (Definition of Done step 4).
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 9e60850
+> **Last verified:** 2026-11-25 @ 9a42db6
 
 One page per decision, max about 3.5k chars. Never edit an accepted ADR's decision silently: add a new ADR and mark the old one Superseded.
 
@@ -26,6 +26,7 @@ One page per decision, max about 3.5k chars. Never edit an accepted ADR's decisi
 | [0015](0015-skip-passed-formfields-on-rerun-and-rerun-shard.md) | A re-run skips formFields jobs that already passed (sandbox first); rerun shard design | Proposed (step 1 in sandbox.yml, not yet run) |
 | [0016](0016-first-attempt-hardening-framework-wide.md) | First-attempt hardening: measure first, real ready signals, no hidden retries | Proposed (B0 done; batches add decisions) |
 | [0017](0017-check-before-retry-no-double-submit.md) | Check before retry, never double-submit (B4) | Accepted |
+| [0018](0018-outcome-donut-png.md) | The outcome donut is a PNG made in-process, no dependency | Accepted |
 
 ## Template
 ```
