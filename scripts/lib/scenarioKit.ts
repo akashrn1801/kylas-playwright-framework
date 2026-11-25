@@ -78,7 +78,7 @@ export interface ScenarioSpec {
   title: string;
   /** What a reader should conclude; printed in the index. */
   expect: string;
-  env?: 'staging' | 'qa' | 'prod';
+  env?: string; // 'staging' | 'qa' | 'prod', or any other name to see the palette's fallback
   branch?: string;
   first: Def[];
   /** The rerun shard exists only on sandbox: false = no manifest at all (kill switch off, or another branch). */

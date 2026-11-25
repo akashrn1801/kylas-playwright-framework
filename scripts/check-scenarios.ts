@@ -16,6 +16,7 @@ import * as path from 'path';
 import { RenewalFailure } from '../src/auth/renewalFailure';
 import { DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
+import { RETRY, infoSwatch } from '../src/notifications/EmailPalette';
 import { Def, SKIP_REASON_TEXT, ScenarioResult, ScenarioSpec, def, many, runScenario } from './lib/scenarioKit';
 import { replayBuild235 } from './lib/build235Fixture';
 
@@ -65,6 +66,14 @@ const BRANCHES: Array<{ branch: string; env: 'staging' | 'qa' | 'prod' }> = [
   { branch: 'stage', env: 'staging' }, { branch: 'prod', env: 'prod' }, { branch: 'main', env: 'prod' },
   { branch: 'feature/ui-polish', env: 'staging' },
 ];
+// one scenario per environment, with every colour in play (failures, retries, a rerun, a skip), and an environment the palette does not know (neutral slate)
+const mixed = (): Def[] => [...base(20), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky'), ...many(1, 'skip-reason', 'skipped with reason', 'ui/skips/skips.spec.ts', 10)];
+SCENARIOS.push(
+  { name: '33-env-qa', title: 'QA: failures, retries, a rerun and a skip: the info colour is QA sky blue', expect: 'QA sky blue info tiles and ENV badge; yellow retry; green / red / slate status colours', env: 'qa', branch: 'dev', first: mixed(), rerun: true },
+  { name: '34-env-staging', title: 'STAGING: the same run: the info colour is lavender', expect: 'lavender info tiles and ENV badge; the status colours are the same as in QA', env: 'staging', branch: 'sandbox', first: mixed(), rerun: true },
+  { name: '35-env-prod', title: 'PROD: the same run: the info colour is a deeper blue', expect: 'deeper blue info tiles and ENV badge (white text); the status colours are the same as in QA', env: 'prod', branch: 'prod', first: mixed(), rerun: true },
+  { name: '36-env-unknown', title: 'An environment the palette does not know: neutral slate', expect: 'slate info tiles and ENV badge; nothing breaks', env: 'local', branch: 'sandbox', first: mixed(), rerun: true },
+);
 for (const b of BRANCHES) {
   const id = b.branch.replace(/\//g, '-');
   SCENARIOS.push(
@@ -142,6 +151,18 @@ export function errorTiles(html: string): { tiles: Record<string, number>; bar: 
   const bar: Record<string, number> = {};
   for (const m of section.matchAll(/title="([^":]+): (\d+)"/g)) bar[m[1]] = parseInt(m[2], 10);
   return { tiles, bar };
+}
+/** The fill and text colour of each Run Summary / Rerun Summary / error tile, from its inline style (first occurrence of a label wins). */
+export function tileStyles(html: string): Record<string, { fill: string; text: string }> {
+  const out: Record<string, { fill: string; text: string }> = {};
+  for (const chunk of html.split('<td style="width:').slice(1)) {
+    const style = chunk.slice(0, chunk.indexOf('"'));
+    const label = />([^<]+)<\/div>\s*(?:<div class="ts"|<\/td>|$)/.exec(chunk.slice(0, chunk.indexOf('</td>')))?.[1];
+    const fill = /background:(#[0-9A-Fa-f]{6})/.exec(style)?.[1];
+    const textc = /;color:(#[0-9A-Fa-f]{6});?$/.exec(style)?.[1] ?? /color:(#[0-9A-Fa-f]{6});?$/.exec(style)?.[1];
+    if (label && fill && textc && !out[label.trim()]) out[label.trim()] = { fill: fill.toUpperCase(), text: textc.toUpperCase() };
+  }
+  return out;
 }
 export interface RerunRow { first: number; final: number; note: string }
 export function rerunTable(html: string): Record<string, RerunRow> | null {
@@ -326,6 +347,38 @@ export function invariants(s: ScenarioResult): Violation[] {
   }
   const passedInEnd = /(\d+) of (\d+) tests passed in the end/.exec(text(s.html));
   if (passedInEnd && (parseInt(passedInEnd[1], 10) !== r.finalPassed || parseInt(passedInEnd[2], 10) !== r.total)) bad('exec-quotes-report', `"N of M passed in the end" is ${passedInEnd[1]} of ${passedInEnd[2]}, report ${r.finalPassed} of ${r.total}`);
+
+  // Colours (2026-11-25): information tiles and the ENV badge take the environment's colour; flaky / retry is yellow everywhere; status colours never change
+  if (!blockedLike) {
+    const ts = tileStyles(s.html);
+    const info = infoSwatch(s.env);
+    const same = (a: { fill: string; text: string } | undefined, b: { bg: string; text: string }): boolean => !!a && a.fill === b.bg.toUpperCase() && a.text === b.text.toUpperCase();
+    for (const label of ['Duration', 'Modules', 'Total', 'Rerun', 'Not rerun', 'Rerun duration']) {
+      const t = ts[label];
+      if (t && t.fill !== '#6E7781' && !same(t, info)) bad('info-colour-per-env', `the ${label} tile is ${t.fill}/${t.text}, ${s.env} uses ${info.bg}/${info.text}`);
+    }
+    const chip = /<span style="display:inline-block;font-size:11px;color:(#[0-9A-Fa-f]{6});background:(#[0-9A-Fa-f]{6});[^"]*">ENV <b/.exec(s.html);
+    if (!chip || chip[2].toUpperCase() !== info.bg.toUpperCase() || chip[1].toUpperCase() !== info.text.toUpperCase()) bad('env-badge-colour', `the ENV badge is ${chip?.[2]}/${chip?.[1]}, ${s.env} uses ${info.bg}/${info.text}`);
+    for (const label of ['Flaky', 'Retries', 'Did not run']) {
+      const t = ts[label];
+      if (t && t.fill !== '#6E7781' && !same(t, RETRY)) bad('retry-yellow', `the ${label} tile is ${t.fill}/${t.text}, retry is ${RETRY.bg}/${RETRY.text}`);
+    }
+    const status: Array<[string, string]> = [['Passed', '#1A7F37'], ['Failed', '#CF222E']];
+    for (const [label, color] of status) {
+      const t = ts[label];
+      if (t && t.fill !== '#6E7781' && (t.fill !== color || t.text !== '#FFFFFF')) bad('status-colour-constant', `the ${label} tile is ${t.fill}/${t.text} in ${s.env}: status colours do not change with the environment`);
+    }
+    if (ts['Skipped'] && (ts['Skipped'].fill !== '#6E7781' || ts['Skipped'].text !== '#FFFFFF')) bad('status-colour-constant', `the Skipped tile is ${ts['Skipped'].fill}, skipped is slate grey in every environment`);
+    // pills are green (passed), red (failed), retry yellow, or neutral: nothing else
+    for (const m of s.html.matchAll(/<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:(#[0-9A-Fa-f]{6});color:(#[0-9A-Fa-f]{6});/g)) {
+      const pair = `${m[1].toUpperCase()}/${m[2].toUpperCase()}`;
+      const okPairs = [`#DAFBE1/#1A7F37`.toUpperCase(), `#FFEBE9/#CF222E`.toUpperCase(), `${RETRY.bg}/${RETRY.text}`.toUpperCase()];
+      if (!okPairs.includes(pair) && m[1].toUpperCase() !== '#F6F8FA') bad('pill-palette', `a pill is ${pair}`);
+    }
+    const bar = /title="Passed on retry: \d+" style="background:(#[0-9A-Fa-f]{6})/.exec(s.html);
+    const dot = /<span class="sw"[^>]*background:(#[0-9A-Fa-f]{6});[^>]*><\/span>(?:&nbsp;|\s)+Passed on retry/.exec(s.html);
+    if ((bar && bar[1].toUpperCase() !== RETRY.bg.toUpperCase()) || (dot && dot[1].toUpperCase() !== RETRY.bg.toUpperCase())) bad('retry-yellow', `the Passed on retry bar / legend dot is not ${RETRY.bg}`);
+  }
 
   // 5-6: verdict, colour and icon
   if (r.failed > 0 && (verdict.verdict === 'clear' || verdict.bannerTone === 'success' || subjectIcon === 'green')) bad('failure-never-green', `a run with ${r.failed} failed tests is shown green (${verdict.bannerLabel})`);

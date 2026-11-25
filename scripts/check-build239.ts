@@ -5,6 +5,9 @@
  * Run: npm run check:build239
  */
 import * as fs from 'fs';
+import * as zlib from 'zlib';
+import { EmailTemplate } from '../src/notifications/EmailTemplate';
+import { ENV_INFO, INFO_FALLBACK, RETRY } from '../src/notifications/EmailPalette';
 import * as path from 'path';
 import { isExpectedBackgroundNoise } from '../src/error-collector/errorFilters';
 import { isMergeCommit, mergeTargetBranch, parseCommitFacts } from '../src/notifications/CommitInfo';
@@ -89,17 +92,49 @@ function main(): void {
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   };
   const contrast = (a: string, b: string): number => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
-  const fills: Record<string, string> = { green: hex('SUCCESS'), amber: hex('WARN'), red: hex('FAIL'), blue: hex('ACCENT'), grey: '#6E7781' };
-  check(Object.entries(fills).every(([, c]) => contrast(c, '#FFFFFF') >= 4.5), 'polish: white text on every tile fill (green, amber, red, blue, grey) is at least 4.5:1 (WCAG AA)', Object.entries(fills).map(([k, c]) => `${k} ${contrast(c, '#FFFFFF').toFixed(2)}`).join(', '));
+  const white = '#FFFFFF';
+  const statusFills: Record<string, string> = { green: hex('SUCCESS'), red: hex('FAIL'), grey: '#6E7781' };
+  check(Object.values(statusFills).every((c) => contrast(c, white) >= 4.5), 'polish: white text on the status fills (green, red, grey) is at least 4.5:1 (WCAG AA)', Object.entries(statusFills).map(([k, c]) => `${k} ${contrast(c, white).toFixed(2)}`).join(', '));
+  const lightPairs: Array<[string, { bg: string; text: string }]> = [...Object.entries(ENV_INFO), ['fallback', INFO_FALLBACK], ['retry', RETRY]];
+  check(lightPairs.every(([, p]) => contrast(p.text, p.bg) >= 4.5), 'palette: text on every info fill (QA, STAGING, PROD, the slate fallback) and on the retry yellow is at least 4.5:1 (WCAG AA)', lightPairs.map(([k, p]) => `${k} ${contrast(p.text, p.bg).toFixed(2)}`).join(', '));
   const tileFill = (label: string): string => {
     for (const chunk of r.html.split('<td style="width:').slice(1)) {
-      if (new RegExp(`<div class="tl"[^>]*>${label}</div>`).test(chunk)) return /background:(#[0-9A-Fa-f]{6})/.exec(chunk)?.[1] ?? '';
+      if (new RegExp(`<div class="tl"[^>]*>${label}</div>`).test(chunk)) return /background:(#[0-9A-Fa-f]{6})/.exec(chunk)?.[1].toUpperCase() ?? '';
     }
     return '';
   };
+  const stg = ENV_INFO.staging;
   check(tileFill('Failed') === '#6E7781' && tileFill('Still failing') === '#6E7781', 'polish: a zero Failed / Still failing tile is grey, not red', `${tileFill('Failed')} / ${tileFill('Still failing')}`);
-  check(tileFill('Passed') === fills.green && tileFill('Total') === fills.blue && tileFill('Flaky') === fills.amber, 'polish: Passed is green, Total is blue (information), Flaky is amber', `${tileFill('Passed')} ${tileFill('Total')} ${tileFill('Flaky')}`);
-  check(tileFill('Skipped') === '#6E7781' && tileFill('Skipped') !== fills.amber, 'polish: the Skipped tile (1 skipped test) is slate grey, not amber: skipped is deliberate, amber is for retry, rerun and flaky');
+  check(tileFill('Passed') === statusFills.green.toUpperCase() && tileFill('Total') === stg.bg && tileFill('Duration') === stg.bg && tileFill('Not rerun') === stg.bg && tileFill('Flaky') === RETRY.bg, 'colour: Passed is green, the info tiles (Total, Duration, Not rerun) are STAGING lavender, Flaky is retry yellow', `${tileFill('Passed')} ${tileFill('Total')} ${tileFill('Not rerun')} ${tileFill('Flaky')}`);
+  check(/<span style="[^"]*color:#3B0764;background:#C4B5FD;[^"]*">ENV <b/.test(r.html), 'colour: the ENV badge is lavender with dark text for STAGING');
+  const tw = (env: string): string => new EmailTemplate().html({ ...r.ctx, env });
+  check(/color:#1E3A8A;background:#93C5FD;[^"]*">ENV </.test(tw('qa')) && /color:#ffffff;background:#0C6FAC;[^"]*">ENV </.test(tw('prod')) && /color:#1E293B;background:#CBD5E1;[^"]*">ENV </.test(tw('local')), 'colour: QA is sky blue, PROD a deeper blue with white text, and an unknown environment neutral slate (the fallback)');
+  const retryOf = (h: string): boolean => /title="Passed on retry: 1" style="background:#FDE047/.test(h) && /<span class="sw"[^>]*background:#FDE047;[^>]*><\/span>&nbsp; Passed on retry/.test(h);
+  check(retryOf(r.html) && retryOf(tw('qa')) && retryOf(tw('prod')), 'colour: the Passed on retry legend dot and bar segment are yellow in every environment');
+  const pngAt = (): Buffer => (new EmailTemplate().chartAttachment(r.ctx) as { content: Buffer }).content;
+  const pix = ((): [number, number, number, number] => {
+    const png = pngAt();
+    const w = png.readUInt32BE(16);
+    let off = 8;
+    const idat: Buffer[] = [];
+    while (off < png.length) {
+      const len = png.readUInt32BE(off);
+      if (png.toString('ascii', off + 4, off + 8) === 'IDAT') idat.push(png.subarray(off + 8, off + 8 + len));
+      off += 12 + len;
+    }
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const rad = (350 * Math.PI) / 180; // the retry slice of build #239 (the 940 first-time slice ends near 348 degrees)
+    const x = Math.round(w / 2 + w * 0.385 * Math.sin(rad));
+    const y = Math.round(w / 2 - w * 0.385 * Math.cos(rad));
+    const o = y * (w * 4 + 1) + 1 + x * 4;
+    return [raw[o], raw[o + 1], raw[o + 2], raw[o + 3]];
+  })();
+  check(pix[3] === 255 && `#${[pix[0], pix[1], pix[2]].map((v) => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase() === RETRY.bg, 'colour: the donut PNG paints the Passed on retry slice retry yellow', JSON.stringify(pix));
+  const palette = fs.readFileSync(path.join(__dirname, '../src/notifications/EmailPalette.ts'), 'utf8');
+  const literals = [...palette.matchAll(/#[0-9A-Fa-f]{6}/g)].map((m) => m[0].toUpperCase()).filter((c) => c !== '#FFFFFF');
+  const elsewhere = ['src/notifications/EmailTemplate.ts', 'src/notifications/DonutChart.ts', 'src/notifications/NotificationService.ts'].flatMap((f) => literals.filter((c) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8').toUpperCase().includes(c)).map((c) => `${path.basename(f)} has ${c}`));
+  check(elsewhere.length === 0, 'colour: the environment and retry colours are defined in one place (EmailPalette.ts); no other source file repeats them', elsewhere.join(', '));
+  check(tileFill('Skipped') === '#6E7781', 'polish: the Skipped tile (1 skipped test) is slate grey, not amber: skipped is deliberate, amber is for retry, rerun and flaky');
   check(!/class="tv"[^>]*><code>/.test(r.html) && !/class="tv"[^>]*><a[^>]*><code>/.test(r.html) && (r.html.match(/class="tv"/g) ?? []).length >= 14, 'polish: tile numbers are bold sans-serif text, not <code> / monospace');
   check(/@media only screen and \(max-width: 480px\)/.test(r.html) && (r.html.match(/class="kpi"/g) ?? []).length >= 14 && /class="mh"/.test(r.html), 'polish: the mobile rules are there (tiles two per row, side padding, secondary table columns hidden at 375 px)');
   check(!/<script|display:flex|display:grid|position:(?:absolute|fixed)/i.test(r.html), 'polish: no script, flex, grid or absolute positioning in the email');

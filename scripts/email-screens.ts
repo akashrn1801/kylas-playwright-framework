@@ -20,7 +20,7 @@ import { replayBuild239 } from './lib/build239Fixture';
 
 const WIDTHS = [1200, 375] as const;
 const SCHEMES = ['light', 'dark'] as const;
-const KEY_SCENARIOS = ['01-all-pass-first-time', '04-flaky-only-no-rerun', '06-failures-fail-again', '20-zero-tests-selected', '21-very-bad-run', '30-dev-clean', '32-qa-needs-a-look'];
+const KEY_SCENARIOS = ['01-all-pass-first-time', '04-flaky-only-no-rerun', '06-failures-fail-again', '20-zero-tests-selected', '21-very-bad-run', '30-dev-clean', '32-qa-needs-a-look', '33-env-qa', '34-env-staging', '35-env-prod', '36-env-unknown'];
 
 const arg = (name: string): string | undefined => {
   const i = process.argv.indexOf(name);

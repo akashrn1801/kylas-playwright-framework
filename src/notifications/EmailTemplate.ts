@@ -23,6 +23,7 @@ import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, reru
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
 import { nounFor } from './wording';
 import { DonutSegment, renderDonutPng } from './DonutChart';
+import { RETRY, infoSwatch } from './EmailPalette';
 import { logger } from '../utils/logger';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
@@ -198,6 +199,8 @@ const SANS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,
 export class EmailTemplate {
   // The donut PNG is made once per context (the HTML and the attachment must agree) and never lets a failure reach the send: see chartPng().
   private readonly chartCache = new WeakMap<EmailContext, Buffer | null>();
+  // the environment of the email being rendered: the info tiles and the ENV badge take its colour (EmailPalette.ts)
+  private env = '';
 
   /** `donut` is injectable so a test can make the image fail (the email must still be sent, without the image). */
   constructor(private readonly donut: (segments: DonutSegment[]) => Buffer = (segments) => renderDonutPng(segments)) {}
@@ -343,6 +346,7 @@ export class EmailTemplate {
 
   /** The email with a given budget of detail cards; `html()` picks the largest budget that fits EMAIL_SIZE_TARGET. Public so tests can force the cards. */
   renderHtml(ctx: EmailContext, totalCards: number): string {
+    this.env = ctx.env;
     this.kiLocations = ctx.kiLocations ?? {};
     this.kiBase = ctx.knownIssuesUrl ?? null;
     const health = ctx.health ?? this.fallbackHealth(ctx.report);
@@ -667,11 +671,6 @@ ${body}
     // at all. Chips are joined with a literal space (not just CSS margin) so
     // spacing survives in plain-text/no-CSS contexts too (screen readers,
     // copy-paste, stripped-down clients).
-    const ENV_COLORS: Record<string, string> = {
-      prod: '#7c3aed',
-      staging: '#0891b2',
-      qa: '#059669',
-    };
     const SOURCE_COLORS: Record<string, string> = {
       jenkins: '#d33833',
       'github-actions': '#24292f',
@@ -679,10 +678,10 @@ ${body}
     };
     const NEUTRAL = '#374151';
     const BRANCH_COLOR = '#2563eb';
-    const chip = (label: string, value: string, bg: string, monospace = false): string =>
-      `<span style="display:inline-block;font-size:11px;color:#ffffff;background:${bg};border-radius:4px;padding:4px 9px;margin:3px 6px 0 0;">${label} <b style="color:#ffffff;font-weight:600;${monospace ? `font-family:${MONO_FONT};` : ''}">${value}</b></span>`;
+    const chip = (label: string, value: string, bg: string, monospace = false, fg = '#ffffff'): string =>
+      `<span style="display:inline-block;font-size:11px;color:${fg};background:${bg};border-radius:4px;padding:4px 9px;margin:3px 6px 0 0;">${label} <b style="color:${fg};font-weight:600;${monospace ? `font-family:${MONO_FONT};` : ''}">${value}</b></span>`;
     const chips = [
-      chip('ENV', this.esc(ctx.env.toUpperCase()), ENV_COLORS[ctx.env] ?? ENV_COLORS.qa),
+      chip('ENV', this.esc(ctx.env.toUpperCase()), infoSwatch(ctx.env).bg, false, infoSwatch(ctx.env).text),
       chip('BRANCH', this.esc(ctx.branch), BRANCH_COLOR, true),
       chip('BUILD', `#${this.esc(ctx.buildNumber)}`, NEUTRAL, true),
       chip('SOURCE', this.esc(sourceLabel), SOURCE_COLORS[ctx.runSource ?? 'local'] ?? NEUTRAL),
@@ -1004,7 +1003,7 @@ ${body}
   private chartSegments(o: ReturnType<EmailTemplate['outcomeShares']>): Array<{ key: string; label: string; value: number; color: string }> {
     return [
       { key: 'first', label: 'Passed first time', value: o.first, color: SUCCESS },
-      { key: 'retry', label: 'Passed on retry', value: o.retry, color: WARN },
+      { key: 'retry', label: 'Passed on retry', value: o.retry, color: RETRY.bg },
       { key: 'rerun', label: 'Passed on rerun', value: o.rerun, color: '#57AB5A' },
       { key: 'failed', label: 'Failed', value: o.failed, color: FAIL },
       { key: 'skipped', label: 'Skipped', value: o.skipped, color: '#8C959F' },
@@ -1149,13 +1148,22 @@ ${body}
     // retry / rerun / flaky / skipped, red failed, blue information (totals, durations, counts), grey = zero or not applicable (a problem tile
     // with nothing in it must not shout). White text on each fill is at least 4.5:1.
     const grey = value === '0' || value === 'n/a';
-    const fill = grey || tileVariant === 'muted' ? '#6E7781' : tileVariant === 'success' ? SUCCESS : tileVariant === 'fail' ? FAIL : tileVariant === 'warn' ? WARN : ACCENT;
-    const valueHtml = anchor ? `<a href="${this.escAttr(anchor)}" style="color:#ffffff;text-decoration:none;">${this.esc(value)}</a>` : this.esc(value);
+    const info = infoSwatch(this.env);
+    // fill + text: status tiles are solid with white text; information tiles take the environment's colour and "needs a look" tiles (flaky, retries, did
+    // not run) the retry yellow, both light with dark text (EmailPalette.ts)
+    let fill = info.bg;
+    let text = info.text;
+    if (grey || tileVariant === 'muted') [fill, text] = ['#6E7781', '#ffffff'];
+    else if (tileVariant === 'success') [fill, text] = [SUCCESS, '#ffffff'];
+    else if (tileVariant === 'fail') [fill, text] = [FAIL, '#ffffff'];
+    else if (tileVariant === 'warn') [fill, text] = [RETRY.bg, RETRY.text];
+    const dark = text.toLowerCase() === '#ffffff'; // white text: the subtext keeps the light tone of the .ts class
+    const valueHtml = anchor ? `<a href="${this.escAttr(anchor)}" style="color:${text};text-decoration:none;">${this.esc(value)}</a>` : this.esc(value);
     return `
-  <td style="width:${widthPct}%;background:${fill};border:3px solid #ffffff;border-radius:10px;padding:12px 4px 10px;text-align:center;color:#ffffff;" class="kpi">
+  <td style="width:${widthPct}%;background:${fill};border:3px solid #ffffff;border-radius:10px;padding:12px 4px 10px;text-align:center;color:${text};" class="kpi">
     <div class="tv" style="font-size:22px;font-weight:700;">${valueHtml}</div>
     <div class="tl" style="font-size:9px;">${this.esc(label)}</div>
-    ${subtext ? `<div class="ts" style="font-size:10px;">${subtext.replace(/color:#[0-9A-Fa-f]{6};?/g, '')}</div>` : ''}
+    ${subtext ? `<div class="ts" style="font-size:10px;${dark ? '' : `color:${text};`}">${subtext.replace(/color:#[0-9A-Fa-f]{6};?/g, '')}</div>` : ''}
   </td>`;
   }
 
@@ -1876,8 +1884,9 @@ ${body}
 
   /** A status pill: soft tint of the colour with the colour as text (green passed, amber retry/rerun, red failed). */
   private pill(text: string, color: string): string {
-    const bg = color === SUCCESS ? SUCCESS_BG : color === FAIL ? FAIL_BG : color === WARN ? WARN_BG : CANVAS_TINT;
-    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${bg};color:${color};font-size:10.5px;font-weight:700;">${this.esc(text)}</span>`;
+    // retry / rerun (amber in the old palette) is the yellow pill; the status pills keep their own tints
+    const [bg, fg] = color === WARN ? [RETRY.bg, RETRY.text] : [color === SUCCESS ? SUCCESS_BG : color === FAIL ? FAIL_BG : CANVAS_TINT, color];
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${bg};color:${fg};font-size:10.5px;font-weight:700;">${this.esc(text)}</span>`;
   }
 
   private rerunColor(final: RerunTestRow['final']): string {
@@ -2254,7 +2263,7 @@ ${body}
     ${this.segmentedBar(
       [
         { label: 'Unexpected', value: miscErrors.unexpectedErrors, color: FAIL },
-        { label: 'Expected RBAC', value: miscErrors.expectedRbacErrors, color: ACCENT },
+        { label: 'Expected RBAC', value: miscErrors.expectedRbacErrors, color: infoSwatch(this.env).bg },
         { label: 'Known noise', value: noiseCount, color: '#6E7781' },
       ],
       miscErrors.totalErrors
