@@ -42,6 +42,7 @@
     "check:formfields-gate": "ts-node scripts/check-formfields-gate.ts",
     "check:build235": "ts-node scripts/check-build235.ts",
     "check:build239": "ts-node scripts/check-build239.ts",
+    "check:build240": "ts-node scripts/check-build240.ts",
     "check:donut": "ts-node scripts/check-donut.ts",
     "check:email-preview": "ts-node scripts/check-email-preview.ts",
     "check:email-safety": "ts-node scripts/check-email-safety.ts",

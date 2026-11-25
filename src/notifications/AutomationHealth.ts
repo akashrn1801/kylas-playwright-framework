@@ -433,7 +433,7 @@ export function computeOverallVerdict(
       report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : '',
     ].filter(Boolean);
     const reasons = [
-      aboveBudget ? `${flakyTotal} flaky tests is above the budget of ${FLAKY_BUDGET}` : '',
+      aboveBudget ? `${flakyTotal} flaky ${nounFor(flakyTotal, 'test')} ${flakyTotal === 1 ? 'is' : 'are'} above the budget of ${FLAKY_BUDGET}` : '',
       recoveredOnRerun > 0 ? `${recoveredOnRerun} ${nounFor(recoveredOnRerun, 'test')} failed every attempt and passed only on the rerun` : '',
       notVerified > 0 ? `${notVerified} ${nounFor(notVerified, 'test')} did not run in the first run` : '',
     ].filter(Boolean);

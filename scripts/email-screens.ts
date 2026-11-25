@@ -17,6 +17,7 @@ import { SCENARIOS } from './check-scenarios';
 import { runScenario } from './lib/scenarioKit';
 import { buildWorstCaseFixture, replayBuild235 } from './lib/build235Fixture';
 import { replayBuild239 } from './lib/build239Fixture';
+import { replayBuild240 } from './lib/build240Fixture';
 
 const WIDTHS = [1200, 375] as const;
 const SCHEMES = ['light', 'dark'] as const;
@@ -41,6 +42,8 @@ async function main(): Promise<void> {
   const emails: Array<{ name: string; title: string; html: string }> = [];
   const r239 = replayBuild239();
   emails.push({ name: 'build-239', title: 'Build #239 (real run: 1 flaky, 1 passed on the rerun)', html: inline(r239.html, r239.ctx) });
+  const r240 = replayBuild240();
+  emails.push({ name: 'build-240', title: 'Build #240 (real run: 8 flaky, none failed, nothing rerun)', html: inline(r240.html, r240.ctx) });
   const r235 = replayBuild235();
   emails.push({ name: 'build-235', title: 'Build #235 (2 failed, 6 flaky, rerun)', html: inline(r235.html, r235.ctx) });
   const blocked = replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } });

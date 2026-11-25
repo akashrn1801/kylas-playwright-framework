@@ -448,6 +448,18 @@ const DELIBERATE_VALIDATION_ERROR_SIGNATURE = /"field":"cfParagraphText"/i;
 const NO_PIPELINE_URL = /\/v1\/(?:leads|deals)\/\d+\/pipeline(?:\?|$)/i;
 const NO_PIPELINE_BODY = /There is no pipeline attached with the (?:lead|deal)/i;
 
+// WHY (2026-11-25, build #239/#240): every one of the 690 "429" events of build #239 was a POST to Sentry's ingest endpoint (the app's own browser
+// telemetry), none a Kylas API call, yet the email counted them as "429 API" and read as rate limiting of our tests. Third-party hosts the app talks to
+// are listed here so a 429 from them is counted apart (noise), and "429 API" means the Kylas API. A host that is not listed counts as the Kylas API
+// (the cautious reading: a real throttling is never hidden as noise).
+export const THIRD_PARTY_HOST_PATTERNS: RegExp[] = [/(^|\.)sentry\.io$/i, /(^|\.)viasocket\.com$/i, /(^|\.)headwayapp\.co$/i, /(^|\.)userpilot\.(io|com)$/i, /(^|\.)zohocdn\.com$/i, /(^|\.)zoho\.com$/i, /(^|\.)cloudflareinsights\.com$/i, /(^|\.)googleapis\.com$/i, /(^|\.)gstatic\.com$/i, /(^|\.)google-analytics\.com$/i, /(^|\.)googletagmanager\.com$/i, /(^|\.)intercom\.io$/i];
+
+/** true when the first URL in `text` (e.g. "POST https://o1.ingest.us.sentry.io/api/1/envelope") points at a known third-party host. */
+export function isThirdPartyUrl(text: string | undefined): boolean {
+  const host = /https?:\/\/([^/\s:?#]+)/i.exec(text ?? '')?.[1];
+  return !!host && THIRD_PARTY_HOST_PATTERNS.some((p) => p.test(host));
+}
+
 export function isExpectedBackgroundNoise(
   message: string,
   url?: string,

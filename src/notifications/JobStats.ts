@@ -51,6 +51,8 @@ export interface JobStats {
   incompleteJobCount: number;
 }
 
+import { isThirdPartyUrl } from '../error-collector/errorFilters';
+
 const GITHUB_API_BASE = 'https://api.github.com';
 
 // WHY paginated (100/page, GitHub's own per_page max), not a single request:
@@ -219,6 +221,8 @@ export interface RecoveryEventLike {
   kind: string;
   outcome: string;
   timestamp: string;
+  // "POST https://host/path" for an api-429 event: the host tells a Kylas API throttle from a third party's (Sentry telemetry)
+  detail?: string;
 }
 
 export interface JobRecoveryRow {
@@ -227,8 +231,10 @@ export interface JobRecoveryRow {
   completedAt: string;
   durationMs: number;
   rateLimitPages: number;
-  // API responses with status 429 (not the page): kind 'api-429'.
+  // Kylas API responses with status 429 (not the page): kind 'api-429' from a host that is not a known third party. Real throttling.
   rateLimitApi: number;
+  // 429s from third-party hosts the app calls (Sentry telemetry): background noise, not rate limiting of our tests.
+  rateLimitThirdParty: number;
   errorBoundaryPages: number;
   setupRetries: number;
   // recoveries whose own retried action threw again (the recovery did NOT save the test)
@@ -296,7 +302,8 @@ export function buildJobRecoveryRows(
       completedAt: job.completedAt,
       durationMs: job.durationMs,
       rateLimitPages: events.filter((e) => e.kind === 'rate-limit-page').length,
-      rateLimitApi: events.filter((e) => e.kind === 'api-429').length,
+      rateLimitApi: events.filter((e) => e.kind === 'api-429' && !isThirdPartyUrl(e.detail)).length,
+      rateLimitThirdParty: events.filter((e) => e.kind === 'api-429' && isThirdPartyUrl(e.detail)).length,
       errorBoundaryPages: events.filter((e) => e.kind === 'error-boundary-page').length,
       setupRetries: events.filter((e) => e.kind === 'globalsetup-transient-retry').length,
       failedAfterRecovery: events.filter((e) => e.outcome === 'failed').length,

@@ -17,6 +17,7 @@ import {
 import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
+import { describeRequestAge } from '../utils/requestAge';
 import { trackFailedWrites, recentFailedWrite, recentFailedRead } from '../utils/failedWriteTracker';
 import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 
@@ -438,7 +439,7 @@ export class BasePage {
       const rows = (list: Request[], what: (r: Request) => string): string =>
         list
           .slice(0, 6)
-          .map((r) => `${r.method()} ${new URL(r.url()).pathname} sent ${Math.round((now - r.timing().startTime) / 1000)}s ago${what(r)}`)
+          .map((r) => `${r.method()} ${new URL(r.url()).pathname} sent ${describeRequestAge(now, r.timing().startTime)}${what(r)}`)
           .join('; ');
       const state = await this.page
         .evaluate(() => ({

@@ -31,7 +31,7 @@ import { execFileSync, execSync } from 'child_process';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { nounFor } from './wording';
-import { isMergeCommit, mergeTargetBranch, parseCommitFacts } from './CommitInfo';
+import { GitRunner, resolveCommit } from './CommitInfo';
 
 // WHY: added 2026-07-14 — confirmed live via two real sends that this
 // pipeline had zero freshness checking anywhere: it unconditionally trusted
@@ -540,33 +540,14 @@ export class NotificationService {
     if (!gitCommit || gitCommit === 'unknown') return undefined;
     const ownerRepo = resolveGithubOwnerRepo();
     const urlOf = (sha: string): string | null => (ownerRepo ? `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/commit/${sha}` : null);
-    const git = (args: string[]): string | undefined => {
+    const git: GitRunner = (args, timeoutMs = 5000) => {
       try {
-        return execFileSync('git', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
+        return execFileSync('git', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs }).trim();
       } catch {
         return undefined; // not a git checkout, or the commit is not in it
       }
     };
-    const FORMAT = '--format=%H%x1f%an%x1f%s%x1f%P';
-    const pushedRaw = git(['show', '-s', FORMAT, gitCommit]);
-    const pushed = pushedRaw ? parseCommitFacts(pushedRaw) : undefined;
-    if (!pushed) return { sha: gitCommit, url: urlOf(gitCommit), message: null, author: null };
-    // A merge into the run's branch (sandbox merges the feature branch): show the feature's own head commit, newest non-merge commit of the
-    // second parent, and keep the merge as a note.
-    if (isMergeCommit(pushed)) {
-      const headRaw = git(['log', '-1', '--no-merges', FORMAT, pushed.parents[1]]);
-      const head = headRaw ? parseCommitFacts(headRaw) : undefined;
-      if (head) {
-        return {
-          sha: head.sha,
-          url: urlOf(head.sha),
-          message: head.subject || null,
-          author: head.author || null,
-          merge: { sha: pushed.sha, url: urlOf(pushed.sha), into: mergeTargetBranch(pushed.subject) ?? null },
-        };
-      }
-    }
-    return { sha: pushed.sha, url: urlOf(pushed.sha), message: pushed.subject || null, author: pushed.author || null };
+    return resolveCommit(gitCommit, git, urlOf);
   }
 
   private resolveKnownIssuesUrl(gitCommit: string): string | null {

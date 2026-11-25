@@ -23,6 +23,7 @@ import { SCENARIOS } from './check-scenarios';
 import { runScenario } from './lib/scenarioKit';
 import { buildWorstCaseFixture, replayBuild235 } from './lib/build235Fixture';
 import { replayBuild239 } from './lib/build239Fixture';
+import { replayBuild240 } from './lib/build240Fixture';
 
 const ALLOWED_TAGS = new Set(['html', 'head', 'meta', 'style', 'title', 'body', 'table', 'tbody', 'thead', 'tr', 'td', 'th', 'div', 'span', 'a', 'b', 'strong', 'em', 'i', 'code', 'pre', 'br', 'img', 'ol', 'ul', 'li', 'p', 'h1', 'h2', 'h3', 'h4', 'hr', 'small', 'sup', 'sub']);
 const SYSTEM_FONTS = new Set(['-apple-system', 'blinkmacsystemfont', 'segoe ui', 'roboto', 'helvetica', 'arial', 'sans-serif', 'ui-monospace', 'consolas', 'monospace', 'sf mono', 'cascadia code', 'courier new', 'courier', 'inherit']);
@@ -147,7 +148,7 @@ function main(): void {
   // ── the real emails ──
   const corpus: Array<[string, string]> = [];
   for (const spec of SCENARIOS) corpus.push([`scenario ${spec.name}`, runScenario(spec).html]);
-  corpus.push(['build #239', replayBuild239().html], ['build #235', replayBuild235().html], ['worst case', replayBuild235({ fixture: buildWorstCaseFixture() }).html]);
+  corpus.push(['build #239', replayBuild239().html], ['build #240', replayBuild240().html], ['build #235', replayBuild235().html], ['worst case', replayBuild235({ fixture: buildWorstCaseFixture() }).html]);
   corpus.push(['build #235 blocked', replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } }).html]);
   let bytesLinted = 0;
   const problems: string[] = [];

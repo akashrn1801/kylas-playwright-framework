@@ -331,7 +331,7 @@ function main(): void {
     const p = pipeline([...filler(5), ...many(61, 'failed', 'broken')], null);
     check(p.list.decision === 'cap' && p.summary.ran === false && p.summary.reason === 'cap', 'S7: 61 failures: decision cap, summary says why');
     const s = rerunSection(p.html);
-    check(!!s && text(s).includes('61 failed/flaky tests is more than the limit of 60') && text(s).includes('nothing was rerun'), 'S7: email says the cap reason', text(s ?? ''));
+    check(!!s && text(s).includes('61 failed/flaky tests are more than the limit of 60') && text(s).includes('nothing was rerun'), 'S7: email says the cap reason', text(s ?? ''));
     check(summaryTable(p.html) !== null && Object.keys(summaryTable(p.html) ?? {}).length === 0, 'S7: no first/after table (nothing changed)');
     expectStatus(p, 'red', 'Failed', 'S7');
     eq([p.parsed.passed, p.parsed.failed, p.parsed.flaky], [5, 61, 0], 'S7: statuses are the first-run statuses');

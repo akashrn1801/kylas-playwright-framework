@@ -523,7 +523,7 @@ function main(): void {
   check((cardsHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
   check(/(?:was|were) not rerun/.test(rerunHtml) && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
   const capHtml = tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
-  check(capHtml.includes('Not rerun: 90 failed/flaky tests is more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
+  check(capHtml.includes('Not rerun: 90 failed/flaky tests are more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
   check(!tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'none', rows: [], excluded: [] } }).includes('section-rerun'), 'rerun: nothing to rerun = no rerun section');
   check(tpl.html({ ...rr, rerun: { ...rerunSummary, rerunOf: { runId: '99', runNumber: '12' } } }).includes('Manual rerun of run #12'), 'rerun: a manual rerun names the run it reran');
 

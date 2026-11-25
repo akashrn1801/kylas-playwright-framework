@@ -248,6 +248,10 @@ export function invariants(s: ScenarioResult): Violation[] {
   // The email's own wording only: the error text of a card is the test's own message and may say "result(s)".
   const ownWording = s.html.replace(/\b(?:result|attempt|request|element)\(s\)/g, ' '); // the page objects' own error messages (MeetingsPage "result(s)", "attempt(s)")
   if (/\(s\)/.test(ownWording) || /\b1 (?:tests|errors|failures|shards|hours|days)\b/.test(ownWording.replace(/<[^>]*>/g, ' '))) bad('count-wording', 'a count-based sentence says "(s)" or "1 tests"');
+  // verb agreement (E3, 2026-11-25: "8 flaky tests is above the budget"): a plural count with "is / has / was", a "1 ..." with "are / were / have"
+  const agreement = ownWording.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  const wrongVerb = /\b(?:[2-9]|\d{2,})\s+(?:[\w/-]+\s+){0,3}(?:tests|errors|failures|shards|modules|jobs|retries|groups|attempts)\s+(?:is|has|was)\b|\b1\s+(?:[\w/-]+\s+){0,3}(?:test|error|failure|shard|module|job|retry|group|attempt)\s+(?:are|were|have)\b/.exec(agreement);
+  if (wrongVerb) bad('count-agreement', `the verb does not agree with the count: "${wrongVerb[0]}"`);
   if (r.finalPassed < r.firstRun.passed) bad('final-passed-ge-first', `Final passed ${r.finalPassed} < first-run passed ${r.firstRun.passed}`);
   if (r.failed > r.firstRun.failed + r.firstRun.didNotRun) bad('final-failed-le-first', `Final failed ${r.failed} > first-run failed ${r.firstRun.failed} + did-not-run ${r.firstRun.didNotRun}`);
   if (table) {

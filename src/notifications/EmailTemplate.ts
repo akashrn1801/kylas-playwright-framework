@@ -1648,10 +1648,10 @@ ${body}
     // see JobStats.buildJobRecoveryRows()'s own WHY comment for what it measures.
     const recoveryRows = buildJobRecoveryRows(stats.jobs, ctx.miscErrors?.recoveryByShard);
     const hasAnyRecovery = recoveryRows.some(
-      (r) => r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0
+      (r) => r.rateLimitPages + r.rateLimitApi + r.rateLimitThirdParty + r.errorBoundaryPages + r.setupRetries > 0
     );
     const hhmm = (iso: string): string => new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-    const hotRows = recoveryRows.filter((r) => r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries + r.failedAfterRecovery > 0);
+    const hotRows = recoveryRows.filter((r) => r.rateLimitPages + r.rateLimitApi + r.rateLimitThirdParty + r.errorBoundaryPages + r.setupRetries + r.failedAfterRecovery > 0);
     const quietCount = recoveryRows.length - hotRows.length;
     const recoverySection =
       recoveryRows.length === 0
@@ -1663,7 +1663,7 @@ ${body}
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
       hasAnyRecovery
-        ? 'Times the app showed its 429 page / "Something is broken" error screen, answered an API call with HTTP 429, and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (times in IST). "Failed" = the retried action threw again after recovery.'
+        ? 'Times the app showed its 429 page / "Something is broken" error screen, answered a Kylas API call with HTTP 429 (real throttling; third-party 429s, such as Sentry telemetry sent by the app, are counted apart as noise, not rate limiting of our tests), and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (times in IST). "Failed" = the retried action threw again after recovery.'
         : 'No 429 pages, HTTP 429 API answers, error-boundary screens or globalSetup retries were recorded in any shard this run (counted: the 429 and error pages a wait ran into, every API response with status 429, and globalSetup retries).'
     }</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -1671,7 +1671,8 @@ ${body}
         <th align="left" style="padding:4px 0;font-size:10px;color:${MUTED};">Job</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Start–End (IST)</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 page</th>
-        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 API</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">429 Kylas API</th>
+        <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};" class="mh">429 third-party</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};" class="mh">Boundary</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};" class="mh">Setup retry</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
@@ -1685,6 +1686,7 @@ ${body}
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${hhmm(r.startedAt)}–${hhmm(r.completedAt)}`)}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitPages > 0 ? FAIL : SLATE};">${r.rateLimitPages}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.rateLimitApi > 0 ? FAIL : SLATE};">${r.rateLimitApi}</td>
+        <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${MUTED};" class="mh">${r.rateLimitThirdParty}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.errorBoundaryPages > 0 ? FAIL : SLATE};" class="mh">${r.errorBoundaryPages}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.setupRetries > 0 ? FAIL : SLATE};" class="mh">${r.setupRetries}</td>
         <td style="padding:5px 4px;text-align:right;font-size:11.5px;color:${r.failedAfterRecovery > 0 ? FAIL : SLATE};font-weight:${hot ? '700' : '400'};">${r.failedAfterRecovery}</td>
@@ -1923,6 +1925,21 @@ ${body}
     </table>`;
   }
 
+  /** One plain sentence per reason with the tests named (item 11, 2026-11-25 wording): which tests were not rerun, and why. '' when none. */
+  private notRerunHtml(rerun: RerunSummary, marginTop = 8): string {
+    if (rerun.excluded.length === 0) return '';
+    const byReason = new Map<string, string[]>();
+    for (const e of rerun.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) ?? []), e.title]);
+    return `<div style="font-size:11.5px;color:${SLATE};margin-top:${marginTop}px;">${[...byReason]
+      .map(([reason, titles]) => {
+        const why = this.notRerunWhy(reason, titles.length);
+        if (titles.length === 1) return `<div style="margin-top:3px;">${this.esc(this.truncate(titles[0], 90))} was not rerun: ${this.esc(why)}.</div>`;
+        const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
+        return `<div style="margin-top:3px;">${titles.length} tests were not rerun: ${this.esc(why)} (${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}).</div>`;
+      })
+      .join('')}</div>`;
+  }
+
   /** Why a failed or flaky test was not rerun, in plain words (the selector's own reason is a technical phrase). */
   private notRerunWhy(reason: string, n: number): string {
     if (/flaky tests are not/i.test(reason)) return n === 1 ? 'it had already passed on its retry' : 'they had already passed on a retry';
@@ -1943,13 +1960,21 @@ ${body}
     if (!rerun.ran) {
       // WHY (2026-11-24, scenario matrix): "no test failed or was flaky" was printed for a run whose only failures were in suites that are
       // never rerun (formFields); the excluded list says what happened to them.
+      if (rerun.reason === 'none' && rerun.excluded.length > 0) {
+        return `
+<tr><td id="section-rerun" style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
+    ${heading}
+    <div style="font-size:12px;color:${SLATE};">Nothing was rerun.${origin}</div>
+    ${this.notRerunHtml(rerun, 4)}
+  </div>
+</td></tr>`;
+      }
       const why =
-        rerun.reason === 'none' && rerun.excluded.length > 0
-          ? `${rerun.excluded.length} failed/flaky ${nounFor(rerun.excluded.length, 'test')} could not be rerun (${[...new Set(rerun.excluded.map((e) => e.reason))].join('; ')}): ${rerun.excluded.slice(0, 5).map((e) => this.esc(this.truncate(e.title, 90))).join('; ')}${rerun.excluded.length > 5 ? ` and ${rerun.excluded.length - 5} more` : ''}`
-          : rerun.reason === 'none'
+        rerun.reason === 'none'
           ? 'no test failed or was flaky, so no rerun was needed'
           : rerun.reason === 'cap'
-            ? `${rerun.candidates} failed/flaky tests is more than the limit of ${rerun.maxTests}: that points at the environment, so nothing was rerun`
+            ? `${rerun.candidates} failed/flaky ${nounFor(rerun.candidates, 'test')} ${rerun.candidates === 1 ? 'is' : 'are'} more than the limit of ${rerun.maxTests}: that points at the environment, so nothing was rerun`
             : `no rerun result was produced (${this.esc(rerun.reason ?? 'unknown')})`;
       return `
 <tr><td id="section-rerun" style="padding:8px 28px;">
@@ -1982,20 +2007,7 @@ ${body}
       <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
     </table>${rerun.rows.length > MAX_RERUN_ROWS ? `<div style="font-size:11px;color:${SLATE};margin-top:6px;">+${rerun.rows.length - MAX_RERUN_ROWS} more rerun tests (every row is in rerun-summary.json of the run).</div>` : ''}`
         : '';
-    // One plain sentence per reason with the tests named (items 11 and the 2026-11-25 wording): which tests were not rerun, and why.
-    const byReason = new Map<string, string[]>();
-    for (const e of rerun.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) ?? []), e.title]);
-    const excluded =
-      rerun.excluded.length > 0
-        ? `<div style="font-size:11.5px;color:${SLATE};margin-top:8px;">${[...byReason]
-            .map(([reason, titles]) => {
-              const why = this.notRerunWhy(reason, titles.length);
-              if (titles.length === 1) return `<div style="margin-top:3px;">${this.esc(this.truncate(titles[0], 90))} was not rerun: ${this.esc(why)}.</div>`;
-              const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
-              return `<div style="margin-top:3px;">${titles.length} tests were not rerun: ${this.esc(why)} (${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}).</div>`;
-            })
-            .join('')}</div>`
-        : '';
+    const excluded = this.notRerunHtml(rerun);
     const n = rerun.rows.length;
     const passed = rerun.rows.filter((r) => r.rerun === 'passed').length;
     const failedAgain = rerun.rows.filter((r) => r.rerun === 'failed').length;

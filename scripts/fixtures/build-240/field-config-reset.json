@@ -1,0 +1,136 @@
+{
+  "env": "staging",
+  "mode": "reset",
+  "startedAt": "2026-11-25T16:34:32.484Z",
+  "complete": true,
+  "totalFields": 18,
+  "records": [
+    {
+      "entity": "lead",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "lead",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "lead",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "contact",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "contact",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "contact",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "company",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "company",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "company",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "task",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "task",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "task",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "deal",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "deal",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "deal",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "productsAndServices",
+      "field": "cfFormFieldLimitText",
+      "before": "min=- max=- regex=No Regex",
+      "after": "min=- max=- regex=No Regex",
+      "status": "blank"
+    },
+    {
+      "entity": "productsAndServices",
+      "field": "cfFormFieldLimitNumber",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    },
+    {
+      "entity": "productsAndServices",
+      "field": "cfFormFieldLimitParagraph",
+      "before": "min=- max=- regex=n/a",
+      "after": "min=- max=- regex=n/a",
+      "status": "blank"
+    }
+  ],
+  "finishedAt": "2026-11-25T08:41:40.070Z"
+}

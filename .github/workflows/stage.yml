@@ -507,6 +507,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # E1 (2026-11-25): the notify step shows the feature branch's own head commit for a merge push; that commit is the merge's second parent, so the clone must hold the history
+          fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
       - uses: actions/setup-node@v5

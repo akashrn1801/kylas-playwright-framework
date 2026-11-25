@@ -323,7 +323,7 @@ export interface ReplayOptions {
   // Replay another build with the same pipeline (build #239): its identity and timing, job windows, session ends and the sample commit.
   meta?: BuildMeta;
   jobs?: GitHubJobEntry[];
-  sessions?: Array<{ role: string; endIso: string; minutesLeft: number }>;
+  sessions?: Array<{ role: string; endIso: string; minutesLeft: number; renewedAt?: string }>;
   commit?: NonNullable<EmailContext['commit']>;
 }
 

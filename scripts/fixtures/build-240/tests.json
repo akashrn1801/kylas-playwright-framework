@@ -1,0 +1,376 @@
+{
+ "modules": [
+  {
+   "name": "Call-logs",
+   "type": "RBAC",
+   "file": "rbac/call-logs.rbac.spec.ts",
+   "total": 27
+  },
+  {
+   "name": "Companies",
+   "type": "RBAC",
+   "file": "rbac/companies.rbac.spec.ts",
+   "total": 25
+  },
+  {
+   "name": "Companies — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/companyFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Contacts",
+   "type": "RBAC",
+   "file": "rbac/contacts.rbac.spec.ts",
+   "total": 22
+  },
+  {
+   "name": "Contacts — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/contactFieldLimits.rbac.spec.ts",
+   "total": 28
+  },
+  {
+   "name": "Dashboard",
+   "type": "RBAC",
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "total": 28
+  },
+  {
+   "name": "Deals",
+   "type": "RBAC",
+   "file": "rbac/deals.rbac.spec.ts",
+   "total": 30
+  },
+  {
+   "name": "Deals — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/dealFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Leads",
+   "type": "RBAC",
+   "file": "rbac/leads.rbac.spec.ts",
+   "total": 40
+  },
+  {
+   "name": "Leads — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/leadFieldLimits.rbac.spec.ts",
+   "total": 25
+  },
+  {
+   "name": "Meetings",
+   "type": "RBAC",
+   "file": "rbac/meetings.rbac.spec.ts",
+   "total": 12
+  },
+  {
+   "name": "ProductsAndServices",
+   "type": "RBAC",
+   "file": "rbac/ProductsAndServices.rbac.spec.ts",
+   "total": 7
+  },
+  {
+   "name": "ProductsAndServices — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Quotations",
+   "type": "RBAC",
+   "file": "rbac/quotations.rbac.spec.ts",
+   "total": 16
+  },
+  {
+   "name": "Reports",
+   "type": "RBAC",
+   "file": "rbac/reports.rbac.spec.ts",
+   "total": 27
+  },
+  {
+   "name": "Tasks",
+   "type": "RBAC",
+   "file": "rbac/tasks.rbac.spec.ts",
+   "total": 16
+  },
+  {
+   "name": "Tasks — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/taskFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Call-logs",
+   "type": "UI",
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "total": 29
+  },
+  {
+   "name": "Companies",
+   "type": "UI",
+   "file": "ui/companies/companies.spec.ts",
+   "total": 23
+  },
+  {
+   "name": "Companies — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/companyFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Contacts",
+   "type": "UI",
+   "file": "ui/contacts/contacts.spec.ts",
+   "total": 22
+  },
+  {
+   "name": "Contacts — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/contactFieldLimits.spec.ts",
+   "total": 42
+  },
+  {
+   "name": "Dashboard",
+   "type": "UI",
+   "file": "ui/dashboard/dashboard.spec.ts",
+   "total": 33
+  },
+  {
+   "name": "Deals",
+   "type": "UI",
+   "file": "ui/deals/deals.spec.ts",
+   "total": 26
+  },
+  {
+   "name": "Deals — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/dealFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Leads",
+   "type": "UI",
+   "file": "ui/leads/leads.spec.ts",
+   "total": 40
+  },
+  {
+   "name": "Leads — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/leadFieldLimits.spec.ts",
+   "total": 42
+  },
+  {
+   "name": "Meetings",
+   "type": "UI",
+   "file": "ui/meetings/meetings.spec.ts",
+   "total": 17
+  },
+  {
+   "name": "ProductsAndServices",
+   "type": "UI",
+   "file": "ui/ProductsAndServices/ProductsAndServices.spec.ts",
+   "total": 9
+  },
+  {
+   "name": "ProductsAndServices — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/productsAndServicesFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Quotations",
+   "type": "UI",
+   "file": "ui/quotations/quotations.spec.ts",
+   "total": 23
+  },
+  {
+   "name": "Reports",
+   "type": "UI",
+   "file": "ui/reports/reports.spec.ts",
+   "total": 37
+  },
+  {
+   "name": "Tasks",
+   "type": "UI",
+   "file": "ui/tasks/tasks.spec.ts",
+   "total": 17
+  },
+  {
+   "name": "Tasks — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/taskFieldLimits.spec.ts",
+   "total": 39
+  }
+ ],
+ "named": [
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 398,
+   "title": "admin shares lead Task permission restricted user sees Tasks icon and can create task from lead detail",
+   "kind": "flaky",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: multi-select control: Products or Services: react-select showed no options after 3 open attempts (menu open: true): TimeoutError: locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator('.is-invalid__menu .is-invalid__option, div[class$=\"-menu\"]:not(.dropdown-menu) div[class$=\"-option\"]').first() to be visible\n[requests during the open] 0 request(s) seen, 0 unanswered\n\n   at ../src/core/BasePage.ts:2106\n\n  2104 |         } catch (error) {\n  2105 |           if (attempt === maxAttempts) {\n> 2106 |             throw new Error(\n       |                   ^",
+    "snippet": "   at ../src/core/BasePage.ts:2106\n\n  2104 |         } catch (error) {\n  2105 |           if (attempt === maxAttempts) {\n> 2106 |             throw new Error(\n       |                   ^",
+    "stack": "Error: multi-select control: Products or Services: react-select showed no options after 3 open attempts (menu open: true): TimeoutError: locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator('.is-invalid__menu .is-invalid__option, div[class$=\"-menu\"]:not(.dropdown-menu) div[class$=\"-option\"]').first() to be visible\n[requests during the open] 0 request(s) seen, 0 unanswered\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/core/BasePage.ts:2106:13"
+   }
+  },
+  {
+   "file": "ui/leads/leads.spec.ts",
+   "line": 141,
+   "title": "admin should change pipeline stage while updating a lead",
+   "kind": "flaky",
+   "module": "Leads",
+   "type": "UI",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: Lead ID not captured after save — cannot proceed (matched POST /v1/leads/ -> HTTP 400, code 000000, message \"Unexpected error occurred!!\", fieldErrors none)\n\n   at ../src/modules/leads/LeadsPage.ts:1789\n\n  1787 |     // convention already used elsewhere in this codebase.\n  1788 |     // WHY the cause is in the message: see ContactsPage.saveContact().\n> 1789 |     throw new Error(`Lead ID not captured after save — cannot proceed (${outcome.detail})`);\n       |           ^",
+    "snippet": "   at ../src/modules/leads/LeadsPage.ts:1789\n\n  1787 |     // convention already used elsewhere in this codebase.\n  1788 |     // WHY the cause is in the message: see ContactsPage.saveContact().\n> 1789 |     throw new Error(`Lead ID not captured after save — cannot proceed (${outcome.detail})`);\n       |           ^",
+    "stack": "Error: Lead ID not captured after save — cannot proceed (matched POST /v1/leads/ -> HTTP 400, code 000000, message \"Unexpected error occurred!!\", fieldErrors none)\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/leads/LeadsPage.ts:1789:13"
+   }
+  },
+  {
+   "file": "rbac/meetings.rbac.spec.ts",
+   "line": 263,
+   "title": "restricted user should reschedule their own meeting",
+   "kind": "flaky",
+   "module": "Meetings",
+   "type": "RBAC",
+   "durationMs": 60000,
+   "error": {
+    "primary": "TimeoutError: locator.click: Timeout 60000ms exceeded.\nCall log:\n  - waiting for locator('.is-invalid__option').filter({ hasText: 'Lead' }).first()\n\n   at ../src/modules/meetings/MeetingsPage.ts:1593\n\n  1591 |       try {\n  1592 |         await this.entitiesDropdown().click();\n> 1593 |         await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();\n       |                                                                                           ^",
+    "snippet": "   at ../src/modules/meetings/MeetingsPage.ts:1593\n\n  1591 |       try {\n  1592 |         await this.entitiesDropdown().click();\n> 1593 |         await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();\n       |                                                                                           ^",
+    "stack": "TimeoutError: locator.click: Timeout 60000ms exceeded.\nCall log:\n  - waiting for locator('.is-invalid__option').filter({ hasText: 'Lead' }).first()\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/meetings/MeetingsPage.ts:1593:13"
+   }
+  },
+  {
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "line": 501,
+   "title": "DB22 restricted user: create disposable dashboard, delete it, confirm gone after reload",
+   "kind": "flaky",
+   "module": "Dashboard",
+   "type": "RBAC",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: locator.waitFor: Target page, context or browser has been closed\nCall log:\n  - waiting for locator('.dashboard-header h2') to be visible",
+    "snippet": "",
+    "stack": "Error: locator.waitFor: Target page, context or browser has been closed\nCall log:\n  - waiting for locator('.dashboard-header h2') to be visible"
+   }
+  },
+  {
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "line": 523,
+   "title": "DB23 restricted user: remove a dashlet, Cancel instead of Save, confirm restored",
+   "kind": "flaky",
+   "module": "Dashboard",
+   "type": "RBAC",
+   "durationMs": 60000,
+   "error": {
+    "primary": "TimeoutError: locator.waitFor: Timeout 120000ms exceeded.\nCall log:\n  - waiting for locator('#dashlet-wizard').locator('input[type=\"radio\"][id^=\"check_\"], input[type=\"checkbox\"][id^=\"check_\"]').first() to be visible\n\n   at ../src/modules/dashboard/DashboardPage.ts:713\n\n  711 |     await this.wizardConfigureRadios()\n  712 |       .first()\n> 713 |       .waitFor({ state: 'visible', timeout: config.timeouts.navigation });\n      |        ^",
+    "snippet": "   at ../src/modules/dashboard/DashboardPage.ts:713\n\n  711 |     await this.wizardConfigureRadios()\n  712 |       .first()\n> 713 |       .waitFor({ state: 'visible', timeout: config.timeouts.navigation });\n      |        ^",
+    "stack": "TimeoutError: locator.waitFor: Timeout 120000ms exceeded.\nCall log:\n  - waiting for locator('#dashlet-wizard').locator('input[type=\"radio\"][id^=\"check_\"], input[type=\"checkbox\"][id^=\"check_\"]').first() to be visible\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/dashboard/DashboardPage.ts:713:13"
+   }
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "line": 1518,
+   "title": "restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling",
+   "kind": "flaky",
+   "module": "Deals",
+   "type": "RBAC",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: Deal ID not captured after save — cannot proceed (the create request was SENT but got no answer within 120000ms (backend did not answer): 1 request(s) seen, 0 unanswered: POST /v1/deals/ sent +281ms, failed: net::ERR_FAILED)\n\n   at ../src/modules/deals/DealsPage.ts:1180\n\n  1178 |     // convention already used elsewhere in this codebase.\n  1179 |     if (!dealId) {\n> 1180 |       throw new Error(\n       |             ^",
+    "snippet": "   at ../src/modules/deals/DealsPage.ts:1180\n\n  1178 |     // convention already used elsewhere in this codebase.\n  1179 |     if (!dealId) {\n> 1180 |       throw new Error(\n       |             ^",
+    "stack": "Error: Deal ID not captured after save — cannot proceed (the create request was SENT but got no answer within 120000ms (backend did not answer): 1 request(s) seen, 0 unanswered: POST /v1/deals/ sent +281ms, failed: net::ERR_FAILED)\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/deals/DealsPage.ts:1180:13"
+   }
+  },
+  {
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "line": 56,
+   "title": "admin should create a lead call log with outcome connected, verify duration enabled, add note during create, verify toaster and detail panel",
+   "kind": "flaky",
+   "module": "Call-logs",
+   "type": "UI",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: goToCallLogsList: user profile (permissions): no matching response within 120002ms (limit 120000ms). page.waitForResponse: Timeout 120000ms exceeded while waiting for event \"response\" — GET /v1/users/me: NEVER SENT (0 request(s) seen, 0 unanswered); [page state] https://app.example.test/sales/calls/list; signed-out page: false; rate-limit page: false; readyState=complete, .rt-table=0, skeleton rows=0, \"Loading\" splash=false; 10 /v1/ request(s) in the last 100: 0 unanswered, 3 failed; failed: GET /v1/entities/label sent 1795618370s ago (net::ERR_ABORTED); GET /v1/users/me/settings sent 1795618370s ago (net::ERR_ABORTED); GET /v1/users/me/permissions sent 1795618370s ago (net::ERR_ABORTED)\n\n   at ../src/modules/call-logs/CallLogsPage.ts:905\n\n  903 |       await permissionsLoaded;\n  904 |     } catch (error) {\n> 905 |       throw new Error(\n      |             ^",
+    "snippet": "   at ../src/modules/call-logs/CallLogsPage.ts:905\n\n  903 |       await permissionsLoaded;\n  904 |     } catch (error) {\n> 905 |       throw new Error(\n      |             ^",
+    "stack": "Error: goToCallLogsList: user profile (permissions): no matching response within 120002ms (limit 120000ms). page.waitForResponse: Timeout 120000ms exceeded while waiting for event \"response\" — GET /v1/users/me: NEVER SENT (0 request(s) seen, 0 unanswered); [page state] https://app.example.test/sales/calls/list; signed-out page: false; rate-limit page: false; readyState=complete, .rt-table=0, skeleton rows=0, \"Loading\" splash=false; 10 /v1/ request(s) in the last 100: 0 unanswered, 3 failed; failed: GET /v1/entities/label sent 1795618370s ago (net::ERR_ABORTED); GET /v1/users/me/settings sent 1795618370s ago (net::ERR_ABORTED); GET /v1/users/me/permissions sent 1795618370s ago (net::ERR_ABORTED)\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/call-logs/CallLogsPage.ts:905:13"
+   }
+  },
+  {
+   "file": "ui/contacts/contacts.spec.ts",
+   "line": 149,
+   "title": "admin should see owner field on contact detail page",
+   "kind": "flaky",
+   "module": "Contacts",
+   "type": "UI",
+   "durationMs": 60000,
+   "error": {
+    "primary": "Error: expect(locator).toBeVisible() failed\n\nLocator: locator('input[name=\"firstName\"]')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" with timeout 10000ms\n  - waiting for locator('input[name=\"firstName\"]')\n\n   at ../src/modules/contacts/ContactsPage.ts:616\n\n  614 |     await this.click(this.addButton(), 'add contact button');\n  615 |     await this.withSessionExpiryRecovery(() =>\n> 616 |       expect(this.firstNameInput()).toBeVisible({ timeout: 10000 })\n      |                                                         ^",
+    "snippet": "   at ../src/modules/contacts/ContactsPage.ts:616\n\n  614 |     await this.click(this.addButton(), 'add contact button');\n  615 |     await this.withSessionExpiryRecovery(() =>\n> 616 |       expect(this.firstNameInput()).toBeVisible({ timeout: 10000 })\n      |                                                         ^",
+    "stack": "Error: expect(locator).toBeVisible() failed\n\nLocator: locator('input[name=\"firstName\"]')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" with timeout 10000ms\n  - waiting for locator('input[name=\"firstName\"]')\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/src/modules/contacts/ContactsPage.ts:616:13"
+   }
+  },
+  {
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "line": 582,
+   "title": "admin should see validation errors for invalid call log custom field values and not save the call log",
+   "kind": "skipped",
+   "module": "Call-logs",
+   "type": "UI",
+   "durationMs": 0
+  },
+  {
+   "file": "rbac/quotations.rbac.spec.ts",
+   "line": 140,
+   "title": "restricted user should handle inaccessible entity error and retry successfully",
+   "kind": "passed",
+   "module": "Quotations",
+   "type": "RBAC",
+   "durationMs": 286000
+  },
+  {
+   "file": "ui/contacts/contacts.spec.ts",
+   "line": 3010,
+   "title": "admin should see Notes Tasks Meetings Call Logs and Quotations icons on contact detail",
+   "kind": "passed",
+   "module": "Contacts",
+   "type": "UI",
+   "durationMs": 284000
+  },
+  {
+   "file": "rbac/call-logs.rbac.spec.ts",
+   "line": 3020,
+   "title": "Restricted user should create a Contact call log with optional Associated Deal and Outcome No Answer and verify both entity associations on detail panel",
+   "kind": "passed",
+   "module": "Call-logs",
+   "type": "RBAC",
+   "durationMs": 278000
+  },
+  {
+   "file": "rbac/quotations.rbac.spec.ts",
+   "line": 3030,
+   "title": "restricted user should see and edit quotation when set as owner by admin",
+   "kind": "passed",
+   "module": "Quotations",
+   "type": "RBAC",
+   "durationMs": 273000
+  },
+  {
+   "file": "ui/reports/reports.spec.ts",
+   "line": 3040,
+   "title": "admin should verify deal report count matches actual filtered entity count",
+   "kind": "passed",
+   "module": "Reports",
+   "type": "UI",
+   "durationMs": 272000
+  }
+ ]
+}
