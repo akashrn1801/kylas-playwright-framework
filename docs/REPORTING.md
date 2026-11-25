@@ -3,7 +3,7 @@
 > **Purpose:** How a test run becomes a summary email, a history ledger entry and a background-error report; what each `src/notifications` module owns.
 > **Read when:** Changing anything under `src/notifications/`, `src/reporters/`, `src/error-collector/`, or `scripts/merge-misc-errors.ts`; debugging an odd email or an empty trend section.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ c12c85c
+> **Last verified:** 2026-11-25 @ 1b5d74a
 
 ## 1. Data flow
 
@@ -116,7 +116,8 @@ Each worker's `ErrorCollector` writes `misc-errors-worker-<N>.json`; `MiscErrorR
 
 - **Freshness:** if the report's end time is older than the stale threshold (default 4 hours, env `STALE_REPORT_THRESHOLD_HOURS`), the email gets a top warning, a subject prefix and a large health penalty.
 - **Outlook desktop renders with Word's engine.** Use literal HTML `width` attributes (no reliance on `max-width`), solid opaque hex colours (never `rgba()`, which is silently dropped), and join badges with a real space character, not just CSS margin. The container is fluid by design. Emoji and symbols appear on the status banner, the SOURCE badge, the subject line (✅/❌/⚠️), the stale warning, the Module Analytics trend glyphs and the overlap flags. Dark mode is best-effort and not verified in real clients.
-- **Traces:** failures retain trace, screenshot and video; the email shows repo-relative trace paths matching the downloaded artifact.
+- **Traces:** failures retain trace, screenshot and video, in the report artifact. The email does not print their paths (they open nothing from an inbox): each failure section says once where the artifact is (the run page, Artifacts, `playwright-report-…`).
+- **Size (commit 2, 2026-11-25; Gmail clips at about 100 KB, build #235 was 456 KB):** `EmailTemplate.html()` renders with a budget of detail cards (10, 8, 6, 4, 2, 0 in total, failed tests first, flaky and passed-on-rerun keep at least 4) and takes the first that fits `EMAIL_SIZE_TARGET` (98 KiB). Each error appears once (message and one short code frame; no stack frames). A cluster of tests with one cause gets one full card and one line per other test. Module Analytics shows at most 8 rows with news and names the quiet modules in one line; Slowest Tests by Module shows 5 modules; CI Job Stats shows 8 jobs, the real overlap anomalies only (same module at the same time) and the load-signal rows that have events; Trend, Action Required and the rerun table are capped. Background errors are grouped by method + endpoint (ids as `{id}`) + status, top 8 groups with counts and tests; the full list is `background-errors.html`, written next to the HTML report by NotificationService and uploaded with it. Top of the email: three lines (Result, Action, Run). A plain-text part (`EmailTemplate.text()`, multipart/alternative) carries the same facts. `npm run check:email-size` fails above 100 KiB on the build #235 replay, its blocked variant and the worst case (60 failed, 80 flaky, 790 background errors).
 
 ## 9. Open items
 

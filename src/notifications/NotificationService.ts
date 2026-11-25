@@ -12,6 +12,7 @@ import { RenewalFailure, describeRenewalFailure, loadRenewalFailure } from '../a
 import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
+import { writeBackgroundErrorsPage } from './BackgroundErrors';
 import { computeHealthScore, computeOverallVerdict, healthNotApplicableReason } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
@@ -426,10 +427,13 @@ export class NotificationService {
     const recipients = getRecipients(input.env, input.branch);
     const subject = this.template.subject(ctx);
     const html = this.template.html(ctx);
+    const text = this.template.text(ctx);
+    // the full background-error list, next to the HTML report (it goes into the report artifact); the email carries only the top groups
+    writeBackgroundErrorsPage(path.dirname(input.jsonReportPath), ctx.miscErrors, { env: input.env, branch: input.branch, buildNumber: input.buildNumber });
 
     logger.info(`[Notification] Sending email — Subject: ${subject}`);
     try {
-      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
+      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, text, env: input.env });
       logger.success('[Notification] Email sent successfully');
       // WHY only marked "sent" here, after a confirmed-successful send: see
       // markNotified()'s own WHY comment — a failed attempt must remain

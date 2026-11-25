@@ -81,7 +81,7 @@ function main(): void {
   check(/unstable this run: 3 of 12 \(1 failed first, 2 flaky\)/.test(mr), 'item 4: Meetings RBAC (3 of 12 unstable this run) says so in words', mr);
   check(!/– stable/.test(t) && !/stable \(\d+% unstable/.test(t), 'item 4: no bare "– stable (N% unstable / last N)" badge is left');
   check(/last \d+ runs: \d+% unstable, /.test(mr), 'item 4: the rolling window has its own label ("last N runs: N% unstable, ...")', mr);
-  check(/clean this run/.test(rowOf('Call-logs', 'RBAC')), 'item 4: a module with nothing unstable says "clean this run"');
+  check(/passed every test first time/.test(html) && /passed every test first time[^]*Call-logs RBAC/.test(html.slice(html.indexOf('passed every test first time'), html.indexOf('passed every test first time') + 4000)), 'item 4: a module with nothing unstable is named in the "passed every test first time" footer, not given a row');
   check(html.includes('>vs last run</th>') && html.includes('>Stability</th>'), 'item 4: the Trend column is split into "vs last run" and "Stability"');
 
   // ── Final result rule (second amendment of ADR 0015, 2026-11-24): tiles, executive summary, modules, subject ──
@@ -93,7 +93,7 @@ function main(): void {
   check(/\b6 Flaky passed on an in-job retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
   check(/940 of 943 tests passed in the end: 6 after an in-job retry \(flaky\) and 2 after the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
   const mr2 = rowOf('Meetings', 'RBAC');
-  check(/Meetings RBAC 12 3 needed a retry or rerun/.test(mr2) && !html.includes('>Flaky</th>') && html.includes('>Pass (final)</th>'), 'modules: Meetings RBAC Pass (final) 12 with "3 needed a retry or rerun" inside it; no separate Flaky column', mr2);
+  check(/Meetings RBAC 12 100% of 12 3 needed a retry or rerun/.test(mr2) && !html.includes('>Flaky</th>') && html.includes('>Pass (final)</th>'), 'modules: Meetings RBAC Pass (final) 12 with "3 needed a retry or rerun" inside it; no separate Flaky column', mr2);
   check(r.report.passRate === 98.8 && /98\.8%/.test(t) && /Passed first time/.test(t), 'signals kept: "Passed first time" 98.8%, and the Flaky Tests section still lists each flaky test with its error');
 
   // ── item 5: background errors reconcile ──

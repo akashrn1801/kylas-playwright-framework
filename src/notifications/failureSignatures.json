@@ -27,7 +27,7 @@
       "minTests": 1,
       "minModules": 1,
       "kiRef": "KI-43",
-      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "kiFile": "docs/known-issues/watch-items.md",
       "added": "2026-10-15",
       "confirmed": false,
       "why": "The error text itself says the TCP connection was refused, so no application or test logic is involved. One test is enough because the text is explicit. KI-43 is the closest environment entry; there is no dedicated one."
@@ -52,7 +52,7 @@
       "minTests": 2,
       "minModules": 1,
       "kiRef": "KI-43",
-      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "kiFile": "docs/known-issues/watch-items.md",
       "added": "2026-10-15",
       "confirmed": false,
       "why": "Gateway errors mean the upstream service was unreachable or overloaded. Two tests are required because a captured 5xx is not proven to be the request that failed the test; one stray 502 should not label a failure."
@@ -78,7 +78,7 @@
       "minTests": 8,
       "minModules": 2,
       "kiRef": "KI-43",
-      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "kiFile": "docs/known-issues/watch-items.md",
       "added": "2026-10-15",
       "confirmed": true,
       "askKylasTeam": {

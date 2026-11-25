@@ -42,6 +42,7 @@
     "check:formfields-gate": "ts-node scripts/check-formfields-gate.ts",
     "check:build235": "ts-node scripts/check-build235.ts",
     "check:renew-session": "ts-node scripts/check-renew-session.ts",
+    "check:email-size": "ts-node scripts/check-email-size.ts",
     "check:app-time": "ts-node scripts/check-app-time.ts",
     "check:scenarios": "ts-node scripts/check-scenarios.ts",
     "check:rerun": "ts-node scripts/check-rerun.ts && ts-node scripts/check-rerun-scenarios.ts",

@@ -13,8 +13,9 @@ import {
 import { HealthScore, VerdictResult, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
 import { FailureCategory } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
-import { MiscErrorReport, MiscError } from '../error-collector/ErrorCollector';
+import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
+import { groupBackgroundErrors } from './BackgroundErrors';
 import { JobStats, detectJobOverlaps, buildJobRecoveryRows } from './JobStats';
 import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
@@ -147,6 +148,17 @@ export interface EmailContext {
   historyBranchUrl?: string | null;
 }
 
+// Size rules (commit 2 of the email review, 2026-11-25): Gmail clips a message at about 100 KB, so each list is capped here and the full
+// lists live in the HTML report (the background-errors page is written next to it).
+const MAX_DETAIL_CARDS = 10;
+// failed + flaky + passed-on-rerun cards together, tried in this order until the message fits EMAIL_SIZE_TARGET; failed tests come first, the others keep at least 4
+const CARD_BUDGETS = [10, 8, 6, 4, 2, 0];
+export const EMAIL_SIZE_TARGET = 98 * 1024; // Gmail clips at about 100 KB; the margin covers what the target cannot see (headers, encoding)
+const MAX_EXTRA_TITLES = 15;
+const MAX_SLOW_MODULES = 5;
+const MAX_JOB_ROWS = 8;
+const MAX_ERROR_GROUPS = 8;
+
 const INK = '#1B1F24';
 const SLATE = '#57606A';
 const MUTED = '#8C959F';
@@ -206,8 +218,15 @@ export class EmailTemplate {
     // terms as the email (Passed = final outcome, with the instability named inside it), and no health score (it is in the body).
     // A run that is not a count-based result says what it is instead: BLOCKED, INCOMPLETE RUN, NO TESTS EXECUTED, SUITE DRIFT.
     const report = ctx.report;
+    const counts = this.countsLine(report);
+    const summary = verdict.bannerLabel.startsWith('🚫') || verdict.bannerLabel.includes('Suite Drift') || verdict.bannerLabel.includes('No Tests Selected') ? status : `${counts} of ${report.total}`;
+    return `${scopedPrefix}${stalePrefix}${icon} ${ctx.env.toUpperCase()} ${ctx.branch} #${ctx.buildNumber}: ${summary}`;
+  }
+
+  /** "2 failed, 940 passed (6 flaky, 2 on rerun), 1 skipped": the counts, in the same terms in the subject, the top summary and the text part. */
+  private countsLine(report: ParsedReport): string {
     const marks = [report.firstRun.flaky > 0 ? `${report.firstRun.flaky} flaky` : '', report.recoveredOnRerun > 0 ? `${report.recoveredOnRerun} on rerun` : '', report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : ''].filter(Boolean);
-    const counts = [
+    return [
       report.failed > 0 ? `${report.failed} failed` : '',
       `${report.finalPassed} passed${marks.length > 0 ? ` (${marks.join(', ')})` : ''}`,
       report.didNotRun > 0 ? `${report.didNotRun} did not run` : '',
@@ -216,11 +235,80 @@ export class EmailTemplate {
     ]
       .filter(Boolean)
       .join(', ');
-    const summary = verdict.bannerLabel.startsWith('🚫') || verdict.bannerLabel.includes('Suite Drift') || verdict.bannerLabel.includes('No Tests Selected') ? status : `${counts} of ${report.total}`;
-    return `${scopedPrefix}${stalePrefix}${icon} ${ctx.env.toUpperCase()} ${ctx.branch} #${ctx.buildNumber}: ${summary}`;
+  }
+
+  /** Three lines a reader gets before anything else (item 14): the result, what needs action, and the run link. */
+  private topSummaryLines(ctx: EmailContext, verdict: VerdictResult): { result: string; action: string; link: string | null } {
+    const r = ctx.report;
+    const nothingRan = verdict.verdict === 'blocked' && (r.total === 0 || r.status === 'no-tests-executed' || (ctx.health?.notApplicable ?? '') !== '');
+    const result = nothingRan ? verdict.bannerLabel.replace(/^[^\w]+/, '') : `${verdict.bannerLabel.replace(/^[^\w]+/, '')}: ${this.countsLine(r)} of ${r.total}`;
+    let action: string;
+    if (r.failed > 0) {
+      const names = (ctx.clusters ?? []).flatMap((c) => c.details.map((d) => d.test.title)).slice(0, 2).map((t) => this.truncate(t, 80));
+      action = `Fix ${r.failed} failing test${r.failed === 1 ? '' : 's'}${names.length > 0 ? `: ${names.join('; ')}${r.failed > names.length ? '; …' : ''}` : ''}`;
+    } else if (verdict.verdict === 'blocked') {
+      action = verdict.headline;
+    } else if (verdict.verdict === 'caution') {
+      action = verdict.headline.replace(/^Deployment likely safe — /, '').replace(/^but /, '');
+      action = action.charAt(0).toUpperCase() + action.slice(1);
+    } else {
+      action = 'None.';
+    }
+    return { result, action, link: ctx.buildUrl || null };
+  }
+
+  private buildTopSummary(ctx: EmailContext, verdict: VerdictResult): string {
+    const t = this.topSummaryLines(ctx, verdict);
+    const row = (label: string, value: string): string => `<div style="font-size:12.5px;color:${INK};padding:2px 0;"><strong style="color:${SLATE};display:inline-block;width:64px;">${label}</strong>${value}</div>`;
+    return `
+<tr><td style="padding:12px 28px 0;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:10px 14px;background:${CANVAS_TINT};">
+    ${row('Result', this.esc(t.result))}
+    ${row('Action', this.esc(t.action))}
+    ${row('Run', t.link ? `<a href="${this.escAttr(t.link)}" style="color:${ACCENT};">${this.esc(t.link)}</a>` : 'no run link (local execution)')}
+  </div>
+</td></tr>`;
+  }
+
+  /** The plain-text alternative part (item 24): the same facts without layout, for clients that cannot or will not show the HTML. */
+  text(ctx: EmailContext): string {
+    const health = ctx.health ?? this.fallbackHealth(ctx.report);
+    const verdict = ctx.verdict ?? computeOverallVerdict(ctx.report, health, ctx.suiteDrift ?? null, ctx.shardCompleteness);
+    const t = this.topSummaryLines(ctx, verdict);
+    const r = ctx.report;
+    const lines: string[] = [this.subject(ctx), '', `Result: ${t.result}`, `Action: ${t.action}`, `Run: ${t.link ?? 'no run link (local execution)'}`, ''];
+    lines.push(`Health: ${health.notApplicable ? `n/a (${health.notApplicable})` : `${health.label} ${health.score}/100`}`);
+    lines.push(`Passed first time: ${health.notApplicable ? 'n/a' : `${r.passRate}%`}; duration ${this.formatDuration(r.duration)}; ${r.modules.length} modules`);
+    const failed = (ctx.clusters ?? []).flatMap((c) => c.details);
+    if (failed.length > 0) {
+      lines.push('', `FAILED (${r.failed})`);
+      for (const d of failed.slice(0, MAX_DETAIL_CARDS)) lines.push(`- ${d.test.title} (${d.test.file.split('/').pop()}): ${this.truncate(d.primaryError.replace(/\s+/g, ' '), 200)}`);
+      if (failed.length > MAX_DETAIL_CARDS) lines.push(`- +${failed.length - MAX_DETAIL_CARDS} more in the HTML report`);
+    }
+    const unstable = [...r.flakyTests, ...r.passedOnRerunTests];
+    if (unstable.length > 0) {
+      lines.push('', `FLAKY / PASSED ON RERUN (${unstable.length})`);
+      for (const x of unstable.slice(0, MAX_DETAIL_CARDS)) lines.push(`- ${x.title}`);
+      if (unstable.length > MAX_DETAIL_CARDS) lines.push(`- +${unstable.length - MAX_DETAIL_CARDS} more in the HTML report`);
+    }
+    if (ctx.miscErrors && ctx.miscErrors.totalErrors > 0) lines.push('', `Background errors: ${ctx.miscErrors.unexpectedErrors} unexpected + ${ctx.miscErrors.expectedRbacErrors} expected RBAC + known noise = ${ctx.miscErrors.totalErrors} (details: background-errors.html in the report artifact)`);
+    lines.push('', 'Traces, screenshots, page snapshots and the full lists are in the report artifact on the run page.');
+    return lines.join('\n');
   }
 
   html(ctx: EmailContext): string {
+    // Size rule (item 13): render with the full card budget and, while the message is above the target, with fewer detail cards (the
+    // lists below the cards and the HTML report keep every test). The last budget is 0 cards.
+    let out = '';
+    for (const budget of CARD_BUDGETS) {
+      out = this.renderHtml(ctx, budget);
+      if (Buffer.byteLength(out) <= EMAIL_SIZE_TARGET) break;
+    }
+    return out;
+  }
+
+  /** The email with a given budget of detail cards; `html()` picks the largest budget that fits EMAIL_SIZE_TARGET. Public so tests can force the cards. */
+  renderHtml(ctx: EmailContext, totalCards: number): string {
     const health = ctx.health ?? this.fallbackHealth(ctx.report);
     const clusters = ctx.clusters ?? [];
     // WHY computed here (not left undefined) when a caller omits it: mirrors
@@ -234,6 +322,12 @@ export class EmailTemplate {
     // specific test's own card in Failed/Flaky Tests when that test actually
     // appears in THIS run's output — see buildTestAnchorLookup()'s own WHY.
     const testAnchors = this.buildTestAnchorLookup(clusters, [...(ctx.flakyFailureDetails ?? []), ...(ctx.rerunPassedDetails ?? [])]);
+    // Shared card budget (size): failed tests first, flaky and passed-on-rerun keep at least 4 cards between them when there are any.
+    const unstableCount = ctx.report.flakyTests.length + ctx.report.passedOnRerunTests.length;
+    const failedCards = Math.max(0, Math.min(ctx.report.failed, MAX_DETAIL_CARDS, totalCards - Math.min(unstableCount, 4)));
+    const unstableCards = totalCards - Math.min(failedCards, totalCards);
+    const flakyCards = Math.min(ctx.report.flakyTests.length, unstableCards);
+    const rerunCards = Math.max(0, Math.min(ctx.report.passedOnRerunTests.length, unstableCards - flakyCards));
 
     const body = [
       this.buildIncompleteRunBanner(ctx.shardCompleteness),
@@ -241,6 +335,7 @@ export class EmailTemplate {
       this.buildFreshnessWarning(ctx.reportFreshness),
       this.buildMasthead(ctx, health),
       this.buildStatusBanner(verdict),
+      this.buildTopSummary(ctx, verdict),
       this.buildCauseBanner(ctx.causeSummary),
       this.buildStatusBadgeRow(ctx),
       this.buildExecutiveSummary(ctx, health, clusters, verdict),
@@ -255,10 +350,10 @@ export class EmailTemplate {
       this.buildSlowTestsSection(ctx),
       this.buildModuleSlowestTestsSection(ctx),
       this.buildJobStatsSection(ctx),
-      this.buildFlakyTestsSection(ctx),
-      this.buildPassedOnRerunSection(ctx),
+      this.buildFlakyTestsSection(ctx, flakyCards),
+      this.buildPassedOnRerunSection(ctx, rerunCards),
       this.buildSkippedTestsSection(ctx),
-      this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl, ctx.rerun),
+      this.buildFailureClustersSection(clusters, ctx.knownIssuesUrl, ctx.rerun, ctx.buildUrl, failedCards),
       this.buildBackgroundErrorsSection(ctx.miscErrors),
       this.buildFieldConfigResetSection(ctx.fieldConfigReset, ctx.env),
       this.buildActionRequiredSection(ctx, health, clusters),
@@ -268,7 +363,7 @@ export class EmailTemplate {
       this.buildFooter(ctx),
     ].join('');
 
-    return `<!DOCTYPE html><html><head>
+    const page = `<!DOCTYPE html><html><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light dark">
@@ -306,6 +401,10 @@ ${body}
 </td></tr>
 </table>
 </body></html>`;
+    // Size (item 13): the template's indentation and line breaks between tags are about 15% of the message. Only whitespace that sits between
+    // a '>' and a '<' is collapsed to one space (text inside <pre> and pre-wrap blocks has no tags between its characters).
+    // The newline in front of a top-level section row (`\n<tr><td`) stays: tests and tooling split the email on it.
+    return page.replace(/>(\s+)</g, (m, ws: string, off: number) => (ws === '\n' && page.startsWith('tr><td', off + m.length) ? '>\n<' : '> <'));
   }
 
   // ===================== Masthead + status =====================
@@ -945,6 +1044,7 @@ ${body}
         : `<div style="margin-top:10px;">
              <div style="font-size:11.5px;font-weight:700;color:${WARN};margin-bottom:4px;">${this.esc(title)}</div>
              ${issues
+               .slice(0, 8)
                .map((i) => {
                  const anchor = testAnchors.get(i.title);
                  const titleHtml = anchor
@@ -952,7 +1052,7 @@ ${body}
                    : this.esc(i.title);
                  return `<div style="font-size:11.5px;color:#6B5300;padding:2px 0;">${titleHtml} — ${i.countInLastNRuns} of last ${i.ofLastNRuns} runs</div>`;
                })
-               .join('')}
+               .join('')}${issues.length > 8 ? `<div style="font-size:11px;color:${SLATE};padding:2px 0;">+${issues.length - 8} more (in the run history)</div>` : ''}
            </div>`;
 
     const moduleTrendBlock =
@@ -961,11 +1061,12 @@ ${body}
         : `<div style="margin-top:10px;">
              <div style="font-size:11.5px;font-weight:700;color:${FAIL};margin-bottom:4px;">Modules trending worse</div>
              ${worseningModules
+               .slice(0, 8)
                .map(
                  (m) =>
                    `<div style="font-size:11.5px;color:${INK};padding:2px 0;">▼ ${this.esc(m.name)} (${this.esc(m.type)}) — ${m.failedDelta > 0 ? `+${m.failedDelta} failed` : ''}${m.failedDelta > 0 && m.flakyDelta > 0 ? ', ' : ''}${m.flakyDelta > 0 ? `+${m.flakyDelta} flaky` : ''}</div>`
                )
-               .join('')}
+               .join('')}${worseningModules.length > 8 ? `<div style="font-size:11px;color:${SLATE};padding:2px 0;">+${worseningModules.length - 8} more modules (see Module Analytics)</div>` : ''}
            </div>`;
 
     return `
@@ -1028,7 +1129,21 @@ ${body}
       }))
       .sort((a, b) => b.score - a.score);
 
-    const rows = scored
+    // Size (commit 2, 2026-11-25): a module whose tests all passed first time, with no worsening trend, is one name in a footer line instead of
+    // a 700-byte row; every module with something to say keeps its full row. The numbers in the footer are the same as in the rows above.
+    const isQuiet = (m: (typeof scored)[number]): boolean => {
+      const trend = trendByKey.get(`${m.type}:${m.name}`);
+      const stability = stabilityByKey.get(`${m.type}:${m.name}`);
+      return m.failed === 0 && m.firstRun.failed === 0 && m.firstRun.flaky === 0 && m.passedOnRerun === 0 && m.flaky === 0 && m.totalRetries === 0 && trend?.direction !== 'worsening' && stability?.direction !== 'worsening';
+    };
+    const quietModules = scored.filter(isQuiet);
+    // At most 8 module rows, the worst first in the table's own order (best first among them); the others with something to say are named.
+    const MAX_MODULE_ROWS = 8;
+    const withNews = scored.filter((m) => !isQuiet(m));
+    const worstSet = new Set([...withNews].sort((a, b) => a.score - b.score).slice(0, MAX_MODULE_ROWS));
+    const hiddenModules = withNews.filter((m) => !worstSet.has(m));
+    const rows = withNews
+      .filter((m) => worstSet.has(m))
       .map((m) => {
         // Pass = the FINAL outcome (second amendment of ADR 0015, 2026-11-24): clean + after an in-job retry + after the rerun. The tests
         // that needed a retry or the rerun are counted INSIDE it and said so under the number.
@@ -1100,9 +1215,8 @@ ${body}
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
         <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
         <td style="padding:8px;"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${finalPassed}${neededNote}</td>
+        <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${finalPassed}<div style="font-size:9px;font-weight:400;color:${barColor};">${passRate}% of ${m.total}</div>${neededNote}</td>
         <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
-        <td style="padding:8px;width:70px;"><div style="background:${CANVAS_TINT};border-radius:4px;height:6px;"><div style="background:${barColor};width:${passRate}%;height:6px;border-radius:4px;"></div></div><div style="font-size:9px;color:${MUTED};margin-top:2px;">${passRate}% passed</div></td>
         <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
         <td style="padding:8px;text-align:center;font-size:11px;">${trendGlyph}</td>
         <td style="padding:8px;text-align:left;">${thisRun}${stabilityBadge}</td>
@@ -1121,13 +1235,14 @@ ${body}
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Type</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SUCCESS};font-weight:600;">Pass (final)</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
-      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Progress</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
       <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">vs last run</th>
       <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Stability</th>
     </tr>
     ${rows}
-  </table>
+  </table>${hiddenModules.length > 0 ? `
+  <div style="font-size:11px;color:${SLATE};margin-top:8px;"><strong style="color:${INK};">${hiddenModules.length} more module${hiddenModules.length === 1 ? '' : 's'} with failures or flaky tests</strong> (all in the HTML report): ${hiddenModules.slice(0, 12).map((m) => `${this.esc(m.name)} ${m.type} (${m.failed} failed, ${m.firstRun.flaky} flaky)`).join(', ')}${hiddenModules.length > 12 ? `, and ${hiddenModules.length - 12} more` : ''}.</div>` : ''}${quietModules.length > 0 ? `
+  <div style="font-size:11px;color:${SLATE};margin-top:8px;"><strong style="color:${INK};">${quietModules.length} module${quietModules.length === 1 ? '' : 's'} passed every test first time</strong> (${quietModules.reduce((n, m) => n + m.total, 0)} tests, no retries, no worsening trend): ${quietModules.map((m) => `${this.esc(m.name)} ${m.type}`).join(', ')}.</div>` : ''}
 </td></tr>`;
   }
 
@@ -1179,9 +1294,9 @@ ${body}
     const { report } = ctx;
     const modulesWithTests = report.modules.filter((m) => m.slowestTests.length > 0);
     if (modulesWithTests.length === 0) return '';
-    const sortedModules = [...modulesWithTests].sort(
-      (a, b) => (b.slowestTests[0]?.duration ?? 0) - (a.slowestTests[0]?.duration ?? 0)
-    );
+    const sortedModules = [...modulesWithTests]
+      .sort((a, b) => (b.slowestTests[0]?.duration ?? 0) - (a.slowestTests[0]?.duration ?? 0))
+      .slice(0, MAX_SLOW_MODULES);
     const moduleBlocks = sortedModules
       .map((m) => {
         const typeStyle =
@@ -1191,13 +1306,7 @@ ${body}
               ? `background:${SUCCESS_BG};color:${SUCCESS};`
               : `background:${CANVAS_TINT};color:${SLATE};`;
         const rows = m.slowestTests
-          .map(
-            (t: TestResult) => `
-        <tr style="border-bottom:1px solid ${CANVAS_TINT};">
-          <td style="padding:4px 0 4px 12px;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
-          <td style="padding:4px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(t.duration / 1000)}s`)}</td>
-        </tr>`
-          )
+          .map((t: TestResult) => `<tr><td style="padding:3px 0 3px 12px;">${this.esc(this.truncate(t.title, 90))}</td><td style="text-align:right;color:${SLATE};font-weight:600;white-space:nowrap;font-family:${MONO_FONT};">${Math.round(t.duration / 1000)}s</td></tr>`)
           .join('');
         return `
       <tr>
@@ -1212,9 +1321,9 @@ ${body}
     return `
 <tr><td style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
-    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">Slowest Tests by Module (Top 3 each)</div>
-    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Ranked by each module's own worst test — surfaces drag a whole-run top-5 can hide</div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moduleBlocks}</table>
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:2px;">Slowest Tests by Module (5 slowest modules, top 3 each)</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Ranked by each module's own worst test; the full per-module lists are in the HTML report</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;color:${INK};">${moduleBlocks}</table>
   </div>
 </td></tr>`;
   }
@@ -1239,6 +1348,7 @@ ${body}
     if (!stats || stats.jobs.length === 0) return '';
     const sortedJobs = [...stats.jobs].sort((a, b) => b.durationMs - a.durationMs);
     const rows = sortedJobs
+      .slice(0, MAX_JOB_ROWS)
       .map(
         (j) => `
       <tr style="border-bottom:1px solid ${CANVAS_TINT};">
@@ -1246,7 +1356,7 @@ ${body}
         <td style="padding:6px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(`${Math.round(j.durationMs / 60000)}m`)}</td>
       </tr>`
       )
-      .join('');
+      .join('') + (sortedJobs.length > MAX_JOB_ROWS ? `<tr><td colspan="2" style="padding:6px 0;font-size:11px;color:${MUTED};">+${sortedJobs.length - MAX_JOB_ROWS} shorter jobs (each at most ${Math.round(sortedJobs[MAX_JOB_ROWS].durationMs / 60000)}m); the total above includes them</td></tr>` : '');
     // WHY a plural-safe note only when incompleteJobCount > 0, not always:
     // most runs have zero incomplete jobs by the time this section renders
     // (this merge+notify job itself is the one common exception — it's
@@ -1266,27 +1376,26 @@ ${body}
     // real, honest scope limit: module-tag attribution (the `sameModuleTag`
     // flag) only exists for formFields-track jobs; every other overlap is
     // still reported, just without a module tag, never silently dropped.
-    const overlaps = detectJobOverlaps(stats.jobs);
+    // Only the real anomaly is listed (item 9): a pair of jobs that overlapped AND share a module. Every other overlap is how sharding works.
+    const overlaps = detectJobOverlaps(stats.jobs).filter((o) => o.sameModuleTag !== undefined);
     const overlapsSection =
       overlaps.length === 0
-        ? ''
+        ? `
+    <div style="font-size:11px;color:${SLATE};margin-top:12px;"><strong style="color:${INK};">Job time overlaps:</strong> none that matter (no two jobs ran the same module at the same time).</div>`
         : (() => {
-            const flaggedFirst = [...overlaps].sort(
-              (a, b) => (b.sameModuleTag ? 1 : 0) - (a.sameModuleTag ? 1 : 0) || b.overlapDurationMs - a.overlapDurationMs
-            );
-            const overlapRows = flaggedFirst
-              .map((o) => {
-                const flagged = o.sameModuleTag !== undefined;
-                return `
+            const overlapRows = [...overlaps]
+              .sort((x, y) => y.overlapDurationMs - x.overlapDurationMs)
+              .map(
+                (o) => `
       <tr style="border-bottom:1px solid ${CANVAS_TINT};">
-        <td style="padding:6px 0;font-size:11.5px;color:${flagged ? FAIL : INK};font-weight:${flagged ? '700' : '400'};">${flagged ? '⚠ ' : ''}${this.esc(o.jobA)} ↔ ${this.esc(o.jobB)}${flagged ? ` <span style="font-size:10px;color:${FAIL};">(same module: ${this.esc(o.sameModuleTag!)})</span>` : ''}</td>
+        <td style="padding:6px 0;font-size:11.5px;color:${FAIL};font-weight:700;">⚠ ${this.esc(o.jobA)} ↔ ${this.esc(o.jobB)} <span style="font-size:10px;">(same module: ${this.esc(o.sameModuleTag!)})</span></td>
         <td style="padding:6px 0;text-align:right;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.mono(`${Math.round(o.overlapDurationMs / 60000)}m`)}</td>
-      </tr>`;
-              })
+      </tr>`
+              )
               .join('');
             return `
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Job Time Overlaps</div>
-    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Jobs whose execution windows overlapped — ⚠ flags a pair confirmed to share the SAME module (a structural anomaly the current shard design should prevent; investigate if this ever appears). Module attribution is currently only derivable for formFields-track jobs — a rest-of-suite shard overlap is still shown, just without a module tag (see JobStats.ts's own WHY comment).</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Two jobs that ran the SAME module at the same time: a structural anomaly the shard design should prevent. Investigate.</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${overlapRows}</table>`;
           })();
     // WHY computed inline from ctx.jobStats.jobs + ctx.miscErrors.recoveryByShard
@@ -1297,10 +1406,15 @@ ${body}
       (r) => r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0
     );
     const hhmm = (iso: string): string => new Date(iso).toISOString().slice(11, 16);
+    const hotRows = recoveryRows.filter((r) => r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries + r.failedAfterRecovery > 0);
+    const quietCount = recoveryRows.length - hotRows.length;
     const recoverySection =
       recoveryRows.length === 0
         ? ''
-        : `
+        : !hasAnyRecovery
+          ? `
+    <div style="font-size:11px;color:${SLATE};margin-top:12px;"><strong style="color:${INK};">Load signals:</strong> no 429 pages, HTTP 429 API answers, error-boundary screens or globalSetup retries were recorded in any of the ${recoveryRows.length} test jobs.</div>`
+          : `
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
       hasAnyRecovery
@@ -1317,7 +1431,7 @@ ${body}
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Setup retry</th>
         <th align="right" style="padding:4px 4px;font-size:10px;color:${MUTED};">Failed</th>
         <th align="right" style="padding:4px 0 4px 4px;font-size:10px;color:${MUTED};">Jobs running (window / at events)</th>
-      </tr>${recoveryRows
+      </tr>${hotRows
         .map((r) => {
           const hot = r.rateLimitPages + r.rateLimitApi + r.errorBoundaryPages + r.setupRetries > 0;
           return `
@@ -1333,7 +1447,7 @@ ${body}
       </tr>`;
         })
         .join('')}
-    </table>`;
+    </table>${quietCount > 0 ? `<div style="font-size:11px;color:${MUTED};margin-top:4px;">${quietCount} other test job${quietCount === 1 ? '' : 's'} recorded none of these.</div>` : ''}`;
     return `
 <tr><td style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
@@ -1439,47 +1553,39 @@ ${body}
   // a regression/chronic badge applies (meaningless for a test that already
   // passed on retry this run). One function, one place to fix a rendering
   // bug, per this codebase's "every new piece of logic does ONE thing" rule.
+  /** The error's message without its code frame and stack: the card shows ONE short code frame below it (item 7), not the frame twice. */
+  private errorMessageOnly(primary: string): string {
+    const lines = primary.split('\n');
+    const cut = lines.findIndex((l) => /^\s*at\s/.test(l) || /^\s*>?\s*\d+\s*\|/.test(l));
+    const head = (cut >= 0 ? lines.slice(0, cut) : lines).join('\n').replace(/\n{2,}/g, '\n').trim();
+    return head.split('\n').slice(0, 8).join('\n');
+  }
+
   private buildFailureDetailCard(
     d: FailureDetail,
     knownIssuesUrl: string | null | undefined,
     accentColor: string,
     rerunRows?: Map<string, RerunTestRow>
   ): string {
+    // Each error once (item 7, build #235 printed it 2-3 times): the primary message and ONE short code frame. The earlier errors of the
+    // attempt are only counted, and the stack frames are not repeated (the code frame names the line).
     const earlierErrorsHtml =
       d.earlierErrors.length > 0
-        ? `<div style="margin-top:6px;">
-             <div style="font-size:10px;color:${MUTED};margin-bottom:2px;">Earlier error(s) in this attempt, before the one below:</div>
-             ${d.earlierErrors
-               .map((e) => `<div style="font-size:10.5px;color:${SLATE};font-family:${MONO_FONT};background:${CANVAS_TINT};border-radius:4px;padding:4px 6px;margin-bottom:3px;white-space:pre-wrap;word-break:break-word;">${this.esc(e)}</div>`)
-               .join('')}
-           </div>`
+        ? `<div style="margin-top:4px;font-size:10px;color:${MUTED};">${d.earlierErrors.length} earlier error${d.earlierErrors.length === 1 ? '' : 's'} in this attempt (see the HTML report)</div>`
         : '';
     const snippetHtml = d.snippet
-      ? `<pre style="margin:6px 0 0;font-size:10.5px;font-family:${MONO_FONT};background:${INK};color:#E6EDF3;border-radius:4px;padding:8px 10px;overflow-x:auto;white-space:pre;">${this.esc(d.snippet)}</pre>`
+      ? `<pre style="margin:6px 0 0;font-size:10.5px;font-family:${MONO_FONT};background:${INK};color:#E6EDF3;border-radius:4px;padding:8px 10px;overflow-x:auto;white-space:pre;">${this.esc(d.snippet.split('\n').slice(0, 6).join('\n'))}</pre>`
       : '';
-    const stackHtml =
-      d.stackFrames.length > 0
-        ? `<div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${d.stackFrames.map((f) => this.esc(f)).join('<br>')}${d.stackTruncatedCount > 0 ? `<br>… +${d.stackTruncatedCount} more frame${d.stackTruncatedCount === 1 ? '' : 's'} — open the trace for the full stack.` : ''}</div>`
-        : '';
+    const stackHtml = '';
+    // Trace, screenshot and page-snapshot paths were relative paths inside a CI runner (item 8): they open nothing from an email. The card
+    // links a file only where a real link exists (Jenkins); on GitHub Actions the section header points to the run's report artifact.
     const artifactLines: string[] = [];
-    const traceHref = d.artifactLinks.trace;
-    artifactLines.push(
-      `Trace: ${d.tracePath ? (traceHref ? `<a href="${this.escAttr(traceHref)}" style="color:${ACCENT};">${this.esc(d.tracePath)}</a>` : this.esc(d.tracePath)) : 'not captured'}`
-    );
-    if (d.screenshotPaths.length > 0) {
-      artifactLines.push(
-        d.screenshotPaths
-          .map((p, i) => {
-            const href = d.artifactLinks.screenshots[i];
-            return `Screenshot: ${href ? `<a href="${this.escAttr(href)}" style="color:${ACCENT};">${this.esc(p)}</a>` : this.esc(p)}`;
-          })
-          .join(' · ')
-      );
-    }
-    if (d.errorContextPath) {
-      const href = d.artifactLinks.errorContext;
-      artifactLines.push(`Page snapshot: ${href ? `<a href="${this.escAttr(href)}" style="color:${ACCENT};">${this.esc(d.errorContextPath)}</a>` : this.esc(d.errorContextPath)}`);
-    }
+    const linkWord = (word: string, href: string | undefined): void => {
+      if (href) artifactLines.push(`<a href="${this.escAttr(href)}" style="color:${ACCENT};">${word}</a>`);
+    };
+    linkWord('Trace', d.artifactLinks.trace);
+    d.artifactLinks.screenshots.forEach((h) => linkWord('Screenshot', h));
+    linkWord('Page snapshot', d.artifactLinks.errorContext);
     // WHY the artifact links above only ever resolve on Jenkins runs (see
     // FailureDetailBuilder.buildArtifactLinks's own WHY) — GitHub Actions has
     // no browsable single-file URL for an archived artifact, confirmed
@@ -1495,15 +1601,15 @@ ${body}
           <div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(d.test.title)}</div>
           <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}${this.causeBadge(d.cause)}</div>
           <div style="font-size:10.5px;color:${SLATE};margin-bottom:4px;">${this.esc(d.test.file.split('/').pop() || '')}</div>
-          <div style="font-size:11.5px;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(d.primaryError)}</div>
+          <div style="font-size:11.5px;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(this.errorMessageOnly(d.primaryError))}</div>
           ${earlierErrorsHtml}
           ${snippetHtml}
           ${stackHtml}
-          <div style="margin-top:6px;font-size:10.5px;color:${SLATE};font-style:italic;">${this.esc(d.diagnosticHint)}</div>
+          ${accentColor === FAIL ? `<div style="margin-top:6px;font-size:10.5px;color:${SLATE};font-style:italic;">${this.esc(d.diagnosticHint)}</div>` : ''}
           ${this.causeEvidence(d.cause)}
           ${this.rerunTestLine(rerunRows?.get(rerunRowKey(d.test.file, d.test.title)))}
           ${knownIssueHtml}
-          <div style="margin-top:6px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${artifactLines.join('<br>')}</div>
+          ${artifactLines.length > 0 ? `<div style="margin-top:6px;font-size:10.5px;color:${MUTED};">${artifactLines.join(' · ')}</div>` : ''}
         </div>`;
   }
 
@@ -1577,7 +1683,12 @@ ${body}
       <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
       <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
     </table>`;
-    const rows = rerun.rows
+    // Size: still-failing tests first, then the others; the rest are counted (the rerun-summary.json of the run has every row).
+    const MAX_RERUN_ROWS = 10;
+    const rank = (r: RerunTestRow): number => (r.final === 'failed' ? 0 : r.final === 'passed' ? 1 : 2);
+    const orderedRows = [...rerun.rows].sort((x, y) => rank(x) - rank(y));
+    const rows = orderedRows
+      .slice(0, MAX_RERUN_ROWS)
       .map(
         (r) => `
       <tr style="border-bottom:1px solid ${BORDER};">
@@ -1592,7 +1703,7 @@ ${body}
       rerun.rows.length > 0
         ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
-    </table>`
+    </table>${rerun.rows.length > MAX_RERUN_ROWS ? `<div style="font-size:11px;color:${SLATE};margin-top:6px;">+${rerun.rows.length - MAX_RERUN_ROWS} more rerun tests (every row is in rerun-summary.json of the run).</div>` : ''}`
         : '';
     // WHY one line per reason with the tests named (2026-11-24, item 11): the old sentence listed every possible reason, so
     // a reader could not tell which one applied to which test. The reasons are the selector's own, per test.
@@ -1637,8 +1748,16 @@ ${body}
 </td></tr>`;
   }
 
-  private buildFlakyTestsSection(ctx: EmailContext): string {
+  // One line instead of a path under every card (item 8): where the traces, screenshots and page snapshots are.
+  private artifactNote(buildUrl: string | undefined): string {
+    return buildUrl
+      ? `<div style="font-size:11px;color:${SLATE};margin-bottom:8px;">Traces, screenshots and page snapshots: the report artifact on <a href="${this.escAttr(buildUrl)}" style="color:${ACCENT};">the run page</a> (Artifacts, <em>playwright-report-…</em>).</div>`
+      : '';
+  }
+
+  private buildFlakyTestsSection(ctx: EmailContext, cards: number): string {
     return this.buildUnstableTestsSection(ctx, {
+      cards,
       id: 'section-flaky-tests',
       heading: 'Flaky Tests',
       tests: ctx.report.flakyTests,
@@ -1648,8 +1767,9 @@ ${body}
 
   // Tests that failed every first attempt (or passed only on an in-job retry) and passed on the rerun shard: Passed in the
   // counts (ADR 0015, amended 2026-11-24), listed here with their first-run failure so the evidence is not lost.
-  private buildPassedOnRerunSection(ctx: EmailContext): string {
+  private buildPassedOnRerunSection(ctx: EmailContext, cards: number): string {
     return this.buildUnstableTestsSection(ctx, {
+      cards,
       id: 'section-passed-on-rerun',
       heading: 'Passed on rerun',
       tests: ctx.report.passedOnRerunTests,
@@ -1658,12 +1778,13 @@ ${body}
     });
   }
 
-  private buildUnstableTestsSection(ctx: EmailContext, opts: { id: string; heading: string; tests: TestResult[]; details: FailureDetail[]; note?: string }): string {
+  private buildUnstableTestsSection(ctx: EmailContext, opts: { id: string; heading: string; tests: TestResult[]; details: FailureDetail[]; note?: string; cards: number }): string {
     if (opts.tests.length === 0) return '';
     const recurringByTitle = new Map((ctx.recurringFlaky ?? []).map((r) => [r.title, r]));
     const detailByTitle = new Map(opts.details.map((d) => [d.test.title, d]));
     const rerunRows = this.rerunRowMap(ctx.rerun);
     const rows = opts.tests
+      .slice(0, Math.max(opts.cards, 0))
       .map((t: TestResult) => {
         const recurring = recurringByTitle.get(t.title);
         const ratio = recurring ? recurring.countInLastNRuns / recurring.ofLastNRuns : 0;
@@ -1686,17 +1807,21 @@ ${body}
         <td style="padding:6px 0;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} ${t.retries === 1 ? 'retry' : 'retries'}</td>
         <td style="padding:6px 0 6px 10px;font-size:11px;color:${riskColor};font-weight:700;white-space:nowrap;">${risk} risk</td>
         <td style="padding:6px 0 6px 10px;font-size:10.5px;color:${SLATE};">${this.esc(history)}</td>
-        <td style="padding:6px 0 6px 10px;font-size:10px;color:${MUTED};font-family:${MONO_FONT};word-break:break-all;">${t.tracePath ? this.esc(t.tracePath) : 'no trace captured'}</td>
       </tr>
-      ${detailHtml ? `<tr><td colspan="5" style="padding:0 0 8px;">${detailHtml}</td></tr>` : ''}`;
+      ${detailHtml ? `<tr><td colspan="4" style="padding:0 0 8px;">${detailHtml}</td></tr>` : ''}`;
       })
       .join('');
+    const extra = opts.tests.slice(Math.max(opts.cards, 0));
+    const extraHtml =
+      extra.length > 0
+        ? `<div style="font-size:11px;color:${SLATE};margin-top:8px;">+${extra.length} more, not shown in full here (the HTML report has every one): ${extra.slice(0, MAX_EXTRA_TITLES).map((t) => this.esc(this.truncate(t.title, 70))).join('; ')}${extra.length > MAX_EXTRA_TITLES ? `; and ${extra.length - MAX_EXTRA_TITLES} more` : ''}</div>`
+        : '';
     return `
 <tr><td id="${opts.id}" style="padding:8px 28px;">
   <div style="border:1px solid ${WARN_BORDER};background:${WARN_BG};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${WARN};margin-bottom:${opts.note ? '4' : '10'}px;">${opts.heading} (${opts.tests.length})</div>${opts.note ? `
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${this.esc(opts.note)}</div>` : ''}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
+    ${this.artifactNote(ctx.buildUrl)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>${extraHtml}
   </div>
 </td></tr>`;
   }
@@ -1706,14 +1831,32 @@ ${body}
   private buildFailureClustersSection(
     clusters: EnrichedCluster[],
     knownIssuesUrl: string | null | undefined,
-    rerun?: RerunSummary | null
+    rerun?: RerunSummary | null,
+    buildUrl?: string,
+    cardLimit: number = MAX_DETAIL_CARDS
   ): string {
     if (clusters.length === 0) return '';
     const rerunRows = this.rerunRowMap(rerun);
     const totalTests = clusters.reduce((sum, c) => sum + c.tests.length, 0);
 
+    let cardsLeft = cardLimit;
+    const omitted: string[] = [];
     const clusterBlocks = clusters
       .map((c) => {
+        // A cluster shares one cause (same message, location or endpoint): its first test gets the full card, the others are one line
+        // each ("same cause"), so a 20-test cluster costs one card, not twenty.
+        const fullCards = c.tests.length > 1 ? 1 : c.details.length;
+        const shown = c.details.slice(0, Math.min(fullCards, cardsLeft));
+        cardsLeft -= shown.length;
+        const sameCause = c.details.slice(shown.length);
+        if (shown.length === 0) {
+          for (const d of sameCause) omitted.push(d.test.title);
+          return '';
+        }
+        const sameCauseHtml =
+          sameCause.length > 0
+            ? `<div style="font-size:11px;color:${SLATE};margin-top:2px;">Same cause, ${sameCause.length} more test${sameCause.length === 1 ? '' : 's'}:${sameCause.slice(0, 8).map((d) => `<div style="padding:2px 0;">${this.esc(this.truncate(d.test.title, 80))}${this.rerunTestLine(rerunRows?.get(rerunRowKey(d.test.file, d.test.title)))}</div>`).join('')}${sameCause.length > 8 ? `<div>and ${sameCause.length - 8} more</div>` : ''}</div>`
+            : '';
         // WHY the category badge/header is now unconditional (2026-08-24,
         // item 8/2 fix): it used to render ONLY for clusters with 2+ tests —
         // the common case (a handful of unrelated standalone failures) got
@@ -1723,12 +1866,12 @@ ${body}
         const header = `<div style="background:${CANVAS_TINT};border-radius:4px 4px 0 0;padding:8px 10px;font-size:11.5px;font-weight:700;color:${INK};border:1px solid ${FAIL_BORDER};border-bottom:none;">
                  ${c.tests.length > 1 ? `${c.tests.length} tests affected — shared cause (${this.signalTypeLabel(c.signalType)}) · ` : ''}category: ${this.esc(c.category)}
                </div>`;
-        const cards = c.details.map((d) => this.buildFailureDetailCard(d, knownIssuesUrl, FAIL, rerunRows)).join('');
+        const cards = shown.map((d) => this.buildFailureDetailCard(d, knownIssuesUrl, FAIL, rerunRows)).join('');
         return `
         <div style="margin-bottom:12px;">
           ${header}
           <div style="border:1px solid ${FAIL_BORDER};border-top:none;background:${FAIL_BG};padding:10px;">
-            ${cards}
+            ${cards}${sameCauseHtml}
           </div>
         </div>`;
       })
@@ -1739,7 +1882,8 @@ ${body}
   <div style="border:1px solid ${FAIL_BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${FAIL};margin-bottom:4px;">Failed Tests (${totalTests})</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">${clusters.filter((c) => c.tests.length > 1).length} cluster(s) sharing a real signal, ${clusters.filter((c) => c.tests.length === 1).length} standalone</div>
-    ${clusterBlocks}
+    ${this.artifactNote(buildUrl)}${clusterBlocks}${omitted.length > 0 ? `
+    <div style="font-size:11px;color:${SLATE};margin-top:4px;">+${omitted.length} more failed test(s), not shown in full here (the HTML report has every one): ${omitted.slice(0, MAX_EXTRA_TITLES).map((t) => this.esc(this.truncate(t, 70))).join('; ')}${omitted.length > MAX_EXTRA_TITLES ? `; and ${omitted.length - MAX_EXTRA_TITLES} more` : ''}</div>` : ''}
   </div>
 </td></tr>`;
   }
@@ -1801,52 +1945,19 @@ ${body}
 </td></tr>`;
     }
 
-    const byTypeRows = Object.entries(miscErrors.byType as Record<string, number>)
-      .map(
-        ([type, count]) =>
-          `<tr><td style="padding:4px 8px;font-size:12px;color:${INK};">${this.esc(type)}</td><td style="padding:4px 8px;font-size:12px;font-weight:700;color:${INK};text-align:right;">${count}</td></tr>`
-      )
-      .join('');
-
-    const byTest = new Map<string, MiscError[]>();
-    for (const e of miscErrors.errors) {
-      const key = e.testTitle || 'unknown';
-      if (!byTest.has(key)) byTest.set(key, []);
-      byTest.get(key)!.push(e);
-    }
-    const errorRows = Array.from(byTest.entries())
-      .map(([testTitle, errors]) => {
-        const details = errors
-          .map((e) => {
-            const expectedBadge =
-              e.expectedReason === 'rbac'
-                ? ` <span style="font-size:10px;background:${WARN_BG};padding:1px 4px;border-radius:3px;margin-left:4px;">Expected RBAC</span>`
-                : e.expectedReason === 'background-noise'
-                  ? ` <span style="font-size:10px;background:#EFF3FE;padding:1px 4px;border-radius:3px;margin-left:4px;">Known Background Noise</span>`
-                  : '';
-            // WHY redactSensitiveText() applied here (2026-08-24, item 13):
-            // e.message/e.apiErrorMessage are raw captured browser/API text
-            // — never previously redacted anywhere in this pipeline (see
-            // redact.ts's own WHY comment for why BasePage's existing
-            // redaction doesn't cover this data path at all).
-            return `<div style="background:#FFF8F3;border-left:3px solid ${WARN};padding:6px 8px;margin:4px 0;border-radius:0 4px 4px 0;">
-        <div style="font-size:11px;font-weight:700;color:${e.expectedReason ? WARN : FAIL};">[${this.esc(e.type)}]${expectedBadge}</div>
-        ${e.method ? `<div style="font-size:10px;color:${INK};margin-top:2px;"><strong>Method:</strong> ${this.esc(e.method)}</div>` : ''}
-        <div style="font-size:11px;color:${INK};margin-top:2px;"><strong>Error:</strong> ${this.esc(this.truncate(redactSensitiveText(e.message || ''), 150))}</div>
-        ${e.url ? `<div style="font-size:10px;color:${SLATE};margin-top:2px;word-break:break-all;"><strong>URL:</strong> ${this.esc(e.url)}</div>` : ''}
-        ${e.statusCode ? `<div style="font-size:10px;color:${FAIL};font-weight:700;margin-top:2px;">HTTP Status: ${e.statusCode}</div>` : ''}
-        ${e.apiErrorMessage ? `<div style="font-size:11px;color:${FAIL};margin-top:3px;font-weight:600;background:${FAIL_BG};padding:4px 6px;border-radius:4px;">Server Error: ${this.esc(redactSensitiveText(e.apiErrorMessage))}</div>` : ''}
-        <div style="font-size:10px;color:${MUTED};margin-top:2px;">${e.timestamp}</div>
-      </div>`;
-          })
-          .join('');
-        return `<tr style="border-bottom:1px solid ${BORDER};"><td style="padding:8px;">
-      <div style="font-size:12px;font-weight:600;color:${INK};margin-bottom:4px;">${this.esc(testTitle)}</div>
-      ${details}
-    </td></tr>`;
+    const groups = groupBackgroundErrors(miscErrors.errors);
+    const shownGroups = groups.slice(0, MAX_ERROR_GROUPS);
+    const moreGroups = groups.length - shownGroups.length;
+    const moreErrors = groups.slice(MAX_ERROR_GROUPS).reduce((n, g) => n + g.count, 0);
+    const klassLabel = { unexpected: ['Unexpected', FAIL], rbac: ['Expected RBAC', WARN], noise: ['Known noise', MUTED] } as const;
+    const groupRows = shownGroups
+      .map((g) => {
+        const [label, color] = klassLabel[g.klass];
+        const what = g.endpoint ? `${g.method ? `${g.method} ` : ''}${g.endpoint}${g.status ? ` → ${g.status}` : ''}` : `[${g.type}] ${g.sample}`;
+        const tests = `${g.tests.slice(0, 3).map((t) => this.esc(this.truncate(t, 60))).join('; ')}${g.tests.length > 3 ? `; +${g.tests.length - 3} more` : ''}`;
+        return `<tr style="border-bottom:1px solid ${CANVAS_TINT};vertical-align:top;"><td align="right" style="padding:4px 8px;font-size:12px;font-weight:700;color:${INK};">${g.count}</td><td style="padding:4px 8px;font-size:10.5px;font-weight:700;color:${color};white-space:nowrap;">${label}</td><td style="padding:4px 8px;font-size:11px;color:${INK};word-break:break-all;">${this.esc(this.truncate(what, 110))}${g.serverMessage ? `<div style="font-size:10.5px;color:${SLATE};">${this.esc(this.truncate(g.serverMessage, 110))}</div>` : ''}</td><td style="padding:4px 8px;font-size:10.5px;color:${SLATE};">${tests}</td></tr>`;
       })
       .join('');
-
     const unexpectedInfra = miscErrors.errors.filter(
       (e) => !e.expectedReason && (e.statusCode ?? 0) >= 500
     ).length;
@@ -1865,14 +1976,13 @@ ${body}
       ${noiseCount > 0 ? this.signalChip(`${noiseCount} known background noise`, 'warn') : ''}
     </div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:4px;">${miscErrors.unexpectedErrors} unexpected + ${miscErrors.expectedRbacErrors} expected RBAC + ${noiseCount} known background noise = ${miscErrors.totalErrors} total. Only the unexpected ones count towards the health score and the "background errors" figures above; the other two are shown for completeness.</div>
-    <div style="font-size:11px;color:${SLATE};margin-bottom:12px;">Unexpected = review and raise bugs (app-level = likely a real app bug; infra-level = a 5xx from a dependency, often transient). Expected RBAC = correct app security behaviour. Known background noise = a side widget or a deliberate validation error the suite already knows about.</div>
-    <div style="margin-bottom:12px;">
-      <div style="font-size:12px;font-weight:600;color:${INK};margin-bottom:6px;">By Error Type</div>
-      <table role="presentation" width="220" cellpadding="0" cellspacing="0">${byTypeRows}</table>
-    </div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">By type: ${Object.entries(miscErrors.byType as Record<string, number>).map(([type, count]) => `${this.esc(type)} ${count}`).join(', ')}. Unexpected = review (app-level: likely an app bug; infra-level: a 5xx, often transient). Expected RBAC = correct security behaviour. Known noise = a side widget or deliberate validation error the suite already knows.</div>
     <div>
-      <div style="font-size:12px;font-weight:600;color:${INK};margin-bottom:6px;">Error Details</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">${errorRows}</table>
+      <div style="font-size:12px;font-weight:600;color:${INK};margin-bottom:6px;">Top errors, grouped by request</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr style="background:${CANVAS_TINT};"><th align="right" style="padding:4px 8px;font-size:10px;color:${MUTED};">Times</th><th align="left" style="padding:4px 8px;font-size:10px;color:${MUTED};">Kind</th><th align="left" style="padding:4px 8px;font-size:10px;color:${MUTED};">Request / error</th><th align="left" style="padding:4px 8px;font-size:10px;color:${MUTED};">Tests that hit it</th></tr>${groupRows}
+      </table>${moreGroups > 0 ? `<div style="font-size:11px;color:${SLATE};margin-top:6px;">+${moreGroups} more group${moreGroups === 1 ? '' : 's'} (${moreErrors} error${moreErrors === 1 ? '' : 's'}).</div>` : ''}
+      <div style="font-size:11px;color:${SLATE};margin-top:6px;">Every error, with its message and time, is in <code>background-errors.html</code> in the report artifact (the run page, Artifacts, <em>playwright-report-…</em>).</div>
     </div>
   </div>
 </td></tr>`;
@@ -1940,6 +2050,7 @@ ${body}
     const order = { high: 0, medium: 1, low: 2 };
     items.sort((a, b) => order[a.priority] - order[b.priority]);
     const rows = items
+      .slice(0, 8)
       .map((i) => {
         const color = i.priority === 'high' ? FAIL : i.priority === 'medium' ? WARN : SLATE;
         const textHtml = i.anchor ? `<a href="${this.escAttr(i.anchor)}" style="color:${INK};">${this.esc(i.text)}</a>` : this.esc(i.text);
@@ -1948,7 +2059,7 @@ ${body}
           ${textHtml}
         </div>`;
       })
-      .join('');
+      .join('') + (items.length > 8 ? `<div style="padding:5px 0;font-size:11.5px;color:${SLATE};">+${items.length - 8} more action items (the failing and flaky tests above).</div>` : '');
 
     return `
 <tr><td id="section-action-required" style="padding:8px 28px;">

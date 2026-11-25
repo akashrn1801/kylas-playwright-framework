@@ -6,6 +6,8 @@ export interface EmailPayload {
   cc?: string[];
   subject: string;
   html: string;
+  // plain-text alternative (multipart/alternative); optional so older callers keep working
+  text?: string;
   env: string;
 }
 
@@ -42,6 +44,7 @@ export class EmailAdapter {
       cc: payload.cc?.join(', '),
       subject: payload.subject,
       html: payload.html,
+      ...(payload.text ? { text: payload.text } : {}),
     });
     console.log(
       // WHY a count, not the addresses: recipients are CI secrets, and GitHub masks only the exact secret

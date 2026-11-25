@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RenewalFailure } from '../src/auth/renewalFailure';
+import { EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
 import { Def, SKIP_REASON_TEXT, ScenarioResult, ScenarioSpec, def, many, runScenario } from './lib/scenarioKit';
 import { replayBuild235 } from './lib/build235Fixture';
@@ -52,6 +53,8 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '22-flaky-above-budget', title: 'Four flaky tests (budget is 3); the rerun is off', expect: 'amber: flaky above the budget; the subject names 4 flaky', first: [...base(25), ...many(4, 'flaky', 'flaky')], rerun: false },
   { name: '23-flaky-at-budget-plus-rerun-recovery', title: 'Three flaky tests plus one that failed every attempt and passed on the rerun (D2)', expect: 'amber because of the D2 test, not because of the flaky ones', first: [...base(25), ...many(3, 'flaky', 'flaky'), def('ui/d2/d2.spec.ts', 'd2 failing test', 5, 'failed')], rerun: true },
   { name: '24-flaky-at-budget-not-rerun-by-default', title: 'Three flaky tests; the flaky rerun is off by default (RERUN_INCLUDE_FLAKY=false)', expect: 'green, "(3 flaky)" in the subject; no rerun table', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: true, includeFlaky: false },
+  { name: '25-many-flaky-over-the-card-cap', title: 'Fourteen flaky tests and ten background-error groups; no rerun', expect: 'amber (above the flaky budget); full cards for at most 10, the others listed by title; background errors grouped', first: [...base(30), ...many(14, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: false, unexpectedErrors: 60 },
+  { name: '26-big-failure-cluster', title: 'Twenty failures with the same error message (one cluster)', expect: 'red; one full card for the cluster, the others one line each ("same cause")', first: [...base(30), ...many(20, 'failed', 'same cause', 'ui/same/same.spec.ts', 10)], rerun: true, rerunResult: () => 'failed' },
   { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; the email must stay under 100 KB', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
 ];
 
@@ -276,6 +279,20 @@ export function invariants(s: ScenarioResult): Violation[] {
   // 11: health
   if (blockedLike && ctx.health && !ctx.health.notApplicable) bad('health-of-blocked-run', `a run where tests did not run has health ${ctx.health.score} ${ctx.health.label}`);
 
+  // 13: structure and size rules of commit 2 (items 7-10, 13, 14, 24)
+  const plain = new EmailTemplate().text(ctx);
+  const flat = s.html.replace(/\s+/g, ' ');
+  const iResult = s.html.indexOf('>Result<');
+  const iExec = s.html.indexOf('Executive Summary');
+  if (iResult < 0 || !s.html.includes('>Action<') || !s.html.includes('>Run<') || (iExec >= 0 && iResult > iExec)) bad('top-summary', 'the Result / Action / Run lines are missing or come after the Executive Summary');
+  if (!plain.startsWith(s.subject) || /<[a-z][^>]*>/i.test(plain) || !/\nResult: /.test(plain)) bad('text-part', 'the plain-text part does not start with the subject, has HTML in it or has no Result line');
+  if (Buffer.byteLength(plain) > 12 * 1024) bad('text-part-size', `the plain-text part is ${(Buffer.byteLength(plain) / 1024).toFixed(1)} KiB`);
+  const cardCount = (s.html.match(/<div id="test-/g) ?? []).length;
+  if (cardCount > 12 + (s.html.match(/<tr id="test-/g)?.length ?? 0)) bad('cards-capped', `${cardCount} detail cards in one email`);
+  if (/all-blob-reports\/resources|blob-report\/resources|error-context\.md|test-results\/[^"<\s]*\.zip/.test(flat)) bad('no-runner-paths', 'a runner-relative trace/snapshot path is in the email');
+  if (!/Result<\/strong>/.test(s.html.replace(/\s+/g, ' ')) && s.html.includes('>Result<')) bad('top-summary-shape', 'the Result line is not in the expected markup');
+  if (ctx.miscErrors && ctx.miscErrors.totalErrors > 0 && !s.html.includes('Top errors, grouped by request')) bad('background-errors-grouped', 'background errors are not shown as grouped');
+
   // 12: environment and branch
   if (!s.subject.includes(s.branch) || !s.subject.toUpperCase().includes(s.env.toUpperCase())) bad('subject-names-env-branch', `the subject does not name ${s.env} and ${s.branch}: ${s.subject}`);
   const prLike = ['sandbox', 'dev'].includes(s.branch);
@@ -286,7 +303,6 @@ export function invariants(s: ScenarioResult): Violation[] {
 
 // ── things this suite found that are not decided yet (listed, not failing) ──────────────────────────────────────
 export const KNOWN: Array<{ id: string; scenarios?: RegExp; reason: string }> = [
-  { id: 'size', reason: 'commit 2 of the email review (items 7-10, 13: error de-duplication, background-error summary, caps) is not done; the 100 KiB check fails for big runs until then' },
   { id: 'branch-advice', reason: 'item 16 (branch-aware wording: "ready for a PR to dev" on sandbox/dev, deployment advice only on stage/prod/main) is planned in commit 3, not done' },
 ];
 const isKnown = (v: Violation): string | null => KNOWN.find((k) => k.id === v.id && (!k.scenarios || k.scenarios.test(v.scenario)))?.reason ?? null;

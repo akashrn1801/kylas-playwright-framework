@@ -499,7 +499,8 @@ function main(): void {
   // 9. rerun shard (ADR 0015): one email, first run next to after-rerun; without a summary the email is exactly as before
   const rr = run.ctxFor(true);
   const baseHtml = tpl.html(rr);
-  const failedT = run.report.failedTests[0];
+  // the first test of the first cluster: the one whose full card the email shows (a cluster's other tests are one line each, 'same cause')
+  const failedT = rr.clusters?.[0]?.details[0]?.test ?? run.report.failedTests[0];
   const flakyT = run.report.flakyTests[0];
   const rerunSummary: RerunSummary = {
     version: 1, ran: true, maxTests: 60, retries: 0, includeFlaky: true, candidates: 3, recovered: 1, stillFailing: 1,
@@ -516,8 +517,9 @@ function main(): void {
   check(snapshot(withRerun) === snapshot(rr) && tpl.subject(withRerun) === tpl.subject(rr), 'rerun: verdict, health, counts, dedup key and subject do not change with the rerun section');
   check(/First run<\/th>/.test(rerunHtml) && /Final result<\/th>/.test(rerunHtml) && !/After rerun<\/th>/.test(rerunHtml), 'rerun: summary table has the columns "First run" and "Final result"');
   check(rerunHtml.includes('1 after the rerun') && rerunHtml.includes('Passed on rerun') && !rerunHtml.includes('recovered on rerun'), 'rerun: a test that passed on the rerun is counted as Passed ("1 after the rerun") and named "Passed on rerun"');
-  check(rerunHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final');
-  check((rerunHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
+  const cardsHtml = tpl.renderHtml(withRerun, 10);
+  check(cardsHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final (cards forced: html() drops cards when the email is too big for Gmail)');
+  check((cardsHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
   check(rerunHtml.includes('were not rerun') && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
   const capHtml = tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
   check(capHtml.includes('Not rerun: 90 failed/flaky tests is more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
