@@ -90,8 +90,8 @@ function main(): void {
   check(/Total.*943/.test(t) || t.includes('943 Total'), 'tiles: Total 943');
   check(/\b2 Failed\b/.test(t) && /\b1 Skipped\b/.test(t), 'tiles: Failed 2 and Skipped 1');
   check(940 + 2 + 1 === 943 && r.report.finalPassed + r.report.failed + (r.report.skipped - r.report.didNotRun) + r.report.didNotRun === r.report.total, 'tiles: Passed + Failed + Skipped (+ Did not run) add up to the total');
-  check(/\b6 Flaky passed on an in-job retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
-  check(/940 of 943 tests passed in the end: 6 after an in-job retry \(flaky\) and 2 after the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
+  check(/\b6 Flaky passed on a retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
+  check(/940 of 943 tests passed in the end: 6 passed on their retry and 2 only on the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
   const mr2 = rowOf('Meetings', 'RBAC');
   check(/Meetings RBAC 12 100% of 12 3 needed a retry or rerun/.test(mr2) && !html.includes('>Flaky</th>') && html.includes('>Pass (final)</th>'), 'modules: Meetings RBAC Pass (final) 12 with "3 needed a retry or rerun" inside it; no separate Flaky column', mr2);
   check(r.report.passRate === 98.8 && /98\.8%/.test(t) && /Passed first time/.test(t), 'signals kept: "Passed first time" 98.8%, and the Flaky Tests section still lists each flaky test with its error');
@@ -106,7 +106,11 @@ function main(): void {
   check(t.includes('2 failed every attempt and passed on the rerun, 6 passed on a retry'), 'item 6: ... and says how the 8 tests that were not failing at the end passed (2 on the rerun, 6 on a retry)');
 
   // ── item 11: per-test reasons ──
-  check(/6 failed\/flaky tests were not rerun; their first-run result stands/.test(t) && /6 — the run has failed tests: only those are rerun, flaky tests are not: /.test(t), 'item 11: "not rerun" names the reason that applied, with the tests');
+  check(/6 tests were not rerun: they had already passed on a retry \(/.test(t) && !/their first-run result stands|flaky tests are not/.test(t), 'item 11: "not rerun" names the reason that applied in plain words ("they had already passed on a retry"), with the tests');
+  check(/4 tests were rerun after the main run \(8m 44s\): 2 passed, 2 failed again\./.test(t), 'rerun section: one plain sentence says what was rerun and how it ended');
+  check(!/rerun shard|in-job retr|Retries tile counts/.test(t.slice(t.indexOf('Rerun of failed and flaky tests'), t.indexOf('Rerun of failed and flaky tests') + 3000)), 'rerun section: no "rerun shard", "in-job retries" or "the Retries tile counts" in the reader-facing text');
+  const rerunText = t.slice(t.indexOf('Rerun of failed and flaky tests'));
+  check(/First run Final result/.test(rerunText) && /Passed 932 940 \(6 after a retry, 2 after the rerun\)/.test(rerunText) && !/First run Final result/.test(t.slice(0, t.indexOf('Rerun of failed and flaky tests'))), 'rerun section: the First run -> Final result counts stay in the Rerun section (not in the donut card)');
   check(!t.includes('form-field suites are never rerun; when the run has failed tests'), 'item 11: the old sentence listing every possible reason is gone');
 
   // ── item 2: load signals ──

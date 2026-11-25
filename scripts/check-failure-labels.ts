@@ -570,10 +570,10 @@ function main(): void {
   ]);
   const viaRerunHtml = tpl.html({ ...rr, report: viaRerun, clusters: [], flakyFailureDetails: [] });
   check(viaRerun.totalRetries === 5 && viaRerun.retriesFromRerun === 2, 'parser: 3 flaky tests = 5 retries, 2 of them rerun-shard attempts', `${viaRerun.totalRetries}/${viaRerun.retriesFromRerun}`);
-  check(viaRerunHtml.includes('2 are rerun-shard attempts, 3 in-job retries'), 'email: the Retries tile says how many retries are rerun-shard attempts and how many are in-job retries');
-  check(!baseHtml.includes('are rerun-shard attempts'), 'email: a run without a rerun has no rerun-shard wording in the Retries tile');
-  check(rerunHtml.includes('the rerun shard itself ran with 0 in-job retries; the Retries tile counts that rerun attempt as one retry'), 'email: the rerun sentence separates the rerun shard\'s own retry budget from the Retries tile');
-  check(tpl.html({ ...rr, rerun: { ...rerunSummary, retries: 2 } }).includes('the rerun shard itself ran with 2 in-job retries'), 'email: the rerun sentence shows the real in-job retry budget');
+  check(viaRerunHtml.includes('2 from the rerun, 3 from retries'), 'email: the Retries tile says how many retries came from the rerun and how many from retries, in plain words');
+  check(!baseHtml.includes('from the rerun,'), 'email: a run without a rerun has no "from the rerun" in the Retries tile');
+  { const sec = rerunHtml.slice(rerunHtml.indexOf('id="section-rerun"')).replace(/<[^>]*>/g, ' '); check(/2 tests were rerun after the main run|1 test was rerun after the main run|tests were rerun after the main run/.test(sec) && !/rerun shard|in-job retr|Retries tile counts/.test(sec), 'email: the rerun section says what was rerun in plain words, without "rerun shard", "in-job retries" or "the Retries tile counts"'); }
+  check(/id="section-rerun"[\s\S]*First run<\/th>/.test(tpl.html({ ...rr, rerun: { ...rerunSummary, retries: 2 } })), 'email: the First run / Final result counts stay in the Rerun section');
   const unstableViaRerun = [...viaRerun.flakyTests, ...viaRerun.passedOnRerunTests];
   const flagOf = (t: string): boolean | undefined => unstableViaRerun.find((x) => x.title === t)?.recoveredOnRerun;
   check(flagOf('recovered') === true && flagOf('retry then rerun') === undefined && flagOf('retry only') === undefined, 'parser: only a test that failed every first-run attempt and passed on the rerun is "recoveredOnRerun" (Passed in the counts, listed as passed on rerun)');

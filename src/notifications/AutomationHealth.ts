@@ -290,14 +290,22 @@ export function healthNotApplicableReason(
  * there is only one verdict, not two independently-derived ones.
  */
 /**
- * The recommendation wording per branch (item 16, 2026-11-25): sandbox, dev and feature branches answer "is this ready for a PR to dev?";
- * qa, stage, prod and main keep the deployment wording (the run is the gate for a promotion or a release).
+ * The recommendation wording per branch, following the promotion chain (item 16, 2026-11-25; chain corrected the same day: dev used to say "PR to dev").
+ * Each branch names its own next step: sandbox and feature/* -> a PR to dev; dev -> promote to qa; qa -> promote to stage; stage -> promote to prod;
+ * prod -> promote to main; main (and any other branch) -> release/deployment wording. `next` is the phrase a check can look for.
  */
-export function branchAdvice(branch?: string): { ready: string; likely: string; notReady: string; review: string; prLike: boolean } {
-  const prLike = !!branch && (['sandbox', 'dev'].includes(branch) || branch.startsWith('feature/'));
-  return prLike
-    ? { ready: 'Ready for a PR to dev', likely: 'Likely ready for a PR to dev', notReady: 'Not ready for a PR to dev', review: 'Recommended — review before opening the PR', prLike }
-    : { ready: 'Deployment recommended', likely: 'Deployment likely safe', notReady: 'Deployment not recommended', review: 'Recommended — review before the next release', prLike };
+const PROMOTES_TO: Record<string, string> = { dev: 'qa', qa: 'stage', stage: 'prod', prod: 'main' };
+
+export function branchAdvice(branch?: string): { ready: string; likely: string; notReady: string; review: string; prLike: boolean; next: string } {
+  const prLike = !!branch && (branch === 'sandbox' || branch.startsWith('feature/'));
+  if (prLike) {
+    return { ready: 'Ready for a PR to dev', likely: 'Likely ready for a PR to dev', notReady: 'Not ready for a PR to dev', review: 'Recommended — review before opening the PR', prLike, next: 'PR to dev' };
+  }
+  const target = branch ? PROMOTES_TO[branch] : undefined;
+  if (target) {
+    return { ready: `Ready to promote to ${target}`, likely: `Likely ready to promote to ${target}`, notReady: `Not ready to promote to ${target}`, review: `Recommended — review before promoting to ${target}`, prLike, next: `promote to ${target}` };
+  }
+  return { ready: 'Deployment recommended', likely: 'Deployment likely safe', notReady: 'Deployment not recommended', review: 'Recommended — review before the next release', prLike, next: 'Deployment' };
 }
 
 export function computeOverallVerdict(
@@ -429,11 +437,13 @@ export function computeOverallVerdict(
       recoveredOnRerun > 0 ? `${recoveredOnRerun} ${nounFor(recoveredOnRerun, 'test')} failed every attempt and passed only on the rerun` : '',
       notVerified > 0 ? `${notVerified} ${nounFor(notVerified, 'test')} did not run in the first run` : '',
     ].filter(Boolean);
+    // how many tests the reasons are about, so "review it" / "review them" agrees with the count
+    const involved = (aboveBudget ? flakyTotal : 0) + recoveredOnRerun + notVerified;
     return {
       verdict: 'caution',
       bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
       bannerTone: 'warning',
-      headline: `${advice.likely} — but ${reasons.join('; ')}; review them`,
+      headline: `${advice.likely} — but ${reasons.join('; ')}; review ${involved === 1 ? 'it' : 'them'}`,
     };
   }
   if (health.label === 'Needs Attention') {

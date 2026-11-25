@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RenewalFailure } from '../src/auth/renewalFailure';
-import { EmailTemplate } from '../src/notifications/EmailTemplate';
+import { DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
 import { Def, SKIP_REASON_TEXT, ScenarioResult, ScenarioSpec, def, many, runScenario } from './lib/scenarioKit';
 import { replayBuild235 } from './lib/build235Fixture';
@@ -63,11 +63,14 @@ export const SCENARIOS: ScenarioSpec[] = [
 const BRANCHES: Array<{ branch: string; env: 'staging' | 'qa' | 'prod' }> = [
   { branch: 'sandbox', env: 'staging' }, { branch: 'dev', env: 'qa' }, { branch: 'qa', env: 'qa' },
   { branch: 'stage', env: 'staging' }, { branch: 'prod', env: 'prod' }, { branch: 'main', env: 'prod' },
+  { branch: 'feature/ui-polish', env: 'staging' },
 ];
 for (const b of BRANCHES) {
+  const id = b.branch.replace(/\//g, '-');
   SCENARIOS.push(
-    { name: `30-${b.branch}-clean`, title: `Branch ${b.branch} (${b.env}): all pass`, expect: 'green; advice fits the branch', env: b.env, branch: b.branch, first: base(30), rerun: false },
-    { name: `31-${b.branch}-failures`, title: `Branch ${b.branch} (${b.env}): 2 failed, 2 flaky`, expect: 'red; advice fits the branch', env: b.env, branch: b.branch, first: [...base(26), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky')], rerun: false }
+    { name: `32-${id}-needs-a-look`, title: `Branch ${b.branch} (${b.env}): 4 flaky tests, above the budget`, expect: 'amber; "likely ready" advice names the next step of this branch', env: b.env, branch: b.branch, first: [...base(26), ...many(4, 'flaky', 'flaky')], rerun: false },
+    { name: `30-${id}-clean`, title: `Branch ${b.branch} (${b.env}): all pass`, expect: 'green; advice fits the branch', env: b.env, branch: b.branch, first: base(30), rerun: false },
+    { name: `31-${id}-failures`, title: `Branch ${b.branch} (${b.env}): 2 failed, 2 flaky`, expect: 'red; advice fits the branch', env: b.env, branch: b.branch, first: [...base(26), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky')], rerun: false }
   );
 }
 
@@ -122,7 +125,7 @@ export function outcomeChart(html: string): ChartRead | null {
   const bar: Record<string, number> = {};
   const barHtml = end < 0 ? '' : html.slice(end, html.indexOf('</table>', end));
   for (const m of barHtml.matchAll(/title="([^":]+): (\d+)"/g)) bar[m[1]] = parseInt(m[2], 10);
-  const fig = /font-weight:700;line-height:1;color:#[0-9A-Fa-f]{6};">([\d.]+)%<\/div>/.exec(block);
+  const fig = /font-weight:700;line-height:1;color:#[0-9A-Fa-f]{6};(?:margin-top:\d+px;)?">([\d.]+)%<\/div>/.exec(block);
   return { legend, alt: alt ? alt.slice(1, 7).map(Number) : null, bar, figure: fig ? parseFloat(fig[1]) : null };
 }
 /** The Background Errors tiles (Unexpected, Expected RBAC, Known noise) and the bar under them. */
@@ -318,7 +321,7 @@ export function invariants(s: ScenarioResult): Violation[] {
   const execText = text(s.html);
   const execSentence = /(\d+) of (\d+) tests passed in the end: ([^—]*)—/.exec(execText);
   if (execSentence) {
-    const parts = [...execSentence[3].matchAll(/(\d+) (?:after an in-job retry|after the rerun|that did not run)/g)].reduce((n2, m) => n2 + parseInt(m[1], 10), 0);
+    const parts = [...execSentence[3].matchAll(/(\d+) (?:passed on (?:its|their) retry|passed only on the rerun|only on the rerun|that did not run)/g)].reduce((n2, m) => n2 + parseInt(m[1], 10), 0);
     if (r.firstRun.passed + parts !== r.finalPassed) bad('exec-parts-add-up', `the executive summary's breakdown does not add up: clean ${r.firstRun.passed} + ${parts} != ${r.finalPassed} ("${execSentence[3].trim()}")`);
   }
   const passedInEnd = /(\d+) of (\d+) tests passed in the end/.exec(text(s.html));
@@ -409,11 +412,31 @@ export function invariants(s: ScenarioResult): Violation[] {
   const bareArrows = [...plainText.matchAll(/[▲▼]([^▲▼]{0,90})/g)].map((m) => m[1]).filter((a) => !/(than last|than the last|slower than|worse|better)/.test(a));
   if (bareArrows.length > 0) bad('arrows-have-words', `an arrow without words: ${bareArrows[0].slice(0, 60)}`);
 
+  // reader-facing text never says "in-job retry" (it is "retry"); nor "rerun shard" outside the technical rerun-summary file names
+  const readerText = s.html.replace(/<[^>]*>/g, ' ');
+  if (/in-job/i.test(readerText)) bad('no-in-job-wording', `the email says "in-job": ${(/.{30}in-job.{20}/i.exec(readerText) ?? [''])[0]}`);
+  if (/rerun[- ]shard/i.test(readerText)) bad('no-rerun-shard-wording', `the email says "rerun shard": ${(/.{30}rerun[- ]shard.{20}/i.exec(readerText) ?? [''])[0]}`);
+
   // 12: environment and branch
   if (!s.subject.includes(s.branch) || !s.subject.toUpperCase().includes(s.env.toUpperCase())) bad('subject-names-env-branch', `the subject does not name ${s.env} and ${s.branch}: ${s.subject}`);
-  const prLike = ['sandbox', 'dev'].includes(s.branch);
-  if (prLike && /Deployment/i.test(verdict.headline)) bad('branch-advice', `the ${s.branch} email gives deployment advice ("${verdict.headline}") where the question is "ready for a PR to dev?"`);
-  if (!prLike && !blockedLike && ['prod', 'main'].includes(s.branch) && !/Deployment/i.test(verdict.headline)) bad('branch-advice-prod', `the ${s.branch} email gives no deployment advice`);
+  // the advice follows the promotion chain: each branch names its own next step (2026-11-25; dev used to say "PR to dev")
+  const NEXT: Record<string, string> = { sandbox: 'PR to dev', dev: 'promote to qa', qa: 'promote to stage', stage: 'promote to prod', prod: 'promote to main', main: 'Deployment' };
+  const nextStep = s.branch.startsWith('feature/') ? 'PR to dev' : NEXT[s.branch] ?? 'Deployment';
+  const adviceIn = (txt: string): string | undefined => /(PR to dev|promote to (?:qa|stage|prod|main)|Deployment)/.exec(txt)?.[1];
+  const adviceSeen = adviceIn(verdict.headline);
+  const needsAdvice = !blockedLike && (verdict.verdict === 'clear' || verdict.verdict === 'caution' || r.failed > 0);
+  if (needsAdvice && adviceSeen !== nextStep) bad('branch-next-step', `the ${s.branch} email says "${verdict.headline}" but this branch's next step is "${nextStep}"`);
+  if (adviceSeen && adviceSeen !== nextStep) bad('branch-wrong-step', `the ${s.branch} email names "${adviceSeen}" instead of "${nextStep}"`);
+  // "review it" / "review them" agrees with how many tests the reasons are about (A5-style singular/plural)
+  const reviewWord = /; review (it|them)$/.exec(verdict.headline)?.[1];
+  if (reviewWord) {
+    const involved = (r.firstRun.flaky > FLAKY_BUDGET ? r.firstRun.flaky : 0) + r.recoveredOnRerun + r.didNotRun + r.ranOnlyOnRerun;
+    if ((involved === 1) !== (reviewWord === 'it')) bad('review-singular-plural', `"${verdict.headline}" says "review ${reviewWord}" for ${involved} test(s)`);
+  }
+  const wrongSteps = ['PR to dev', 'promote to qa', 'promote to stage', 'promote to prod', 'promote to main', 'Deployment'].filter((x) => x !== nextStep);
+  const action = text(s.html).match(/Recommended — review before [^.<]*/)?.[0] ?? '';
+  if (action && !(nextStep === 'PR to dev' ? /opening the PR/ : nextStep === 'Deployment' ? /next release/ : new RegExp(`promoting to ${nextStep.replace('promote to ', '')}`)).test(action)) bad('branch-review-line', `the review line "${action}" does not name the next step "${nextStep}" of ${s.branch}`);
+  void wrongSteps;
   return v;
 }
 
@@ -446,7 +469,12 @@ function main(): void {
 
   if (outDir) {
     fs.mkdirSync(outDir, { recursive: true });
-    for (const s of results) fs.writeFileSync(path.join(outDir, `${s.spec.name}.html`), s.html);
+    // the real message refers to the donut as cid:<id> (an inline attachment); a browser cannot, so the review files carry the same PNG as a data URI
+    const review = (r: ScenarioResult): string => {
+      const png = r.ctx ? new EmailTemplate().chartAttachment(r.ctx) : null;
+      return png ? r.html.split(`cid:${DONUT_CID}`).join(`data:image/png;base64,${png.content.toString('base64')}`) : r.html;
+    };
+    for (const s of results) fs.writeFileSync(path.join(outDir, `${s.spec.name}.html`), review(s));
     fs.writeFileSync(path.join(outDir, 'matrix.md'), `${md}\n\n## Findings (known, not failing)\n${known.map((k) => `- ${k.scenario}: [${k.id}] ${k.message}`).join('\n')}\n`);
     const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const items = results

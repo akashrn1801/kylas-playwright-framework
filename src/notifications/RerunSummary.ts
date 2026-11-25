@@ -123,7 +123,7 @@ export const RERUN_LABEL: Record<RerunOutcome, string> = { passed: 'Passed', fai
 export const FINAL_LABEL: Record<RerunFinalStatus, string> = {
   passed: 'Passed on rerun',
   recovered: 'Passed on rerun',
-  flaky: 'Passed after an in-job retry',
+  flaky: 'Passed on retry',
   failed: 'Failed',
   'not-run': 'Did not run',
 };

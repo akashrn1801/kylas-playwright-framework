@@ -264,7 +264,7 @@ function main(): void {
     expectStatus(p, 'amber', 'Unstable', 'S3');
     eq(summaryTable(p.html), { Passed: [5, 10], Failed: [0, 0], Flaky: [5, 0], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S3: Final result: all 5 flaky tests passed in the end (3 on the rerun, 2 on their in-job retry only): Passed 5 -> 10, Flaky 0');
     const tt = testTable(p.html);
-    eq(tt['flaky 4'], ['Flaky', 'Failed', 'Passed after an in-job retry'], 'S3: flaky 4 shows Flaky -> Failed -> Passed after an in-job retry (the rerun failure never undoes its in-job pass)');
+    eq(tt['flaky 4'], ['Flaky', 'Failed', 'Passed on retry'], 'S3: flaky 4 shows Flaky -> Failed -> Passed on retry (the rerun failure never undoes its in-job pass)');
     eq(tt['flaky 1'], ['Flaky', 'Passed', 'Passed on rerun'], 'S3: flaky 1 shows Flaky -> Passed -> Passed on rerun');
     check(p.parsed.flaky === 2 && p.parsed.flakyPassedOnRerun === 3 && p.parsed.status === 'unstable', 'S3: 3 of 5 resolved: the 2 that failed on rerun stay flaky and keep the run Unstable');
     check(p.summary.stillFailing === 0 && p.summary.recovered === 3, 'S3: summary: 3 passed on the rerun, none still failing');

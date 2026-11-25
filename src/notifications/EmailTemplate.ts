@@ -21,7 +21,7 @@ import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
 import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
-import { be, nounFor, plural, wasWere } from './wording';
+import { nounFor } from './wording';
 import { DonutSegment, renderDonutPng } from './DonutChart';
 import { logger } from '../utils/logger';
 
@@ -414,6 +414,9 @@ export class EmailTemplate {
     .kpi { display: inline-block !important; width: 44% !important; box-sizing: border-box; vertical-align: top; }
     td[style*="28px"] { padding-left: 16px !important; padding-right: 16px !important; }
     table { width: 100% !important; max-width: 100% !important; }
+    table.lt { width: auto !important; }
+    .donut { width: 110px !important; height: 110px !important; }
+    .col { display: block !important; width: 100% !important; padding: 0 0 12px !important; box-sizing: border-box; }
     .mh { display: none !important; }
     .wr { white-space: normal !important; }
     td, div, a { overflow-wrap: break-word; }
@@ -463,7 +466,7 @@ ${body}
    */
   private polish(page: string): string {
     const ICONS: Array<[RegExp, string]> = [
-      [/^Executive Summary/, '📝'], [/^Run Details/, '🗂️'], [/^Rerun Summary/, '🔁'], [/^Run Summary/, '📊'], [/^Rerun of/, '🔁'], [/^Trend/, '📈'], [/^Flakiest/, '🔥'],
+      [/^Executive Summary/, '📝'], [/^How the run ended/, '🏁'], [/^Run Details/, '🗂️'], [/^Rerun Summary/, '🔁'], [/^Run Summary/, '📊'], [/^Rerun of/, '🔁'], [/^Trend/, '📈'], [/^Flakiest/, '🔥'],
       [/^Module Analytics/, '🧩'], [/^Slowest/, '🐢'], [/^CI Job Stats/, '⚙️'], [/^Load Signals/, '📡'], [/^Flaky Tests/, '🧪'], [/^Passed on rerun/, '✅'],
       [/^Skipped/, '⏭️'], [/^Action Required/, '🎯'], [/^Environment/, '🖥️'], [/^CI\/CD/, '🚀'], [/^Background/, '⚠️'], [/^Failed/, '❌'],
     ];
@@ -735,7 +738,8 @@ ${body}
     const afterRerun = report.recoveredOnRerun;
     const ranOnly = report.ranOnlyOnRerun;
     if (afterRetry + afterRerun + ranOnly > 0) {
-      const parts = [afterRetry > 0 ? `${afterRetry} after an in-job retry (flaky)` : '', afterRerun > 0 ? `${afterRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} that did not run in the first run, only on the rerun` : ''].filter(Boolean);
+      // plain words (2026-11-25): "1 passed on its retry and 1 only on the rerun", not "1 after an in-job retry (flaky) and 1 after the rerun"
+      const parts = [afterRetry > 0 ? `${afterRetry} passed on ${afterRetry === 1 ? 'its' : 'their'} retry` : '', afterRerun > 0 ? `${afterRerun} ${afterRetry > 0 ? '' : 'passed '}only on the rerun` : '', ranOnly > 0 ? `${ranOnly} that did not run in the first run, only on the rerun` : ''].filter(Boolean);
       sentences.push(`${report.finalPassed} of ${report.total} tests passed in the end: ${parts.join(' and ')} — not clean the first time.`);
     }
     if (drift?.occurred) {
@@ -913,7 +917,7 @@ ${body}
     // Rerun shard attempts are counted in the tile too (each rerun result is one more result of its test), so the
     // tile and the rerun section's "(N in-job retries)" (the rerun shard's own retry budget) are told apart here.
     const retriesSubtext = [
-      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} ${be(report.retriesFromRerun)} rerun-shard ${nounFor(report.retriesFromRerun, 'attempt')}, ${plural(report.totalRetries - report.retriesFromRerun, 'in-job retry', 'in-job retries')}` : '',
+      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} from the rerun, ${report.totalRetries - report.retriesFromRerun} from retries` : '',
       report.retriesFromCleanSweeps > 0
         ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
         : '',
@@ -947,7 +951,7 @@ ${body}
         label: 'Flaky',
         variant: report.firstRun.flaky > 0 ? 'warn' : 'neutral',
         anchor: report.flaky > 0 ? '#section-flaky-tests' : report.passedOnRerunTests.length > 0 ? '#section-passed-on-rerun' : undefined,
-        subtext: report.firstRun.flaky > 0 || report.recoveredOnRerun > 0 ? `passed on an in-job retry (inside Passed)${report.recoveredOnRerun > 0 ? `; +${report.recoveredOnRerun} passed only on the rerun` : ''}` : undefined,
+        subtext: report.firstRun.flaky > 0 || report.recoveredOnRerun > 0 ? `passed on a retry (inside Passed)${report.recoveredOnRerun > 0 ? `; +${report.recoveredOnRerun} passed only on the rerun` : ''}` : undefined,
       },
       { value: this.formatDuration(report.duration), label: 'Duration' },
       { value: String(report.modules.length), label: 'Modules' },
@@ -985,7 +989,6 @@ ${body}
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Run Summary</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${primaryRow}</table>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${secondaryRow}</table>
-  ${this.buildRerunSummaryRow(ctx)}
   ${this.buildOutcomeChart(ctx)}
   ${signalChips ? `<div style="margin-top:10px;">${signalChips}</div>` : ''}
 </td></tr>`;
@@ -1051,55 +1054,80 @@ ${body}
     return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;border-radius:4px;"><tr>${cells}</tr></table>`;
   }
 
+  /**
+   * "How the run ended" (2026-11-25): one card with two halves. Left (about 40%): the donut, "99.7% first time" under it and a compact legend with each
+   * count right next to its label. Right (about 60%): the Rerun Summary tiles, a grid of 3 per row (only when a rerun ran; without one the donut and
+   * the legend are centred and fill the card). The segmented bar runs under both. A two-column table (no flex or grid); on phones the halves stack, donut first (`.col`).
+   */
   private buildOutcomeChart(ctx: EmailContext): string {
-    if (!this.chartShown(ctx)) return '';
+    // nothing verified (blocked, incomplete, empty run): no chart, but a rerun that ran still shows its tiles
+    if (!this.chartShown(ctx)) return ctx.rerun?.ran ? `\n  <div style="margin-top:14px;">${this.buildRerunSummaryTiles(ctx)}</div>` : '';
     const o = this.outcomeShares(ctx.report);
     const segs = this.chartSegments(o);
     const png = this.chartPng(ctx);
+    const tiles = this.buildRerunSummaryTiles(ctx);
     const legend = segs
-      .map((x) => `<tr style="font-size:12px;${x.value === 0 ? `color:${MUTED};` : ''}"><td style="padding:3px 0;"><span class="sw" style="display:inline-block;width:10px;height:10px;background:${x.color};"></span>&nbsp; ${x.label}</td><td style="padding:3px 0 3px 14px;font-weight:700;text-align:right;">${x.value}</td></tr>`)
+      .map((x) => `<tr style="font-size:12px;${x.value === 0 ? `color:${MUTED};` : ''}"><td style="padding:3px 0;"><span class="sw" style="display:inline-block;width:10px;height:10px;background:${x.color};"></span>&nbsp; ${x.label}</td><td style="padding:3px 0 3px 10px;font-weight:700;">${x.value}</td></tr>`)
       .join('');
     // "99.7% first time" is text, not part of the image: readable, selectable, and still there when images are blocked
     const figureColor = o.passRate >= 90 ? SUCCESS : o.passRate >= 75 ? WARN : FAIL;
     const image = png
-      ? `<td width="186" valign="middle" style="padding:0 16px 0 0;"><img src="cid:${DONUT_CID}" width="170" height="170" alt="${this.escAttr(this.chartAlt(o))}" style="display:block;border:0;width:170px;height:170px;"></td>`
+      ? `<img src="cid:${DONUT_CID}" width="170" height="170" alt="${this.escAttr(this.chartAlt(o))}" class="donut" style="display:block;border:0;width:170px;height:170px;margin:0 auto;">`
       : '';
+    // Left half: a nested two-column table, the donut with "99.7% first time" under it, then the legend beside it. Both halves are vertically centred.
+    // On phones the donut shrinks (`.donut`) so the pair still fits side by side at 375 px; the outer halves stack (`.col`).
+    const donutCell = `<td class="dn" valign="middle" style="padding:0 14px 0 0;text-align:center;">${image}<div style="font-size:30px;font-weight:700;line-height:1;color:${figureColor};margin-top:${png ? '8px' : '0px'};">${o.passRate}%</div><div style="font-size:11px;color:${SLATE};margin:2px 0 0;">first time</div></td>`;
+    const legendCell = `<td class="dn" valign="middle"><table class="lt" role="presentation" cellpadding="0" cellspacing="0">${legend}</table></td>`;
     return `
-  <table id="section-outcome-chart" role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;"><tr>
-    ${image}<td valign="middle"><div style="font-size:30px;font-weight:700;line-height:1;color:${figureColor};">${o.passRate}%</div><div style="font-size:11px;color:${SLATE};margin:2px 0 8px;">first time</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${legend}</table></td>
-  </tr></table>
-  ${this.segmentedBar(segs, o.total)}`;
+  <div style="margin-top:14px;border:1px solid ${BORDER};border-radius:8px;padding:14px 16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:10px;">How the run ended</div>
+    <table id="section-outcome-chart" role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td class="col" width="${tiles ? '40%' : '100%'}" valign="middle" style="padding:0 ${tiles ? '12px' : '0'} 0 0;"><table class="lt" role="presentation" ${tiles ? '' : 'align="center" style="margin:0 auto;" '}cellpadding="0" cellspacing="0"><tr>${donutCell}${legendCell}</tr></table></td>${tiles ? `
+      <td class="col" width="60%" valign="middle" style="padding:0 0 0 12px;">${tiles}</td>` : ''}
+    </tr></table>
+    ${this.segmentedBar(segs, o.total)}
+  </div>`;
   }
 
   /**
-   * "Rerun Summary" tiles under the Run Summary tiles, same tile design (2026-11-25): Rerun (tests rerun), Passed on rerun, Still failing, Not rerun (the
-   * reason as subtext: a flaky test passed on its retry and is not rerun, a failed test of a shared-config suite is never rerun), Rerun duration.
-   * Only when a rerun ran; nothing otherwise. The numbers are the rerun summary's own, the same rows the Rerun table below lists.
+   * "Rerun Summary" tiles, same tile design (2026-11-25), as a grid of 3 per row inside the right half of the "How the run ended" card: Rerun (tests
+   * rerun), Passed on rerun, Still failing, Not rerun (the reason as subtext: a flaky test passed on its retry and is not rerun, a failed test of a
+   * shared-config suite is never rerun), Rerun duration. Only when a rerun ran; nothing otherwise. The numbers are the rerun summary's own rows, the same
+   * ones the Rerun section's list shows.
    */
-  private buildRerunSummaryRow(ctx: EmailContext): string {
+  private buildRerunSummaryTiles(ctx: EmailContext): string {
     const rr = ctx.rerun;
     if (!rr || !rr.ran) return '';
-    // from the rows themselves, so they agree with the Rerun table (a test that did not run first and passed on the rerun is a pass too)
+    // from the rows themselves, so they agree with the Rerun section's list (a test that did not run first and passed on the rerun is a pass too)
     const passedOnRerun = rr.rows.filter((x) => x.rerun === 'passed').length;
     const stillFailing = rr.rows.filter((x) => x.rerun === 'failed').length;
     const flakyTitles = new Set(ctx.report.flakyTests.map((t) => t.title));
     const reasons = [...new Set(rr.excluded.map((e) => (flakyTitles.has(e.title) ? 'passed on retry' : e.reason)))].join('; ');
-    return `
-  <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:12px 0 8px;">Rerun Summary</div>
-  <table id="section-rerun-summary" role="presentation" width="100%" cellpadding="0" cellspacing="0">${this.kpiRow([
-      { value: String(rr.rows.length), label: 'Rerun' },
-      { value: String(passedOnRerun), label: 'Passed on rerun', variant: passedOnRerun > 0 ? 'success' : 'neutral' },
-      { value: String(stillFailing), label: 'Still failing', variant: stillFailing > 0 ? 'fail' : 'neutral' },
-      { value: String(rr.excluded.length), label: 'Not rerun', subtext: rr.excluded.length > 0 ? this.esc(this.truncate(reasons, 60)) : undefined },
-      { value: this.formatDuration(rr.durationMs ?? 0), label: 'Rerun duration' },
-    ])}</table>`;
+    return `<div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Rerun Summary</div>
+      <table id="section-rerun-summary" role="presentation" width="100%" cellpadding="0" cellspacing="0">${this.kpiRow(
+        [
+          { value: String(rr.rows.length), label: 'Rerun' },
+          { value: String(passedOnRerun), label: 'Passed on rerun', variant: passedOnRerun > 0 ? 'success' : 'neutral' },
+          { value: String(stillFailing), label: 'Still failing', variant: stillFailing > 0 ? 'fail' : 'neutral' },
+        ],
+        3
+      )}${this.kpiRow(
+        [
+          { value: String(rr.excluded.length), label: 'Not rerun', subtext: rr.excluded.length > 0 ? this.esc(this.truncate(reasons, 60)) : undefined },
+          { value: this.formatDuration(rr.durationMs ?? 0), label: 'Rerun duration' },
+        ],
+        3
+      )}</table>`;
   }
 
   private kpiRow(
-    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn' | 'muted'; subtext?: string; anchor?: string }>
+    tiles: Array<{ value: string; label: string; variant?: 'neutral' | 'success' | 'fail' | 'warn' | 'muted'; subtext?: string; anchor?: string }>,
+    columns = tiles.length
   ): string {
-    const widthPct = Math.floor(100 / tiles.length);
-    return `<tr>${tiles.map((t) => this.kpiTile(t.value, t.label, t.variant ?? 'neutral', t.subtext, widthPct, t.anchor)).join('')}</tr>`;
+    const widthPct = Math.floor(100 / columns);
+    // a short last row keeps the grid's column width: the missing tiles are empty cells
+    const filler = '<td style="padding:0;"></td>'.repeat(Math.max(0, columns - tiles.length));
+    return `<tr>${tiles.map((t) => this.kpiTile(t.value, t.label, t.variant ?? 'neutral', t.subtext, widthPct, t.anchor)).join('')}${filler}</tr>`;
   }
 
   // WHY anchor is a best-effort <a> wrapper, not the only way to find the
@@ -1864,6 +1892,37 @@ ${body}
 
   // ONE email at the end of the run: the first run next to the result after the rerun shard (a rerun pass is
   // never a clean pass: a recovered test counts as Flaky), then every rerun test with first -> rerun -> final.
+  /** The First run -> Final result counts; '' when no rerun ran. They stay in the Rerun section (next to its per-test list). */
+  private rerunCountsTable(rerun: RerunSummary | null | undefined): string {
+    if (!rerun || !rerun.ran) return '';
+    const f = rerun.firstRun;
+    const a = rerun.afterRerun;
+    const ranOnly = rerun.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length;
+    // failed on every first attempt, passed on the rerun (the flaky ones that also passed on the rerun are inside f.flaky)
+    const passedOnRerun = rerun.rows.filter((r) => r.first === 'failed' && r.final === 'passed').length;
+    const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
+    const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
+    const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>${th('', 'left')}${th('First run')}${th('Final result')}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${f.flaky + passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[f.flaky > 0 ? `${f.flaky} after a retry` : '', passedOnRerun > 0 ? `${passedOnRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`)}</tr>
+      <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
+      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${f.flaky > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(the ${f.flaky} ended Passed)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
+      ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
+      <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
+      <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
+    </table>`;
+  }
+
+  /** Why a failed or flaky test was not rerun, in plain words (the selector's own reason is a technical phrase). */
+  private notRerunWhy(reason: string, n: number): string {
+    if (/flaky tests are not/i.test(reason)) return n === 1 ? 'it had already passed on its retry' : 'they had already passed on a retry';
+    if (/shared-config|formfields|never rerun/i.test(reason)) return n === 1 ? 'its suite changes shared account settings, so it is never rerun' : 'their suites change shared account settings, so they are never rerun';
+    return reason;
+  }
+
+  // The Rerun section in plain words (2026-11-25): what was rerun and how it ended, the First run -> Final result counts, the list (test, first run ->
+  // rerun -> final), and which tests were not rerun and why. The Rerun Summary tiles are in the "How the run ended" card.
   private buildRerunSummarySection(rerun: RerunSummary | null | undefined): string {
     if (!rerun) return '';
     // Nothing failed or was flaky: no rerun was needed and there is nothing to explain, so the email has no rerun section.
@@ -1891,24 +1950,7 @@ ${body}
   </div>
 </td></tr>`;
     }
-    const f = rerun.firstRun;
-    const a = rerun.afterRerun;
-    const ranOnly = rerun.rows.filter((r) => r.first === 'not-run' && r.final === 'passed').length;
-    // failed on every first attempt, passed on the rerun (the flaky ones that also passed on the rerun are inside f.flaky)
-    const passedOnRerun = rerun.rows.filter((r) => r.first === 'failed' && r.final === 'passed').length;
     const th = (t: string, align = 'center'): string => `<th style="padding:5px 8px;text-align:${align};font-size:11px;color:${SLATE};font-weight:600;border-bottom:1px solid ${BORDER};">${t}</th>`;
-    const cell = (v: string, color = INK): string => `<td style="padding:5px 8px;text-align:center;font-size:12.5px;font-weight:700;color:${color};">${v}</td>`;
-    const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
-    const summaryTable = `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-      <tr>${th('', 'left')}${th('First run')}${th('Final result')}</tr>
-      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${f.flaky + passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[f.flaky > 0 ? `${f.flaky} after a retry` : '', passedOnRerun > 0 ? `${passedOnRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`, SUCCESS)}</tr>
-      <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
-      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${f.flaky > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(the ${f.flaky} ended Passed)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
-      ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
-      <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
-      <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
-    </table>`;
     // Size: still-failing tests first, then the others; the rest are counted (the rerun-summary.json of the run has every row).
     const MAX_RERUN_ROWS = 8;
     const rank = (r: RerunTestRow): number => (r.final === 'failed' ? 0 : r.final === 'passed' ? 1 : 2);
@@ -1931,26 +1973,35 @@ ${body}
       <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
     </table>${rerun.rows.length > MAX_RERUN_ROWS ? `<div style="font-size:11px;color:${SLATE};margin-top:6px;">+${rerun.rows.length - MAX_RERUN_ROWS} more rerun tests (every row is in rerun-summary.json of the run).</div>` : ''}`
         : '';
-    // WHY one line per reason with the tests named (2026-11-24, item 11): the old sentence listed every possible reason, so
-    // a reader could not tell which one applied to which test. The reasons are the selector's own, per test.
+    // One plain sentence per reason with the tests named (items 11 and the 2026-11-25 wording): which tests were not rerun, and why.
     const byReason = new Map<string, string[]>();
     for (const e of rerun.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) ?? []), e.title]);
     const excluded =
       rerun.excluded.length > 0
-        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky ${nounFor(rerun.excluded.length, 'test')} ${wasWere(rerun.excluded.length)} not rerun; their first-run result stands:${[...byReason]
+        ? `<div style="font-size:11.5px;color:${SLATE};margin-top:8px;">${[...byReason]
             .map(([reason, titles]) => {
+              const why = this.notRerunWhy(reason, titles.length);
+              if (titles.length === 1) return `<div style="margin-top:3px;">${this.esc(this.truncate(titles[0], 90))} was not rerun: ${this.esc(why)}.</div>`;
               const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
-              return `<div style="margin-top:3px;">${titles.length} &mdash; ${this.esc(reason)}: ${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}</div>`;
+              return `<div style="margin-top:3px;">${titles.length} tests were not rerun: ${this.esc(why)} (${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}).</div>`;
             })
             .join('')}</div>`
         : '';
-    const took = rerun.durationMs !== undefined ? ` in ${this.formatDuration(rerun.durationMs)}` : '';
+    const n = rerun.rows.length;
+    const passed = rerun.rows.filter((r) => r.rerun === 'passed').length;
+    const failedAgain = rerun.rows.filter((r) => r.rerun === 'failed').length;
+    const took = rerun.durationMs !== undefined ? ` (${this.formatDuration(rerun.durationMs)})` : '';
+    const outcome = [passed > 0 ? `${passed} passed` : '', failedAgain > 0 ? `${failedAgain} failed again` : ''].filter(Boolean).join(', ');
+    const sentence =
+      n === 1
+        ? `1 test was rerun after the main run${took}, and it ${passed === 1 ? 'passed' : failedAgain === 1 ? 'failed again' : 'did not finish'}.`
+        : `${n} tests were rerun after the main run${took}: ${outcome || 'none finished'}.`;
     return `
 <tr><td id="section-rerun" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
     ${heading}
-    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky ${nounFor(rerun.rows.length, 'test')} ${wasWere(rerun.rows.length)} rerun once${took} (the rerun shard itself ran with ${plural(rerun.retries, 'in-job retry', 'in-job retries')}; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. "Final result" counts every test that ultimately passed as Passed: clean, after an in-job retry (flaky) or on the rerun. "First run" and the "Passed first time" tile keep the first attempt, and the Flaky Tests section still lists each flaky test with its error.${origin}</div>
-    ${summaryTable}
+    <div style="font-size:12px;color:${INK};margin-bottom:8px;">${sentence}${origin}</div>
+    <div style="margin-bottom:10px;">${this.rerunCountsTable(rerun)}</div>
     ${testTable}
     ${excluded}
   </div>
@@ -2000,7 +2051,7 @@ ${body}
       heading: 'Passed on rerun',
       tests: ctx.report.passedOnRerunTests,
       details: ctx.rerunPassedDetails ?? [],
-      note: 'Counted as Passed after the rerun; each failed on every first attempt or passed only on an in-job retry, so the run is not a clean pass.',
+      note: 'Counted as Passed after the rerun; each failed on every first attempt or passed only on a retry, so the run is not a clean pass.',
     });
   }
 

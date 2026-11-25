@@ -91,7 +91,7 @@ check(real.subject === '❌ STAGING sandbox #235: 2 failed, 940 passed (6 flaky,
 check(/Not ready for a PR to dev/.test(flat) && !/Deployment (not|likely|recommended)/.test(flat), 'item 16: the sandbox email says "Not ready for a PR to dev", never deployment advice');
 const prod = replayBuild235({ blockedBySession: undefined });
 const prodText = branchAdviceFor('prod');
-check(/Deployment/.test(prodText.notReady) && /Deployment/.test(prodText.ready) && /PR to dev/.test(branchAdviceFor('sandbox').ready) && /PR to dev/.test(branchAdviceFor('feature/x').ready) && /PR to dev/.test(branchAdviceFor('dev').ready) && /Deployment/.test(branchAdviceFor('main').ready) && /Deployment/.test(branchAdviceFor('qa').ready), 'item 16: PR wording on sandbox, dev and feature branches; deployment wording on qa, stage, prod and main');
+check(/promote to main/.test(prodText.ready) && /promote to main/.test(prodText.notReady) && /PR to dev/.test(branchAdviceFor('sandbox').ready) && /PR to dev/.test(branchAdviceFor('feature/x').ready) && /promote to qa/.test(branchAdviceFor('dev').ready) && !/PR to dev/.test(branchAdviceFor('dev').ready) && /promote to stage/.test(branchAdviceFor('qa').ready) && /promote to prod/.test(branchAdviceFor('stage').ready) && /Deployment/.test(branchAdviceFor('main').ready) && /Deployment/.test(branchAdviceFor('hotfix/x').ready), 'item 16: the advice follows the promotion chain: sandbox and feature/* PR to dev, dev promote to qa, qa to stage, stage to prod, prod to main, main deployment');
 void prod;
 // 17: copy-paste rerun command per failed test
 const cmds = flat.match(/ENV=staging npx playwright test tests\/[^\s]+\.spec\.ts:\d+ --project=chromium --retries=0/g) ?? [];

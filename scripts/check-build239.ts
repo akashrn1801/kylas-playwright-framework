@@ -79,7 +79,7 @@ function main(): void {
 
   const rt = rerunTiles(r.html);
   check(!!rt && rt['Rerun']?.value === '1' && rt['Passed on rerun']?.value === '1' && rt['Still failing']?.value === '0' && rt['Not rerun']?.value === '1' && rt['Not rerun']?.sub === 'passed on retry' && rt['Rerun duration']?.value === '1m 4s', 'Rerun Summary tiles for #239: Rerun 1 | Passed on rerun 1 | Still failing 0 | Not rerun 1 (passed on retry) | 1m 4s', JSON.stringify(rt));
-  check(r.html.indexOf('Run Summary</div>') < r.html.indexOf('Rerun Summary</div>') && r.html.indexOf('Rerun Summary</div>') < r.html.indexOf('id="section-rerun"'), 'Rerun Summary tiles sit directly under the Run Summary tiles');
+  check(r.html.indexOf('Run Summary</div>') < r.html.indexOf('How the run ended</div>') && r.html.indexOf('How the run ended</div>') < r.html.indexOf('Rerun Summary</div>') && r.html.indexOf('Rerun Summary</div>') < r.html.indexOf('id="section-rerun"'), 'Rerun Summary tiles are the right half of the "How the run ended" card, under the Run Summary tiles');
 
   // ── piece A (visual polish): the colour system, contrast, mobile rules ──
   const src = fs.readFileSync(path.join(__dirname, '../src/notifications/EmailTemplate.ts'), 'utf8');
@@ -103,6 +103,16 @@ function main(): void {
   check(!/class="tv"[^>]*><code>/.test(r.html) && !/class="tv"[^>]*><a[^>]*><code>/.test(r.html) && (r.html.match(/class="tv"/g) ?? []).length >= 14, 'polish: tile numbers are bold sans-serif text, not <code> / monospace');
   check(/@media only screen and \(max-width: 480px\)/.test(r.html) && (r.html.match(/class="kpi"/g) ?? []).length >= 14 && /class="mh"/.test(r.html), 'polish: the mobile rules are there (tiles two per row, side padding, secondary table columns hidden at 375 px)');
   check(!/<script|display:flex|display:grid|position:(?:absolute|fixed)/i.test(r.html), 'polish: no script, flex, grid or absolute positioning in the email');
+
+  // ── wording: singular, and plain words for the retry (2026-11-25) ──
+  check(r.ctx.verdict?.headline === 'Likely ready for a PR to dev — but 1 test failed every attempt and passed only on the rerun; review it', 'wording: "1 test ... passed only on the rerun; review it" (singular), not "review them"', r.ctx.verdict?.headline);
+  check(/942 of 943 tests passed in the end: 1 passed on its retry and 1 only on the rerun — not clean the first time\./.test(t) && !/in-job retry \(flaky\)/.test(t.slice(t.indexOf('Executive Summary'), t.indexOf('Run Details'))), 'wording: the summary says "1 passed on its retry and 1 only on the rerun", not "after an in-job retry (flaky)"');
+  check(/Likely ready for a PR to dev/.test(t) && !/promote to/.test(t), 'branch: the sandbox build #239 email names the PR to dev');
+
+  // ── layout of "How the run ended": legend beside the donut, both halves vertically centred ──
+  const card = r.html.slice(r.html.indexOf('id="section-outcome-chart"'), r.html.indexOf('id="section-outcome-chart"') + 4000);
+  const dn = card.match(/<td class="dn" valign="middle"/g) ?? [];
+  check(dn.length === 2 && card.indexOf('<img') < card.lastIndexOf('class="lt"') && /<td class="col" width="40%" valign="middle"/.test(card) && /<td class="col" width="60%" valign="middle"/.test(card), 'layout: the legend sits beside the donut (one nested row, donut first) and both outer halves (40% / 60%) are vertically centred');
 
   process.stdout.write(`\ncheck:build239 — ${total - failed}/${total} checks pass\n`);
   if (failed > 0) process.exit(1);
