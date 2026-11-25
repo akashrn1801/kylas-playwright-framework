@@ -3787,6 +3787,12 @@ export class LeadsPage extends BasePage {
       this.viewLeadLink().click(),
     ]);
     try {
+      // Evidence for the next failure: which request fills this list and what it answered (the e-mail filter may differ from the API search)
+      listTab.on('response', (res) => {
+        if (/\/v1\/search\/lead/.test(res.url()) && res.request().method() === 'POST') {
+          logger.info(`View Lead list request: POST ${res.url()} -> HTTP ${res.status()} body ${(res.request().postData() ?? '').slice(0, 300)}`);
+        }
+      });
       await listTab.waitForLoadState('domcontentloaded');
       await expect(listTab.locator('#totalRecords').first()).toBeVisible({ timeout: config.timeouts.navigation });
       const checkboxIds = await listTab

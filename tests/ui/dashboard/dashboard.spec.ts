@@ -1,4 +1,4 @@
-import { test, expect } from '../../../src/fixtures/index';
+import { test, expect, PRIMARY_WRITER_TAG } from './dashboardPrimary';
 import { DashboardPage, DEFAULT_DASHBOARD_SECTIONS } from '../../../src/modules/dashboard/DashboardPage';
 import {
   generateDashboardData,
@@ -717,7 +717,7 @@ test.describe('Dashboard', () => {
     logger.success('DB13 passed');
   });
 
-  test('@regression DB14 mark a dashboard as Primary, reload, confirm active + option disabled', async ({
+  test('@regression DB14 mark a dashboard as Primary, reload, confirm active + option disabled', { tag: PRIMARY_WRITER_TAG }, async ({
     adminPage,
   }) => {
     test.setTimeout(480000);
@@ -734,7 +734,10 @@ test.describe('Dashboard', () => {
       // IS the behavior under test.
       await dashboardPage.reloadPage();
       await dashboardPage.assertDashboardLoaded();
-      expect(await dashboardPage.getCurrentDashboardName()).toBe(data.name);
+      expect(
+        await dashboardPage.getCurrentDashboardName(),
+        `after marking "${data.name}" Primary (mark_as_preferred answered 2xx) and reloading, the app opened another dashboard; DB14 held the Primary lock exclusively, so no other dashboard test of this file was running`
+      ).toBe(data.name);
       expect(await dashboardPage.isMarkAsPrimaryDisabled()).toBe(true);
     } finally {
       // WHY a plain, unconditional delete — no explicit "restore Default
