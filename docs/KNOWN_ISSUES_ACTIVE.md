@@ -2,8 +2,8 @@
 
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
-> **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 4a85ad7
+> **Size budget:** 31k chars (hard cap 60k; raised from 30k on 2026-11-25 for KI-73)
+> **Last verified:** 2026-11-25 @ 0fec7ea
 
 **Rules.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -130,6 +130,11 @@
 ### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md)
 
 ---
+
+### KI-73 — Call-log UI tests pick a random existing lead/contact/deal
+- **Status:** open · **Since:** 2026-11-25
+- **What:** `fillCreateForm(data)` without an owned name takes a random existing entity (`searchAndSelectEntity` no-term path). Staging 2026-11-25: two different random leads had no phone ("No options" at Phone Number), so CL10 stopped before its date step; CL10 now creates its own lead. About 5 other `call-logs.spec.ts` tests and the entity-type helpers still pick at random (rbac tests already create owned leads).
+- **Next check:** give each create test a run-owned entity, like `createOwnedLead` in `call-logs.rbac.spec.ts`.
 
 ## B. Infrastructure and CI
 
