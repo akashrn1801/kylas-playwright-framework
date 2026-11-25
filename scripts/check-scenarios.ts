@@ -293,6 +293,13 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (!/Result<\/strong>/.test(s.html.replace(/\s+/g, ' ')) && s.html.includes('>Result<')) bad('top-summary-shape', 'the Result line is not in the expected markup');
   if (ctx.miscErrors && ctx.miscErrors.totalErrors > 0 && !s.html.includes('Top errors, grouped by request')) bad('background-errors-grouped', 'background errors are not shown as grouped');
 
+  // 14: commit 3 (items 19-21): one labelled time zone, readable durations, words with every arrow
+  const plainText = s.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  if (/\bUTC\b/.test(plainText)) bad('one-time-zone', 'the email shows a UTC time next to IST ones');
+  if (/\b\d{3,}s\b/.test(plainText) || /\b\d{3,}m\b/.test(plainText)) bad('duration-format', `a duration is not "6m 10s": ${(plainText.match(/\b\d{3,}[sm]\b/g) ?? []).join(', ')}`);
+  const bareArrows = [...plainText.matchAll(/[▲▼]([^▲▼]{0,90})/g)].map((m) => m[1]).filter((a) => !/(than last|than the last|slower than|worse|better)/.test(a));
+  if (bareArrows.length > 0) bad('arrows-have-words', `an arrow without words: ${bareArrows[0].slice(0, 60)}`);
+
   // 12: environment and branch
   if (!s.subject.includes(s.branch) || !s.subject.toUpperCase().includes(s.env.toUpperCase())) bad('subject-names-env-branch', `the subject does not name ${s.env} and ${s.branch}: ${s.subject}`);
   const prLike = ['sandbox', 'dev'].includes(s.branch);
@@ -303,7 +310,6 @@ export function invariants(s: ScenarioResult): Violation[] {
 
 // ── things this suite found that are not decided yet (listed, not failing) ──────────────────────────────────────
 export const KNOWN: Array<{ id: string; scenarios?: RegExp; reason: string }> = [
-  { id: 'branch-advice', reason: 'item 16 (branch-aware wording: "ready for a PR to dev" on sandbox/dev, deployment advice only on stage/prod/main) is planned in commit 3, not done' },
 ];
 const isKnown = (v: Violation): string | null => KNOWN.find((k) => k.id === v.id && (!k.scenarios || k.scenarios.test(v.scenario)))?.reason ?? null;
 

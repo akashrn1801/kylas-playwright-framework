@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { buildWorstCaseFixture, loadFixture, replayBuild235 } from './lib/build235Fixture';
+import { branchAdvice as branchAdviceFor } from '../src/notifications/AutomationHealth';
+import { buildKnownIssuesIndex, locateKnownIssues } from '../src/notifications/KnownIssuesIndex';
 import { EmailTemplate } from '../src/notifications/EmailTemplate';
 import { BACKGROUND_ERRORS_FILE, groupBackgroundErrors, normalizeEndpoint, writeBackgroundErrorsPage } from '../src/notifications/BackgroundErrors';
 
@@ -80,6 +82,41 @@ check(Buffer.byteLength(text) < 12 * 1024, `item 24: the text part is small (${k
 check(/FAILED \(2\)/.test(text) && /FLAKY \/ PASSED ON RERUN \(8\)/.test(text), 'item 24: the text part lists the failed and the flaky tests');
 const worstText = tpl.text(worst.ctx);
 check(Buffer.byteLength(worstText) < 12 * 1024, `item 24: the text part stays small in the worst case (${kib(Buffer.byteLength(worstText))})`);
+
+// ── commit 3 (items 15-23) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const flat = real.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+// 15: the factual subject
+check(real.subject === '❌ STAGING sandbox #235: 2 failed, 940 passed (6 flaky, 2 on rerun), 1 skipped of 943', 'item 15: the subject is factual: counts, flaky and rerun named, no health score', real.subject);
+// 16: branch-aware wording
+check(/Not ready for a PR to dev/.test(flat) && !/Deployment (not|likely|recommended)/.test(flat), 'item 16: the sandbox email says "Not ready for a PR to dev", never deployment advice');
+const prod = replayBuild235({ blockedBySession: undefined });
+const prodText = branchAdviceFor('prod');
+check(/Deployment/.test(prodText.notReady) && /Deployment/.test(prodText.ready) && /PR to dev/.test(branchAdviceFor('sandbox').ready) && /PR to dev/.test(branchAdviceFor('feature/x').ready) && /PR to dev/.test(branchAdviceFor('dev').ready) && /Deployment/.test(branchAdviceFor('main').ready) && /Deployment/.test(branchAdviceFor('qa').ready), 'item 16: PR wording on sandbox, dev and feature branches; deployment wording on qa, stage, prod and main');
+void prod;
+// 17: copy-paste rerun command per failed test
+const cmds = flat.match(/ENV=staging npx playwright test tests\/[^\s]+\.spec\.ts:\d+ --project=chromium --retries=0/g) ?? [];
+check(cmds.length >= 2, `item 17: each failed test card has its rerun command (${cmds.length} commands in the email)`, 'no rerun command found');
+check(tpl.text(real.ctx).includes('ENV=staging npx playwright test tests/'), 'item 17: the text part has the rerun command per failed test');
+// 18: the linked commit with subject and author
+check(real.html.includes(`/commit/${real.ctx.gitCommit}"`) && flat.includes('Sample commit subject') && flat.includes('by Sample Author'), 'item 18: the commit is a link to GitHub with its subject and author');
+// 19: one time zone, labelled
+check(!/\bUTC\b/.test(flat) && /IST/.test(flat), 'item 19: times are in IST and say so; no UTC left');
+// 20: durations as "6m 10s"
+check(!/\b\d{3,}s\b/.test(flat) && !/\b\d{3,}m\b/.test(flat), 'item 20: no "370s" or "154m" durations', (flat.match(/\b\d{3,}[sm]\b/g) ?? []).join(', '));
+check(/\b\d+m \d+s\b/.test(flat), 'item 20: durations read like "6m 10s"');
+// 21: words with every arrow
+const arrows = [...flat.matchAll(/[▲▼]([^▲▼]{0,90})/g)].map((m) => m[1]);
+check(arrows.length > 0 && arrows.every((a) => /(than last|than the last|slower than|worse|better)/.test(a)), `item 21: every arrow is followed by words (${arrows.length} arrows)`, arrows.filter((a) => !/(than last|than the last|slower than|worse|better)/.test(a)).join(' | '));
+// 22: known issues linked by KI number, with the topic file
+check(/Related history: <a [^>]*href="[^"]*docs\/known-issues\/[a-z-]+\.md#L\d+"[^>]*>(KI-\d+ in )?[a-z-]+\.md/.test(real.html), 'item 22: a failure that matches a documented incident links to its topic file (with the KI number when the entry has one)', 'no Related history link to a topic file');
+const locs = locateKnownIssues(path.resolve(__dirname, '..'));
+check(locs['KI-43']?.file === 'docs/known-issues/watch-items.md' && !!locs['KI-03'], 'item 22: every KI number resolves to its doc and line (KI-43 is in watch-items.md)', JSON.stringify(locs['KI-43']));
+const idx = buildKnownIssuesIndex('# T\n\n### KI-99 — x\n- **What:** failed in `DealsPage.selectDate()` here\n', 'docs/KNOWN_ISSUES_ACTIVE.md');
+check(idx.some((c) => c.kiId === 'KI-99' && c.kind === 'method-name'), 'item 22: a match carries the KI number of the entry it is in');
+// 23: flakiest tests
+check(/Flakiest tests, last \d+ runs/.test(flat), 'item 23: the "Flakiest tests, last N runs" section is there');
+const section = real.html.slice(real.html.indexOf('id="section-flakiest-tests"'), real.html.indexOf('id="section-flakiest-tests"') + 6000);
+check((section.match(/ of \d+ runs<\/td>/g) ?? []).length >= 1 && (section.match(/ of \d+ runs<\/td>/g) ?? []).length <= 6, 'item 23: rows show "N of M runs" and are capped at 6');
 
 process.stdout.write(failed === 0 ? `\ncheck:email-size — all ${total} checks passed\n` : `\ncheck:email-size — ${failed} of ${total} failed\n`);
 process.exitCode = failed === 0 ? 0 : 1;

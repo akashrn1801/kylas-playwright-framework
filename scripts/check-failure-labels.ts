@@ -23,7 +23,7 @@ import { computeNotificationDedupKey, NotificationInput } from '../src/notificat
 import { assessCauses, summarizeCauses, splitText, parseSignatureRegistry, EMPTY_REGISTRY, CauseAssessment, CauseSummary, SignatureRegistry } from '../src/notifications/FailureClassifier';
 import { readSignatureRegistryStrict, loadSignatureRegistry } from '../src/notifications/FailureSignatureLoader';
 import { MiscError, MiscErrorReport } from '../src/error-collector/ErrorCollector';
-import { KnownIssueMatch } from '../src/notifications/KnownIssuesIndex';
+import { KnownIssueMatch, locateKnownIssues } from '../src/notifications/KnownIssuesIndex';
 import { RerunSummary } from '../src/notifications/RerunSummary';
 
 interface Spec {
@@ -286,6 +286,9 @@ function main(): void {
     htmlAfter.includes('Likely environment problem: 62 of 75 failed or flaky tests share the signature “search lookup returned no match for a record” (42 failed outright, 20 passed on retry) — see KI-43'),
     'banner text names N of M, the failed/passed-on-retry split and KI-43'
   );
+  // item 22 (commit 3): "see KI-43" is a link to its entry, naming the topic file, once the doc locations and the blob base are known
+  const linked = tpl.html({ ...withC, knownIssuesUrl: 'https://github.com/o/r/blob/abc1234', kiLocations: locateKnownIssues(path.resolve(__dirname, '..')) });
+  check(/see <a href="https:\/\/github\.com\/o\/r\/blob\/abc1234\/docs\/known-issues\/watch-items\.md#L\d+"[^>]*>KI-43<\/a> \(watch-items\.md\)/.test(linked), 'item 22: the cause banner links KI-43 to its entry in watch-items.md');
   check(
     htmlAfter.includes('Suspected cause of the 55 failures and 20 flaky tests (hints, not verdicts): of the 55 that failed outright, 42 environment, 0 application, 0 test/code, 13 unclassified; of the 20 flaky tests, 20 passed on a retry.'),
     'summary line: failures and flaky tests named separately, failed outright split by cause, flaky listed as passed on a retry'

@@ -288,13 +288,26 @@ export function healthNotApplicableReason(
  * makes disagreement structurally impossible — not just less likely — since
  * there is only one verdict, not two independently-derived ones.
  */
+/**
+ * The recommendation wording per branch (item 16, 2026-11-25): sandbox, dev and feature branches answer "is this ready for a PR to dev?";
+ * qa, stage, prod and main keep the deployment wording (the run is the gate for a promotion or a release).
+ */
+export function branchAdvice(branch?: string): { ready: string; likely: string; notReady: string; review: string; prLike: boolean } {
+  const prLike = !!branch && (['sandbox', 'dev'].includes(branch) || branch.startsWith('feature/'));
+  return prLike
+    ? { ready: 'Ready for a PR to dev', likely: 'Likely ready for a PR to dev', notReady: 'Not ready for a PR to dev', review: 'Recommended — review before opening the PR', prLike }
+    : { ready: 'Deployment recommended', likely: 'Deployment likely safe', notReady: 'Deployment not recommended', review: 'Recommended — review before the next release', prLike };
+}
+
 export function computeOverallVerdict(
   report: ParsedReport,
   health: HealthScore,
   suiteDrift: SuiteDrift | null,
   shardCompleteness?: ShardCompleteness | null,
-  renewalFailure?: RenewalFailure | null
+  renewalFailure?: RenewalFailure | null,
+  branch?: string
 ): VerdictResult {
+  const advice = branchAdvice(branch);
   // WHY first of all (2026-11-24, sandbox run 45420781016): when the renew-session job fails every test job is skipped, no shard
   // reports, and the run used to read "Incomplete run — 0 of N shards", which says a job crashed. No test ran, and the cause is
   // known (renew-session-failed.json, or the job result recorded in shard-completeness.json): the verdict names it.
@@ -326,7 +339,7 @@ export function computeOverallVerdict(
       verdict: 'blocked',
       bannerLabel: `🚫 Incomplete Run — ${shardCompleteness.reported} of ${shardCompleteness.expected} shards reported`,
       bannerTone: 'danger',
-      headline: `Deployment not recommended — only ${shardCompleteness.reported} of ${shardCompleteness.expected} shard reports were merged, so totals understate the run${failedNote}`,
+      headline: `${advice.notReady} — only ${shardCompleteness.reported} of ${shardCompleteness.expected} shard reports were merged, so totals understate the run${failedNote}`,
     };
   }
   // WHY checked first, before anything else (confirmed live, sandbox Build
@@ -345,11 +358,11 @@ export function computeOverallVerdict(
       verdict: 'blocked',
       bannerLabel: '🚫 No Tests Executed',
       bannerTone: 'danger',
-      headline: `Deployment not recommended — 0 of ${report.total} tests actually ran (all reported skipped) — this run verified nothing`,
+      headline: `${advice.notReady} — 0 of ${report.total} tests actually ran (all reported skipped) — this run verified nothing`,
     };
   }
   if (report.failed > 0) {
-    return { verdict: 'blocked', bannerLabel: '❌ Failed', bannerTone: 'danger', headline: 'Deployment not recommended' };
+    return { verdict: 'blocked', bannerLabel: '❌ Failed', bannerTone: 'danger', headline: advice.notReady };
   }
   if (suiteDrift?.occurred) {
     // WHY verdict stays 'blocked' even though report.failed === 0 here,
@@ -378,7 +391,7 @@ export function computeOverallVerdict(
       verdict: 'blocked',
       bannerLabel: '⚠️ Suite Drift Detected',
       bannerTone: 'warning',
-      headline: 'Deployment not recommended — suite drift detected',
+      headline: `${advice.notReady} — suite drift detected`,
     };
   }
   // WHY there is no `health.label === 'Critical'` branch any more (2026-10-06):
@@ -419,7 +432,7 @@ export function computeOverallVerdict(
       verdict: 'caution',
       bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
       bannerTone: 'warning',
-      headline: `Deployment likely safe — but ${reasons.join('; ')}; review them`,
+      headline: `${advice.likely} — but ${reasons.join('; ')}; review them`,
     };
   }
   if (health.label === 'Needs Attention') {
@@ -427,8 +440,8 @@ export function computeOverallVerdict(
       verdict: 'caution',
       bannerLabel: '⚠️ Passed',
       bannerTone: 'warning',
-      headline: 'Deployment likely safe — automation health needs attention; review the health factors before proceeding',
+      headline: `${advice.likely} — automation health needs attention; review the health factors before proceeding`,
     };
   }
-  return { verdict: 'clear', bannerLabel: '✅ Passed', bannerTone: 'success', headline: 'Deployment recommended' };
+  return { verdict: 'clear', bannerLabel: '✅ Passed', bannerTone: 'success', headline: advice.ready };
 }

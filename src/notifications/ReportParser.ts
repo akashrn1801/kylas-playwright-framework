@@ -139,6 +139,8 @@ export interface ErrorLocation {
 
 export interface TestResult {
   title: string;
+  // The line of the test declaration in its spec file (for the copy-paste rerun command); absent in old reports.
+  line?: number;
   status: 'passed' | 'failed' | 'skipped' | 'flaky';
   duration: number;
   // WHY: full, untruncated, ANSI-stripped error message. Truncation for
@@ -437,6 +439,7 @@ interface PlaywrightJsonTest {
 
 interface PlaywrightJsonSpec {
   title: string;
+  line?: number;
   tests?: PlaywrightJsonTest[];
 }
 
@@ -733,6 +736,7 @@ export class ReportParser {
                 : undefined;
             results.push({
               title: spec.title.replace(/^@\w+\s*/g, ''),
+              ...(typeof spec.line === 'number' ? { line: spec.line } : {}),
               status,
               duration: lastResult?.duration || 0,
               error,

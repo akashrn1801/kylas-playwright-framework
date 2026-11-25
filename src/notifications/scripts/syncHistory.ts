@@ -607,6 +607,7 @@ export function buildCurrentRecord(
 const EMPTY_DELTA_OUTPUT: HistoryDeltaOutput = {
   delta: null,
   recurringFlaky: [],
+  flakiestTests: [],
   recurringFailures: [],
   moduleTrend: [],
   moduleStabilityTrend: [],

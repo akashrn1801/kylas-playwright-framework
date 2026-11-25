@@ -19,7 +19,7 @@ import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTr
 import { JobStats } from './JobStats';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { loadSessionInfo } from '../auth/sessionInfo';
-import { loadKnownIssuesIndex } from './KnownIssuesIndex';
+import { loadKnownIssuesIndex, locateKnownIssues } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
 import { assessCauses, summarizeCauses, CauseSummary } from './FailureClassifier';
 import { loadSignatureRegistry } from './FailureSignatureLoader';
@@ -27,7 +27,7 @@ import { normalizeTestTitle } from './FailureAnalyzer';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as os from 'os';
 import * as crypto from 'crypto';
 
@@ -114,6 +114,7 @@ function getHistoryDeltaPath(env: string): string {
 interface HistoryDeltaFile {
   delta: RunDelta | null;
   recurringFlaky: RecurringIssue[];
+  flakiestTests: RecurringIssue[];
   recurringFailures: RecurringIssue[];
   moduleTrend: ModuleTrend[];
   moduleStabilityTrend: ModuleStabilityTrend[];
@@ -125,6 +126,7 @@ interface HistoryDeltaFile {
 const EMPTY_HISTORY_DELTA: HistoryDeltaFile = {
   delta: null,
   recurringFlaky: [],
+  flakiestTests: [],
   recurringFailures: [],
   moduleTrend: [],
   moduleStabilityTrend: [],
@@ -233,6 +235,7 @@ export class NotificationService {
         historyDeltaFile = {
           delta: parsed.delta ?? null,
           recurringFlaky: parsed.recurringFlaky ?? [],
+          flakiestTests: parsed.flakiestTests ?? [],
           recurringFailures: parsed.recurringFailures ?? [],
           moduleTrend: parsed.moduleTrend ?? [],
           moduleStabilityTrend: parsed.moduleStabilityTrend ?? [],
@@ -273,7 +276,7 @@ export class NotificationService {
     // A run that verified nothing (blocked, incomplete, nothing selected) has no health score: "n/a" and why (2026-11-25).
     const notApplicable = healthNotApplicableReason(report, shardCompleteness, renewalFailure);
     const health = notApplicable ? { ...computedHealth, notApplicable } : computedHealth;
-    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure);
+    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure, input.branch);
 
     const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
     const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
@@ -343,6 +346,7 @@ export class NotificationService {
       miscErrors,
       historyDelta: historyDeltaFile.delta,
       recurringFlaky: historyDeltaFile.recurringFlaky,
+      flakiestTests: historyDeltaFile.flakiestTests,
       recurringFailures: historyDeltaFile.recurringFailures,
       moduleTrend: historyDeltaFile.moduleTrend,
       moduleStabilityTrend: historyDeltaFile.moduleStabilityTrend,
@@ -357,6 +361,8 @@ export class NotificationService {
       causeSummary,
       hasHistoryEverExisted: historyDeltaFile.delta?.previousRun != null,
       knownIssuesUrl,
+      commit: this.resolveCommitInfo(input.gitCommit),
+      kiLocations: locateKnownIssues(process.cwd()),
       reportFreshness: freshness,
       nodeVersion: process.version,
       osInfo: `${os.platform()} ${os.release()}`,
@@ -523,6 +529,26 @@ export class NotificationService {
   // — linking to the exact commit under test means the link always shows
   // precisely the content that existed for THIS build, immutable, never
   // subject to later edits. GitHub's blob view accepts a short SHA.
+  // The commit this run tested, as a link with its subject line and author (item 18, 2026-11-25). The link needs only the GitHub remote;
+  // the subject and author come from the checkout the notify step runs in (CI has it) and are null when git cannot answer (a scenario's
+  // temporary directory, a shallow clone without the commit): the email then shows the link alone, never a guess.
+  private resolveCommitInfo(gitCommit: string): { sha: string; url: string | null; message: string | null; author: string | null } | undefined {
+    if (!gitCommit || gitCommit === 'unknown') return undefined;
+    const ownerRepo = resolveGithubOwnerRepo();
+    const url = ownerRepo ? `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/commit/${gitCommit}` : null;
+    let message: string | null = null;
+    let author: string | null = null;
+    try {
+      const out = execFileSync('git', ['show', '-s', '--format=%an%x1f%s', gitCommit], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
+      const [a, m] = out.split('\u001f');
+      author = a || null;
+      message = m || null;
+    } catch {
+      // not a git checkout, or the commit is not in it
+    }
+    return { sha: gitCommit, url, message, author };
+  }
+
   private resolveKnownIssuesUrl(gitCommit: string): string | null {
     const ownerRepo = resolveGithubOwnerRepo();
     if (!ownerRepo || !gitCommit || gitCommit === 'unknown') return null;

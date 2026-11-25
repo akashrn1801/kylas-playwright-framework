@@ -20,6 +20,7 @@ import { RerunSummary } from '../../src/notifications/RerunSummary';
 import { RenewalFailure } from '../../src/auth/renewalFailure';
 import { RunHistoryRecord, computeHistoryDeltaOutput, parseHistory } from '../../src/notifications/RunHistory';
 import { buildCurrentRecord } from '../../src/notifications/scripts/syncHistory';
+import { locateKnownIssues } from '../../src/notifications/KnownIssuesIndex';
 
 export const FIXTURE_DIR = path.resolve(__dirname, '../fixtures/build-235');
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -354,7 +355,11 @@ export function replayBuild235(opts: ReplayOptions = {}): Replay {
     // No git remote in the temporary directory: the two GitHub links come from the run's own repository.
     ctx.knownIssuesUrl = `https://github.com/akashrn1801/kylas-playwright-framework/blob/${BUILD_235.commit}`;
     ctx.historyBranchUrl = 'https://github.com/akashrn1801/kylas-playwright-framework/blob/ci/reporting-history/history/staging.jsonl';
+    // Commit 3 of the email review (item 18): the link is the run's own, the subject and author are SAMPLE text (build #235's commit message was
+    // not recorded in the fixture; a real run reads them from the checkout with `git show`).
+    ctx.commit = { sha: BUILD_235.commit, url: `https://github.com/akashrn1801/kylas-playwright-framework/commit/${BUILD_235.commit}`, message: 'Sample commit subject (fixture)', author: 'Sample Author' };
     ctx.reportFreshness = checkReportFreshness(report.endTime, now);
+    ctx.kiLocations = locateKnownIssues(REPO_ROOT);
     ctx.nodeVersion = 'v22.23.5';
     ctx.osInfo = 'linux 7.0.0-1017-azure';
     const tpl = new EmailTemplate();

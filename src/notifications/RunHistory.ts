@@ -925,6 +925,9 @@ export interface HistoryDeltaOutput {
   slowTestTrend: SlowTestTrend[];
   suiteDrift: SuiteDrift | null;
   passRateSeries: PassRatePoint[];
+  // Tests flaky in at least 2 of the last 10 comparable runs (the "Flakiest tests" section, item 23); recurringFlaky keeps its stricter
+  // threshold because the health score reads it.
+  flakiestTests: RecurringIssue[];
 }
 
 /**
@@ -935,6 +938,7 @@ export function computeHistoryDeltaOutput(historyBeforeAppend: RunHistoryRecord[
   return {
     delta: computeDelta(historyBeforeAppend, current),
     recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
+    flakiestTests: computeRecurringFlaky(historyBeforeAppend, current, RECURRING_FLAKY_LOOKBACK, 1),
     recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
     moduleTrend: computeModuleTrend(historyBeforeAppend, current),
     moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
