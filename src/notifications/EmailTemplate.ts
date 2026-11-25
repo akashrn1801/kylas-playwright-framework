@@ -21,6 +21,7 @@ import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
 import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
+import { be, nounFor, plural, wasWere } from './wording';
 
 // WHY: a dedicated version for the REPORT TEMPLATE specifically, not
 // package.json's version — the template's structure changes independently of
@@ -133,7 +134,7 @@ export interface EmailContext {
   // Null when the remote isn't GitHub or couldn't be resolved.
   knownIssuesUrl?: string | null;
   // The tested commit: link, subject line and author (any of them null when unknown). Item 18.
-  commit?: { sha: string; url: string | null; message: string | null; author: string | null };
+  commit?: { sha: string; url: string | null; message: string | null; author: string | null; merge?: { sha: string; url: string | null; into: string | null } };
   // Where each KI number is documented (doc + heading line), so "see KI-43" can be a link (item 22).
   kiLocations?: Record<string, { file: string; line: number }>;
   reportFreshness?: ReportFreshness;
@@ -442,7 +443,7 @@ ${body}
   private buildFreshnessWarning(freshness: ReportFreshness | undefined): string {
     if (!freshness?.isStale) return '';
     const hours = Math.round(freshness.ageMs / 3_600_000);
-    const ageLabel = hours >= 24 ? `${Math.round(hours / 24)} day(s)` : `${hours} hour(s)`;
+    const ageLabel = hours >= 24 ? `${Math.round(hours / 24)} ${nounFor(Math.round(hours / 24), 'day')}` : `${hours} ${nounFor(hours, 'hour')}`;
     return `
 <tr><td style="background:${FAIL};padding:12px 28px;text-align:center;">
   <span style="font-size:13px;font-weight:700;color:#ffffff;">⚠ STALE REPORT — this data is ${ageLabel} old (threshold: ${freshness.thresholdHours}h), not from a fresh run. Investigate why fresh results weren't available before treating this as current.</span>
@@ -468,7 +469,7 @@ ${body}
     return `
 <tr><td id="section-incomplete-run" style="background:${FAIL};padding:14px 28px;text-align:center;">
   <div style="font-size:14px;font-weight:700;color:#ffffff;">Incomplete run: ${completeness.reported} of ${completeness.expected} shards reported</div>
-  <div style="font-size:12px;color:#ffffff;margin-top:4px;">${missing} shard(s) never uploaded a report (job crashed, hung or was cancelled). Totals, pass rate and health below cover only the shards that reported — this is not a pass. Check the run's job list.</div>
+  <div style="font-size:12px;color:#ffffff;margin-top:4px;">${missing} ${nounFor(missing, 'shard')} never uploaded a report (job crashed, hung or was cancelled). Totals, pass rate and health below cover only the shards that reported — this is not a pass. Check the run's job list.</div>
 </td></tr>`;
   }
 
@@ -566,24 +567,22 @@ ${body}
     if (!summary || summary.total === 0) return '';
     const c = summary.counts;
     const note = summary.incompleteRun ? ' Run incomplete: counts cover only the shards that reported.' : '';
-    // WHY worded by what each group is (2026-11-24, build #235 said "the 10 failures" for 2 failed and 8 flaky tests):
-    // `total` is failed plus flaky (and passed-on-rerun) tests, and only the first group failed.
+    // WHY worded by the first-run outcome (2026-11-25, build #239: "none failed outright" while leads.spec.ts:904 failed both attempts and passed
+    // only on the rerun): a test that failed every attempt and passed only on the rerun is labelled flaky by the classifier (it ended
+    // Passed), so counting "failed" by the final result hid it. Three groups, each said as what happened: still failing, failed every attempt
+    // and passed on the rerun, passed on a retry.
     const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
-    const heading =
-      summary.failedTotal > 0 && summary.retryTotal > 0
-        ? `${plural(summary.failedTotal, 'failure')} and ${plural(summary.retryTotal, 'flaky test')}`
-        : summary.failedTotal > 0
-          ? plural(summary.failedTotal, 'failure')
-          : plural(summary.retryTotal, 'flaky test');
+    const retryOnly = summary.retryTotal - summary.rerunTotal;
+    const groups = [
+      summary.rerunTotal > 0 ? `${summary.rerunTotal} failed every attempt and passed on the rerun` : '',
+      retryOnly > 0 ? `${retryOnly} passed on a retry` : '',
+    ].filter(Boolean);
+    const heading = plural(summary.total, 'test') + ' that did not pass first time';
     const failedPart =
       summary.failedTotal > 0
-        ? `of the ${summary.failedTotal} that failed outright, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
-        : 'none failed outright';
-    const retryOnly = summary.retryTotal - summary.rerunTotal;
-    const retryPart =
-      summary.retryTotal > 0
-        ? `; of the ${plural(summary.retryTotal, 'flaky test')}, ${[retryOnly > 0 ? `${retryOnly} passed on a retry` : '', summary.rerunTotal > 0 ? `${summary.rerunTotal} passed only on the rerun` : ''].filter(Boolean).join(' and ')}`
-        : '';
+        ? `of the ${summary.failedTotal} still failing, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
+        : 'none is still failing';
+    const retryPart = groups.length > 0 ? `; ${groups.join(', ')}` : '';
     return `
 <tr><td id="section-failure-causes" style="padding:4px 28px 8px;">
   <div style="font-size:12px;color:${SLATE};">Suspected cause of the ${heading} (hints, not verdicts): ${failedPart}${retryPart}.${this.esc(note)}</div>
@@ -787,9 +786,12 @@ ${body}
   /** The commit as a link with its subject and author (item 18); the bare short hash when nothing more is known. */
   private commitHtml(ctx: EmailContext, shortCommit: string): string {
     const c = ctx.commit;
-    const hash = c?.url ? `<a href="${this.escAttr(c.url)}" style="color:${ACCENT};">${this.mono(shortCommit)}</a>` : this.mono(shortCommit);
+    const link = (sha: string, url: string | null | undefined): string => (url ? `<a href="${this.escAttr(url)}" style="color:${ACCENT};">${this.mono(sha.substring(0, 8))}</a>` : this.mono(sha.substring(0, 8)));
+    const hash = c ? link(c.sha, c.url) : this.mono(shortCommit);
     const detail = [c?.message ? this.esc(this.truncate(c.message, 100)) : '', c?.author ? `by ${this.esc(c.author)}` : ''].filter(Boolean).join(' ');
-    return detail ? `${hash} — ${detail}` : hash;
+    // The pushed commit is a merge: the line above is the feature branch's own head commit.
+    const merged = c?.merge ? ` <span style="color:${MUTED};">(merged into ${this.esc(c.merge.into ?? 'the run branch')} as ${link(c.merge.sha, c.merge.url)})</span>` : '';
+    return (detail ? `${hash} — ${detail}` : hash) + merged;
   }
 
   private buildRunMetadata(ctx: EmailContext): string {
@@ -868,7 +870,7 @@ ${body}
     // Rerun shard attempts are counted in the tile too (each rerun result is one more result of its test), so the
     // tile and the rerun section's "(N in-job retries)" (the rerun shard's own retry budget) are told apart here.
     const retriesSubtext = [
-      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} are rerun-shard attempts, ${report.totalRetries - report.retriesFromRerun} in-job retries` : '',
+      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} ${be(report.retriesFromRerun)} rerun-shard ${nounFor(report.retriesFromRerun, 'attempt')}, ${plural(report.totalRetries - report.retriesFromRerun, 'in-job retry', 'in-job retries')}` : '',
       report.retriesFromCleanSweeps > 0
         ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
         : '',
@@ -1731,7 +1733,7 @@ ${body}
       // never rerun (formFields); the excluded list says what happened to them.
       const why =
         rerun.reason === 'none' && rerun.excluded.length > 0
-          ? `${rerun.excluded.length} failed/flaky test(s) could not be rerun (${[...new Set(rerun.excluded.map((e) => e.reason))].join('; ')}): ${rerun.excluded.slice(0, 5).map((e) => this.esc(this.truncate(e.title, 90))).join('; ')}${rerun.excluded.length > 5 ? ` and ${rerun.excluded.length - 5} more` : ''}`
+          ? `${rerun.excluded.length} failed/flaky ${nounFor(rerun.excluded.length, 'test')} could not be rerun (${[...new Set(rerun.excluded.map((e) => e.reason))].join('; ')}): ${rerun.excluded.slice(0, 5).map((e) => this.esc(this.truncate(e.title, 90))).join('; ')}${rerun.excluded.length > 5 ? ` and ${rerun.excluded.length - 5} more` : ''}`
           : rerun.reason === 'none'
           ? 'no test failed or was flaky, so no rerun was needed'
           : rerun.reason === 'cap'
@@ -1791,7 +1793,7 @@ ${body}
     for (const e of rerun.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) ?? []), e.title]);
     const excluded =
       rerun.excluded.length > 0
-        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky test(s) were not rerun; their first-run result stands:${[...byReason]
+        ? `<div style="font-size:10.5px;color:${MUTED};margin-top:8px;">${rerun.excluded.length} failed/flaky ${nounFor(rerun.excluded.length, 'test')} ${wasWere(rerun.excluded.length)} not rerun; their first-run result stands:${[...byReason]
             .map(([reason, titles]) => {
               const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
               return `<div style="margin-top:3px;">${titles.length} &mdash; ${this.esc(reason)}: ${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}</div>`;
@@ -1803,7 +1805,7 @@ ${body}
 <tr><td id="section-rerun" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;background:${CANVAS_TINT};">
     ${heading}
-    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky test(s) were rerun once${took} (the rerun shard itself ran with ${rerun.retries} in-job retries; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. "Final result" counts every test that ultimately passed as Passed: clean, after an in-job retry (flaky) or on the rerun. "First run" and the "Passed first time" tile keep the first attempt, and the Flaky Tests section still lists each flaky test with its error.${origin}</div>
+    <div style="font-size:11.5px;color:${SLATE};margin-bottom:8px;">${rerun.rows.length} failed/flaky ${nounFor(rerun.rows.length, 'test')} ${wasWere(rerun.rows.length)} rerun once${took} (the rerun shard itself ran with ${plural(rerun.retries, 'in-job retry', 'in-job retries')}; the Retries tile counts that rerun attempt as one retry): ${rerun.recovered} passed on the rerun, ${rerun.stillFailing} still failing. "Final result" counts every test that ultimately passed as Passed: clean, after an in-job retry (flaky) or on the rerun. "First run" and the "Passed first time" tile keep the first attempt, and the Flaky Tests section still lists each flaky test with its error.${origin}</div>
     ${summaryTable}
     ${testTable}
     ${excluded}
@@ -1962,9 +1964,9 @@ ${body}
 <tr><td id="section-failed-tests" style="padding:8px 28px;">
   <div style="border:1px solid ${FAIL_BORDER};border-radius:6px;padding:16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${FAIL};margin-bottom:4px;">Failed Tests (${totalTests})</div>
-    <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">${clusters.filter((c) => c.tests.length > 1).length} cluster(s) sharing a real signal, ${clusters.filter((c) => c.tests.length === 1).length} standalone</div>
+    <div style="font-size:11px;color:${SLATE};margin-bottom:10px;">${clusters.filter((c) => c.tests.length > 1).length} ${nounFor(clusters.filter((c) => c.tests.length > 1).length, 'cluster')} sharing a real signal, ${clusters.filter((c) => c.tests.length === 1).length} standalone</div>
     ${this.artifactNote(buildUrl)}${clusterBlocks}${omitted.length > 0 ? `
-    <div style="font-size:11px;color:${SLATE};margin-top:4px;">+${omitted.length} more failed test(s), not shown in full here (the HTML report has every one): ${omitted.slice(0, MAX_EXTRA_TITLES).map((t) => this.esc(this.truncate(t, 70))).join('; ')}${omitted.length > MAX_EXTRA_TITLES ? `; and ${omitted.length - MAX_EXTRA_TITLES} more` : ''}</div>` : ''}
+    <div style="font-size:11px;color:${SLATE};margin-top:4px;">+${omitted.length} more failed ${nounFor(omitted.length, 'test')}, not shown in full here (the HTML report has every one): ${omitted.slice(0, MAX_EXTRA_TITLES).map((t) => this.esc(this.truncate(t, 70))).join('; ')}${omitted.length > MAX_EXTRA_TITLES ? `; and ${omitted.length - MAX_EXTRA_TITLES} more` : ''}</div>` : ''}
   </div>
 </td></tr>`;
   }
@@ -1997,7 +1999,7 @@ ${body}
 </td></tr>`;
     }
     const headline = reset.complete
-      ? `${failed.length} of ${reset.totalFields} dedicated form-field limit(s) could not be reset or verified`
+      ? `${failed.length} of ${reset.totalFields} dedicated form-field ${nounFor(reset.totalFields, 'limit')} could not be reset or verified`
       : `The dedicated form-field reset did not finish (${reset.records.length} of ${reset.totalFields} fields reached — job timed out or was cancelled)`;
     const rows = failed
       .map(
@@ -2076,7 +2078,7 @@ ${body}
 
     if (ctx.suiteDrift?.occurred) {
       items.push({
-        text: `Investigate suite drift — ${ctx.suiteDrift.decreaseBy} fewer test(s) ran than ${this.driftComparisonLabel(ctx.suiteDrift)}.`,
+        text: `Investigate suite drift — ${ctx.suiteDrift.decreaseBy} fewer ${nounFor(ctx.suiteDrift.decreaseBy, 'test')} ran than ${this.driftComparisonLabel(ctx.suiteDrift)}.`,
         priority: 'high',
         anchor: '#section-module-analytics',
       });
@@ -2098,25 +2100,25 @@ ${body}
     const singleFailureClusters = clusters.filter((c) => c.tests.length === 1);
     if (singleFailureClusters.length > 0) {
       items.push({
-        text: `Investigate ${singleFailureClusters.length} standalone failure(s) — see Failed Tests section.`,
+        text: `Investigate ${singleFailureClusters.length} standalone ${nounFor(singleFailureClusters.length, 'failure')} — see Failed Tests section.`,
         priority: 'medium',
         anchor: '#section-failed-tests',
       });
     }
     if (ctx.report.flaky > 0) {
-      items.push({ text: `Review ${ctx.report.flaky} flaky test(s) — see Flaky Tests section.`, priority: 'medium', anchor: '#section-flaky-tests' });
+      items.push({ text: `Review ${ctx.report.flaky} flaky ${nounFor(ctx.report.flaky, 'test')} — see Flaky Tests section.`, priority: 'medium', anchor: '#section-flaky-tests' });
     }
     const unexpectedMisc = ctx.miscErrors?.unexpectedErrors ?? 0;
     if (unexpectedMisc > 0) {
       items.push({
-        text: `Review ${unexpectedMisc} unexpected background error(s) — see Background Errors section.`,
+        text: `Review ${unexpectedMisc} unexpected background ${nounFor(unexpectedMisc, 'error')} — see Background Errors section.`,
         priority: 'medium',
         anchor: '#section-background-errors',
       });
     }
     const regressions = (ctx.slowTestTrend ?? []).filter((t) => t.regression);
     if (regressions.length > 0) {
-      items.push({ text: `Review ${regressions.length} test(s) with a performance regression — see Slowest Tests section.`, priority: 'low' });
+      items.push({ text: `Review ${regressions.length} ${nounFor(regressions.length, 'test')} with a performance regression — see Slowest Tests section.`, priority: 'low' });
     }
 
     if (items.length === 0) {

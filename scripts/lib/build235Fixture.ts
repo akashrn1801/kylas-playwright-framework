@@ -25,7 +25,27 @@ import { locateKnownIssues } from '../../src/notifications/KnownIssuesIndex';
 export const FIXTURE_DIR = path.resolve(__dirname, '../fixtures/build-235');
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
-export const BUILD_235 = {
+/** What differs between two replayed builds (#235 and #239): identity, timing, rerun policy. */
+export interface BuildMeta {
+  runId: string;
+  buildNumber: string;
+  env: string;
+  branch: string;
+  commit: string;
+  triggeredBy: string;
+  startTime: string;
+  totalDurationMs: number;
+  rerunDurationMs: number;
+  workers: number;
+  playwrightVersion: string;
+  generatedAt: string;
+  runUrl: string;
+  history: { current: number; tailExcludes: string };
+  /** Whether the rerun also takes flaky tests (RERUN_INCLUDE_FLAKY); #235 ran with it on, #239 with it off. */
+  includeFlaky?: boolean;
+}
+
+export const BUILD_235: BuildMeta = {
   runId: '45122485029',
   buildNumber: '235',
   env: 'staging',
@@ -41,13 +61,16 @@ export const BUILD_235 = {
   generatedAt: '2026-11-23T08:52:10.083Z',
   runUrl: 'https://github.com/akashrn1801/kylas-playwright-framework/actions/runs/45122485029',
   history: { current: 235, tailExcludes: '236' },
-} as const;
+};
+
+// The build being replayed; set by replayBuild235() for the duration of a replay (default #235), read by the report builders below.
+let ACTIVE: BuildMeta = BUILD_235;
 
 export const SKIP_REASON_AFTER =
   'Call Log custom fields are not validated by the backend yet (Meeting, Quotation and Task are); re-enable once backend validation exists (docs/known-issues/README.md, 2026-08-03)';
 
 // ── fixture files ──────────────────────────────────────────────────────────────────────────────────────────────
-type Kind = 'passed' | 'flaky' | 'recovered' | 'failed' | 'skipped';
+type Kind = 'passed' | 'flaky' | 'recovered' | 'failed' | 'skipped' | 'known-bug';
 export interface NamedTest {
   file: string;
   line: number;
@@ -75,8 +98,8 @@ export interface Build235Fixture {
   files: Record<'shard-completeness.json' | 'field-config-reset.json' | 'rerun-summary.original.json', string>;
 }
 
-export function loadFixture(): Build235Fixture {
-  const read = (n: string): string => fs.readFileSync(path.join(FIXTURE_DIR, n), 'utf8');
+export function loadFixture(dir: string = FIXTURE_DIR): Build235Fixture {
+  const read = (n: string): string => fs.readFileSync(path.join(dir, n), 'utf8');
   const tests = JSON.parse(read('tests.json')) as { modules: FixtureModule[]; named: NamedTest[] };
   return {
     modules: tests.modules,
@@ -86,7 +109,7 @@ export function loadFixture(): Build235Fixture {
     files: {
       'shard-completeness.json': read('shard-completeness.json'),
       'field-config-reset.json': read('field-config-reset.json'),
-      'rerun-summary.original.json': read('rerun-summary.original.json'),
+      'rerun-summary.original.json': fs.existsSync(path.join(dir, 'rerun-summary.original.json')) ? read('rerun-summary.original.json') : read('rerun-summary.real.json'),
     },
   };
 }
@@ -174,6 +197,10 @@ function specOf(t: NamedTest | Filler, firstRun: boolean): JsonSpec {
     case 'failed':
       test = { projectName: 'chromium', status: 'unexpected', expectedStatus: 'passed', annotations: [], results: [failingResult(named, 0, 110_000, true), failingResult(named, 1, t.kind === 'failed' ? t.durationMs : 110_000, true)] };
       break;
+    case 'known-bug':
+      // test.fail(): Playwright reports it as `expected` although the attempt itself failed (build #239, Leads RBAC L77/L79/L80)
+      test = { projectName: 'chromium', status: 'expected', expectedStatus: 'failed', annotations: [{ type: 'fail' }], results: [failingResult(named, 0, t.durationMs, false)] };
+      break;
     case 'skipped':
       test = { projectName: 'chromium', status: 'skipped', expectedStatus: 'skipped', annotations: [{ type: 'skip' }, ...(named.skipReason ? [{ type: 'skip-reason', description: named.skipReason }] : [])], results: [{ status: 'skipped', duration: 0, retry: 0, attachments: [] }] };
       break;
@@ -216,9 +243,9 @@ export function buildFirstRunReport(fx: Build235Fixture): JsonReport {
     suites.push({ title: m.file, file: m.file, suites: children });
   }
   return {
-    config: { version: BUILD_235.playwrightVersion, workers: BUILD_235.workers, projects: Array.from({ length: 11 }, () => ({ name: 'chromium' })) },
+    config: { version: ACTIVE.playwrightVersion, workers: ACTIVE.workers, projects: Array.from({ length: 11 }, () => ({ name: 'chromium' })) },
     suites,
-    stats: { startTime: BUILD_235.startTime, duration: BUILD_235.totalDurationMs - BUILD_235.rerunDurationMs },
+    stats: { startTime: ACTIVE.startTime, duration: ACTIVE.totalDurationMs - ACTIVE.rerunDurationMs },
   } as JsonReport;
 }
 
@@ -240,11 +267,11 @@ export function buildRerunReport(fx: Build235Fixture): JsonReport {
     for (let i = titles.length - 2; i >= 0; i--) node = { title: titles[i], file: t.file, suites: [node] };
     suites.push({ title: t.file, file: t.file, suites: [node] });
   }
-  return { suites, stats: { duration: BUILD_235.rerunDurationMs } } as JsonReport;
+  return { suites, stats: { duration: ACTIVE.rerunDurationMs } } as JsonReport;
 }
 
 // ── jobs (windows to the minute, UTC, from the email's Load Signals table) ─────────────────────────────────────
-export function buildJobs(): GitHubJobEntry[] {
+export function buildJobs235(): GitHubJobEntry[] {
   const d = '2026-11-23';
   const job = (name: string, from: string, to?: string): GitHubJobEntry =>
     ({ name, startedAt: `${d}T${from}Z`, ...(to ? { completedAt: `${d}T${to}Z` } : {}) }) as GitHubJobEntry;
@@ -293,15 +320,29 @@ export interface ReplayOptions {
   // Replay a run whose renew-session job failed (2026-11-24): the completeness file says no shard reported (with the job-result
   // cause the workflow writes) and, optionally, renew-session-failed.json is present.
   blockedBySession?: { renewalFailure?: RenewalFailure; cause?: string };
+  // Replay another build with the same pipeline (build #239): its identity and timing, job windows, session ends and the sample commit.
+  meta?: BuildMeta;
+  jobs?: GitHubJobEntry[];
+  sessions?: Array<{ role: string; endIso: string; minutesLeft: number }>;
+  commit?: NonNullable<EmailContext['commit']>;
 }
 
 export function replayBuild235(opts: ReplayOptions = {}): Replay {
+  ACTIVE = opts.meta ?? BUILD_235;
+  try {
+    return replayActive(opts);
+  } finally {
+    ACTIVE = BUILD_235;
+  }
+}
+
+function replayActive(opts: ReplayOptions): Replay {
   const fx = opts.fixture ?? loadFixture();
   if (opts.withSkipReason) {
     for (const t of fx.named) if (t.kind === 'skipped') t.skipReason = SKIP_REASON_AFTER;
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build235-'));
-  const reportsEnv = path.join(dir, 'reports', BUILD_235.env);
+  const reportsEnv = path.join(dir, 'reports', ACTIVE.env);
   fs.mkdirSync(reportsEnv, { recursive: true });
   fs.mkdirSync(path.join(dir, 'reports', 'playwright-report'), { recursive: true });
   fs.symlinkSync(path.join(REPO_ROOT, 'docs'), path.join(dir, 'docs'));
@@ -312,10 +353,10 @@ export function replayBuild235(opts: ReplayOptions = {}): Replay {
     const rerun = buildRerunReport(fx);
     const list = selectRerun(
       first,
-      { maxTests: 60, includeFlaky: true, excludePrefixes: ['tests/ui/formFields', 'tests/rbac/formFields'], testDir: 'tests', isSerialFile: () => false },
-      { retries: 0, runId: BUILD_235.runId, runAttempt: 1 }
+      { maxTests: 60, includeFlaky: ACTIVE.includeFlaky ?? true, excludePrefixes: ['tests/ui/formFields', 'tests/rbac/formFields'], testDir: 'tests', isSerialFile: () => false },
+      { retries: 0, runId: ACTIVE.runId, runAttempt: 1 }
     );
-    const { combined, summary } = combineRerun(first, rerun, list, { runId: BUILD_235.runId, runAttempt: 1 });
+    const { combined, summary } = combineRerun(first, rerun, list, { runId: ACTIVE.runId, runAttempt: 1 });
     const jsonPath = path.join(dir, 'reports', 'playwright-report', 'results.json');
     fs.writeFileSync(jsonPath, JSON.stringify(combined));
     fs.writeFileSync(path.join(reportsEnv, 'rerun-summary.json'), JSON.stringify(summary));
@@ -328,36 +369,38 @@ export function replayBuild235(opts: ReplayOptions = {}): Replay {
     fs.writeFileSync(path.join(reportsEnv, 'field-config-reset.json'), fx.files['field-config-reset.json']);
     fs.writeFileSync(
       path.join(reportsEnv, 'session-info.json'),
-      JSON.stringify([
-        { role: 'admin', endIso: '2026-11-23T17:09:49.000Z', minutesLeft: 656, belowRunWindow: false, recordedAt: BUILD_235.startTime },
-        { role: 'restricted', endIso: '2026-11-23T17:10:00.000Z', minutesLeft: 656, belowRunWindow: false, recordedAt: BUILD_235.startTime },
-      ])
+      JSON.stringify(
+        (opts.sessions ?? [
+          { role: 'admin', endIso: '2026-11-23T17:09:49.000Z', minutesLeft: 656 },
+          { role: 'restricted', endIso: '2026-11-23T17:10:00.000Z', minutesLeft: 656 },
+        ]).map((x) => ({ ...x, belowRunWindow: false, recordedAt: ACTIVE.startTime }))
+      )
     );
     // History before this run: the fixture tail without build 236 (it ran after) and without 235 itself.
-    const before = fx.history.filter((r) => r.buildNumber !== BUILD_235.history.tailExcludes && r.buildNumber !== BUILD_235.buildNumber);
-    const record = buildCurrentRecord(BUILD_235.env, BUILD_235.branch, BUILD_235.buildNumber, 'github-actions', jsonPath, BUILD_235.commit, false, BUILD_235.workers, undefined);
+    const before = fx.history.filter((r) => r.buildNumber !== ACTIVE.history.tailExcludes && r.buildNumber !== ACTIVE.buildNumber);
+    const record = buildCurrentRecord(ACTIVE.env, ACTIVE.branch, ACTIVE.buildNumber, 'github-actions', jsonPath, ACTIVE.commit, false, ACTIVE.workers, undefined);
     fs.writeFileSync(path.join(reportsEnv, 'history-delta.json'), JSON.stringify(computeHistoryDeltaOutput(before, record)));
 
     const input: NotificationInput = {
       jsonReportPath: jsonPath,
-      env: BUILD_235.env,
-      branch: BUILD_235.branch,
-      buildNumber: BUILD_235.buildNumber,
-      buildUrl: BUILD_235.runUrl,
-      gitCommit: BUILD_235.commit,
-      triggeredBy: BUILD_235.triggeredBy,
+      env: ACTIVE.env,
+      branch: ACTIVE.branch,
+      buildNumber: ACTIVE.buildNumber,
+      buildUrl: ACTIVE.runUrl,
+      gitCommit: ACTIVE.commit,
+      triggeredBy: ACTIVE.triggeredBy,
       runSource: 'github-actions',
-      jobStats: computeJobStats(buildJobs()),
+      jobStats: computeJobStats(opts.jobs ?? buildJobs235()),
     };
     const report = new ReportParser().parse(jsonPath);
-    const now = Date.parse(BUILD_235.generatedAt);
+    const now = Date.parse(ACTIVE.generatedAt);
     const ctx = new NotificationService().buildContext(input, report, now);
     // No git remote in the temporary directory: the two GitHub links come from the run's own repository.
-    ctx.knownIssuesUrl = `https://github.com/akashrn1801/kylas-playwright-framework/blob/${BUILD_235.commit}`;
+    ctx.knownIssuesUrl = `https://github.com/akashrn1801/kylas-playwright-framework/blob/${ACTIVE.commit}`;
     ctx.historyBranchUrl = 'https://github.com/akashrn1801/kylas-playwright-framework/blob/ci/reporting-history/history/staging.jsonl';
     // Commit 3 of the email review (item 18): the link is the run's own, the subject and author are SAMPLE text (build #235's commit message was
     // not recorded in the fixture; a real run reads them from the checkout with `git show`).
-    ctx.commit = { sha: BUILD_235.commit, url: `https://github.com/akashrn1801/kylas-playwright-framework/commit/${BUILD_235.commit}`, message: 'Sample commit subject (fixture)', author: 'Sample Author' };
+    ctx.commit = opts.commit ?? { sha: ACTIVE.commit, url: `https://github.com/akashrn1801/kylas-playwright-framework/commit/${ACTIVE.commit}`, message: 'Sample commit subject (fixture)', author: 'Sample Author' };
     ctx.reportFreshness = checkReportFreshness(report.endTime, now);
     ctx.kiLocations = locateKnownIssues(REPO_ROOT);
     ctx.nodeVersion = 'v22.23.5';

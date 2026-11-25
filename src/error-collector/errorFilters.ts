@@ -439,12 +439,22 @@ const BACKGROUND_WIDGET_CONNECTION_ERROR_PATTERN =
 // surfaces as unexpected.
 const DELIBERATE_VALIDATION_ERROR_SIGNATURE = /"field":"cfParagraphText"/i;
 
+// WHY (2026-11-25, build #239: 93 of the 120 "unexpected" background errors): the record page asks `GET /v1/deals/<id>/pipeline` / `GET /v1/leads/<id>/pipeline`, and a record that has no pipeline answers with
+// the app's own business error: HTTP 404 code 01001007 "There is no pipeline attached with the deal. Attach a pipeline and try again." (deals)
+// or HTTP 400 code 002056 "...with the lead..." (leads). Evidence from that run's misc-errors.json: 93 responses for 51 distinct records
+// (the app asks about each record up to 3 times), raised in 50 different tests (mostly the form-field-limit specs), every one of those tests ended Passed, and the response text states the condition
+// itself rather than an outage. Matched on BOTH the url and that exact message, so any other failure of the same endpoint (a 5xx, a timeout, a
+// different 4xx) still counts as unexpected. Revisit if a test ever asserts on a record's pipeline.
+const NO_PIPELINE_URL = /\/v1\/(?:leads|deals)\/\d+\/pipeline(?:\?|$)/i;
+const NO_PIPELINE_BODY = /There is no pipeline attached with the (?:lead|deal)/i;
+
 export function isExpectedBackgroundNoise(
   message: string,
   url?: string,
   responseBody?: string
 ): boolean {
   if (responseBody && DELIBERATE_VALIDATION_ERROR_SIGNATURE.test(responseBody)) return true;
+  if (url && responseBody && NO_PIPELINE_URL.test(url) && NO_PIPELINE_BODY.test(responseBody)) return true;
   if (!url) return false;
   const isCompletedHttpError = /HTTP [45]\d\d/.test(message);
   const isConnectionFailure = BACKGROUND_WIDGET_CONNECTION_ERROR_PATTERN.test(message);

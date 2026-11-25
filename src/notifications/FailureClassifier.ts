@@ -328,7 +328,7 @@ export function assessCauses(
         }
       } else {
         unmet.push(
-          `matches "${sig.title}" but only ${s.tests} test(s) in ${s.modules.size} module(s) this run (needs ${sig.minTests} test(s) in ${sig.minModules} module(s))`
+          `matches "${sig.title}" but only ${plural(s.tests, 'test')} in ${plural(s.modules.size, 'module')} this run (needs ${plural(sig.minTests, 'test')} in ${plural(sig.minModules, 'module')})`
         );
       }
     }

@@ -20,7 +20,7 @@ import { buildCurrentRecord } from '../../src/notifications/scripts/syncHistory'
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
-export type Kind = 'passed' | 'flaky' | 'failed' | 'timedOut' | 'did-not-run' | 'cut-off' | 'skip-reason' | 'skip-no-reason';
+export type Kind = 'passed' | 'flaky' | 'failed' | 'timedOut' | 'did-not-run' | 'cut-off' | 'skip-reason' | 'skip-no-reason' | 'known-bug';
 export interface Def {
   file: string;
   title: string;
@@ -46,6 +46,8 @@ function mkTest(d: Def): JsonTest {
   const b = { projectName: 'chromium', expectedStatus: 'passed', annotations: [] as { type: string; description?: string }[] };
   switch (d.kind) {
     case 'passed': return { ...b, status: 'expected', results: [pass()] };
+    // test.fail(): Playwright reports `expected` although the attempt failed (the Leads RBAC known-bug tests)
+    case 'known-bug': return { ...b, status: 'expected', expectedStatus: 'failed', annotations: [{ type: 'fail' }], results: [fail(d.title)] };
     case 'flaky': return { ...b, status: 'flaky', results: [fail(d.title), pass()] };
     case 'failed': return { ...b, status: 'unexpected', results: [fail(d.title), fail(d.title)] };
     case 'timedOut': return { ...b, status: 'unexpected', results: [fail(d.title, 'timedOut'), fail(d.title, 'timedOut')] };
@@ -66,7 +68,7 @@ export function mkReport(defs: Def[], durationMs = 600_000): JsonReport {
     suites: [...byFile].map(([file, ds]) => ({
       title: file,
       file,
-      specs: ds.map((d) => ({ title: `@regression ${d.title}`, file, line: d.line, ok: d.kind === 'passed' || d.kind === 'flaky', tests: [mkTest(d)] })),
+      specs: ds.map((d) => ({ title: `@regression ${d.title}`, file, line: d.line, ok: d.kind === 'passed' || d.kind === 'flaky' || d.kind === 'known-bug', tests: [mkTest(d)] })),
     })),
   } as JsonReport;
 }

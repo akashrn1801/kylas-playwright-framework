@@ -601,7 +601,7 @@ export class ReportParser {
     const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
     const retriesFromRerun = results.reduce((sum, r) => sum + (r.rerunAttempts ?? 0), 0);
     const projects: string[] = Array.isArray(raw.config?.projects)
-      ? raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name))
+      ? [...new Set(raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name)))] // a merged report has one config per shard job (build #239 listed "chromium" 11 times)
       : [];
     return {
       total,
@@ -667,9 +667,14 @@ export class ReportParser {
             const rerunAttempts = status === 'skipped' ? 0 : allResults.filter((r) => r.rerun === true).length;
             // What the first run made of it: the results that are not the rerun shard's own attempt.
             // 'skipped' and 'interrupted' attempts are a test that did not run (serial dependent, cut-off shard), not a failure.
+            // WHY an attempt "as expected" counts as passed (2026-11-25, build #239: Leads RBAC "3 of 40 failed first" while nothing failed): a test
+            // that calls test.fail() (the known-bug tests L77/L79/L80) is expected to fail; Playwright reports it as `expected` although every
+            // attempt's own status is `failed`. Reading the raw attempt status counted those 3 as failed in the first run, so the history
+            // record said 937 passed / 4 failed while the run's own rerun summary said 940 / 1, and "Passed first time" and its trend were wrong.
+            const wasAsExpected = (r: { status?: string }): boolean => r.status === 'passed' || (test.expectedStatus === 'failed' && r.status === 'failed');
             const ranFirst = allResults.filter((r) => r.rerun !== true && r.status !== 'skipped' && r.status !== 'interrupted');
             const firstRunStatus: NonNullable<TestResult['firstRunStatus']> =
-              ranFirst.length === 0 ? 'skipped' : ranFirst.some((r) => r.status === 'passed') ? (ranFirst.some((r) => r.status !== 'passed') ? 'flaky' : 'passed') : 'failed';
+              ranFirst.length === 0 ? 'skipped' : ranFirst.some(wasAsExpected) ? (ranFirst.some((r) => !wasAsExpected(r)) ? 'flaky' : 'passed') : 'failed';
             // A rerun pass counts as Passed (ADR 0015, amended 2026-11-24): combine-rerun sets the test status to
             // 'expected', and these flags keep what it was before.
             const passedOnRerun =

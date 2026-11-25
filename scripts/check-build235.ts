@@ -102,11 +102,11 @@ function main(): void {
   check(r.ctx.health?.factors.some((f) => /123 unexpected background/.test(f.note)) === true, 'item 5: the health score counts only the 123 unexpected errors (capped at 8 points), never the known noise');
 
   // ── item 6: cause wording ──
-  check(t.includes('Suspected cause of the 2 failures and 8 flaky tests (hints, not verdicts)') && !/the 10 failures/.test(t), 'item 6: "Suspected cause of the 2 failures and 8 flaky tests", not "the 10 failures"');
-  check(t.includes('of the 8 flaky tests, 6 passed on a retry and 2 passed only on the rerun'), 'item 6: ... and says how the 8 flaky tests passed');
+  check(t.includes('Suspected cause of the 10 tests that did not pass first time (hints, not verdicts)') && !/the 10 failures/.test(t), 'item 6: "Suspected cause of the 10 tests that did not pass first time", not "the 10 failures"');
+  check(t.includes('2 failed every attempt and passed on the rerun, 6 passed on a retry'), 'item 6: ... and says how the 8 tests that were not failing at the end passed (2 on the rerun, 6 on a retry)');
 
   // ── item 11: per-test reasons ──
-  check(/6 failed\/flaky test\(s\) were not rerun; their first-run result stands/.test(t) && /6 — the run has failed tests: only those are rerun, flaky tests are not: /.test(t), 'item 11: "not rerun" names the reason that applied, with the tests');
+  check(/6 failed\/flaky tests were not rerun; their first-run result stands/.test(t) && /6 — the run has failed tests: only those are rerun, flaky tests are not: /.test(t), 'item 11: "not rerun" names the reason that applied, with the tests');
   check(!t.includes('form-field suites are never rerun; when the run has failed tests'), 'item 11: the old sentence listing every possible reason is gone');
 
   // ── item 2: load signals ──

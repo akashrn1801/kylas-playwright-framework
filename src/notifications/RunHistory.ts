@@ -556,38 +556,54 @@ export interface SlowTestTrend {
   previousDuration: number | null;
   diffMs: number | null;
   regression: boolean;
+  /** How much slower this whole run was than the compared runs (median of the ratios of every slow test seen in both); 1 = same speed. */
+  runFactor?: number;
 }
 
-// WHY: 20% chosen as a regression threshold noticeably above ordinary CI-
-// runner run-to-run jitter, while still catching a real regression early
-// rather than waiting for it to double. This is a starting heuristic, not a
-// statistically-derived constant — revisit once real slow-test history has
-// accumulated across enough runs to measure actual jitter in this suite.
+// WHY a regression is judged against the run's own speed (2026-11-25, build #239: "13 tests with a performance regression" while every one of the
+// 20 slowest tests was 20-54% slower than its last appearance and the whole run was ~19% slower, 175 min against 147): a runner or a load change
+// (the move into a container, more workers, a busy staging) slows every test at once, and that is not 13 regressions. A test is a regression only
+// when it is slower than its last appearance by more than the run as a whole (ratio above runFactor x 1.2) AND by at least a minute (a 20% rise
+// on a 40 s test is jitter), and only against an appearance in the last SLOW_TEST_COMPARE_RUNS runs (older durations belong to another setup).
 export const SLOW_TEST_REGRESSION_THRESHOLD = 0.2;
+export const SLOW_TEST_REGRESSION_MIN_DIFF_MS = 60_000;
+export const SLOW_TEST_COMPARE_RUNS = 5;
+const SLOW_TEST_MIN_FOR_RUN_FACTOR = 5;
 
 /**
- * For each of the current run's slow tests, finds the most recent prior run
- * in which that same test also appeared in the slow-test list and compares
- * durations. A test with no prior appearance in any stored run's slow-test
- * list gets previousDuration: null — that's a "no history yet" state, not an
- * error, and must render as such rather than a false 0/0 comparison.
+ * For each of the current run's slow tests, finds the most recent prior run (within the last SLOW_TEST_COMPARE_RUNS) in which that same test also
+ * appeared in the slow-test list and compares durations. A test with no such appearance gets previousDuration: null, a "no history yet" state,
+ * not an error, and must render as such rather than a false 0/0 comparison.
  */
 export function computeSlowTestTrend(
   historyBeforeAppend: RunHistoryRecord[],
   currentSlowest: Array<{ title: string; duration: number }>
 ): SlowTestTrend[] {
-  return currentSlowest.map((t) => {
-    let previousDuration: number | null = null;
-    for (let i = historyBeforeAppend.length - 1; i >= 0 && previousDuration === null; i--) {
-      const match = historyBeforeAppend[i].slowestTests?.find((s) => s.title === t.title);
-      if (match) previousDuration = match.duration;
+  const window = historyBeforeAppend.slice(-SLOW_TEST_COMPARE_RUNS);
+  const previousOf = (title: string): number | null => {
+    for (let i = window.length - 1; i >= 0; i--) {
+      const match = window[i].slowestTests?.find((s) => s.title === title);
+      if (match) return match.duration;
     }
+    return null;
+  };
+  const ratios = currentSlowest
+    .map((t) => ({ prev: previousOf(t.title), t }))
+    .filter((x): x is { prev: number; t: { title: string; duration: number } } => x.prev !== null && x.prev > 0)
+    .map((x) => x.t.duration / x.prev)
+    .sort((a, b) => a - b);
+  const runFactor = ratios.length >= SLOW_TEST_MIN_FOR_RUN_FACTOR ? ratios[Math.floor(ratios.length / 2)] : 1;
+  return currentSlowest.map((t) => {
+    const previousDuration = previousOf(t.title);
     if (previousDuration === null) {
-      return { title: t.title, duration: t.duration, previousDuration: null, diffMs: null, regression: false };
+      return { title: t.title, duration: t.duration, previousDuration: null, diffMs: null, regression: false, runFactor };
     }
     const diffMs = t.duration - previousDuration;
-    const regression = previousDuration > 0 && diffMs > previousDuration * SLOW_TEST_REGRESSION_THRESHOLD;
-    return { title: t.title, duration: t.duration, previousDuration, diffMs, regression };
+    const regression =
+      previousDuration > 0 &&
+      diffMs >= SLOW_TEST_REGRESSION_MIN_DIFF_MS &&
+      t.duration / previousDuration > Math.max(runFactor, 1) * (1 + SLOW_TEST_REGRESSION_THRESHOLD);
+    return { title: t.title, duration: t.duration, previousDuration, diffMs, regression, runFactor };
   });
 }
 

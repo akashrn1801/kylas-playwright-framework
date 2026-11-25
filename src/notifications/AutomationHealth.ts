@@ -13,6 +13,7 @@ import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
 import { RenewalFailure, describeRenewalFailure, renewalFailureLabel } from '../auth/renewalFailure';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
+import { nounFor } from './wording';
 
 // WHY these constants (2026-10-06, sandbox Build #186: 0 failed, 906 passed,
 // 9 flaky, 361 unexpected background errors, 49 recurring failures, 42
@@ -122,7 +123,7 @@ export function computeHealthScore(
   const failPenalty = Math.min(report.failed * 3, 25);
   if (failPenalty > 0) {
     score -= failPenalty;
-    factors.push({ name: 'Failures', impact: -failPenalty, note: `${report.failed} failed test(s)` });
+    factors.push({ name: 'Failures', impact: -failPenalty, note: `${report.failed} failed ${nounFor(report.failed, 'test')}` });
   }
 
   // WHY recoveredOnRerun is added (ADR 0015 amendment, 2026-11-24): a test that failed every first attempt and passed
@@ -137,7 +138,7 @@ export function computeHealthScore(
     factors.push({
       name: 'Flakiness',
       impact: -flakyPenalty,
-      note: `${parts.join(', ')} test(s)${unstable > FLAKY_BUDGET ? ` — above the budget of ${FLAKY_BUDGET}` : ''}`,
+      note: `${parts.join(', ')}${unstable > FLAKY_BUDGET ? ` — above the budget of ${FLAKY_BUDGET}` : ''}`,
     });
   }
 
@@ -153,7 +154,7 @@ export function computeHealthScore(
     factors.push({
       name: 'Background errors',
       impact: -miscPenalty,
-      note: `${unexpectedMisc} unexpected background error(s) (capped at ${BACKGROUND_ERROR_CAP} points)`,
+      note: `${unexpectedMisc} unexpected background ${nounFor(unexpectedMisc, 'error')} (capped at ${BACKGROUND_ERROR_CAP} points)`,
     });
   }
 
@@ -172,8 +173,8 @@ export function computeHealthScore(
     // last" comparison this fix exists to stop producing.
     const note =
       suiteDrift.basis === 'previous-reset-run'
-        ? `${suiteDrift.decreaseBy} fewer test(s) ran than the last reset-to-dev run (#${suiteDrift.baselineBuildNumber}, ${suiteDrift.baselineTotal} tests)`
-        : `${suiteDrift.decreaseBy} fewer test(s) ran than the previous run`;
+        ? `${suiteDrift.decreaseBy} fewer ${nounFor(suiteDrift.decreaseBy, 'test')} ran than the last reset-to-dev run (#${suiteDrift.baselineBuildNumber}, ${suiteDrift.baselineTotal} tests)`
+        : `${suiteDrift.decreaseBy} fewer ${nounFor(suiteDrift.decreaseBy, 'test')} ran than the previous run`;
     factors.push({ name: 'Suite drift', impact: -driftPenalty, note });
   }
 
@@ -194,7 +195,7 @@ export function computeHealthScore(
     factors.push({
       name: 'Recurring failures',
       impact: -recurringFailurePenalty,
-      note: `${recurringFailures.length} test(s) recurring failing across recent runs (capped at ${RECURRING_FAILURE_CAP} points)`,
+      note: `${recurringFailures.length} ${nounFor(recurringFailures.length, 'test')} recurring failing across recent runs (capped at ${RECURRING_FAILURE_CAP} points)`,
     });
   }
   const recurringFlakyPenalty = Math.min(
@@ -207,7 +208,7 @@ export function computeHealthScore(
     factors.push({
       name: 'Recurring flakiness',
       impact: -recurringFlakyPenalty,
-      note: `${recurringFlaky.length} test(s) recurring flaky across recent runs (capped at ${RECURRING_FLAKY_CAP} points)`,
+      note: `${recurringFlaky.length} ${nounFor(recurringFlaky.length, 'test')} recurring flaky across recent runs (capped at ${RECURRING_FLAKY_CAP} points)`,
     });
   }
   if (contextPenaltyRaw > CONTEXT_PENALTY_CAP) {
@@ -248,7 +249,7 @@ export function computeHealthScore(
   if (report.failed > 0) {
     const cap = report.failed >= 3 || report.failed >= executed * 0.05 ? FAILURE_CAP_SEVERE : FAILURE_CAP_ANY;
     if (score > cap) {
-      factors.push({ name: 'Failure cap', impact: cap - score, note: `${report.failed} failed test(s) keep health at or below ${cap}/100 (${cap === FAILURE_CAP_SEVERE ? 'Needs Attention' : 'Good'}); raw score ${score}` });
+      factors.push({ name: 'Failure cap', impact: cap - score, note: `${report.failed} failed ${nounFor(report.failed, 'test')} keep health at or below ${cap}/100 (${cap === FAILURE_CAP_SEVERE ? 'Needs Attention' : 'Good'}); raw score ${score}` });
       score = cap;
     }
   }
@@ -334,7 +335,7 @@ export function computeOverallVerdict(
   // only part of the suite, so it can never be 'clear' or 'caution'; the
   // verdict is 'blocked' with a danger tone whatever the surviving counts say.
   if (isIncompleteRun(shardCompleteness)) {
-    const failedNote = report.failed > 0 ? ` (${report.failed} failure(s) in the shards that did report)` : '';
+    const failedNote = report.failed > 0 ? ` (${report.failed} ${nounFor(report.failed, 'failure')} in the shards that did report)` : '';
     return {
       verdict: 'blocked',
       bannerLabel: `🚫 Incomplete Run — ${shardCompleteness.reported} of ${shardCompleteness.expected} shards reported`,
@@ -425,8 +426,8 @@ export function computeOverallVerdict(
     ].filter(Boolean);
     const reasons = [
       aboveBudget ? `${flakyTotal} flaky tests is above the budget of ${FLAKY_BUDGET}` : '',
-      recoveredOnRerun > 0 ? `${recoveredOnRerun} test(s) failed every attempt and passed only on the rerun` : '',
-      notVerified > 0 ? `${notVerified} test(s) did not run in the first run` : '',
+      recoveredOnRerun > 0 ? `${recoveredOnRerun} ${nounFor(recoveredOnRerun, 'test')} failed every attempt and passed only on the rerun` : '',
+      notVerified > 0 ? `${notVerified} ${nounFor(notVerified, 'test')} did not run in the first run` : '',
     ].filter(Boolean);
     return {
       verdict: 'caution',

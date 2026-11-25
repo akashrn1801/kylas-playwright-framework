@@ -30,6 +30,8 @@ import * as path from 'path';
 import { execFileSync, execSync } from 'child_process';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { nounFor } from './wording';
+import { isMergeCommit, mergeTargetBranch, parseCommitFacts } from './CommitInfo';
 
 // WHY: added 2026-07-14 — confirmed live via two real sends that this
 // pipeline had zero freshness checking anywhere: it unconditionally trusted
@@ -503,7 +505,7 @@ export class NotificationService {
     const { subject, html } = this.buildReportUnavailableMessage(input, err);
     try {
       await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
-      logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} recipient(s)`);
+      logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} ${nounFor(recipients.to.length, 'recipient')}`);
     } catch (sendErr) {
       logger.error('[Notification] Failed to send even the report-unavailable alert:', sendErr);
     }
@@ -532,21 +534,37 @@ export class NotificationService {
   // The commit this run tested, as a link with its subject line and author (item 18, 2026-11-25). The link needs only the GitHub remote;
   // the subject and author come from the checkout the notify step runs in (CI has it) and are null when git cannot answer (a scenario's
   // temporary directory, a shallow clone without the commit): the email then shows the link alone, never a guess.
-  private resolveCommitInfo(gitCommit: string): { sha: string; url: string | null; message: string | null; author: string | null } | undefined {
+  private resolveCommitInfo(gitCommit: string): EmailContext['commit'] {
     if (!gitCommit || gitCommit === 'unknown') return undefined;
     const ownerRepo = resolveGithubOwnerRepo();
-    const url = ownerRepo ? `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/commit/${gitCommit}` : null;
-    let message: string | null = null;
-    let author: string | null = null;
-    try {
-      const out = execFileSync('git', ['show', '-s', '--format=%an%x1f%s', gitCommit], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
-      const [a, m] = out.split('\u001f');
-      author = a || null;
-      message = m || null;
-    } catch {
-      // not a git checkout, or the commit is not in it
+    const urlOf = (sha: string): string | null => (ownerRepo ? `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/commit/${sha}` : null);
+    const git = (args: string[]): string | undefined => {
+      try {
+        return execFileSync('git', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
+      } catch {
+        return undefined; // not a git checkout, or the commit is not in it
+      }
+    };
+    const FORMAT = '--format=%H%x1f%an%x1f%s%x1f%P';
+    const pushedRaw = git(['show', '-s', FORMAT, gitCommit]);
+    const pushed = pushedRaw ? parseCommitFacts(pushedRaw) : undefined;
+    if (!pushed) return { sha: gitCommit, url: urlOf(gitCommit), message: null, author: null };
+    // A merge into the run's branch (sandbox merges the feature branch): show the feature's own head commit, newest non-merge commit of the
+    // second parent, and keep the merge as a note.
+    if (isMergeCommit(pushed)) {
+      const headRaw = git(['log', '-1', '--no-merges', FORMAT, pushed.parents[1]]);
+      const head = headRaw ? parseCommitFacts(headRaw) : undefined;
+      if (head) {
+        return {
+          sha: head.sha,
+          url: urlOf(head.sha),
+          message: head.subject || null,
+          author: head.author || null,
+          merge: { sha: pushed.sha, url: urlOf(pushed.sha), into: mergeTargetBranch(pushed.subject) ?? null },
+        };
+      }
     }
-    return { sha: gitCommit, url, message, author };
+    return { sha: pushed.sha, url: urlOf(pushed.sha), message: pushed.subject || null, author: pushed.author || null };
   }
 
   private resolveKnownIssuesUrl(gitCommit: string): string | null {

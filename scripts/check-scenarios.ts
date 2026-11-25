@@ -56,6 +56,7 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '25-many-flaky-over-the-card-cap', title: 'Fourteen flaky tests and ten background-error groups; no rerun', expect: 'amber (above the flaky budget); full cards for at most 10, the others listed by title; background errors grouped', first: [...base(30), ...many(14, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: false, unexpectedErrors: 60 },
   { name: '26-big-failure-cluster', title: 'Twenty failures with the same error message (one cluster)', expect: 'red; one full card for the cluster, the others one line each ("same cause")', first: [...base(30), ...many(20, 'failed', 'same cause', 'ui/same/same.spec.ts', 10)], rerun: true, rerunResult: () => 'failed' },
   { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; the email must stay under 100 KB', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
+  { name: '42-known-bug-tests', title: 'Three known-bug tests (test.fail()) fail as expected, one flaky test', expect: 'green or amber by the flaky budget; the 3 expected failures are Passed first time, never "failed first"', first: [...base(25), ...many(3, 'known-bug', 'known bug', 'rbac/known.rbac.spec.ts', 50), ...many(1, 'flaky', 'flaky')], rerun: true },
 ];
 
 // every branch with its environment (the deployment/PR advice differs by branch)
@@ -166,6 +167,10 @@ export function invariants(s: ScenarioResult): Violation[] {
   // 1-3: the numbers add up and only move in the allowed directions
   if (r.finalPassed + r.failed + r.skipped !== r.total) bad('outcomes-add-up', `Final passed ${r.finalPassed} + failed ${r.failed} + skipped/did-not-run ${r.skipped} = ${r.finalPassed + r.failed + r.skipped}, total ${r.total}`);
   if (r.firstRun.passed + r.firstRun.failed + r.firstRun.flaky + r.firstRun.skipped + r.firstRun.didNotRun !== r.total) bad('first-run-adds-up', `first run does not add up to ${r.total}: ${JSON.stringify(r.firstRun)}`);
+  if (s.record && (s.record.passed !== r.firstRun.passed || s.record.failed !== r.firstRun.failed)) bad('record-equals-first-run', `the history record says ${s.record.passed} passed / ${s.record.failed} failed first, the report ${r.firstRun.passed} / ${r.firstRun.failed}`);
+  // The email's own wording only: the error text of a card is the test's own message and may say "result(s)".
+  const ownWording = s.html.replace(/\b(?:result|attempt|request|element)\(s\)/g, ' '); // the page objects' own error messages (MeetingsPage "result(s)", "attempt(s)")
+  if (/\(s\)/.test(ownWording) || /\b1 (?:tests|errors|failures|shards|hours|days)\b/.test(ownWording.replace(/<[^>]*>/g, ' '))) bad('count-wording', 'a count-based sentence says "(s)" or "1 tests"');
   if (r.finalPassed < r.firstRun.passed) bad('final-passed-ge-first', `Final passed ${r.finalPassed} < first-run passed ${r.firstRun.passed}`);
   if (r.failed > r.firstRun.failed + r.firstRun.didNotRun) bad('final-failed-le-first', `Final failed ${r.failed} > first-run failed ${r.firstRun.failed} + did-not-run ${r.firstRun.didNotRun}`);
   if (table) {

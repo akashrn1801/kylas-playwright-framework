@@ -290,8 +290,8 @@ function main(): void {
   const linked = tpl.html({ ...withC, knownIssuesUrl: 'https://github.com/o/r/blob/abc1234', kiLocations: locateKnownIssues(path.resolve(__dirname, '..')) });
   check(/see <a href="https:\/\/github\.com\/o\/r\/blob\/abc1234\/docs\/known-issues\/watch-items\.md#L\d+"[^>]*>KI-43<\/a> \(watch-items\.md\)/.test(linked), 'item 22: the cause banner links KI-43 to its entry in watch-items.md');
   check(
-    htmlAfter.includes('Suspected cause of the 55 failures and 20 flaky tests (hints, not verdicts): of the 55 that failed outright, 42 environment, 0 application, 0 test/code, 13 unclassified; of the 20 flaky tests, 20 passed on a retry.'),
-    'summary line: failures and flaky tests named separately, failed outright split by cause, flaky listed as passed on a retry'
+    htmlAfter.includes('Suspected cause of the 75 tests that did not pass first time (hints, not verdicts): of the 55 still failing, 42 environment, 0 application, 0 test/code, 13 unclassified; 20 passed on a retry.'),
+    'summary line: tests that did not pass first time, the still-failing ones split by cause, then how the others passed'
   );
   check(htmlAfter.includes('Of the 75: 55 failed outright, 20 passed on retry.'), 'banner explains what the 75 are');
   const dom = run.summary.dominant!;
@@ -429,12 +429,10 @@ function main(): void {
     const expectSplit = [f > 0 ? `${f} failed outright` : '', r > 0 ? `${r} passed on retry` : ''].filter(Boolean).join(', ');
     check(!!d && d.count === f + r && d.failedCount === f && d.retryCount === r && d.total === total && d.failedTotal === f + o && d.retryTotal === r, `banner arithmetic ${f} failed + ${r} retry (+${o} other): computed split`, JSON.stringify(d));
     check(html.includes(`${f + r} of ${total} failed or flaky tests share the signature “search lookup returned no match for a record” (${expectSplit}) — see KI-43`), `banner wording for ${f} failed + ${r} passed on retry`);
-    const rn: number = r; // widened: the loop tuple is a literal union and TS rejects `=== 1` on it
-    const fo: number = f + o;
     const wantSummary = f + o > 0
-      ? `of the ${f + o} that failed outright, ${f} environment, 0 application, 0 test/code, ${o} unclassified${r > 0 ? `; of the ${r} flaky test${rn === 1 ? '' : 's'}, ${r} passed on a retry` : ''}.`
-      : `none failed outright; of the ${r} flaky test${rn === 1 ? '' : 's'}, ${r} passed on a retry.`;
-    const wantHeading = f + o > 0 && r > 0 ? `${f + o} failure${fo === 1 ? '' : 's'} and ${r} flaky test${rn === 1 ? '' : 's'}` : f + o > 0 ? `${f + o} failure${fo === 1 ? '' : 's'}` : `${r} flaky test${rn === 1 ? '' : 's'}`;
+      ? `of the ${f + o} still failing, ${f} environment, 0 application, 0 test/code, ${o} unclassified${r > 0 ? `; ${r} passed on a retry` : ''}.`
+      : `none is still failing; ${r} passed on a retry.`;
+    const wantHeading = `${f + o + r} test${f + o + r === 1 ? '' : 's'} that did not pass first time`;
     check(html.includes(`Suspected cause of the ${wantHeading} (hints, not verdicts): ${wantSummary}`), `summary line for ${f} failed + ${r} passed on retry (+${o} other)`);
   }
 
@@ -523,7 +521,7 @@ function main(): void {
   const cardsHtml = tpl.renderHtml(withRerun, 10);
   check(cardsHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final (cards forced: html() drops cards when the email is too big for Gmail)');
   check((cardsHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
-  check(rerunHtml.includes('were not rerun') && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
+  check(/(?:was|were) not rerun/.test(rerunHtml) && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
   const capHtml = tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
   check(capHtml.includes('Not rerun: 90 failed/flaky tests is more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
   check(!tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'none', rows: [], excluded: [] } }).includes('section-rerun'), 'rerun: nothing to rerun = no rerun section');
@@ -587,7 +585,7 @@ function main(): void {
   check(recoveredEvidence.startsWith('passed only on the rerun (failed 2 times first)'), 'card evidence: a test that passed only on the rerun says so, not "passed on retry"', recoveredEvidence);
   check((viaAssessed.get(unstableViaRerun.find((x) => x.title === 'retry only')!)?.evidence[0] ?? '').startsWith('passed on retry (1 retry)'), 'card evidence: an in-job retry still says "passed on retry"');
   const viaHtml = tpl.html({ ...rr, report: viaRerun, causeSummary: viaSummary, clusters: [], flakyFailureDetails: [] });
-  check(viaHtml.includes('Suspected cause of the 3 flaky tests (hints, not verdicts): none failed outright; of the 3 flaky tests, 2 passed on a retry and 1 passed only on the rerun.'), 'email summary line: "2 passed on a retry and 1 passed only on the rerun"');
+  check(viaHtml.includes('Suspected cause of the 3 tests that did not pass first time (hints, not verdicts): none is still failing; 1 failed every attempt and passed on the rerun, 2 passed on a retry.'), 'email summary line: "1 failed every attempt and passed on the rerun, 2 passed on a retry"');
 
   // 6. output
   if (wantTable) {
