@@ -3,7 +3,7 @@
 > **Purpose:** How a test run becomes a summary email, a history ledger entry and a background-error report; what each `src/notifications` module owns.
 > **Read when:** Changing anything under `src/notifications/`, `src/reporters/`, `src/error-collector/`, or `scripts/merge-misc-errors.ts`; debugging an odd email or an empty trend section.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 3ac81e5
+> **Last verified:** 2026-11-25 @ c12c85c
 
 ## 1. Data flow
 

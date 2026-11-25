@@ -3,7 +3,7 @@
 > **Purpose:** The only file loaded into every session: standing rules, key commands, a "task → read this" table, and the Definition of Done. Everything else is read on demand.
 > **Read when:** always (it is auto-loaded). Keep it a router — detail belongs in `docs/`.
 > **Size budget:** 10k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 3ac81e5
+> **Last verified:** 2026-11-25 @ c12c85c
 
 Playwright + TypeScript E2E suite for Kylas Sales CRM (UI + RBAC, per-env CI). Branches: `feature/* → dev → qa → stage → prod → main` (+ `sandbox` pre-PR). Claude Code and every agent never run any `git` or `gh` command, read-only ones included (`status`, `log`, `diff`, `gh pr list`); this is enforced by `Bash(git *)` / `Bash(gh *)` deny rules in `.claude/settings.json`. Ask the user for any git information needed. Project scripts that call git internally (e.g. `npm run check:docs`) still run.
 

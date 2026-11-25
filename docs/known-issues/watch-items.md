@@ -3,7 +3,7 @@
 > **Purpose:** Open or unverified items whose evidence is a one-time observation or a never-run CI/Jenkins path, moved verbatim from `docs/KNOWN_ISSUES_ACTIVE.md` on 2026-11-04 to keep that file under 80% of its budget. IDs are unchanged; each is still tracked and listed in the pointer table of the active file.
 > **Read when:** you touch the code, workflow or Jenkinsfile an entry names, or a CI/report failure looks like one of them.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 4a85ad7
+> **Last verified:** 2026-11-25 @ c12c85c
 
 Entries are unchanged except relative links (rewritten for this folder). Closing one: move a ≤15-line summary to its resolved topic file and delete it here and from the pointer table. Unlike the other files in this folder, these are NOT resolved.
 
@@ -102,3 +102,15 @@ Entries are unchanged except relative links (rewritten for this folder). Closing
 - **Status:** inconclusive · **Since:** 2026-08-26
 - **What:** a thrown Protocol error during fixture setup in one long multi-worker run (resource-pressure-consistent, never reproduced). The adjacent structural gap (recovery login not wrapped, so setup got one attempt instead of two) was fixed ([locators-and-timing.md](../known-issues/locators-and-timing.md)); the Protocol error itself was deliberately not hardened (rule 10).
 - **Next check:** a recurrence with resource metrics (`free -h`, process counts) from the runner.
+
+## Moved from KNOWN_ISSUES_ACTIVE.md on 2026-11-25 (verbatim, to keep that file inside 30k)
+
+### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
+- **Status:** inconclusive · **Since:** 2026-08-07
+- **What:** two occurrences (a Lead create-POST wait; a Quotations HTTP 500 after three rapid re-auth cycles) were correlated with another worker forcing a fresh login for the same role. `AuthManager` *does* serialize file writes (`withFileLock` + atomic rename), so file corruption is excluded; a same-role session-invalidation collision is not. Almost every pipeline runs `--workers=2`, so the old "always run `--workers=1`" requirement is not observed in CI.
+- **Next check:** per-worker credential isolation or a confirmed trace of the invalidation; until then treat a lone `--workers>1` ID-capture timeout near a `forcing a fresh login` log line as suspect.
+
+### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
+- **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
+- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible recurrence 2026-10-29 (run 40821683680).
+- **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./rbac-and-test-isolation.md) ("OPEN (KI-43)").

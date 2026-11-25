@@ -2164,10 +2164,13 @@ export class CallLogsPage extends BasePage {
   // WHY: Creates a fresh lead owned by the current user and returns its full name.
   // Used when entity dropdown only shows SHR/ADM leads (shared/admin-owned)
   // which may not have call log permission, causing HTTP 403.
-  private async ensureOwnedLeadExists(): Promise<string> {
+  // Public since 2026-11-25 so the manual form-fill tests (CL8, CL9, CL10, CL11) can pre-create their lead instead of letting
+  // fillCreateForm() pick a random existing one (two random leads had no phone: "No options" at Phone Number, KI-73). The lead
+  // has a phone (generateLeadData) and a run-stamped last name, which the associated-entity search types, so it finds this lead only.
+  async ensureOwnedLeadExists(): Promise<string> {
     logger.info('Creating owned lead for call log entity selection');
     const leadsPage = new LeadsPage(this.page);
-    const leadData = generateLeadData();
+    const leadData = generateLeadData({ lastName: `CLG${Date.now()}` });
     await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     const fullName = `${leadData.firstName} ${leadData.lastName}`;

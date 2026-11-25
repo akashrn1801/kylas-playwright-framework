@@ -76,10 +76,12 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Contact', outcome: 'Busy' });
+    // run-owned contact (with a phone) instead of a random existing one
+    const contactName = await callLogsPage.ensureOwnedContactExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Contact');
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, contactName);
     await callLogsPage.assertDurationDisabled();
     const callLogId = await callLogsPage.saveCallLog();
     expect(callLogId).not.toBeNull();
@@ -133,10 +135,13 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Deal', outcome: 'Rejected' });
+    // run-owned deal and Associated Contact (the contact has the phone the form auto-populates)
+    const dealName = await callLogsPage.ensureOwnedDealExists();
+    const contactName = await callLogsPage.ensureOwnedContactExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Deal');
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, dealName, false, contactName);
     await callLogsPage.assertPhoneFieldDisabled();
     await callLogsPage.assertDurationDisabled();
     const callLogId = await callLogsPage.saveCallLog();
@@ -166,11 +171,13 @@ test.describe('Call Logs', () => {
   test('@regression admin should verify duration field enables when outcome is connected and disables when outcome is changed to busy', async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Lead');
     await callLogsPage.fillCreateForm(
-      generateCallLogData({ entityType: 'Lead', outcome: 'Connected' })
+      generateCallLogData({ entityType: 'Lead', outcome: 'Connected' }),
+      leadName
     );
     await callLogsPage.assertDurationEnabled();
     logger.info('Duration enabled for Connected — verified');
@@ -194,9 +201,10 @@ test.describe('Call Logs', () => {
       outcome: 'Connected',
       duration: { value: 61, type: 'seconds' },
     });
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, leadName);
     await callLogsPage['saveButton']().scrollIntoViewIfNeeded();
     await callLogsPage['saveButton']().click();
     // WHY: Check form stayed open or error appeared — either means validation worked
@@ -219,11 +227,7 @@ test.describe('Call Logs', () => {
     const callLogsPage = new CallLogsPage(adminPage);
     // Run-owned lead WITH a phone number: the form's Phone Number step needs one, and the old random pick of an existing lead
     // landed on leads without a phone ("No options", staging 2026-11-25, two different leads) before the date step was reached.
-    const leadsPage = new LeadsPage(adminPage);
-    const leadData = generateLeadData();
-    await leadsPage.goToLeadsList();
-    const leadId = await leadsPage.createLead(leadData);
-    expect(leadId, 'Lead ID should be captured after create').not.toBeNull();
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     // The Date field is disabled until the form's earlier steps are done (CL10 screenshot and traces, B6: still
@@ -232,7 +236,7 @@ test.describe('Call Logs', () => {
     // selects the date right after the outcome.
     const clData = generateCallLogData({ entityType: 'Lead', outcome: 'Busy' });
     await callLogsPage.fillEntityType(clData.entityType);
-    await callLogsPage['searchAndSelectEntity'](callLogsPage['associatedEntityInput'](), clData.entityType, `${leadData.firstName} ${leadData.lastName}`);
+    await callLogsPage['searchAndSelectEntity'](callLogsPage['associatedEntityInput'](), clData.entityType, leadName);
     await callLogsPage.fillPhoneNumber();
     await callLogsPage.fillCallType(clData.callType);
     await callLogsPage.fillOutcome(clData.outcome);
@@ -269,9 +273,10 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Lead', outcome: 'Connected' });
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, leadName);
     // WHY: capture ID before save — toast appears immediately after save button click
     const toastIdPromise = callLogsPage['captureIdFromToast']();
     await callLogsPage['saveButton']().scrollIntoViewIfNeeded();

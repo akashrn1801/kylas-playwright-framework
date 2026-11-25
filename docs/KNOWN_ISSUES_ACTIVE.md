@@ -2,8 +2,8 @@
 
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
-> **Size budget:** 31k chars (hard cap 60k; raised from 30k on 2026-11-25 for KI-73)
-> **Last verified:** 2026-11-25 @ 0fec7ea
+> **Size budget:** 30k chars (hard cap 60k)
+> **Last verified:** 2026-11-25 @ c12c85c
 
 **Rules.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -131,11 +131,6 @@
 
 ---
 
-### KI-73 — Call-log UI tests pick a random existing lead/contact/deal
-- **Status:** open · **Since:** 2026-11-25
-- **What:** `fillCreateForm(data)` without an owned name takes a random existing entity (`searchAndSelectEntity` no-term path). Staging 2026-11-25: two different random leads had no phone ("No options" at Phone Number), so CL10 stopped before its date step; CL10 now creates its own lead. About 5 other `call-logs.spec.ts` tests and the entity-type helpers still pick at random (rbac tests already create owned leads).
-- **Next check:** give each create test a run-owned entity, like `createOwnedLead` in `call-logs.rbac.spec.ts`.
-
 ## B. Infrastructure and CI
 
 ### KI-50 — QA front end drops custom-field values typed in the first ~0.5 s of the product form
@@ -152,11 +147,6 @@
 - **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
 - **What:** measured token lifetimes differ between investigations (~10.4 h, ~20 min once, ~101 min later). Since 2026-11-05 (ADR 0016) the refresh margin is sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669). Why the lifetime varies is unexplained.
 - **Next check:** investigate why it varies. History: [session-expiry-and-auth.md](./known-issues/session-expiry-and-auth.md).
-
-### KI-17 — Cross-worker re-login collision: hypothesis, never confirmed
-- **Status:** inconclusive · **Since:** 2026-08-07
-- **What:** two occurrences (a Lead create-POST wait; a Quotations HTTP 500 after three rapid re-auth cycles) were correlated with another worker forcing a fresh login for the same role. `AuthManager` *does* serialize file writes (`withFileLock` + atomic rename), so file corruption is excluded; a same-role session-invalidation collision is not. Almost every pipeline runs `--workers=2`, so the old "always run `--workers=1`" requirement is not observed in CI.
-- **Next check:** per-worker credential isolation or a confirmed trace of the invalidation; until then treat a lone `--workers>1` ID-capture timeout near a `forcing a fresh login` log line as suspect.
 
 ### KI-21 — Unbounded random-option clicks remain in Leads and Quotations
 - **Status:** unverified (carried over; not re-read this session) · **Since:** 2026-07
@@ -176,11 +166,6 @@
 
 ### KI-26 — Repo hygiene
 - **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./known-issues/ci-pipelines.md). <!-- ref-ok -->
-
-### KI-43 — Staging search index not reflecting new records (sandbox 38582148420: 64 failed, 38690038228: 55 failed)
-- **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
-- **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible recurrence 2026-10-29 (run 40821683680).
-- **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md) ("OPEN (KI-43)").
 
 ### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
 - **Status:** open for CI confirmation · **Since:** 2026-10-07
