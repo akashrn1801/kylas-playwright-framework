@@ -9,7 +9,8 @@
  *  - images: only `cid:` (an inline attachment; Gmail blocks remote images and strips data: URIs), each with alt, width and height
  *  - inline CSS (the layout): no flex, grid, gap, position, float, display other than block / inline / inline-block / none, no calc(), var(), vw/vh,
  *    clamp/min/max(), transform, animation, transition, filter, object-fit, gradients, url(), @import, @font-face; font families only from the system stack
- *  - the <style> block is progressive enhancement only: outside @media only cosmetic properties; inside a max-width @media only the phone adjustments
+ *  - the <style> block holds the styles moved out of the elements (repeated inline styles become short classes) and the phone rules: it may hold nothing an
+ *    inline style may not; inside a max-width @media only the phone adjustments
  *    (display none/block/inline-block, widths, padding, wrapping); no other at-rules; and the layout must stand without it (every tile cell keeps its
  *    colour inline, the image its size inline)
  *  - the head declares charset, viewport and a light colour scheme
@@ -85,9 +86,11 @@ export function lintEmailHtml(html: string): string[] {
     const phone = [...css.matchAll(/@media[^{]*\{([\s\S]*?\})\s*\}/gi)].map((m) => m[1]).join('\n');
     const top = css.replace(/@media[^{]*\{[\s\S]*?\}\s*\}/gi, '');
     const props = (body: string): string[] => [...body.matchAll(/([a-z-]+)\s*:\s*([^;}]+)[;}]/gi)].map((m) => `${m[1].toLowerCase()}=${m[2].trim()}`);
-    for (const p of props(top)) {
-      const [k] = p.split('=');
-      if (!STYLE_COSMETIC.has(k)) bad('style-block-layout', `"${k}" outside @media: the <style> block may only be cosmetic (${p.slice(0, 60)})`);
+    // Outside @media the block carries the styles moved out of the elements (E7, 2026-11-25: repeated inline styles become classes), so it may hold any
+    // property an inline style may hold; what an inline style may not hold (flex, grid, position, float, odd display values, functions, effects, gradients,
+    // url()) it may not hold either.
+    for (const rule of top.matchAll(/\{([^{}]*)\}/g)) {
+      for (const [id, re] of INLINE_BANNED) if (re.test(rule[1])) bad('style-block-layout', `${id} in a <style> rule: ${rule[1].slice(0, 70)}`);
     }
     for (const p of props(phone)) {
       const [k, v] = p.split('=');
@@ -147,9 +150,9 @@ function main(): void {
 
   // ── the real emails ──
   const corpus: Array<[string, string]> = [];
-  for (const spec of SCENARIOS) corpus.push([`scenario ${spec.name}`, runScenario(spec).html]);
-  corpus.push(['build #239', replayBuild239().html], ['build #240', replayBuild240().html], ['build #235', replayBuild235().html], ['worst case', replayBuild235({ fixture: buildWorstCaseFixture() }).html]);
-  corpus.push(['build #235 blocked', replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } }).html]);
+  for (const spec of SCENARIOS) corpus.push([`scenario ${spec.name}`, runScenario(spec).sent]);
+  corpus.push(['build #239', replayBuild239().sent], ['build #240', replayBuild240().sent], ['build #235', replayBuild235().sent], ['worst case', replayBuild235({ fixture: buildWorstCaseFixture() }).sent]);
+  corpus.push(['build #235 blocked', replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } }).sent]);
   let bytesLinted = 0;
   const problems: string[] = [];
   for (const [name, html] of corpus) {

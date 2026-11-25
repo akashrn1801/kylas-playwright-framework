@@ -611,9 +611,27 @@ export class ContactsPage extends BasePage {
 
   async clickAddContact(): Promise<void> {
     logger.info('Clicking Add Contact');
-    await this.click(this.addButton(), 'add contact button');
+    // WHY the bounded re-click (sandbox build #240, contacts.spec:149: "input[name=firstName] not found" 10 s after one click): the same "click lands,
+    // nothing opens" React race already fixed in CompaniesPage.clickAddCompany() and LeadsPage.clickAddLead(). The Add button is clicked only while the
+    // modal is not open (a re-click through an open modal's backdrop is impossible), each attempt waits for the form's own first field, and the last
+    // failure is the original loud expect. A first-click open (the norm) exits after one attempt.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!(await this.editModal().isVisible().catch(() => false))) {
+        await this.click(this.addButton(), 'add contact button');
+      }
+      const opened = await this.firstNameInput()
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .then(() => true)
+        .catch(() => false);
+      if (opened) {
+        logger.success('Contact form opened');
+        return;
+      }
+      logger.info(`"Add Contact" form did not open (attempt ${attempt}/${maxAttempts}), re-clicking`);
+    }
     await this.withSessionExpiryRecovery(() =>
-      expect(this.firstNameInput()).toBeVisible({ timeout: 10000 })
+      expect(this.firstNameInput()).toBeVisible({ timeout: config.timeouts.expect })
     );
     logger.success('Contact form opened');
   }

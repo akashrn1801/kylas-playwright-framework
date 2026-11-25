@@ -307,7 +307,10 @@ export interface Replay {
   report: ParsedReport;
   record: RunHistoryRecord;
   ctx: EmailContext;
+  /** The email with every style inline (what the checks parse). */
   html: string;
+  /** The email as sent: repeated inline styles moved into short classes of the head <style> block (E7). */
+  sent: string;
   subject: string;
 }
 
@@ -406,7 +409,8 @@ function replayActive(opts: ReplayOptions): Replay {
     ctx.nodeVersion = 'v22.23.5';
     ctx.osInfo = 'linux 7.0.0-1017-azure';
     const tpl = new EmailTemplate();
-    return { dir, first, rerun, list, combined, summary, report, record, ctx, html: tpl.html(ctx), subject: tpl.subject(ctx) };
+    const readable = tpl.htmlReadable(ctx); // one render: the sent email is this with its styles compacted
+    return { dir, first, rerun, list, combined, summary, report, record, ctx, html: readable, sent: EmailTemplate.compactStyles(readable), subject: tpl.subject(ctx) };
   } finally {
     process.chdir(cwd);
     if (!opts.keepDir) {

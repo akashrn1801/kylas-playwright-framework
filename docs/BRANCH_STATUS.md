@@ -3,7 +3,7 @@
 > **Purpose:** Where the current feature branch stands (PR, CI result, open questions); a dated snapshot, not a rulebook.
 > **Read when:** You start a session on this branch, or need to know what is unmerged and unproven.
 > **Size budget:** 4k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ 00e069d
+> **Last verified:** 2026-11-25 @ c59da69
 
 Snapshot of 2026-11-25. Git facts come from the maintainer's statements; re-check before trusting.
 

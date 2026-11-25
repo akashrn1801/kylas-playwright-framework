@@ -30,16 +30,16 @@ const inline = (html: string, ctx: EmailContext): string => {
 };
 
 const r239 = replayBuild239();
-fs.writeFileSync(path.join(out, 'after.html'), inline(r239.html, r239.ctx));
+fs.writeFileSync(path.join(out, 'after.html'), inline(r239.sent, r239.ctx));
 fs.writeFileSync(path.join(out, 'after.txt'), `Subject: ${r239.subject}\n\n${new EmailTemplate().text(r239.ctx)}`);
 const before = arg('--before');
 if (before) fs.copyFileSync(before, path.join(out, 'before.html'));
 const phone = (html: string): string =>
   `<!doctype html><meta charset="utf-8"><title>375 px</title><body style="margin:0;background:#E5E9EE"><div style="width:375px;margin:16px auto;box-shadow:0 0 0 1px #B8C0CC"><iframe style="width:375px;height:5200px;border:0;display:block;background:#fff" srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe></div></body>`;
-fs.writeFileSync(path.join(out, 'after-mobile.html'), phone(inline(r239.html, r239.ctx)));
+fs.writeFileSync(path.join(out, 'after-mobile.html'), phone(inline(r239.sent, r239.ctx)));
 const r240 = replayBuild240();
-fs.writeFileSync(path.join(out, 'after-240.html'), inline(r240.html, r240.ctx));
-fs.writeFileSync(path.join(out, 'after-240-mobile.html'), phone(inline(r240.html, r240.ctx)));
+fs.writeFileSync(path.join(out, 'after-240.html'), inline(r240.sent, r240.ctx));
+fs.writeFileSync(path.join(out, 'after-240-mobile.html'), phone(inline(r240.sent, r240.ctx)));
 const r235 = replayBuild235();
 const blocked = replayBuild235({
   blockedBySession: {
@@ -47,6 +47,6 @@ const blocked = replayBuild235({
     renewalFailure: { version: 1 as const, role: 'admin', kind: 'not-renewed-after-logout' as const, minutesLeft: 37, endIso: '2026-11-24T15:42:07.402Z', windowMin: 240, sameSession: true, oldTokenStatusAfterLogout: 200, message: 'The admin session has only 37 min left after logout and a fresh login', at: '2026-11-24T15:05:00.000Z' },
   },
 });
-fs.writeFileSync(path.join(out, 'blocked.html'), inline(blocked.html, blocked.ctx));
-fs.writeFileSync(path.join(out, 'build235-after.html'), inline(r235.html, r235.ctx));
-process.stdout.write(`#240 after-240.html ${kib(r240.html)}\nblocked.html ${kib(blocked.html)}\n#239 after.html ${kib(r239.html)}  subject: ${r239.subject}\n#235 build235-after.html ${kib(r235.html)}  subject: ${r235.subject}\n-> ${out}\n`);
+fs.writeFileSync(path.join(out, 'blocked.html'), inline(blocked.sent, blocked.ctx));
+fs.writeFileSync(path.join(out, 'build235-after.html'), inline(r235.sent, r235.ctx));
+process.stdout.write(`#240 after-240.html ${kib(r240.sent)}\nblocked.html ${kib(blocked.sent)}\n#239 after.html ${kib(r239.sent)}  subject: ${r239.subject}\n#235 build235-after.html ${kib(r235.sent)}  subject: ${r235.subject}\n-> ${out}\n`);

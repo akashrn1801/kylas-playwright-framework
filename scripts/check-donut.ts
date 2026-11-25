@@ -78,7 +78,7 @@ function main(): void {
   // ── the email: the image, its alt text and the figure ──
   const r = replayBuild239();
   const tpl = new EmailTemplate();
-  const html = tpl.html(r.ctx);
+  const html = tpl.htmlReadable(r.ctx);
   const att = tpl.chartAttachment(r.ctx);
   check(!!att && att.cid === DONUT_CID && att.contentType === 'image/png' && att.content.length < 30 * 1024 && html.includes(`src="cid:${DONUT_CID}"`), 'email: the donut is an inline CID attachment the HTML refers to, under 30 KB');
   const ch = outcomeChart(html);
@@ -92,7 +92,7 @@ function main(): void {
   const broken = new EmailTemplate(() => {
     throw new Error('simulated: image library missing');
   });
-  const fhtml = broken.html(r.ctx);
+  const fhtml = broken.htmlReadable(r.ctx);
   const fatt = broken.chartAttachment(r.ctx);
   logger.warn = realWarn;
   const fch = outcomeChart(fhtml);

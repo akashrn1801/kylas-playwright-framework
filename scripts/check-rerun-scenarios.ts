@@ -146,7 +146,7 @@ function pipeline(firstDefs: Def[], rerunDefs: Def[] | null, o: PipelineOpts = {
   } finally {
     process.chdir(cwd);
   }
-  return { list, summary, combined, parsed, subject: tpl.subject(ctx), html: tpl.html(ctx), history };
+  return { list, summary, combined, parsed, subject: tpl.subject(ctx), html: tpl.htmlReadable(ctx), history };
 }
 
 // ── reading the rendered email ────────────────────────────────────────────────────────────────────────────────
@@ -552,7 +552,7 @@ function render(combined: JsonReport, summary: RerunSummary, list: RerunList): P
   } finally {
     process.chdir(cwd);
   }
-  return { list, summary, combined, parsed, subject: tpl.subject(ctx), html: tpl.html(ctx), history };
+  return { list, summary, combined, parsed, subject: tpl.subject(ctx), html: tpl.htmlReadable(ctx), history };
 }
 
 // ── 9 + 10: the real scripts/combine-rerun.ts, run as CI runs it ──────────────────────────────────────────────

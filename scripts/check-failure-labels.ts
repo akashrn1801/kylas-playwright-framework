@@ -266,7 +266,7 @@ function main(): void {
   // 2. computed fields identical with and without causes; html differs only by the new fragments
   const without = run.ctxFor(false);
   const subjectBefore = tpl.subject(without);
-  const htmlBefore = tpl.html(without);
+  const htmlBefore = tpl.htmlReadable(without);
   const regBefore = [...run.details, ...run.flaky].map((d) => `${d.test.title}|${d.category}|${d.regressionStatus}`);
   const snapshot = (ctx: EmailContext): string => {
     const input: NotificationInput = { jsonReportPath: 'x', env: 'staging', branch: 'sandbox', buildNumber: '1', buildUrl: 'u', gitCommit: 'abc1234', triggeredBy: 't', runSource: 'github-actions' };
@@ -277,7 +277,7 @@ function main(): void {
   };
   const snapBefore = snapshot(without);
   const withC = run.ctxFor(true);
-  const htmlAfter = tpl.html(withC);
+  const htmlAfter = tpl.htmlReadable(withC);
   check(snapshot(withC) === snapBefore, 'verdict, health, counts, dedup key, subject, unexpectedErrors identical with and without labels');
   check(tpl.subject(withC) === subjectBefore, 'subject line identical');
   check(JSON.stringify([...run.details, ...run.flaky].map((d) => `${d.test.title}|${d.category}|${d.regressionStatus}`)) === JSON.stringify(regBefore), 'category and regression status per failure identical');
@@ -287,7 +287,7 @@ function main(): void {
     'banner text names N of M, the failed/passed-on-retry split and KI-43'
   );
   // item 22 (commit 3): "see KI-43" is a link to its entry, naming the topic file, once the doc locations and the blob base are known
-  const linked = tpl.html({ ...withC, knownIssuesUrl: 'https://github.com/o/r/blob/abc1234', kiLocations: locateKnownIssues(path.resolve(__dirname, '..')) });
+  const linked = tpl.htmlReadable({ ...withC, knownIssuesUrl: 'https://github.com/o/r/blob/abc1234', kiLocations: locateKnownIssues(path.resolve(__dirname, '..')) });
   check(/see <a href="https:\/\/github\.com\/o\/r\/blob\/abc1234\/docs\/known-issues\/watch-items\.md#L\d+"[^>]*>KI-43<\/a> \(watch-items\.md\)/.test(linked), 'item 22: the cause banner links KI-43 to its entry in watch-items.md');
   check(
     htmlAfter.includes('Suspected cause of the 75 tests that did not pass first time (hints, not verdicts): of the 55 still failing, 42 environment, 0 application, 0 test/code, 13 unclassified; 20 passed on a retry.'),
@@ -424,7 +424,7 @@ function main(): void {
   for (const [f, r, o] of [[9, 3, 4], [9, 0, 0], [0, 9, 0], [20, 11, 5]] as const) {
     const b = build([...lookups(f, r), ...other(o)]);
     const d = b.summary.dominant;
-    const html = tpl.html(b.ctxFor(true));
+    const html = tpl.htmlReadable(b.ctxFor(true));
     const total = f + r + o + 0;
     const expectSplit = [f > 0 ? `${f} failed outright` : '', r > 0 ? `${r} passed on retry` : ''].filter(Boolean).join(', ');
     check(!!d && d.count === f + r && d.failedCount === f && d.retryCount === r && d.total === total && d.failedTotal === f + o && d.retryTotal === r, `banner arithmetic ${f} failed + ${r} retry (+${o} other): computed split`, JSON.stringify(d));
@@ -437,13 +437,13 @@ function main(): void {
   }
 
   // ask-the-Kylas-team: dated, labelled, only for confirmed signatures
-  const bannerHtml = tpl.html(run.ctxFor(true));
+  const bannerHtml = tpl.htmlReadable(run.ctxFor(true));
   const ask = reg0.askKylasTeam!;
   check(bannerHtml.includes('Observed on 2026-10-15 (a one-off manual check, not measured by this run): ') && bannerHtml.includes(ask.observation.slice(0, 40)), 'banner shows the probe as a dated, one-off observation');
   check(bannerHtml.includes('Signature registered 2026-10-15.'), 'banner shows the date the signature was registered');
   check(bannerHtml.includes(ask.question.slice(0, 40)) && !/\(probe 2026-10-15\)/.test(bannerHtml), 'question and observation are shown separately');
   const unconfirmed: SignatureRegistry = { ...registry, signatures: registry.signatures.map((x) => (x.id === 'search-lookup-miss' ? { ...x, confirmed: false } : x)) };
-  const unconfirmedHtml = tpl.html(build(replay(), unconfirmed).ctxFor(true));
+  const unconfirmedHtml = tpl.htmlReadable(build(replay(), unconfirmed).ctxFor(true));
   check(unconfirmedHtml.includes('Likely environment problem') && !unconfirmedHtml.includes('To ask the Kylas dev team') && !unconfirmedHtml.includes('Observed on'), 'an unconfirmed signature still gets the banner but no ask-the-Kylas-team text or probe date');
 
   // registry validation and the loader with bad files
@@ -499,7 +499,7 @@ function main(): void {
 
   // 9. rerun shard (ADR 0015): one email, first run next to after-rerun; without a summary the email is exactly as before
   const rr = run.ctxFor(true);
-  const baseHtml = tpl.html(rr);
+  const baseHtml = tpl.htmlReadable(rr);
   // the first test of the first cluster: the one whose full card the email shows (a cluster's other tests are one line each, 'same cause')
   const failedT = rr.clusters?.[0]?.details[0]?.test ?? run.report.failedTests[0];
   const flakyT = run.report.flakyTests[0];
@@ -513,8 +513,8 @@ function main(): void {
     ],
   };
   const withRerun = { ...rr, rerun: rerunSummary };
-  const rerunHtml = tpl.html(withRerun);
-  check(normHtml(tpl.html({ ...rr, rerun: null })) === normHtml(baseHtml) && normHtml(tpl.html({ ...rr, rerun: undefined })) === normHtml(baseHtml), 'rerun: no summary (kill switch off, old run) = the email is exactly as before');
+  const rerunHtml = tpl.htmlReadable(withRerun);
+  check(normHtml(tpl.htmlReadable({ ...rr, rerun: null })) === normHtml(baseHtml) && normHtml(tpl.htmlReadable({ ...rr, rerun: undefined })) === normHtml(baseHtml), 'rerun: no summary (kill switch off, old run) = the email is exactly as before');
   check(snapshot(withRerun) === snapshot(rr) && tpl.subject(withRerun) === tpl.subject(rr), 'rerun: verdict, health, counts, dedup key and subject do not change with the rerun section');
   check(/First run<\/th>/.test(rerunHtml) && /Final result<\/th>/.test(rerunHtml) && !/After rerun<\/th>/.test(rerunHtml), 'rerun: summary table has the columns "First run" and "Final result"');
   check(rerunHtml.includes('1 after the rerun') && rerunHtml.includes('Passed on rerun') && !rerunHtml.includes('recovered on rerun'), 'rerun: a test that passed on the rerun is counted as Passed ("1 after the rerun") and named "Passed on rerun"');
@@ -522,10 +522,10 @@ function main(): void {
   check(cardsHtml.includes('first run <strong>Failed</strong> &rarr; rerun <strong>Failed</strong> &rarr; final <strong style="color:#CF222E;">Failed</strong>'), 'rerun: the failed test card shows first run -> rerun -> final (cards forced: html() drops cards when the email is too big for Gmail)');
   check((cardsHtml.match(/final <strong/g) ?? []).length >= 2, 'rerun: the flaky row and the failed card both show first -> rerun -> final');
   check(/(?:was|were) not rerun/.test(rerunHtml) && rerunHtml.includes('section-rerun'), 'rerun: excluded tests are mentioned, the section has an anchor');
-  const capHtml = tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
+  const capHtml = tpl.htmlReadable({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'cap', candidates: 90, rows: [] } });
   check(capHtml.includes('Not rerun: 90 failed/flaky tests are more than the limit of 60'), 'rerun: a skipped rerun (cap) says why');
-  check(!tpl.html({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'none', rows: [], excluded: [] } }).includes('section-rerun'), 'rerun: nothing to rerun = no rerun section');
-  check(tpl.html({ ...rr, rerun: { ...rerunSummary, rerunOf: { runId: '99', runNumber: '12' } } }).includes('Manual rerun of run #12'), 'rerun: a manual rerun names the run it reran');
+  check(!tpl.htmlReadable({ ...rr, rerun: { ...rerunSummary, ran: false, reason: 'none', rows: [], excluded: [] } }).includes('section-rerun'), 'rerun: nothing to rerun = no rerun section');
+  check(tpl.htmlReadable({ ...rr, rerun: { ...rerunSummary, rerunOf: { runId: '99', runNumber: '12' } } }).includes('Manual rerun of run #12'), 'rerun: a manual rerun names the run it reran');
 
   // 10. email review 2026-11-03: fixes proven by evidence
   check(!baseHtml.includes('id=""'), 'email: no empty id="" attribute on flaky rows without detail');
@@ -549,7 +549,7 @@ function main(): void {
   check(sweep.totalRetries === 2 && sweep.retriesFromNonCleanTests === 1 && sweep.retriesFromCleanSweeps === 1, 'parser: a serial dependent that did not run ([skipped, skipped]) adds no retry; the swept count is only tests that really passed twice', `${sweep.totalRetries}/${sweep.retriesFromNonCleanTests}/${sweep.retriesFromCleanSweeps}`);
   check(sweep.skipped === 1 && sweep.total === 3 && sweep.passed + sweep.failed + sweep.flaky + sweep.skipped === sweep.total, 'parser: passed + failed + flaky + skipped = total');
   const twoRetries = mkReport([{ file: 'ui/a.spec.ts', title: 'flaky twice', status: 'flaky', res: ['failed', 'failed', 'passed'] }, { file: 'ui/a.spec.ts', title: 'flaky once', status: 'flaky', res: ['failed', 'passed'] }]);
-  const retryHtml = tpl.html({ ...rr, report: twoRetries, clusters: [], flakyFailureDetails: [] });
+  const retryHtml = tpl.htmlReadable({ ...rr, report: twoRetries, clusters: [], flakyFailureDetails: [] });
   check(!retryHtml.includes('id=""'), 'email: flaky rows without a detail card carry no id attribute');
   check(retryHtml.includes('2 retries</td>') && retryHtml.includes('1 retry</td>') && !retryHtml.includes('2 retry<'), 'email: "1 retry", "2 retries" (never "2 retry")');
 
@@ -561,19 +561,19 @@ function main(): void {
   check(passRatePercent(955, 955) === 100 && passRatePercent(0, 0) === 0 && passRatePercent(9999, 10000) === 99.9, 'pass rate: all passed = 100, empty = 0, 9999/10000 = 99.9 (never 100.0)');
   check(baseHtml.includes('>Passed first time<') && !baseHtml.includes('>Pass Rate<'), 'email: the KPI tile is "Passed first time" (passed / all tests), not "Pass Rate"');
   check(baseHtml.includes('Passed incl. flaky:') && !baseHtml.includes('Pass rate:'), 'email: the Health factor is "Passed incl. flaky" (passed + flaky over executed), not a second "Pass rate"');
-  const seriesHtml = tpl.html({ ...rr, passRateSeries: [{ buildNumber: '6', passRate: 90, timestamp: 't' }, { buildNumber: '7', passRate: 80, timestamp: 't' }] });
+  const seriesHtml = tpl.htmlReadable({ ...rr, passRateSeries: [{ buildNumber: '6', passRate: 90, timestamp: 't' }, { buildNumber: '7', passRate: 80, timestamp: 't' }] });
   check(seriesHtml.includes('Passed first time — last 2 runs') && !seriesHtml.includes('Pass rate — last'), 'email: the trend series is labelled "Passed first time"');
   const viaRerun = mkReport([
     { file: 'ui/a.spec.ts', title: 'recovered', status: 'expected', res: ['failed', 'failed', 'passed:rerun'] },
     { file: 'ui/a.spec.ts', title: 'retry then rerun', status: 'expected', res: ['failed', 'passed', 'passed:rerun'] },
     { file: 'ui/a.spec.ts', title: 'retry only', status: 'flaky', res: ['failed', 'passed'] },
   ]);
-  const viaRerunHtml = tpl.html({ ...rr, report: viaRerun, clusters: [], flakyFailureDetails: [] });
+  const viaRerunHtml = tpl.htmlReadable({ ...rr, report: viaRerun, clusters: [], flakyFailureDetails: [] });
   check(viaRerun.totalRetries === 5 && viaRerun.retriesFromRerun === 2, 'parser: 3 flaky tests = 5 retries, 2 of them rerun-shard attempts', `${viaRerun.totalRetries}/${viaRerun.retriesFromRerun}`);
   check(viaRerunHtml.includes('2 from the rerun, 3 from retries'), 'email: the Retries tile says how many retries came from the rerun and how many from retries, in plain words');
   check(!baseHtml.includes('from the rerun,'), 'email: a run without a rerun has no "from the rerun" in the Retries tile');
   { const sec = rerunHtml.slice(rerunHtml.indexOf('id="section-rerun"')).replace(/<[^>]*>/g, ' '); check(/2 tests were rerun after the main run|1 test was rerun after the main run|tests were rerun after the main run/.test(sec) && !/rerun shard|in-job retr|Retries tile counts/.test(sec), 'email: the rerun section says what was rerun in plain words, without "rerun shard", "in-job retries" or "the Retries tile counts"'); }
-  check(/id="section-rerun"[\s\S]*First run<\/th>/.test(tpl.html({ ...rr, rerun: { ...rerunSummary, retries: 2 } })), 'email: the First run / Final result counts stay in the Rerun section');
+  check(/id="section-rerun"[\s\S]*First run<\/th>/.test(tpl.htmlReadable({ ...rr, rerun: { ...rerunSummary, retries: 2 } })), 'email: the First run / Final result counts stay in the Rerun section');
   const unstableViaRerun = [...viaRerun.flakyTests, ...viaRerun.passedOnRerunTests];
   const flagOf = (t: string): boolean | undefined => unstableViaRerun.find((x) => x.title === t)?.recoveredOnRerun;
   check(flagOf('recovered') === true && flagOf('retry then rerun') === undefined && flagOf('retry only') === undefined, 'parser: only a test that failed every first-run attempt and passed on the rerun is "recoveredOnRerun" (Passed in the counts, listed as passed on rerun)');
@@ -584,7 +584,7 @@ function main(): void {
   const recoveredEvidence = viaAssessed.get(unstableViaRerun.find((x) => x.title === 'recovered')!)?.evidence[0] ?? '';
   check(recoveredEvidence.startsWith('passed only on the rerun (failed 2 times first)'), 'card evidence: a test that passed only on the rerun says so, not "passed on retry"', recoveredEvidence);
   check((viaAssessed.get(unstableViaRerun.find((x) => x.title === 'retry only')!)?.evidence[0] ?? '').startsWith('passed on retry (1 retry)'), 'card evidence: an in-job retry still says "passed on retry"');
-  const viaHtml = tpl.html({ ...rr, report: viaRerun, causeSummary: viaSummary, clusters: [], flakyFailureDetails: [] });
+  const viaHtml = tpl.htmlReadable({ ...rr, report: viaRerun, causeSummary: viaSummary, clusters: [], flakyFailureDetails: [] });
   check(viaHtml.includes('Suspected cause of the 3 tests that did not pass first time (hints, not verdicts): none is still failing; 1 failed every attempt and passed on the rerun, 2 passed on a retry.'), 'email summary line: "1 failed every attempt and passed on the rerun, 2 passed on a retry"');
 
   // 6. output
@@ -619,8 +619,8 @@ function main(): void {
     ];
     for (const [name, specs] of cases) {
       const r = build(specs);
-      const noCause = tpl.html(r.ctxFor(false));
-      const withCause = tpl.html(r.ctxFor(true));
+      const noCause = tpl.htmlReadable(r.ctxFor(false));
+      const withCause = tpl.htmlReadable(r.ctxFor(true));
       out(`\n=== ${name}: ${normHtml(withCause) === normHtml(noCause) ? 'identical apart from new fragments' : 'DIFFERS'}; new fragments:`);
       const frags = fragments(withCause);
       if (frags.length === 0) out('  (none)');

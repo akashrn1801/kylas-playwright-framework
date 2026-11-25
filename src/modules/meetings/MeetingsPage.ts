@@ -531,17 +531,37 @@ export class MeetingsPage extends BasePage {
     return decodeURIComponent(new URL(request.url()).search).includes(text);
   }
 
+  // Bounded pick of the Related To entity type (sandbox build #240, meetings.rbac:263: the control click and the option click were unbounded, so when
+  // the click did not open the menu the option wait ran the 60 s action timeout with no hint). Same shape as TasksPage.selectRelationEntityType():
+  // the control is clicked only while no menu is open (a click on an open react-select closes it), each attempt waits for the option itself, and a
+  // menu that did not show it is closed and reopened; the click is bounded and the failure names the entity type.
+  private async selectRelatedToEntityType(entityType: string): Promise<void> {
+    const maxAttempts = 3;
+    const control = this.entitiesDropdown();
+    const openMenu = this.page.locator('.entity-lookup .is-invalid__menu').first();
+    const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!(await openMenu.isVisible().catch(() => false))) {
+        await this.click(control, `Related To entity type control (open ${attempt}/${maxAttempts})`);
+      }
+      const visible = await typeOption
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .then(() => true)
+        .catch(() => false);
+      if (visible) {
+        await typeOption.click({ timeout: config.timeouts.expect });
+        return;
+      }
+      logger.warn(`Related To: the "${entityType}" type option is not visible (attempt ${attempt}/${maxAttempts}), closing and reopening`);
+      if (await openMenu.isVisible().catch(() => false)) await this.page.keyboard.press('Escape');
+    }
+    throw new Error(`Related To: the "${entityType}" type option never appeared after ${maxAttempts} attempts`);
+  }
+
   // B6 (staging trace 2026-11-17; request shapes per MeetingsPage.isRelatedToSearch):
   // open the Related To search of one entity type on the open Add form...
   async openRelatedToSearch(entityType: string): Promise<void> {
-    await this.entitiesDropdown().click();
-    const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
-    await this.withSessionExpiryRecovery(() =>
-      expect(typeOption, `Related To: the "${entityType}" type option should appear`).toBeVisible({
-        timeout: config.timeouts.expect,
-      })
-    );
-    await typeOption.click({ timeout: config.timeouts.expect });
+    await this.selectRelatedToEntityType(entityType);
     const searchControl = this.page.getByText('Search ...').last();
     await this.withSessionExpiryRecovery(() =>
       expect(searchControl, `Related To: the ${entityType} search control should appear`).toBeVisible({
@@ -1589,8 +1609,7 @@ export class MeetingsPage extends BasePage {
     const firstWord = name.trim().split(/\s+/)[0];
     let via = 'opening list';
     try {
-      await this.entitiesDropdown().click();
-      await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();
+      await this.selectRelatedToEntityType(entityType);
       const searchPlaceholder = this.page.getByText('Search ...').last();
       await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
       await searchPlaceholder.click();

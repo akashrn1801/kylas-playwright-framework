@@ -2091,7 +2091,8 @@ export class BasePage {
   protected async openReactSelectAndWaitForOptions(
     control: Locator,
     description: string,
-    failureDetail?: () => string
+    failureDetail?: () => string,
+    nothingInFlight?: () => boolean
   ): Promise<Locator> {
     const options = this.reactSelectOpenOptions();
     const maxAttempts = 3;
@@ -2111,6 +2112,14 @@ export class BasePage {
           );
         }
         logger.warn(`${description}: no react-select options yet (attempt ${attempt}/${maxAttempts})`);
+        // WHY (sandbox build #240, leads.rbac:398, Products or Services: "menu open: true" on all 3 attempts and "0 request(s) seen"): a menu that is
+        // open and empty is normally LOADING, so only waiting is right (a second click would close it). With no request in flight there is nothing to
+        // wait for: the option lookup was never started (the menu opened before its loader was bound), so waiting 3 x 10 s cannot help. Only a caller that
+        // watches the requests passes `nothingInFlight`; then the open, empty, idle menu is closed with Escape and opened again, which starts a fresh
+        // load. Hardened, root cause not confirmed (no trace): other callers keep the wait-only behaviour.
+        if (nothingInFlight?.() && (await this.reactSelectOpenMenu().count()) > 0) {
+          await this.page.keyboard.press('Escape');
+        }
       }
     }
     throw new Error(`${description}: react-select did not open`);
@@ -3096,8 +3105,11 @@ export class BasePage {
     const menuOptions = this.page.locator('.is-invalid__menu .is-invalid__option');
     const openWatch = this.watchRequests((r) => /\/v[13]\//.test(r.url()));
     try {
-      await this.openReactSelectAndWaitForOptions(control, `multi-select control: ${description}`, () =>
-        openWatch.describe(true)
+      await this.openReactSelectAndWaitForOptions(
+        control,
+        `multi-select control: ${description}`,
+        () => openWatch.describe(true),
+        () => openWatch.unansweredCount() === 0
       );
     } finally {
       openWatch.stop();

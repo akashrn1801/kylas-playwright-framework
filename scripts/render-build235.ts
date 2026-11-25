@@ -23,8 +23,8 @@ const blocked = process.argv.includes('--blocked')
     }
   : undefined;
 const r = replayBuild235({ withSkipReason: process.argv.includes('--with-skip-reason'), blockedBySession: blocked });
-const bytes = Buffer.byteLength(r.html, 'utf8');
-if (out) fs.writeFileSync(out, r.html);
+const bytes = Buffer.byteLength(r.sent, 'utf8');
+if (out) fs.writeFileSync(out, r.sent);
 process.stdout.write(`subject: ${r.subject}\nhtml: ${bytes} bytes (${(bytes / 1024).toFixed(1)} KiB)${out ? ` -> ${out}` : ''}\n`);
 process.stdout.write(
   `first run ${JSON.stringify(r.summary.firstRun)}\nafter rerun ${JSON.stringify(r.summary.afterRerun)}\nparsed: total ${r.report.total} passed ${r.report.passed} failed ${r.report.failed} flaky ${r.report.flaky} skipped ${r.report.skipped}; passRate ${r.report.passRate}\n`

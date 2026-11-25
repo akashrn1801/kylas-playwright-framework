@@ -261,6 +261,8 @@ export interface ModuleStats {
   // `failed` and `flaky` above are the counts AFTER the rerun; history trends and "unstable this run" use these.
   firstRun: { passed: number; failed: number; flaky: number };
   passedOnRerun: number;
+  // Tests that did not pass in the first run (failed every attempt, or did not run) and passed on the rerun: the "Rerun" column of the all-modules table.
+  passedOnlyOnRerun: number;
   // WHY added 2026-09-29 (Phase 3 reporting enhancement, item 4a): the
   // whole-run `totalRetries`/`retriesFromNonCleanTests`/
   // `retriesFromCleanSweeps` split (see ParsedReport's own WHY comment for
@@ -550,6 +552,7 @@ export class ReportParser {
           slowestTests: [],
           firstRun: { passed: 0, failed: 0, flaky: 0 },
           passedOnRerun: 0,
+          passedOnlyOnRerun: 0,
           totalRetries: 0,
           retriesFromNonCleanTests: 0,
           retriesFromCleanSweeps: 0,
@@ -566,6 +569,7 @@ export class ReportParser {
       const first = firstOf(r);
       if (first === 'passed' || first === 'failed' || first === 'flaky') mod.firstRun[first]++;
       if (r.passedOnRerun) mod.passedOnRerun++;
+      if (r.recoveredOnRerun || r.ranOnlyOnRerun) mod.passedOnlyOnRerun++;
       // WHY the identical genuine-vs-swept split as the whole-run
       // totalRetries/retriesFromNonCleanTests/retriesFromCleanSweeps
       // computed further below, just per-module (2026-09-29, Phase 3 item

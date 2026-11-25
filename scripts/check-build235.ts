@@ -81,7 +81,7 @@ function main(): void {
   check(/unstable this run: 3 of 12 \(1 failed first, 2 flaky\)/.test(mr), 'item 4: Meetings RBAC (3 of 12 unstable this run) says so in words', mr);
   check(!/– stable/.test(t) && !/stable \(\d+% unstable/.test(t), 'item 4: no bare "– stable (N% unstable / last N)" badge is left');
   check(/last \d+ runs: \d+% unstable, /.test(mr), 'item 4: the rolling window has its own label ("last N runs: N% unstable, ...")', mr);
-  check(/passed every test first time/.test(html) && /passed every test first time[^]*Call-logs RBAC/.test(html.slice(html.indexOf('passed every test first time'), html.indexOf('passed every test first time') + 4000)), 'item 4: a module with nothing unstable is named in the "passed every test first time" footer, not given a row');
+  check(/All 34 modules, UI and RBAC side by side/.test(t) && /Call-logs 29 /.test(t) && !/passed every test first time/.test(t), 'item 4 / E6: every module is in the all-modules table (34 rows, UI and RBAC side by side); the "N modules passed every test first time" one-liner is gone');
   check(html.includes('>vs last run</th>') && html.includes('>Stability</th>'), 'item 4: the Trend column is split into "vs last run" and "Stability"');
 
   // ── Final result rule (second amendment of ADR 0015, 2026-11-24): tiles, executive summary, modules, subject ──

@@ -41,18 +41,18 @@ async function main(): Promise<void> {
 
   const emails: Array<{ name: string; title: string; html: string }> = [];
   const r239 = replayBuild239();
-  emails.push({ name: 'build-239', title: 'Build #239 (real run: 1 flaky, 1 passed on the rerun)', html: inline(r239.html, r239.ctx) });
+  emails.push({ name: 'build-239', title: 'Build #239 (real run: 1 flaky, 1 passed on the rerun)', html: inline(r239.sent, r239.ctx) });
   const r240 = replayBuild240();
-  emails.push({ name: 'build-240', title: 'Build #240 (real run: 8 flaky, none failed, nothing rerun)', html: inline(r240.html, r240.ctx) });
+  emails.push({ name: 'build-240', title: 'Build #240 (real run: 8 flaky, none failed, nothing rerun)', html: inline(r240.sent, r240.ctx) });
   const r235 = replayBuild235();
-  emails.push({ name: 'build-235', title: 'Build #235 (2 failed, 6 flaky, rerun)', html: inline(r235.html, r235.ctx) });
+  emails.push({ name: 'build-235', title: 'Build #235 (2 failed, 6 flaky, rerun)', html: inline(r235.sent, r235.ctx) });
   const blocked = replayBuild235({ blockedBySession: { cause: 'renew-session:failure' } });
-  emails.push({ name: 'build-235-blocked', title: 'Blocked run (renew-session failed)', html: inline(blocked.html, blocked.ctx) });
+  emails.push({ name: 'build-235-blocked', title: 'Blocked run (renew-session failed)', html: inline(blocked.sent, blocked.ctx) });
   const worst = replayBuild235({ fixture: buildWorstCaseFixture() });
-  emails.push({ name: 'worst-case', title: 'Worst case (60 failed, 80 flaky, 790 background errors)', html: inline(worst.html, worst.ctx) });
+  emails.push({ name: 'worst-case', title: 'Worst case (60 failed, 80 flaky, 790 background errors)', html: inline(worst.sent, worst.ctx) });
   for (const spec of SCENARIOS.filter((s) => KEY_SCENARIOS.includes(s.name))) {
     const r = runScenario(spec);
-    emails.push({ name: spec.name, title: spec.title, html: inline(r.html, r.ctx) });
+    emails.push({ name: spec.name, title: spec.title, html: inline(r.sent, r.ctx) });
   }
   const chosen = emails.filter((e) => !only || only.includes(e.name));
 

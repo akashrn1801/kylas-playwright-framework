@@ -99,7 +99,10 @@ export interface ScenarioResult {
   spec: ScenarioSpec;
   env: string;
   branch: string;
+  /** Every style inline: what the invariants parse. */
   html: string;
+  /** As sent: repeated inline styles moved into classes of the head <style> block (E7). */
+  sent: string;
   subject: string;
   /** Present when a report existed. */
   report: ParsedReport | null;
@@ -141,7 +144,7 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
     const svc = new NotificationService();
     if (spec.noResults) {
       const msg = svc.buildReportUnavailableMessage(input, new Error(spec.unavailableReason ?? `Report not found: ${jsonPath}`));
-      return { spec, env, branch, html: msg.html, subject: msg.subject, report: null, ctx: null, summary: null, list: null, record: null, kind: 'unavailable' };
+      return { spec, env, branch, html: msg.html, sent: msg.html, subject: msg.subject, report: null, ctx: null, summary: null, list: null, record: null, kind: 'unavailable' };
     }
     const first = mkReport(spec.first);
     let combined = first;
@@ -165,7 +168,9 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
     const record = buildCurrentRecord(env, branch, '100', 'github-actions', jsonPath, 'abc1234', false, undefined, undefined);
     const ctx = svc.buildContext(input, report, Date.parse(report.endTime));
     const tpl = new EmailTemplate();
-    return { spec, env, branch, html: tpl.html(ctx), subject: tpl.subject(ctx), report, ctx, summary, list, record, kind: 'email' };
+    // one render, so the footer's "Generated" time is the same in both (the sent email IS the readable one with its styles compacted)
+    const readable = tpl.htmlReadable(ctx);
+    return { spec, env, branch, html: readable, sent: EmailTemplate.compactStyles(readable), subject: tpl.subject(ctx), report, ctx, summary, list, record, kind: 'email' };
   } finally {
     process.chdir(cwd);
     fs.rmSync(path.join(dir, 'docs'), { force: true });
