@@ -475,7 +475,8 @@ export class NotificationService {
         }</p>`
       : '';
     const subject = `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: REPORT NOT AVAILABLE`;
-    const html = `
+    // a complete document (charset, viewport, light colour scheme) like the run email: without a charset the emoji and dashes can garble in a client
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="color-scheme" content="light"></head><body style="margin:0;">
 <div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
   <div style="background:#B3261E;padding:16px 24px;">
     <span style="color:#ffffff;font-weight:700;font-size:14px;letter-spacing:0.05em;text-transform:uppercase;">No Test Report Available — Not A Pass Or Fail</span>
@@ -497,7 +498,7 @@ export class NotificationService {
     }
     <p>Common causes: the job was cancelled or killed before finishing (e.g. a platform timeout), or a real infrastructure failure prevented tests from running at all.</p>
   </div>
-</div>`;
+</div></body></html>`;
     return { subject, html };
   }
 
