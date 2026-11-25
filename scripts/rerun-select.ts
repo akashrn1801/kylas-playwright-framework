@@ -4,7 +4,7 @@
  *   npx ts-node scripts/rerun-select.ts --report reports/rerun/first-run.json --out reports/rerun/rerun-list.json --targets reports/rerun/targets.txt
  *
  * Env: RERUN_MAX_TESTS (default 60; more candidates than this = no rerun, a mass failure is an outage, not a flake),
- * RERUN_RETRIES (default 0, recorded for the manifest), RERUN_INCLUDE_FLAKY ('false' leaves flaky tests out),
+ * RERUN_RETRIES (default 0, recorded for the manifest), RERUN_INCLUDE_FLAKY (default 'false': flaky tests are left out; 'true' reruns them when nothing failed),
  * GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT (stored so the combiner ignores a manifest of an earlier attempt),
  * GITHUB_OUTPUT (run=true|false, count, decision).
  *
@@ -68,7 +68,7 @@ function main(): void {
   }
   const maxTests = intEnv('RERUN_MAX_TESTS', 60);
   const retries = intEnv('RERUN_RETRIES', 0);
-  const includeFlaky = (process.env.RERUN_INCLUDE_FLAKY ?? 'true').toLowerCase() !== 'false';
+  const includeFlaky = (process.env.RERUN_INCLUDE_FLAKY ?? 'false').toLowerCase() === 'true';
   const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
   const meta = { retries, runId: process.env.GITHUB_RUN_ID, runAttempt: Number.isInteger(attempt) ? attempt : undefined };
   fs.mkdirSync(path.dirname(outPath), { recursive: true });

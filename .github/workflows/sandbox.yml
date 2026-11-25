@@ -587,7 +587,7 @@ jobs:
   # own attempt gate still skips formFields entities that already passed. Behind the repo variable RERUN_SHARD:
   # runs only when it is exactly 'on'; any other value skips this job and the run behaves as before. Optional
   # variables: RERUN_MAX_TESTS (default 60, more failures than that = no rerun), RERUN_RETRIES (default 0),
-  # RERUN_INCLUDE_FLAKY (default true). Tests are picked from the shard BLOBS (scripts/rerun-select.ts), never
+  # RERUN_INCLUDE_FLAKY (default false: a flaky test already passed, so a rerun cannot change a number or the colour). Tests are picked from the shard BLOBS (scripts/rerun-select.ts), never
   # .last-run.json; a serial file is rerun whole; formFields tests are not rerun (they run after this job, and
   # share account-wide config). Artifact names deliberately do NOT match blob-report-sandbox-* or
   # misc-errors-sandbox-*, which merge-and-report and verify-shard-completeness count as shards. The job never
@@ -660,7 +660,7 @@ jobs:
         env:
           RERUN_MAX_TESTS: ${{ vars.RERUN_MAX_TESTS || '60' }}
           RERUN_RETRIES: ${{ vars.RERUN_RETRIES || '0' }}
-          RERUN_INCLUDE_FLAKY: ${{ vars.RERUN_INCLUDE_FLAKY || 'true' }}
+          RERUN_INCLUDE_FLAKY: ${{ vars.RERUN_INCLUDE_FLAKY || 'false' }}
         run: npx ts-node scripts/rerun-select.ts --report reports/rerun/first-run.json --out reports/rerun/rerun-list.json --targets reports/rerun/targets.txt
 
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt

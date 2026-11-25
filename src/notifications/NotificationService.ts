@@ -12,7 +12,7 @@ import { RenewalFailure, describeRenewalFailure, loadRenewalFailure } from '../a
 import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
-import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
+import { computeHealthScore, computeOverallVerdict, healthNotApplicableReason } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { JobStats } from './JobStats';
@@ -256,7 +256,11 @@ export class NotificationService {
         `[Notification] STALE REPORT — this report's data is ${Math.round(freshness.ageMs / 3_600_000)}h old (threshold: ${freshness.thresholdHours}h). This may not reflect a fresh run.`
       );
     }
-    const health = computeHealthScore(
+    // WHY (2026-11-24, sandbox 45420781016): a failed renew-session job skips every test job; the verdict and the incomplete-run
+    // banner name that cause instead of "Incomplete run".
+    const renewalFailure = loadRenewalFailure(input.env);
+    const shardCompleteness = withRenewalCause(loadShardCompleteness(input.env), renewalFailure);
+    const computedHealth = computeHealthScore(
       report,
       historyDeltaFile.delta,
       miscErrors,
@@ -265,10 +269,9 @@ export class NotificationService {
       historyDeltaFile.recurringFlaky,
       freshness.isStale
     );
-    // WHY (2026-11-24, sandbox 45420781016): a failed renew-session job skips every test job; the verdict and the incomplete-run
-    // banner name that cause instead of "Incomplete run".
-    const renewalFailure = loadRenewalFailure(input.env);
-    const shardCompleteness = withRenewalCause(loadShardCompleteness(input.env), renewalFailure);
+    // A run that verified nothing (blocked, incomplete, nothing selected) has no health score: "n/a" and why (2026-11-25).
+    const notApplicable = healthNotApplicableReason(report, shardCompleteness, renewalFailure);
+    const health = notApplicable ? { ...computedHealth, notApplicable } : computedHealth;
     const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure);
 
     const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
@@ -458,7 +461,7 @@ export class NotificationService {
           completeness.cause?.startsWith('renew-session') ? ` <strong>No test job started:</strong> ${this.escapeHtml(completeness.cause.replace(/^renew-session:\s*/, 'the renew-session job did not succeed: '))}` : ''
         }</p>`
       : '';
-    const subject = `🚫 [${input.env.toUpperCase()}] Kylas Automation — REPORT NOT AVAILABLE | Branch: ${input.branch} | Build #${input.buildNumber}`;
+    const subject = `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: REPORT NOT AVAILABLE`;
     const html = `
 <div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
   <div style="background:#B3261E;padding:16px 24px;">

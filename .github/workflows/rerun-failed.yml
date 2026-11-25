@@ -26,7 +26,7 @@ on:
         description: 'Also rerun tests that were flaky in that run'
         required: true
         type: boolean
-        default: true
+        default: false
 
 # WHY the SAME per-account group as the pipelines (ADR 0009): qa -> kylas-qa, staging -> kylas-staging (qa.yml,
 # stage.yml and sandbox.yml share it), so this run queues behind a running pipeline on that account instead of

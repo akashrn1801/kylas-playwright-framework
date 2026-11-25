@@ -211,10 +211,12 @@ export class EmailTemplate {
       report.failed > 0 ? `${report.failed} failed` : '',
       `${report.finalPassed} passed${marks.length > 0 ? ` (${marks.join(', ')})` : ''}`,
       report.didNotRun > 0 ? `${report.didNotRun} did not run` : '',
+      // deliberate skips are named so that failed + passed + skipped adds up to the total (2026-11-25, scenario matrix)
+      report.skipped - report.didNotRun > 0 ? `${report.skipped - report.didNotRun} skipped` : '',
     ]
       .filter(Boolean)
       .join(', ');
-    const summary = verdict.bannerLabel.startsWith('🚫') || verdict.bannerLabel.includes('Suite Drift') ? status : `${counts} of ${report.total}`;
+    const summary = verdict.bannerLabel.startsWith('🚫') || verdict.bannerLabel.includes('Suite Drift') || verdict.bannerLabel.includes('No Tests Selected') ? status : `${counts} of ${report.total}`;
     return `${scopedPrefix}${stalePrefix}${icon} ${ctx.env.toUpperCase()} ${ctx.branch} #${ctx.buildNumber}: ${summary}`;
   }
 
@@ -362,7 +364,7 @@ ${body}
 <tr><td style="background:${INK};padding:20px 28px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
     <td style="font-size:16px;font-weight:700;color:#ffffff;">Kylas <span style="font-weight:400;color:#9BA9FF;">${this.esc(ctx.env.toUpperCase())} Automation</span></td>
-    <td align="right" style="font-size:11px;color:#9BA5B1;">Automation Health: <strong style="color:#ffffff;">${health.label}</strong></td>
+    <td align="right" style="font-size:11px;color:#9BA5B1;">Automation Health: <strong style="color:#ffffff;">${health.notApplicable ? 'n/a' : health.label}</strong></td>
   </tr></table>
   <div style="font-size:12px;color:#9BA5B1;margin-top:6px;">Test Execution Report — ${this.esc(this.formatReportDate(ctx.report.startTime))}</div>
 </td></tr>`;
@@ -550,6 +552,12 @@ ${body}
             : ''
         }.`
       );
+    } else if (health.notApplicable) {
+      // WHY (2026-11-25, scenario matrix): "No test failures this run." for a run where nothing ran or shards are missing read as good news.
+      sentences.push(`Nothing was verified: ${health.notApplicable}.`);
+    } else if (report.recoveredOnRerun > 0 || report.ranOnlyOnRerun > 0 || report.didNotRun > 0) {
+      // tests did fail (or never ran) in the first run: the true statement is about the end result
+      sentences.push('No test failed in the end.');
     } else {
       sentences.push('No test failures this run.');
     }
@@ -577,7 +585,8 @@ ${body}
     // reason a clean run still isn't "clear": without this sentence, a
     // reader would see "No test failures this run." next to a "not
     // recommended" headline with no explanation connecting the two.
-    if (report.failed === 0 && !drift?.occurred && verdict.verdict !== 'clear') {
+    // Only when health itself is the reason (Needs Attention or worse): for every other amber run the headline and the sentences above state the real reason.
+    if (report.failed === 0 && !drift?.occurred && verdict.verdict !== 'clear' && !health.notApplicable && (health.label === 'Needs Attention' || health.label === 'Critical')) {
       sentences.push(`Automation health is ${health.label} — see Health Score below for why.`);
     }
 
@@ -611,6 +620,13 @@ ${body}
   }
 
   private buildHealthScoreBlock(health: HealthScore): string {
+    if (health.notApplicable) {
+      return `
+<tr><td style="padding:4px 28px 8px;">
+  <span style="display:inline-block;border:1px solid ${BORDER};background:${CANVAS_TINT};color:${SLATE};border-radius:4px;padding:5px 10px;font-size:11.5px;font-weight:700;">Health: n/a</span>
+  <span style="font-size:11.5px;color:${SLATE};margin-left:8px;">Not scored: ${this.esc(health.notApplicable)}.</span>
+</td></tr>`;
+    }
     const color =
       health.label === 'Excellent'
         ? SUCCESS
@@ -741,12 +757,12 @@ ${body}
 
     const secondaryRow = this.kpiRow([
       {
-        value: `${report.passRate}%`,
+        value: ctx.health?.notApplicable ? 'n/a' : `${report.passRate}%`,
         // WHY labelled by what it measures (2026-11-03 email review): this is passed / ALL tests, a test that needed a
         // retry or a rerun is not in it; the Health block's "Passed incl. flaky" is a different number on purpose.
         label: 'Passed first time',
-        variant: report.passRate >= 90 ? 'success' : report.passRate >= 75 ? 'warn' : 'fail',
-        subtext: passRateSubtext,
+        variant: ctx.health?.notApplicable ? 'neutral' : report.passRate >= 90 ? 'success' : report.passRate >= 75 ? 'warn' : 'fail',
+        subtext: ctx.health?.notApplicable ? undefined : passRateSubtext,
       },
       {
         // A signal INSIDE Passed, not an outcome (it is not in the sum above): tests that passed only on an in-job retry.
@@ -1937,7 +1953,7 @@ ${body}
     return `
 <tr><td id="section-action-required" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:16px;">
-    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Action Required (Automation Health: ${this.esc(health.label)})</div>
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Action Required (Automation Health: ${health.notApplicable ? 'n/a' : this.esc(health.label)})</div>
     ${rows}
   </div>
 </td></tr>`;

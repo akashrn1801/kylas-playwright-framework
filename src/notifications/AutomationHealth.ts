@@ -8,7 +8,7 @@
  * SLOW_TEST_REGRESSION_THRESHOLD in RunHistory.ts. Nothing here is a build
  * gate; it's a single at-a-glance signal for the email.
  */
-import { ParsedReport } from './ReportParser';
+import { FLAKY_BUDGET, ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
 import { RenewalFailure, describeRenewalFailure, renewalFailureLabel } from '../auth/renewalFailure';
@@ -33,7 +33,7 @@ import { MiscErrorReport } from '../error-collector/ErrorCollector';
 //     count; health is shown as its own labeled value, not the headline.
 // These are proposed starting points like every constant in this file, not
 // precision-tuned numbers.
-export const FLAKY_BUDGET = 3;
+export { FLAKY_BUDGET };
 export const BACKGROUND_ERROR_WEIGHT = 0.5;
 export const BACKGROUND_ERROR_CAP = 8;
 export const RECURRING_FAILURE_WEIGHT = 2;
@@ -44,6 +44,9 @@ export const RECURRING_FLAKY_CAP = 5;
 export const CONTEXT_PENALTY_CAP = 15;
 // Lowest score a run with 0 failed tests can show (bottom of 'Needs Attention').
 export const ZERO_FAILURE_SCORE_FLOOR = 50;
+// Highest score (and label) a run with failures can show: any failure -> Good; 3 failures or 5% of the run -> Needs Attention.
+export const FAILURE_CAP_ANY = 89;
+export const FAILURE_CAP_SEVERE = 74;
 
 export type OverallVerdict = 'clear' | 'caution' | 'blocked';
 export type VerdictTone = 'success' | 'warning' | 'danger';
@@ -62,6 +65,8 @@ export interface HealthFactor {
 }
 
 export interface HealthScore {
+  /** Set when the run verified nothing (blocked, incomplete, empty): the score is not shown, this says why. */
+  notApplicable?: string;
   score: number; // 0-100
   label: 'Excellent' | 'Good' | 'Needs Attention' | 'Critical';
   factors: HealthFactor[];
@@ -237,10 +242,37 @@ export function computeHealthScore(
     });
     score = ZERO_FAILURE_SCORE_FLOOR;
   }
+  // WHY (2026-11-25, scenario matrix finding: "Health: Excellent" beside a red FAILED run): any failed test caps the label at
+  // 'Good', and 3 failures or 5% of the executed tests cap it at 'Needs Attention'. The score is capped with it and the cap is its own
+  // factor line, so the number, the label and the verdict never contradict each other.
+  if (report.failed > 0) {
+    const cap = report.failed >= 3 || report.failed >= executed * 0.05 ? FAILURE_CAP_SEVERE : FAILURE_CAP_ANY;
+    if (score > cap) {
+      factors.push({ name: 'Failure cap', impact: cap - score, note: `${report.failed} failed test(s) keep health at or below ${cap}/100 (${cap === FAILURE_CAP_SEVERE ? 'Needs Attention' : 'Good'}); raw score ${score}` });
+      score = cap;
+    }
+  }
   const label: HealthScore['label'] =
     score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
 
   return { score, label, factors };
+}
+
+/**
+ * Why a run's health score does not apply, or null when it does. A run where no test ran (renew-session blocked, report missing),
+ * only some shards reported, or nothing was selected verified nothing, so a score computed from the surviving numbers would read
+ * "Excellent" for a run that proved nothing (scenario matrix, 2026-11-25).
+ */
+export function healthNotApplicableReason(
+  report: ParsedReport,
+  shardCompleteness?: ShardCompleteness | null,
+  renewalFailure?: RenewalFailure | null
+): string | null {
+  if (renewalFailure || (isIncompleteRun(shardCompleteness) && shardCompleteness.cause?.startsWith('renew-session'))) return 'no test ran (the admin session was not renewed)';
+  if (isIncompleteRun(shardCompleteness)) return `only ${shardCompleteness.reported} of ${shardCompleteness.expected} shards reported`;
+  if (report.total === 0) return 'no tests were selected';
+  if (report.status === 'no-tests-executed') return 'no test actually ran';
+  return null;
 }
 
 /**
@@ -305,6 +337,9 @@ export function computeOverallVerdict(
   // literal false positive, not just an unhelpful one. This must never be
   // described as a "clean run" (the health.label==='Critical' branch further
   // down does that) because nothing ran, clean or otherwise.
+  if (report.total === 0) {
+    return { verdict: 'caution', bannerLabel: '⚠️ No Tests Selected', bannerTone: 'warning', headline: 'No tests were selected, so nothing was verified — check the test filter or the shard plan' };
+  }
   if (report.status === 'no-tests-executed') {
     return {
       verdict: 'blocked',
@@ -359,31 +394,32 @@ export function computeOverallVerdict(
   // A flaky test that passed again on the rerun shard is resolved (Passed after the rerun): when it is the only issue the
   // run is green. A test that failed every first attempt and passed only on the rerun is Passed in the counts but is NOT
   // resolved for the verdict (ADR 0015 amendment, 2026-11-24): the run stays amber, never a clean green.
+  // WHY the colour rule is by results only (2026-11-25, approved after the scenario matrix: the same results were green with a rerun and
+  // amber without one). Green when everything passed in the end, flaky tests (passed on an in-job retry, whether or not the rerun
+  // confirmed them) are within FLAKY_BUDGET and no test failed every attempt. Amber when flaky is above the budget, a test passed only
+  // on the rerun after failing every first attempt (D2), or tests did not run / ran only on the rerun. The flaky count is always in the subject.
   const recoveredOnRerun = report.recoveredOnRerun ?? 0;
-  const unresolvedFlaky = report.flaky + recoveredOnRerun;
+  const flakyTotal = report.firstRun.flaky;
   const notVerified = (report.didNotRun ?? 0) + (report.ranOnlyOnRerun ?? 0);
-  if (unresolvedFlaky === 0 && notVerified > 0) {
+  const aboveBudget = flakyTotal > FLAKY_BUDGET;
+  if (aboveBudget || recoveredOnRerun > 0 || notVerified > 0) {
+    const notConfirmed = report.flaky > 0 && report.flaky < flakyTotal ? ` (${report.flaky} not confirmed by the rerun)` : '';
     const parts = [
+      flakyTotal > 0 ? `${flakyTotal} flaky${notConfirmed}` : '',
+      recoveredOnRerun > 0 ? `${recoveredOnRerun} passed only on rerun` : '',
       report.didNotRun > 0 ? `${report.didNotRun} did not run` : '',
       report.ranOnlyOnRerun > 0 ? `${report.ranOnlyOnRerun} ran only on rerun` : '',
+    ].filter(Boolean);
+    const reasons = [
+      aboveBudget ? `${flakyTotal} flaky tests is above the budget of ${FLAKY_BUDGET}` : '',
+      recoveredOnRerun > 0 ? `${recoveredOnRerun} test(s) failed every attempt and passed only on the rerun` : '',
+      notVerified > 0 ? `${notVerified} test(s) did not run in the first run` : '',
     ].filter(Boolean);
     return {
       verdict: 'caution',
       bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
       bannerTone: 'warning',
-      headline: 'Deployment likely safe — but not every test ran in the first run; review them',
-    };
-  }
-  if (unresolvedFlaky > 0) {
-    const aboveBudget = unresolvedFlaky > FLAKY_BUDGET;
-    const parts = [report.flaky > 0 ? `${report.flaky} flaky` : '', recoveredOnRerun > 0 ? `${recoveredOnRerun} passed only on rerun` : ''].filter(Boolean);
-    return {
-      verdict: 'caution',
-      bannerLabel: `⚠️ Unstable — ${parts.join(', ')}`,
-      bannerTone: 'warning',
-      headline: aboveBudget
-        ? `Deployment likely safe — but ${unresolvedFlaky} unstable tests is above the budget of ${FLAKY_BUDGET}; review them`
-        : 'Deployment likely safe — review flaky tests',
+      headline: `Deployment likely safe — but ${reasons.join('; ')}; review them`,
     };
   }
   if (health.label === 'Needs Attention') {

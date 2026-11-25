@@ -246,11 +246,12 @@ function main(): void {
     const f = many(5, 'flaky', 'flaky');
     const p = pipeline([...filler(5), ...f], many(5, 'passed', 'flaky'));
     check(p.list.decision === 'run' && p.list.candidates.length === 5, 'S2: no failed/timed-out/did-not-run test: the 5 flaky tests are rerun');
-    expectStatus(p, 'green', 'Passed', 'S2');
+    // 5 flaky tests are above FLAKY_BUDGET (3): amber whatever the rerun did (colour by results only, 2026-11-25)
+    expectStatus(p, 'amber', 'Unstable', 'S2');
     eq(summaryTable(p.html), { Passed: [5, 10], Failed: [0, 0], Flaky: [5, 0], Skipped: [0, 0], 'Did not run': [0, 0], Total: [10, 10] }, 'S2: table: 5 Flaky -> 0 Flaky, Passed 5 -> 10 (a rerun pass is a pass)');
     const tt = testTable(p.html);
     check(Object.keys(tt).length === 5 && Object.values(tt).every((r) => r[0] === 'Flaky' && r[1] === 'Passed' && r[2] === 'Passed on rerun'), 'S2: every row Flaky -> Passed -> "Passed on rerun"', JSON.stringify(tt));
-    check(p.parsed.flaky === 0 && p.parsed.flakyPassedOnRerun === 5 && p.parsed.recoveredOnRerun === 0 && p.parsed.status === 'passed' && p.parsed.flakyTests.length === 0 && p.parsed.passedOnRerunTests.length === 5, 'S2: the parser counts the 5 as Passed (resolved on rerun), lists them as passed-on-rerun, run status passed');
+    check(p.parsed.flaky === 0 && p.parsed.flakyPassedOnRerun === 5 && p.parsed.recoveredOnRerun === 0 && p.parsed.status === 'unstable' && p.parsed.flakyTests.length === 0 && p.parsed.passedOnRerunTests.length === 5, 'S2: the parser counts the 5 as Passed (resolved on rerun), lists them as passed-on-rerun, run status unstable (5 flaky > budget 3)');
     check((p.html.match(/final <strong[^>]*>Passed on rerun/g) ?? []).length >= 5 && p.html.includes('id="section-passed-on-rerun"') && !p.html.includes('id="section-flaky-tests"'), 'S2: the "Passed on rerun" section lists each test with the tag "Passed on rerun"; there is no Flaky section any more');
     check(!text(rerunSection(p.html) ?? '').includes('recovered on rerun)'), 'S2: nothing is "recovered on rerun" (they were flaky, not failed)');
     expectCountsAddUp(p, 'S2');
@@ -491,11 +492,11 @@ function main(): void {
   // ── 20. flaky only: green needs the rerun; without it (kill switch off / cap off) the run stays amber ──
   {
     const first = [...filler(6), ...many(2, 'flaky', 'flaky'), def('ui/d/d.spec.ts', 'annotated', 1, 'annotated-skip')];
-    expectStatus(pipeline(first, null, { noManifest: true }), 'amber', 'Unstable', 'S20 (no rerun)');
+    expectStatus(pipeline(first, null, { noManifest: true }), 'green', 'Passed', 'S20 (no rerun: 2 flaky are within the budget)');
     expectStatus(pipeline(first, many(2, 'passed', 'flaky')), 'green', 'Passed', 'S20 (all pass on rerun, deliberate skip ignored)');
-    expectStatus(pipeline(first, [def('ui/many/many.spec.ts', 'flaky 1', 100, 'passed'), def('ui/many/many.spec.ts', 'flaky 2', 101, 'failed')]), 'amber', 'Unstable', 'S20 (one fails on rerun)');
+    expectStatus(pipeline(first, [def('ui/many/many.spec.ts', 'flaky 1', 100, 'passed'), def('ui/many/many.spec.ts', 'flaky 2', 101, 'failed')]), 'green', 'Passed', 'S20 (one fails on rerun: it passed on its in-job retry)');
     const off = pipeline(first, many(2, 'passed', 'flaky'), { select: { includeFlaky: false } });
-    expectStatus(off, 'amber', 'Unstable', 'S20 (RERUN_INCLUDE_FLAKY off)');
+    expectStatus(off, 'green', 'Passed', 'S20 (RERUN_INCLUDE_FLAKY off)');
     // stays visible for trends even though the email is green
     const g = pipeline(first, many(2, 'passed', 'flaky'));
     check(g.history.flakyTestTitles.length === 2 && g.history.flaky === 2, 'S20: green email, history still has 2 flaky tests');

@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RenewalFailure } from '../src/auth/renewalFailure';
+import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
 import { Def, SKIP_REASON_TEXT, ScenarioResult, ScenarioSpec, def, many, runScenario } from './lib/scenarioKit';
 import { replayBuild235 } from './lib/build235Fixture';
 
@@ -48,6 +49,9 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '18-blocked-by-renew-session', title: 'Blocked by renew-session: no test job started', expect: 'red BLOCKED naming renew-session; no pass-rate claim', first: [], rerun: false, completeness: { expected: 5, reported: 0, cause: 'renew-session:failure' }, renewalFailure: renewal },
   { name: '19-infra-failure-no-report', title: 'Infra failure (browser install): no results file, no test ran', expect: 'report-unavailable alert, never a pass', first: [], noResults: true, unavailableReason: 'Report not found: reports/playwright-report/results.json', completeness: { expected: 5, reported: 0 } },
   { name: '20-zero-tests-selected', title: '0 tests selected (an empty sandbox selection)', expect: 'must not read as a pass', first: [], rerun: false },
+  { name: '22-flaky-above-budget', title: 'Four flaky tests (budget is 3); the rerun is off', expect: 'amber: flaky above the budget; the subject names 4 flaky', first: [...base(25), ...many(4, 'flaky', 'flaky')], rerun: false },
+  { name: '23-flaky-at-budget-plus-rerun-recovery', title: 'Three flaky tests plus one that failed every attempt and passed on the rerun (D2)', expect: 'amber because of the D2 test, not because of the flaky ones', first: [...base(25), ...many(3, 'flaky', 'flaky'), def('ui/d2/d2.spec.ts', 'd2 failing test', 5, 'failed')], rerun: true },
+  { name: '24-flaky-at-budget-not-rerun-by-default', title: 'Three flaky tests; the flaky rerun is off by default (RERUN_INCLUDE_FLAKY=false)', expect: 'green, "(3 flaky)" in the subject; no rerun table', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: true, includeFlaky: false },
   { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; the email must stay under 100 KB', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
 ];
 
@@ -197,7 +201,7 @@ export function invariants(s: ScenarioResult): Violation[] {
     if (r.recoveredOnRerun > 0 && !(onRerunInSubject && parseInt(onRerunInSubject[1], 10) === r.recoveredOnRerun)) bad('subject-shows-rerun', `${r.recoveredOnRerun} tests that passed only on the rerun are not named in the subject: ${s.subject}`);
     if (r.ranOnlyOnRerun > 0 && !/only on rerun/.test(s.subject)) bad('subject-shows-ran-only-on-rerun', `${r.ranOnlyOnRerun} tests that ran only on the rerun are not named in the subject (the verdict is amber because of them): ${s.subject}`);
     if (r.skipped - r.didNotRun > 0 && !/skipped/.test(s.subject)) bad('subject-accounts-for-skipped', `${r.skipped - r.didNotRun} skipped tests are in "of ${r.total}" but not named: failed + passed < total and the reader cannot see why: ${s.subject}`);
-    if (r.failed > 0 ? !new RegExp(`^${r.failed} tests? failed`).test(exec) : !/^No test failures/.test(exec)) bad('exec-first-line', `the executive summary's first sentence does not state ${r.failed} failures: "${exec.slice(0, 80)}"`);
+    if (r.failed > 0 ? !new RegExp(`^${r.failed} tests? failed`).test(exec) : !/^(No test failures this run|No test failed in the end|Nothing was verified)/.test(exec)) bad('exec-first-line', `the executive summary's first sentence does not state ${r.failed} failures: "${exec.slice(0, 80)}"`);
   }
   const execText = text(s.html);
   const execSentence = /(\d+) of (\d+) tests passed in the end: ([^—]*)—/.exec(execText);
@@ -212,14 +216,20 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (r.failed > 0 && (verdict.verdict === 'clear' || verdict.bannerTone === 'success' || subjectIcon === 'green')) bad('failure-never-green', `a run with ${r.failed} failed tests is shown green (${verdict.bannerLabel})`);
   if (subjectIcon === 'green' && verdict.verdict !== 'clear') bad('icon-matches-verdict', `the subject is green but the verdict is ${verdict.verdict}`);
   if (r.failed === 0 && !blockedLike && (verdict.bannerTone === 'danger' || /failed/i.test(s.subject) || s.subject.includes('❌'))) bad('flaky-only-not-failed', `a run without failures is shown as failed: ${s.subject} / ${verdict.bannerLabel}`);
-  if ((r.flaky > 0 || r.recoveredOnRerun > 0) && verdict.verdict === 'clear') bad('instability-not-clean', `${r.flaky} flaky and ${r.recoveredOnRerun} passed-only-on-rerun tests but the verdict is clear`);
+  // the colour rule (2026-11-25): by results only, whatever the CI setup
+  const notVerified = r.didNotRun + r.ranOnlyOnRerun;
+  const mustBeAmber = r.firstRun.flaky > FLAKY_BUDGET || r.recoveredOnRerun > 0 || notVerified > 0;
+  if (!blockedLike && r.failed === 0 && !ctx.suiteDrift?.occurred && ctx.health!.label !== 'Needs Attention' && ctx.health!.label !== 'Critical') {
+    if (mustBeAmber && verdict.verdict === 'clear') bad('instability-not-clean', `${r.firstRun.flaky} flaky (budget ${FLAKY_BUDGET}), ${r.recoveredOnRerun} passed-only-on-rerun, ${notVerified} not run but the verdict is clear`);
+    if (!mustBeAmber && verdict.verdict !== 'clear') bad('colour-by-results', `flaky ${r.firstRun.flaky} <= ${FLAKY_BUDGET}, nothing failed every attempt, everything ran, yet the verdict is ${verdict.verdict}: ${verdict.bannerLabel}`);
+  }
   if (blockedLike && verdict.verdict !== 'blocked' && !(r.total === 0)) bad('blocked-is-blocked', `an incomplete or blocked run has verdict ${verdict.verdict}`);
   if (r.total === 0 && verdict.verdict === 'clear') bad('zero-tests-never-green', `0 tests ran and the verdict is clear (${verdict.bannerLabel}, "${verdict.headline}")`);
 
   // 7: a blocked, incomplete or empty run never claims a pass rate
   if (blockedLike) {
     if (/\d+ passed|✅/.test(s.subject)) bad('no-pass-claim-subject', `the subject of a run where tests did not run claims passes: ${s.subject}`);
-    if (t['Passed first time']) bad('no-pass-rate-tile', `a run where tests did not run still shows "Passed first time ${t['Passed first time'].value}"`);
+    if (t['Passed first time'] && t['Passed first time'].value !== 'n/a') bad('no-pass-rate-tile', `a run where tests did not run still shows "Passed first time ${t['Passed first time'].value}"`);
   }
 
   // 8: flaky tests stay visible somewhere
@@ -234,11 +244,16 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (s.summary && !s.summary.ran && s.summary.reason === 'none' && s.summary.excluded.length > 0 && /no test failed or was flaky/.test(text(s.html))) bad('not-rerun-reason', 'the rerun section says "no test failed or was flaky" although failed tests could not be rerun');
 
   // reader-confusion checks (findings, see KNOWN): wording that contradicts the verdict or hides why a run is amber or red
-  if (ctx.health && ['Excellent'].includes(ctx.health.label) && r.failed > 0) bad('health-with-failures', `health says "${ctx.health.label}" (${ctx.health.score}) next to ${r.failed} failed tests`);
+  if (ctx.health && !ctx.health.notApplicable && r.failed > 0) {
+    const severe = r.failed >= 3 || r.failed >= (r.total - r.skipped) * 0.05;
+    if (ctx.health.label === 'Excellent' || (severe && ctx.health.label === 'Good')) bad('health-with-failures', `health says "${ctx.health.label}" (${ctx.health.score}) next to ${r.failed} failed tests of ${r.total - r.skipped}`);
+  }
+  if (ctx.health?.notApplicable && !/Health: n\/a|Automation Health: n\/a/.test(text(s.html))) bad('health-na-shown', 'health is not applicable but the email does not say "n/a"');
   if (countBased && verdict.verdict === 'caution' && r.failed === 0 && /Automation health is (Excellent|Good)/.test(exec)) bad('exec-health-sentence', `the executive summary explains an amber run with "${/Automation health is [^.]*\./.exec(exec)?.[0]}": health is fine, the real reason is not stated`);
   if (blockedLike && /^No test failures/.test(exec)) bad('exec-no-failures-when-nothing-ran', `the executive summary says "No test failures this run." for a run where ${noTestRan(s) ? 'no test ran' : 'shards are missing'}`);
   if (r.total === 0 && (/Passed/.test(verdict.bannerLabel) || /0 passed of 0/.test(s.subject))) bad('zero-tests-label', `0 tests ran and the email says "${verdict.bannerLabel}" / "${s.subject}"`);
-  if (r.failed === 0 && r.flaky > 0 && r.firstRun.flaky !== r.flaky && /Unstable — \d+ flaky/.test(verdict.bannerLabel)) bad('verdict-label-vs-tile', `the verdict label counts ${r.flaky} flaky, the Flaky tile ${r.firstRun.flaky} (the label counts only those the rerun did not confirm)`);
+  const labelFlaky = /Unstable — (\d+) flaky/.exec(verdict.bannerLabel);
+  if (labelFlaky && parseInt(labelFlaky[1], 10) !== r.firstRun.flaky) bad('verdict-label-vs-tile', `the verdict label counts ${r.flaky} flaky, the Flaky tile ${r.firstRun.flaky} (the label counts only those the rerun did not confirm)`);
   if (r.recoveredOnRerun > 0 && r.failed === 0 && /^No test failures this run/.test(exec)) bad('exec-no-failures-after-rerun', `"No test failures this run." although ${r.recoveredOnRerun} tests failed every first attempt (they passed on the rerun)`);
 
   // 9: history
@@ -259,7 +274,7 @@ export function invariants(s: ScenarioResult): Violation[] {
   }
 
   // 11: health
-  if (blockedLike && ctx.health && ctx.health.score >= 70) bad('health-of-blocked-run', `a run where tests did not run has health ${ctx.health.score} ${ctx.health.label}`);
+  if (blockedLike && ctx.health && !ctx.health.notApplicable) bad('health-of-blocked-run', `a run where tests did not run has health ${ctx.health.score} ${ctx.health.label}`);
 
   // 12: environment and branch
   if (!s.subject.includes(s.branch) || !s.subject.toUpperCase().includes(s.env.toUpperCase())) bad('subject-names-env-branch', `the subject does not name ${s.env} and ${s.branch}: ${s.subject}`);
@@ -273,20 +288,6 @@ export function invariants(s: ScenarioResult): Violation[] {
 export const KNOWN: Array<{ id: string; scenarios?: RegExp; reason: string }> = [
   { id: 'size', reason: 'commit 2 of the email review (items 7-10, 13: error de-duplication, background-error summary, caps) is not done; the 100 KiB check fails for big runs until then' },
   { id: 'branch-advice', reason: 'item 16 (branch-aware wording: "ready for a PR to dev" on sandbox/dev, deployment advice only on stage/prod/main) is planned in commit 3, not done' },
-  { id: 'no-pass-rate-tile', reason: 'FINDING: a blocked/incomplete/empty run still shows a "Passed first time" tile; proposed fix: show "n/a" when no test ran' },
-  { id: 'zero-tests-never-green', reason: 'FINDING: a run with 0 tests reads as a clean pass; proposed fix: treat 0 selected tests as its own verdict ("No tests selected")' },
-  { id: 'health-of-blocked-run', reason: 'FINDING: a run where tests did not run can show a good health score; proposed fix: health "not applicable" for blocked/incomplete/empty runs' },
-  { id: 'no-pass-claim-subject', reason: 'FINDING: see no-pass-rate-tile' },
-  { id: 'health-with-failures', reason: 'FINDING: "Health: Excellent" next to a red FAILED run; proposed fix: cap the label at "Good" when any test failed and at "Needs Attention" from 3 failures or 5% of the run' },
-  { id: 'exec-health-sentence', reason: 'FINDING: an amber run says "Automation health is Excellent — see Health Score below for why", which explains nothing; proposed fix: state the real reason (N flaky, N passed only on the rerun, N did not run) and drop the health sentence unless health is Needs Attention or worse' },
-  { id: 'exec-no-failures-when-nothing-ran', reason: 'FINDING: "No test failures this run." for a blocked, incomplete or empty run; proposed fix: first line says what happened ("No test ran: admin session not renewed", "Only 3 of 5 shards reported")' },
-  { id: 'zero-tests-label', reason: 'FINDING: 0 tests selected reads "Passed"; proposed fix: its own verdict "No tests selected" (amber, never a pass)' },
-  { id: 'verdict-label-vs-tile', reason: 'FINDING: the amber label counts flaky tests the rerun did not confirm ("1 flaky") while the Flaky tile counts all that needed a retry (3); proposed fix: "Unstable — 3 flaky (1 not confirmed by the rerun)"' },
-  { id: 'exec-no-failures-after-rerun', reason: 'FINDING: "No test failures this run." is true of the final result but hides that tests failed every first attempt; proposed fix: "No test failed in the end."' },
-  { id: 'subject-accounts-for-skipped', reason: 'FINDING: skipped tests are inside "of N" but not named, so failed + passed is less than N; proposed fix: ", 2 skipped" in the subject (the requested form has none)' },
-  { id: 'subject-shows-ran-only-on-rerun', reason: 'FINDING: the run is amber because tests ran only on the rerun, and the subject does not say so (only the body does)' },
-  { id: 'alert-subject-format', reason: 'FINDING: the report-unavailable email has its own subject format; proposed fix: "🚫 STAGING sandbox #100: REPORT NOT AVAILABLE"' },
-  { id: 'blocked-is-blocked', reason: 'FINDING: see zero-tests-never-green' },
 ];
 const isKnown = (v: Violation): string | null => KNOWN.find((k) => k.id === v.id && (!k.scenarios || k.scenarios.test(v.scenario)))?.reason ?? null;
 

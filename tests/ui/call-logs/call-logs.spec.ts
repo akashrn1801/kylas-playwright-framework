@@ -10,6 +10,7 @@ import {
   generateCallLogData,
   formatDateForCalendarLabel,
 } from '../../../src/data/factories/callLogFactory';
+import { appToday } from '../../../src/utils/appTime';
 import { logger } from '../../../src/utils/logger';
 import { config } from '../../../config/config';
 
@@ -231,8 +232,9 @@ test.describe('Call Logs', () => {
     await expect(callLogsPage['calendarIcon'](), 'Date picker icon should be enabled once the outcome is selected').toBeEnabled();
     await callLogsPage['calendarIcon']().click();
     await callLogsPage['calendarForwardButton']().waitFor({ state: 'visible', timeout: 10000 });
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // The picker's "today" is the app's (account time zone), not the runner's: from 18:30 UTC the runner's "tomorrow" is the app's
+    // today, which is selectable (sandbox run 45457800405). appToday() gives the app's day.
+    const tomorrow = appToday(1);
     const tomorrowLabel = formatDateForCalendarLabel(tomorrow);
     // suffix match: a blocked day's aria-label has a prefix before the date (the exact match never found it)
     const tomorrowCell = adminPage.locator(`.SingleDatePicker td[aria-label$="${tomorrowLabel}"]`);

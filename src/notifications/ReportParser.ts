@@ -128,6 +128,9 @@ export function deriveModuleFromFile(file: string): { name: string; type: 'UI' |
   return { name, type };
 }
 
+// Flaky tests (passed on an in-job retry) a run may contain and still read green; above it the run is amber. Shared with AutomationHealth.
+export const FLAKY_BUDGET = 3;
+
 export interface ErrorLocation {
   file: string;
   line: number;
@@ -507,8 +510,8 @@ export class ReportParser {
         ? 'no-tests-executed'
         : failed > 0
           ? 'failed'
-          : flaky > 0 || recoveredOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
-            ? 'unstable' // green only when nothing failed all first attempts: flaky, recovered-on-rerun, not-run and rerun-only tests are never clean
+          : firstRun.flaky > FLAKY_BUDGET || recoveredOnRerun > 0 || didNotRun > 0 || ranOnlyOnRerun > 0
+            ? 'unstable' // colour by results only (2026-11-25): flaky within the budget stays green; above it, a test that failed every attempt, a test that did not run or ran only on the rerun is amber
             : 'passed';
     // WHY first-time, not after the rerun (e700d3a: a run with any test that did not pass first time never reads 100%): a
     // rerun pass is Passed in `passed`, but this tile says "Passed first time".
