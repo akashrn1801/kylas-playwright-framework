@@ -191,6 +191,24 @@
       "added": "2026-10-28",
       "confirmed": false,
       "why": "QA run 40477938102 (2026-10-27, traces read 2026-10-28): HTTP 400 code 000000 \"Failed to resolve 'sd-sales' / 'sd-marketplace' / 'sd-rule' / 'sd-order-management' and search domain query for configured domains failed as well\" on POST /v1/contacts/ (09:18 UTC), GET /v1/marketplace/apps/actions, POST /v1/rules/search/action-logs and GET /v1/quotations/layout/create (11:26 UTC), and \"Connection prematurely closed BEFORE response\" on GET /v1/quotations/layout/list (10:57 UTC). The error text names an internal service lookup, so no test or page logic is involved. The text only reaches the failure message since the create flows and the Quotations layout wait began including the response message, so it cannot match older runs. Two tests are required because one captured message is not proven to be the request that failed the test; one module is enough because the text is explicit."
+    },
+    {
+      "id": "account-plan-limit",
+      "title": "Kylas plan limit reached (\"Upgrade your plan\" shown)",
+      "label": "environment-suspected",
+      "errorPatterns": [
+        "Kylas showed '[^']*' \\(account plan limit reached\\)"
+      ],
+      "errorPatternNotes": [
+        "Kylas showed its \"Upgrade your plan\" modal because the account hit a plan limit (BasePage names it in the failure text)"
+      ],
+      "minTests": 1,
+      "minModules": 1,
+      "kiRef": "KI-76",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-11-26",
+      "confirmed": false,
+      "why": "The failure text itself says the app showed its plan-upgrade modal, so one test is enough and no test logic is involved. Reported 2026-11-26: after Add, Kylas showed the modal and 57 tests failed with a bare locator-not-found. Not reproduced live (the modal's selectors are unverified), so confirmed stays false."
     }
   ]
 }

@@ -716,7 +716,67 @@ export class BasePage {
       ErrorCollector.recordRecoveryEvent({ kind: 'error-boundary-page', outcome: 'failed', detail: description });
       return new Error(`${description}: the app is showing its error screen ("Something is broken") over the page — an app/backend failure, not a missing element. Original: ${original}`);
     }
+    const overlay = await this.overlayError(description, error);
+    if (overlay) return overlay;
     return error;
+  }
+
+  /**
+   * A modal or overlay visible over the page, named by its title (2026-11-26: Kylas showed the "Upgrade your plan"
+   * modal (`plan-upgrade-modal`) after Add, and 57 tests failed with a bare "locator not found"). null when none is open.
+   * `planOnly` looks only for that known modal, which is cheap enough to check every wait slice; the generic scan
+   * (any `.modal.show` / dialog / full-cover fixed layer) runs only when something is already failing.
+   * WHY the plan modal's selectors are a guess: the id, test id and class `plan-upgrade-modal` come from the report of
+   * that failure and were NOT reproduced live (the account was nowhere near its limit afterwards); the visible text
+   * "Upgrade your plan" is matched too, so either one names it. Verify against the real DOM next time it shows.
+   */
+  private async findBlockingOverlay(planOnly = false): Promise<{ title: string; planLimit: boolean } | null> {
+    return this.page
+      .evaluate((onlyPlan) => {
+        const visible = (el: Element): boolean => {
+          const r = el.getBoundingClientRect();
+          const st = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+        };
+        const titleOf = (el: Element): string =>
+          (el.querySelector('.modal-title, [class*="modal-title"], h1, h2, h3, h4, [role="heading"]')?.textContent || el.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80);
+        const planText = /upgrade your plan/i;
+        const plan = [...document.querySelectorAll('[data-testid="plan-upgrade-modal"], #plan-upgrade-modal, [class*="plan-upgrade-modal"]')].find(visible);
+        if (plan) return { title: titleOf(plan), planLimit: true };
+        const dialogs = [...document.querySelectorAll('.modal.show, [role="dialog"], [aria-modal="true"]')].filter(visible);
+        const byText = dialogs.find((d) => planText.test(d.textContent || ''));
+        if (byText) return { title: titleOf(byText), planLimit: true };
+        if (onlyPlan) return null;
+        if (dialogs[0]) return { title: titleOf(dialogs[0]), planLimit: false };
+        for (const el of document.querySelectorAll('body *')) {
+          const st = getComputedStyle(el);
+          if (st.position !== 'fixed') continue;
+          const r = el.getBoundingClientRect();
+          if (visible(el) && r.width >= innerWidth * 0.8 && r.height >= innerHeight * 0.8 && (el.textContent || '').trim()) {
+            return { title: titleOf(el), planLimit: false };
+          }
+        }
+        return null;
+      }, planOnly)
+      .catch(() => null);
+  }
+
+  /** The error that names the modal or overlay covering the page, or null when nothing covers it. */
+  private async overlayError(description: string, error: unknown, planOnly = false): Promise<Error | null> {
+    const overlay = await this.findBlockingOverlay(planOnly);
+    if (!overlay) return null;
+    const original = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    if (overlay.planLimit) {
+      return new Error(
+        `${description}: Kylas showed '${overlay.title}' (account plan limit reached) instead of the expected UI — the account hit a plan limit (records, custom fields, …); nothing in the test can fix that. Original: ${original}`
+      );
+    }
+    return new Error(
+      `${description}: a modal or overlay is open over the page ('${overlay.title}') instead of the expected UI, so the element is covered or was never rendered. Original: ${original}`
+    );
   }
 
   /**
@@ -766,7 +826,12 @@ export class BasePage {
           // wait has run out (below).
           if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
           if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
+          // The plan-limit modal cannot go away by waiting: named at once (any other overlay only once the wait has run out, below).
+          const planModal = await this.overlayError(description, error, true);
+          if (planModal) throw planModal;
           if (left <= SLICE_MS) {
+            const covered = await this.overlayError(description, error);
+            if (covered) throw covered;
             if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
               throw new Error(
                 `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`

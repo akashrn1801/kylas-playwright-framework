@@ -37,6 +37,8 @@ const ROUTES: Record<string, string> = {
   '/slow': page('<div id="m"></div>', "setTimeout(function(){document.getElementById('m').innerHTML='<input name=x>'},7000)"),
   '/broken': page('<div class="app-error something-is-broken">Something is broken here</div>'),
   '/skeleton': page('<div>skeleton</div>', "fetch('/v1/deals/1')"),
+  '/plan': page('<div id="plan-upgrade-modal" class="modal show" role="dialog" style="display:block"><div class="modal-title">Upgrade your plan</div><p>Record limit reached</p></div>'),
+  '/modal': page('<div class="modal show" role="dialog" style="display:block"><h5 class="modal-title">Confirm delete</h5></div>'),
   '/covered': page('<button id="b">Type</button><div class="app-error something-is-broken" style="position:fixed;left:0;top:0;right:0;bottom:0;background:#fff">Something is broken here</div>'),
 };
 
@@ -85,6 +87,19 @@ async function main(): Promise<void> {
 
   r = await timed('/covered', () => probe.clicked(pg.locator('#b'), 'type dropdown'));
   check(!!r.error && /error screen \("Something is broken"\)/.test(r.error.message) && r.ms < 25000, 'a click covered by the error screen fails in ~15 s (was 657 retries until the test timeout) and names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  // Plan-limit modal and other overlays (2026-11-26): named in the failure; a plain missing element stays plain.
+  r = await timed('/plan', () => probe.rendered(input, 'Add form behind the plan modal', 60000));
+  check(!!r.error && /Kylas showed 'Upgrade your plan' \(account plan limit reached\)/.test(r.error.message) && r.ms < 10000, 'the plan-upgrade modal fails within seconds and names its title', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/modal', () => probe.rendered(input, 'form behind another modal', 6000));
+  check(!!r.error && /a modal or overlay is open over the page \('Confirm delete'\)/.test(r.error.message) && !/plan limit/.test(r.error.message), 'another open modal is named by its title once the wait runs out, and is not called a plan limit', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/ok', () => probe.rendered(pg.locator('input[name=absent]'), 'control that is not on the page', 6000));
+  check(!!r.error && !/modal|overlay|plan limit/i.test(r.error.message), 'red sample: a normal missing element is reported as before, no modal or plan-limit wording', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/plan', () => probe.clicked(pg.locator('#absent'), 'Add button behind the plan modal'));
+  check(!!r.error && /account plan limit reached/.test(r.error.message), 'a click that fails behind the plan-upgrade modal names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
 
   await browser.close();
   server.close();

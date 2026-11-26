@@ -46,6 +46,14 @@
 - **Fix:** `TasksPage.fillRelation` uses only run-owned records (`TaskRelationTargets`: one lead, deal, contact, company per account and worker, deleted by no test), found by name with a lookup watcher (leads/contacts by first name: the lookup queries `firstName:`).
 - **Same run:** the 429 pages came at the end of an all-worker stall (KI-71), not from extra retries (none logged). The Add dropdown now reloads once on the 429 page; missed saves name "NEVER SENT" / "SENT but NO ANSWER"; a missed contact update is checked before a second save. **Open:** a limiter change is unproven; the quotations list-layout 429 is not recovered.
 
+### KI-76 — "Upgrade your plan" modal after Add: 57 tests "locator not found" (2026-11-26)
+- **Status:** open, account side; selectors **unverified** · **Since:** 2026-11-26
+- **What:** reported, not reproduced; `BasePage` names any open modal (signature `account-plan-limit`). **Next:** capture its DOM.
+
+### KI-75 — Restricted user reads `GET /v1/tenants/usage` (HTTP 200) (2026-11-26)
+- **Status:** open, Kylas bug, **not yet reported** · **Since:** 2026-11-26 (QA)
+- **Test:** `billing.rbac.spec.ts` BLR2 (`BILLING-USAGE:restricted-read`): accepted = expected failure.
+
 ### KI-74 — Staging: `POST /v1/deals/` sent, then `net::ERR_FAILED` (2026-11-25)
 - **Status:** open, Kylas/environment side · **Since:** 2026-11-25
 - **What:** sandbox #240 `deals.rbac:1518`: create sent +281 ms, no answer for 120 s, `net::ERR_FAILED`; passed on retry. The request left the browser, so not a lost click; see KI-71 for the stall pattern.

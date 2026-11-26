@@ -59,6 +59,24 @@ export const config = {
     minRemainingForRunMs: Number(process.env.SESSION_MIN_REMAINING_FOR_RUN_MS) || 4 * 60 * 60 * 1000,
     renewSession: process.env.SESSION_RENEW === '1',
   },
+  // Billing (Account capacity): per-environment thresholds and the plan each environment is expected to be on.
+  // WHY the thresholds are per environment: QA and staging run on a shared, uncleaned data set, so "records left" is the
+  // early warning; prod gets its own knob (BILLING_RECORDS_WARN_BELOW) once its real headroom is known. Custom Fields
+  // warn under 10 left and never stop a run. `expectedPlan` is the plan NAME as /v1/tenants/usage reports it; prod is set
+  // with PROD_EXPECTED_PLAN (unset = the plan check is skipped there with a log line, never guessed).
+  billing: {
+    recordsWarnBelow: {
+      qa: 10000,
+      staging: 10000,
+      prod: Number(process.env.BILLING_RECORDS_WARN_BELOW) || 10000,
+    },
+    customFieldsWarnBelow: 10,
+    expectedPlan: {
+      qa: 'Elevate',
+      staging: 'Elevate',
+      prod: process.env.PROD_EXPECTED_PLAN || '',
+    },
+  },
   browser: {
     name: process.env.BROWSER || 'chromium',
     headless: process.env.HEADLESS === 'true',

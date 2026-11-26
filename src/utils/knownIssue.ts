@@ -25,6 +25,7 @@ export const KNOWN_BUG_FIX_CONFIRMED_ENVS: Record<string, readonly string[]> = {
   'SD-32157:add-note': ['qa'], // confirmed 2026-11-18: HTTP 401, code 000004
   'SD-32157:delete-admins-note': [],
   'SD-32158:add-task': [],
+  'BILLING-USAGE:restricted-read': [], // KI-75, observed live 2026-11-26: restricted GET /v1/tenants/usage answers 200; no Kylas ticket yet
 };
 
 export interface KnownBugVerdict {

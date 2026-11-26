@@ -318,6 +318,24 @@ function main(): void {
   const plain = build([{ file: 'tests/ui/deals/deals.spec.ts', title: 'odd timeout', status: 'failed', error: 'TimeoutError: page.goto: Timeout 30000ms exceeded.' }]);
   check(labelOf(plain, 'odd timeout').label === 'unclassified', 'a plain timeout with no signature: unclassified');
 
+  // Plan-limit modal (2026-11-26, BasePage.overlayError): the failure text names the modal, so the email says "plan limit".
+  const PLAN_ERR = (what: string): string =>
+    `Error: ${what}: Kylas showed 'Upgrade your plan' (account plan limit reached) instead of the expected UI — the account hit a plan limit (records, custom fields, …); nothing in the test can fix that. Original: locator.waitFor: Timeout 60000ms exceeded.`;
+  const planMods = ['deals', 'leads', 'contacts', 'companies', 'tasks'];
+  const planSpecs: Spec[] = Array.from({ length: 12 }, (_, i) => ({ file: `tests/ui/${planMods[i % planMods.length]}/x${i}.spec.ts`, title: `plan limit ${i}`, status: 'failed' as const, error: PLAN_ERR(`Add ${planMods[i % planMods.length]} form ${i}`) }));
+  const planRun = build(planSpecs);
+  check(planSpecs.every((sp) => labelOf(planRun, sp.title).signatureId === 'account-plan-limit' && labelOf(planRun, sp.title).label === 'environment-suspected'), 'plan-limit modal in the error: every test labelled account-plan-limit, environment-suspected');
+  check(planRun.summary.dominant?.signatureId === 'account-plan-limit' && planRun.summary.dominant.count === 12, 'plan-limit modal: the banner signature is account-plan-limit, 12 of 12', JSON.stringify(planRun.summary.dominant));
+  const planHtml = tpl.htmlReadable(planRun.ctxFor(true));
+  check(planHtml.includes('Likely environment problem: 12 of 12 failed or flaky tests share the signature “Kylas plan limit reached'), 'plan-limit modal: the email headline says the plan limit was reached, not a list of locator failures');
+  const oneModal = build([planSpecs[0]]);
+  check(labelOf(oneModal, 'plan limit 0').signatureId === 'account-plan-limit', 'a single test showing the plan-limit modal is already labelled (the text is explicit)');
+  // red samples: the same shape of failure WITHOUT the plan-limit modal must not be labelled
+  const missing = build([{ file: 'tests/ui/deals/deals.spec.ts', title: 'plain missing element', status: 'failed', error: 'Error: Add deal form: not rendered within 60 s. Original: locator.waitFor: Timeout 60000ms exceeded.' }]);
+  check(labelOf(missing, 'plain missing element').signatureId !== 'account-plan-limit', 'red sample: a normal missing element is NOT labelled account-plan-limit', JSON.stringify(labelOf(missing, 'plain missing element')));
+  const otherModal = build([{ file: 'tests/ui/deals/deals.spec.ts', title: 'other modal open', status: 'failed', error: "Error: Add deal form: a modal or overlay is open over the page ('Confirm delete') instead of the expected UI, so the element is covered or was never rendered. Original: locator.waitFor: Timeout 60000ms exceeded." }]);
+  check(labelOf(otherModal, 'other modal open').signatureId !== 'account-plan-limit', 'red sample: a different modal named in the error is NOT labelled account-plan-limit', JSON.stringify(labelOf(otherModal, 'other modal open')));
+
   const rep500 = (code: string): Spec => ({ file: 'tests/ui/reports/reports.spec.ts', title: `report ${code}`, status: 'failed', error: 'Error: report not saved', misc: [{ statusCode: 500, apiErrorCode: code, url: 'https://api.example.invalid/v3/reports' }] });
   check(labelOf(build([rep500('01403004')]), 'report 01403004').label === 'application-bug-suspected', 'HTTP 500 01403004 on POST /v3/reports: application-bug-suspected');
   check(labelOf(build([rep500('09999999')]), 'report 09999999').label === 'unclassified', 'HTTP 500 with an unknown code: unclassified');

@@ -10,12 +10,13 @@ End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (st
 Current suite size (generated; do not edit by hand):
 
 <!-- GEN:suite-totals:START -->
-**957 tests** in **35 spec files** (UI 525 · RBAC 432)
+**965 tests** in **37 spec files** (UI 531 · RBAC 434)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
+| Billing | 6 | 2 | 8 |
 | Call-logs | 30 | 28 | 58 |
 | Companies | 23 | 26 | 49 |
 | Companies — Field Limits | 39 | 31 | 70 |
@@ -33,13 +34,13 @@ Current suite size (generated; do not edit by hand):
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **525** | **432** | **957** |
+| **Total** | **531** | **434** | **965** |
 <!-- GEN:module-table:END -->
 
 Tag counts:
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 925 · `@prodSafe` 54
+`@smoke` 53 · `@regression` 931 · `@prodSafe` 62
 <!-- GEN:tag-counts:END -->
 
 Module names in the table come from `deriveModuleFromFile()` (the same labels the notification email uses). Login's spec lives in `tests/ui/dashboard/` and is counted under Dashboard.
