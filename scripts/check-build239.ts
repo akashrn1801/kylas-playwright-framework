@@ -13,7 +13,7 @@ import { isExpectedBackgroundNoise } from '../src/error-collector/errorFilters';
 import { isMergeCommit, mergeTargetBranch, parseCommitFacts } from '../src/notifications/CommitInfo';
 import { RunHistoryRecord, computeSlowTestTrend } from '../src/notifications/RunHistory';
 import { be, nounFor, plural, wasWere } from '../src/notifications/wording';
-import { rerunTiles } from './check-scenarios';
+import { moduleCoverageViolations, rerunTiles } from './check-scenarios';
 import { loadFixture239, replayBuild239 } from './lib/build239Fixture';
 
 let failed = 0;
@@ -33,6 +33,8 @@ function main(): void {
 
   // ── the fixture is faithful to the run ──
   check(r.report.total === 943 && fx.modules.reduce((n, m) => n + m.total, 0) === 943 && fx.modules.length === 34, 'fixture: 943 tests in 34 modules');
+  const cov239 = moduleCoverageViolations(r.html, fx.modules.map((m) => ({ name: m.name, type: m.type, total: m.total })));
+  check(cov239.length === 0, `every module in the results has its row, on its own side, with its own test count (${fx.modules.length} sides: ${[...new Set(fx.modules.map((m) => m.name))].join(', ')})`, cov239.join('; '));
   check(JSON.stringify(r.summary.firstRun) === JSON.stringify(real.firstRun) && JSON.stringify(r.summary.afterRerun) === JSON.stringify(real.afterRerun), 'fixture: first run (940/1/1/1) and after-rerun counts equal the run\'s own rerun-summary.json', JSON.stringify(r.summary.firstRun));
   check(r.subject === '⚠️ STAGING sandbox #239: 942 passed (1 flaky, 1 on rerun), 1 skipped of 943', 'replay: the subject is the one the run sent', r.subject);
 

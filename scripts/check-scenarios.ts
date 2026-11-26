@@ -78,6 +78,7 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '57-capacity-no-post-run-reading', title: 'Account capacity: a pre-run snapshot but no post-run reading', expect: 'the bars show the account at the start; the change cells say n/a and the note says why', first: base(30), rerun: false, capacity: { pre: {} } },
   { name: '58-capacity-unreadable-stopped', title: 'Account capacity: the usage call failed and the run was stopped', expect: 'BLOCKED — ACCOUNT CAPACITY UNREADABLE; "unavailable" in the section with the reason', first: base(30), rerun: false, capacity: { error: { message: 'GET /v1/tenants/usage failed: HTTP 403 {"code":"001019"}', readOnlyRun: false } } },
   { name: '59-capacity-custom-fields-low', title: 'Account capacity: 5 custom fields left', expect: 'Custom Fields bar yellow, a yellow warning, never blocked', first: base(30), rerun: false, capacity: { pre: { customFieldsUsed: 120 }, post: { customFieldsUsed: 120 } } },
+  { name: '60-every-module-incl-billing', title: 'Every kind of module in one run: Billing, Dashboard, Reports and formFields, UI and RBAC', expect: 'one row per module in Module Analytics, each on its own UI or RBAC side with its own test count (Billing UI 6 + RBAC 2, Dashboard UI 3 + RBAC 2, Reports UI 2 + RBAC 2, "Leads — Field Limits" UI 2 + RBAC 2)', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(3, 'passed', 'dashboard ui', 'ui/dashboard/dashboard.spec.ts', 300), ...many(2, 'passed', 'dashboard rbac', 'rbac/dashboard.rbac.spec.ts', 400), ...many(2, 'passed', 'reports ui', 'ui/reports/reports.spec.ts', 500), ...many(2, 'passed', 'reports rbac', 'rbac/reports.rbac.spec.ts', 600), ...many(2, 'passed', 'leads field limits ui', 'ui/formFields/leadFieldLimits.spec.ts', 700), ...many(2, 'passed', 'leads field limits rbac', 'rbac/formFields/leadFieldLimits.rbac.spec.ts', 800)], rerun: false, expectModules: [{ name: 'Billing', type: 'UI', total: 6 }, { name: 'Billing', type: 'RBAC', total: 2 }, { name: 'Dashboard', type: 'UI', total: 3 }, { name: 'Dashboard', type: 'RBAC', total: 2 }, { name: 'Reports', type: 'UI', total: 2 }, { name: 'Reports', type: 'RBAC', total: 2 }, { name: 'Leads — Field Limits', type: 'UI', total: 2 }, { name: 'Leads — Field Limits', type: 'RBAC', total: 2 }] },
 ];
 
 // every branch with its environment (the deployment/PR advice differs by branch)
@@ -214,6 +215,46 @@ export function allModulesTable(html: string): ModuleRow[] | null {
     rows.push({ name, UI: side(), RBAC: side(), bgs });
   }
   return rows;
+}
+export interface ExpectedModule { name: string; type: 'UI' | 'RBAC'; total: number }
+/**
+ * The modules a run's spec files belong to, from the file paths alone (independent of ReportParser.deriveModuleFromFile, so a parser that
+ * drops or misnames a module cannot hide behind itself). formFields files are not derived (their module is the entity in the file name):
+ * list them explicitly in the scenario's `expectModules`.
+ */
+export function expectedModulesFromDefs(defs: Def[]): ExpectedModule[] {
+  const out = new Map<string, ExpectedModule>();
+  for (const d of defs) {
+    const m = /^(?:tests\/)?(ui|rbac)\/([^/]+)/.exec(d.file);
+    if (!m) continue;
+    const seg = m[2].replace(/\.(rbac\.)?spec\.ts$/, '');
+    if (seg.toLowerCase() === 'formfields') continue;
+    const type = m[1] === 'ui' ? 'UI' : 'RBAC';
+    const key = `${type}:${seg.toLowerCase()}`;
+    const cur = out.get(key) ?? { name: seg, type: type as 'UI' | 'RBAC', total: 0 };
+    cur.total += 1;
+    out.set(key, cur);
+  }
+  return [...out.values()];
+}
+/**
+ * Every module present in a run's results is a row of the Module Analytics "all modules" table, on the right side (UI or RBAC), with the run's own
+ * test count for that side, and no row appears that the run does not have (unless `allowExtra`). Returns what is wrong; [] when it holds.
+ */
+export function moduleCoverageViolations(html: string, expected: ExpectedModule[], opts: { allowExtra?: boolean } = {}): string[] {
+  const rows = allModulesTable(html);
+  if (!rows) return ['the all-modules table is missing'];
+  const out: string[] = [];
+  const lower = (n: string): string => n.toLowerCase();
+  for (const e of expected) {
+    const row = rows.find((x) => lower(x.name) === lower(e.name));
+    if (!row) { out.push(`${e.type} ${e.name} is in the results but has no row`); continue; }
+    const side = row[e.type];
+    if (!side) out.push(`${e.name}: the ${e.type} side is missing from its row`);
+    else if (side[0] !== e.total) out.push(`${e.name} ${e.type}: the row says ${side[0]} tests, the results have ${e.total}`);
+  }
+  if (!opts.allowExtra) for (const row of rows) if (!expected.some((e) => lower(e.name) === lower(row.name))) out.push(`the row "${row.name}" is not in the results`);
+  return out;
 }
 export interface RerunRow { first: number; final: number; note: string }
 export function rerunTable(html: string): Record<string, RerunRow> | null {
@@ -507,6 +548,13 @@ export function invariants(s: ScenarioResult): Violation[] {
     if ((bar && bar[1].toUpperCase() !== RETRY.bg.toUpperCase()) || (dot && dot[1].toUpperCase() !== RETRY.bg.toUpperCase())) bad('retry-yellow', `the Passed on retry bar / legend dot is not ${RETRY.bg}`);
   }
 
+  // Every module in the results is a row of Module Analytics, on its own side, with the run's own count (2026-11-26): the expected list comes from the
+  // scenario's spec files (or its explicit `expectModules`), NOT from the parsed report, which the older all-modules-complete check below reads
+  if (s.spec.first && s.spec.first.length > 0 && r.total > 0 && !blockedLike) {
+    const expected = s.spec.expectModules ?? expectedModulesFromDefs(s.spec.first);
+    const hasFormFields = s.spec.first.some((d) => /formfields/i.test(d.file.split('/')[1] ?? ''));
+    for (const msg of moduleCoverageViolations(s.html, expected, { allowExtra: hasFormFields && !s.spec.expectModules })) bad('modules-in-results', msg);
+  }
   // E6 (2026-11-25): every module, UI and RBAC side by side; per side the five outcomes add up to Tests; the totals are the run's; problems are highlighted
   const modRows = allModulesTable(s.html);
   if (!blockedLike || r.modules.length > 0) {
@@ -670,6 +718,28 @@ function main(): void {
 
   const rows = results.map(row);
   const violations = results.flatMap(invariants);
+  // Red samples for the module-coverage invariant: a run's email that drops a module (or one side, or miscounts it) must be reported
+  {
+    const every = results.find((x) => x.spec.name === '60-every-module-incl-billing')!;
+    const exp = every.spec.expectModules!;
+    const dropRow = (html: string, name: string): string => {
+      const at = html.indexOf(`>${name}</td>`, html.indexOf('id="all-modules"'));
+      const start = html.lastIndexOf('<tr style="border-bottom', at);
+      const next = html.indexOf('<tr style="border-bottom', at);
+      const end = next > 0 ? next : html.indexOf('</table>', at);
+      return html.slice(0, start) + html.slice(end);
+    };
+    const samples: Array<[string, string[], boolean]> = [
+      ['the full email: every module has its row', moduleCoverageViolations(every.html, exp), false],
+      ['the Billing row dropped', moduleCoverageViolations(dropRow(every.html, 'Billing'), exp), true],
+      ['the Dashboard row dropped', moduleCoverageViolations(dropRow(every.html, 'Dashboard'), exp), true],
+      ['a module the run does not have (extra row)', moduleCoverageViolations(every.html, exp.filter((e) => e.name !== 'Reports')), true],
+      ['a miscounted side (Billing UI expected 7, the row says 6)', moduleCoverageViolations(every.html, exp.map((e) => (e.name === 'Billing' && e.type === 'UI' ? { ...e, total: 7 } : e))), true],
+    ];
+    for (const [what, found, shouldFail] of samples) {
+      if ((found.length > 0) !== shouldFail) violations.push({ scenario: 'module-coverage-red-samples', id: 'invariant-self-test', message: `${what}: expected ${shouldFail ? 'a violation' : 'none'}, got ${JSON.stringify(found)}` });
+    }
+  }
   // Red samples for the run-times invariant (2026-11-26): each of these orderings must be reported, and the good one must not
   const T = { s: '2026-11-25T14:08:52.000Z', e: '2026-11-25T16:32:18.000Z' };
   const good = { runStart: { iso: '2026-11-25T14:05:00.000Z', source: 'github-run' as const }, runEnd: '2026-11-25T16:36:00.000Z' };

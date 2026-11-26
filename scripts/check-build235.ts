@@ -13,6 +13,7 @@ import { buildJobRecoveryRows } from '../src/notifications/JobStats';
 import { RunHistoryRecord, buildPassRateSeries } from '../src/notifications/RunHistory';
 import { BUILD_235, SKIP_REASON_AFTER, loadFixture, replayBuild235 } from './lib/build235Fixture';
 import { RenewalFailure } from '../src/auth/renewalFailure';
+import { moduleCoverageViolations } from './check-scenarios';
 
 let failed = 0;
 let total = 0;
@@ -28,6 +29,8 @@ function main(): void {
   const r = replayBuild235();
   const html = r.html;
   const t = text(html);
+  const cov235 = moduleCoverageViolations(html, fx.modules.map((m) => ({ name: m.name, type: m.type, total: m.total })));
+  check(cov235.length === 0, `every module in the results has its row, on its own side, with its own test count (${fx.modules.length} sides: ${[...new Set(fx.modules.map((m) => m.name))].join(', ')})`, cov235.join('; '));
 
   // ── the fixture is faithful to the run's own counts ──
   const original = JSON.parse(fx.files['rerun-summary.original.json']) as { firstRun: Record<string, number>; rows: { key: string; first: string; rerun: string }[]; excluded: unknown[]; candidates: number };

@@ -138,6 +138,8 @@ export interface ScenarioSpec {
     error?: { message: string; readOnlyRun: boolean };
     readOnlyRun?: boolean;
   };
+  /** The modules the run's results contain, written by hand (independent of the parser): used when the files alone do not say, e.g. formFields. */
+  expectModules?: Array<{ name: string; type: 'UI' | 'RBAC'; total: number }>;
   /** Give every attempt its own start time, so the tests window comes from the attempts and differs from the stats window. */
   attemptTimes?: boolean;
 }

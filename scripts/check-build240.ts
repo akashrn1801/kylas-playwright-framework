@@ -16,7 +16,7 @@ import { replayBuild235, buildWorstCaseFixture } from './lib/build235Fixture';
 import { replayBuild239 } from './lib/build239Fixture';
 import { EmailTemplate } from '../src/notifications/EmailTemplate';
 import { RETRY } from '../src/notifications/EmailPalette';
-import { allModulesTable, normalizeTags } from './check-scenarios';
+import { allModulesTable, moduleCoverageViolations, normalizeTags } from './check-scenarios';
 
 let failed = 0;
 let total = 0;
@@ -103,6 +103,8 @@ function main(): void {
 
   // ── E6: every module, UI and RBAC side by side ──
   const mt = allModulesTable(r.html) ?? [];
+  const cov240 = moduleCoverageViolations(r.html, fx.modules.map((m) => ({ name: m.name, type: m.type, total: m.total })));
+  check(cov240.length === 0, `every module in the results has its row, on its own side, with its own test count (${fx.modules.length} sides: ${[...new Set(fx.modules.map((m) => m.name))].join(', ')})`, cov240.join('; '));
   const byName = new Map(mt.map((x) => [x.name, x]));
   check(mt.length === new Set(fx.modules.map((m) => m.name)).size && /All 34 modules, UI and RBAC side by side/.test(t) && !/passed every test first time/.test(t), 'E6: one row per entity (every module of the 34 is shown), the "27 modules passed every test first time" one-liner is gone', `${mt.length} rows`);
   const dash = byName.get('Dashboard');
