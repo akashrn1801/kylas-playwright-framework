@@ -59,6 +59,8 @@ export interface Usage {
   planId: string;
   /** Renewal instant as sent (ISO string); null on a plan without one. */
   renewalAt: string | null;
+  /** `updatedAt` as sent. Observed on QA 2026-11-26: it EQUALS renewalAt (a 2027 date), so it is not a refresh time; kept so the email can tell. */
+  updatedAt: string | null;
   records: Quota;
   storage: Quota;
   customFields: Quota;
@@ -111,6 +113,7 @@ export function parseUsage(raw: RawUsage): Usage {
     planName: raw.planName,
     planId: raw.plan?.id,
     renewalAt: raw.renewalAt,
+    updatedAt: raw.updatedAt ?? null,
     records: toQuota(raw.records),
     storage: toQuota(raw.storage),
     customFields: toQuota(raw.customFields),
@@ -141,6 +144,14 @@ export class BillingApi extends ApiClient {
   /** Raw status and body — the RBAC tests need the refusal itself, so nothing is thrown here. */
   async getUsageRaw(): Promise<ApiResult<RawUsage>> {
     return this.send<RawUsage>('GET', '/tenants/usage');
+  }
+
+  /**
+   * One cheap read-only list search (size 1) whose only use is its `totalElements`. POST is the app's own search verb: nothing is written.
+   * Never throws on an HTTP error: the caller needs the status (a 429 or 5xx stops the remaining reads).
+   */
+  async searchTotal(path: string, startPage: number): Promise<ApiResult<{ totalElements?: number }>> {
+    return this.send<{ totalElements?: number }>('POST', `${path}?page=${startPage}&size=1&sort=createdAt,desc`, { fields: [], jsonRule: null });
   }
 
   async getSubscriptionDetailsRaw(): Promise<ApiResult<SubscriptionDetails>> {

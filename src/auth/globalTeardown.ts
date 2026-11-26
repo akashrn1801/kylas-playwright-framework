@@ -1,7 +1,8 @@
 import * as path from 'path';
 import { config } from '../../config/config';
 import { BillingApi } from '../modules/billing/BillingApi';
-import { POST_RUN_SNAPSHOT_FILE, capacityDir, evaluateCapacity, writeSnapshot } from '../modules/billing/capacity';
+import { POST_RUN_SNAPSHOT_FILE, capacityDir, evaluateCapacity, selectionIsReadOnly, writeSnapshot } from '../modules/billing/capacity';
+import { readLiveCounts } from '../modules/billing/liveCounts';
 import { redactTokens } from '../utils/apiClient';
 import { readAccessTokenFromStateFile } from './sessionCheck';
 
@@ -30,6 +31,8 @@ export default async function globalTeardown(): Promise<void> {
         },
         new Date()
       );
+      // the live totals after the run (skipped on a read-only run, like the gate's)
+      if (!selectionIsReadOnly(process.argv.slice(2)).readOnly) verdict.snapshot.live = await readLiveCounts(api, new Date());
       const file = writeSnapshot(capacityDir(config.env), verdict.snapshot, POST_RUN_SNAPSHOT_FILE);
       console.log(`[globalTeardown] Capacity after the run: records ${usage.records.used} used (${verdict.snapshot.records.remaining ?? 'unlimited'} left), saved ${file}`);
     } finally {

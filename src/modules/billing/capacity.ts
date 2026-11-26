@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Quota, Usage } from './BillingApi';
 import { extractFileFilters } from '../../auth/productFixtureNeed';
+import { LiveCounts } from './liveCounts';
 
 export type CapacityLevel = 'ok' | 'warn' | 'stop';
 
@@ -55,6 +56,10 @@ export interface CapacitySnapshot {
   readOnlyRun?: boolean;
   /** Billing period and currency from GET /v1/tenants/subscription-details (no price: it is not in the API). null = could not be read. */
   billing?: { period: string | null; currency: string | null };
+  /** `updatedAt` of GET /v1/tenants/usage as sent (on QA it equals renewalAt: not a refresh time, see AccountCapacity.refreshLabel). */
+  usageUpdatedAt?: string | null;
+  /** Live per-entity totals at this moment (src/modules/billing/liveCounts.ts); absent on a run that only reads. */
+  live?: LiveCounts;
 }
 
 export interface CapacityVerdict {
@@ -130,6 +135,7 @@ export function evaluateCapacity(usage: Usage, env: string, thresholds: Capacity
       thresholds,
       level,
       warnings,
+      usageUpdatedAt: usage.updatedAt,
     },
   };
 }
@@ -277,6 +283,8 @@ export interface CapacityGateDeps {
   warn: (line: string) => void;
   /** From selectionIsReadOnly(process.argv): a run that only reads warns instead of stopping. Absent = stops. */
   readOnlyRun?: ReadOnlyRun;
+  /** The live per-entity totals (nine small searches); skipped on a read-only run, never fatal. */
+  fetchLive?: () => Promise<LiveCounts>;
   /** Billing period and currency (one more read-only GET); never fatal: a failure leaves them null. */
   fetchBilling?: () => Promise<{ period: string | null; currency: string | null }>;
 }
@@ -307,6 +315,14 @@ export async function runCapacityGate(deps: CapacityGateDeps): Promise<CapacityV
     verdict.snapshot.billing = deps.fetchBilling ? await deps.fetchBilling() : { period: null, currency: null };
   } catch {
     verdict.snapshot.billing = { period: null, currency: null };
+  }
+  // WHY not on a read-only run: it creates nothing, so there is nothing to count (and nine requests per shard are saved)
+  if (!readOnly && deps.fetchLive) {
+    try {
+      verdict.snapshot.live = await deps.fetchLive();
+    } catch {
+      /* the email then says "created: not available" */
+    }
   }
   if (readOnly) {
     verdict.snapshot.readOnlyRun = true;

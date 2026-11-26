@@ -1017,8 +1017,6 @@ ${body}
       ${meta('Renewal', plan.renewalAt ? `${this.esc(new Date(plan.renewalAt).toLocaleDateString('en-IN', ist))}${this.esc(days)}` : 'none (no renewal on this plan)')}
     </table>`;
     const num = (n: number | null, unit: string): string => (n === null ? 'unlimited' : `${n.toLocaleString('en-US')}${unit}`);
-    const change = (r: { change: number | null; unit?: string }): string =>
-      r.change === null ? 'n/a' : `${r.change > 0 ? '+' : ''}${r.change.toLocaleString('en-US')}${r.unit ?? ''}`;
     const bars = view.rows
       .map((r) => {
         const c = this.capacityColours(r.colour);
@@ -1026,28 +1024,38 @@ ${body}
         <td style="padding:6px 8px 2px 0;font-size:12px;color:${INK};width:150px;vertical-align:top;">${this.esc(r.label)}</td>
         <td style="padding:6px 0 2px 0;vertical-align:middle;">${this.capacityBar(r)}</td>
         <td style="padding:6px 0 2px 8px;font-size:12px;color:${c.text};width:240px;vertical-align:top;"><strong>${this.esc(num(r.remaining, r.unit))} left</strong> (${this.esc(r.state)})</td>
-        <td style="padding:6px 0 2px 8px;font-size:11px;color:${SLATE};width:170px;vertical-align:top;">${this.esc(num(r.used, r.unit))} used of ${this.esc(num(r.total, r.unit))}${r.change === null ? '' : ` · ${this.esc(change(r))} this run`}</td>
+        <td style="padding:6px 0 2px 8px;font-size:11px;color:${SLATE};width:170px;vertical-align:top;">${this.esc(num(r.used, r.unit))} used of ${this.esc(num(r.total, r.unit))}</td>
       </tr>`;
       })
       .join('');
+    const created = (n: number | null): string => (n === null ? 'n/a' : `${n > 0 ? '+' : ''}${n.toLocaleString('en-US')}`);
     const entities = view.entities
       .map(
         (e) =>
-          `<tr><td style="padding:2px 12px 2px 0;font-size:12px;color:${INK};">${this.esc(EmailTemplate.ENTITY_LABELS[e.entity] ?? e.entity)}</td><td style="padding:2px 12px;font-size:12px;color:${INK};text-align:right;">${e.used.toLocaleString('en-US')}</td><td style="padding:2px 0 2px 12px;font-size:12px;color:${SLATE};text-align:right;">${this.esc(change(e))}</td></tr>`
+          `<tr><td style="padding:2px 12px 2px 0;font-size:12px;color:${INK};">${this.esc(EmailTemplate.ENTITY_LABELS[e.entity] ?? e.entity)}</td><td style="padding:2px 12px;font-size:12px;color:${INK};text-align:right;">${e.used.toLocaleString('en-US')}</td><td style="padding:2px 0 2px 12px;font-size:12px;color:${SLATE};text-align:right;">${this.esc(created(e.created))}</td></tr>`
       )
       .join('');
-    const foot = view.postMissing
-      ? 'No post-run reading reached this report, so the change during the run is not shown.'
-      : `Change during this run = the latest post-run reading (of ${view.postCount} ${view.postCount === 1 ? 'shard' : 'shards'}) minus the earliest pre-run snapshot (of ${view.preCount}). The account is shared, so it can include records created by other activity, not only this run.`;
+    const cr = view.created;
+    const createdLine =
+      cr.total === null
+        ? `Created during this run: not available (${cr.reason || 'no live counts'}).`
+        : `Created during this run: ${cr.total.toLocaleString('en-US')} (the live per-entity totals after the run minus before it${cr.reason ? `; ${cr.reason}` : ''}). The account is shared and the search index can lag, so this can include other activity or miss records still being indexed.`;
+    const expectedColour = cr.expectedColour ? this.capacityColours(cr.expectedColour).text : SLATE;
+    const expectedLine =
+      cr.expectedLeft === null
+        ? ''
+        : `<div style="font-size:12px;color:${expectedColour};margin-top:4px;"><strong>Expected after the next refresh: ${cr.partial ? 'at most ' : ''}about ${this.esc(cr.expectedLeft <= 0 ? `none left (over by ${(-cr.expectedLeft).toLocaleString('en-US')})` : cr.expectedLeft.toLocaleString('en-US') + ' records left')}</strong> (records left now minus the ${cr.total!.toLocaleString('en-US')} created${cr.partial ? ', a lower bound: some entities were not read' : ''}).</div>`;
     return `
 <tr><td id="section-account-capacity" style="padding:8px 28px;">
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Account capacity</div>
     ${header}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${bars}</table>
-    <div style="font-size:11px;font-weight:700;color:${SLATE};margin-top:10px;">Used records by entity</div>
-    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:4px;"><tr><td style="font-size:11px;color:${SLATE};padding:2px 12px 2px 0;">Entity</td><td style="font-size:11px;color:${SLATE};padding:2px 12px;text-align:right;">Used</td><td style="font-size:11px;color:${SLATE};padding:2px 0 2px 12px;text-align:right;">Change this run</td></tr>${entities}</table>
-    <div style="font-size:11px;color:${SLATE};margin-top:8px;">${this.esc(foot)}</div>
+    <div style="font-size:11px;color:${SLATE};margin-top:8px;">Billing figures below are ${this.esc(view.refreshLabel)}: Kylas counts a delete at once but a create only at its nightly refresh.</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:4px;">${bars}</table>
+    <div style="font-size:11px;font-weight:700;color:${SLATE};margin-top:10px;">Records by entity</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:4px;"><tr><td style="font-size:11px;color:${SLATE};padding:2px 12px 2px 0;">Entity</td><td style="font-size:11px;color:${SLATE};padding:2px 12px;text-align:right;">Used (billing)</td><td style="font-size:11px;color:${SLATE};padding:2px 0 2px 12px;text-align:right;">Created this run (live)</td></tr>${entities}</table>
+    <div style="font-size:11px;color:${SLATE};margin-top:8px;">${this.esc(createdLine)}</div>
+    ${expectedLine}
   </div>
 </td></tr>`;
   }

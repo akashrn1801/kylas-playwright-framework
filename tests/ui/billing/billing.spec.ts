@@ -1,5 +1,6 @@
 import { test, expect } from '../../../src/fixtures/index';
-import { BillingApi, activePlan, recordsRemaining, Usage } from '../../../src/modules/billing/BillingApi';
+import { BillingApi, Quota, activePlan, recordsRemaining, Usage } from '../../../src/modules/billing/BillingApi';
+import { bracketViolations } from '../../../src/modules/billing/bracket';
 import { BillingPage } from '../../../src/modules/billing/BillingPage';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
@@ -12,11 +13,12 @@ import { logger } from '../../../src/utils/logger';
 const UNLIMITED_ENCODING_NOTE = 'unlimited totals are mapped to Infinity';
 
 // "Data" cards the UI shows with Total / Remaining / Used, by the card title and the API block that feeds them.
-const CARD_TO_QUOTA: Array<{ title: string; quota: (u: Usage) => { total: number; remaining: number; used: number } }> = [
-  { title: 'Records Count', quota: (u) => u.records },
-  { title: 'File Storage', quota: (u) => u.storage },
-  { title: 'Custom Fields', quota: (u) => u.customFields },
-  { title: 'Workflows', quota: (u) => u.quotas.workflows },
+const CARD_TO_QUOTA: Array<{ title: string; quota: (u: Usage) => Quota; decimals: number }> = [
+  { title: 'Records Count', quota: (u) => u.records, decimals: 0 },
+  // storage is in GB and the page shows two decimals
+  { title: 'File Storage', quota: (u) => u.storage, decimals: 2 },
+  { title: 'Custom Fields', quota: (u) => u.customFields, decimals: 0 },
+  { title: 'Workflows', quota: (u) => u.quotas.workflows, decimals: 0 },
 ];
 
 test.describe('Billing (admin, read-only)', () => {
@@ -66,22 +68,23 @@ test.describe('Billing (admin, read-only)', () => {
   });
 
   // ── BL3 ───────────────────────────────────────────────────
-  // WHAT: the Usage Statistics numbers (Total / Remaining / Used) equal the API for Records, Storage, Custom Fields, Workflows.
+  // WHAT: the Usage Statistics numbers (Total / Remaining / Used) agree with the API for Records, Storage, Custom Fields, Workflows.
   // WHY: the page and the API come from one backend value, but a rendering or units bug would show a wrong capacity.
-  // HOW: page first, then the API, so the page cannot be newer than the API it is compared with. A mismatch fails by
-  //   name: the numbers move only when other activity creates records between the two reads.
-  test('@regression @prodSafe admin: usage statistics page numbers match the API', async ({ adminPage }) => {
+  // HOW (bracketed): the account is shared and other shards create records while this runs, so a count read at two instants can differ. The API
+  //   is read BEFORE and AFTER the page: Total (the limit) must equal exactly across all three, the page's Used must lie between the two API
+  //   values (inclusive) and Remaining must equal Total minus the page's own Used (src/modules/billing/bracket.ts).
+  test('@regression @prodSafe admin: usage statistics page numbers match the API (bracketed)', async ({ adminPage }) => {
     const api = await BillingApi.forPage(adminPage);
     const billing = new BillingPage(adminPage);
     try {
+      const before = await api.getUsage();
       await billing.goToUsageStatistics();
-      const usage = await api.getUsage();
-      for (const { title, quota } of CARD_TO_QUOTA) {
-        const ui = await billing.readUsageSection(title);
-        const expected = quota(usage);
-        expect(ui.total, `${title}: Total`).toBe(expected.total);
-        expect(ui.used, `${title}: Used`).toBe(expected.used);
-        expect(ui.remaining, `${title}: Remaining`).toBe(expected.remaining);
+      const onPage = new Map<string, Awaited<ReturnType<BillingPage['readUsageSection']>>>();
+      for (const { title } of CARD_TO_QUOTA) onPage.set(title, await billing.readUsageSection(title));
+      const after = await api.getUsage();
+      for (const { title, quota, decimals } of CARD_TO_QUOTA) {
+        const problems = bracketViolations(title, onPage.get(title)!, quota(before), quota(after), decimals);
+        expect(problems, `${title}: page vs the API read before and after it`).toEqual([]);
       }
       logger.success('BL3 passed');
     } finally {

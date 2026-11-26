@@ -11,6 +11,7 @@ import * as path from 'path';
 import { MiscErrorReport } from '../../src/error-collector/ErrorCollector';
 import { RenewalFailure } from '../../src/auth/renewalFailure';
 import { RunStartSource } from '../../src/notifications/RunTimes';
+import { LiveCounts } from '../../src/modules/billing/liveCounts';
 import { CapacitySnapshot, GATE_ERROR_FILE, POST_RUN_SNAPSHOT_FILE, PRE_RUN_SNAPSHOT_FILE } from '../../src/modules/billing/capacity';
 import { EmailContext, EmailTemplate } from '../../src/notifications/EmailTemplate';
 import { NotificationInput, NotificationService } from '../../src/notifications/NotificationService';
@@ -90,10 +91,12 @@ export interface CapacityScenarioAccount {
   period: string | null;
   entityCounts: Record<string, number>;
   recordsWarnBelow: number;
+  /** Minutes before the email was generated at which Kylas says the usage figures were refreshed; null = `updatedAt` equals the renewal, as on QA. */
+  refreshedMinutesAgo: number | null;
 }
 export const DEFAULT_ACCOUNT: CapacityScenarioAccount = {
   plan: 'Elevate', expectedPlan: 'Elevate', recordsUsed: 78311, recordsTotal: 300000, customFieldsUsed: 96, customFieldsTotal: 125, storageUsedGb: 0.01, storageTotalGb: 1,
-  renewalInDays: 176, period: 'ANNUAL', recordsWarnBelow: 10000,
+  renewalInDays: 176, period: 'ANNUAL', recordsWarnBelow: 10000, refreshedMinutesAgo: null,
   entityCounts: { LEAD: 15382, DEAL: 12496, CONTACT: 11365, COMPANY: 10026, TASK: 7811, CALL: 7590, QUOTATION: 7498, MEETING: 5582, NOTE: 561 },
 };
 
@@ -137,6 +140,10 @@ export interface ScenarioSpec {
     shards?: number;
     error?: { message: string; readOnlyRun: boolean };
     readOnlyRun?: boolean;
+    /** Records created during the run per entity (live totals after minus before); default a small run. `none`: no live counts were taken. */
+    created?: Record<string, number> | 'none';
+    /** Make the live reading a throttled one: the entities after the first N are not read. */
+    liveReadOnlyFirst?: number;
   };
   /** The modules the run's results contain, written by hand (independent of the parser): used when the files alone do not say, e.g. formFields. */
   expectModules?: Array<{ name: string; type: 'UI' | 'RBAC'; total: number }>;
@@ -162,7 +169,18 @@ export interface ScenarioResult {
   kind: 'email' | 'unavailable';
 }
 
-function snapshotFor(env: string, a: CapacityScenarioAccount, capturedAt: string, nowMs: number, readOnly: boolean): CapacitySnapshot {
+/** The live totals the app would give: like QA on 2026-11-26 (tasks, meetings, call logs and quotations equal the billing counts, the search-index entities a little lower, notes counted differently). */
+const LIVE_OFFSET: Record<string, number> = { LEAD: -410, DEAL: -1, CONTACT: -36, COMPANY: -40, NOTE: 2244 };
+export const DEFAULT_CREATED: Record<string, number> = { LEAD: 120, DEAL: 30, CONTACT: 40, COMPANY: 10, TASK: 200, MEETING: 15, CALL: 60, QUOTATION: 8, NOTE: 20 };
+function liveFor(a: CapacityScenarioAccount, capturedAt: string, createdSoFar: Record<string, number> | null, onlyFirst?: number): LiveCounts {
+  const counts: Record<string, number | null> = {};
+  Object.entries(a.entityCounts).forEach(([k, v], i) => {
+    counts[k] = onlyFirst !== undefined && i >= onlyFirst ? null : v + (LIVE_OFFSET[k] ?? 0) + (createdSoFar?.[k] ?? 0);
+  });
+  return { capturedAt, counts, incomplete: onlyFirst !== undefined };
+}
+
+function snapshotFor(env: string, a: CapacityScenarioAccount, capturedAt: string, nowMs: number, readOnly: boolean, live?: LiveCounts): CapacitySnapshot {
   const quota = (used: number, total: number | null): { used: number; total: number | null; remaining: number | null } => ({ used, total, remaining: total === null ? null : Math.max(0, total - used) });
   // the per-entity counts always add up to the pool's used count (as the real API's do): scale the defaults, the remainder goes to the first entity
   const entries = Object.entries(a.entityCounts);
@@ -186,6 +204,8 @@ function snapshotFor(env: string, a: CapacityScenarioAccount, capturedAt: string
     thresholds: { recordsWarnBelow: a.recordsWarnBelow, customFieldsWarnBelow: 10, expectedPlan: a.expectedPlan },
     level: stop ? 'stop' : warnings.length ? 'warn' : 'ok', warnings,
     ...(readOnly ? { readOnlyRun: true } : {}), billing: { period: a.period, currency: a.period ? 'INR' : null },
+    usageUpdatedAt: a.refreshedMinutesAgo === null ? (a.renewalInDays === null ? null : new Date(nowMs + a.renewalInDays * 86_400_000).toISOString()) : new Date(nowMs - a.refreshedMinutesAgo * 60_000).toISOString(),
+    ...(live ? { live } : {}),
   };
 }
 
@@ -200,14 +220,20 @@ function writeCapacityFiles(reportsEnv: string, env: string, c: NonNullable<Scen
   if (!c.pre) return;
   const pre = { ...DEFAULT_ACCOUNT, ...c.pre };
   const shards = c.shards ?? 1;
+  const noLive = c.readOnlyRun === true || c.created === 'none';
+  const created = c.created === 'none' ? null : (c.created ?? DEFAULT_CREATED);
   for (let i = 0; i < shards; i++) {
     const shardDir = path.join(dir, `capacity-${env}-shard-${i + 1}`);
     fs.mkdirSync(shardDir, { recursive: true });
     // shard i starts i minutes after the first one: the EARLIEST (shard 1) must be the one the email uses
-    fs.writeFileSync(path.join(shardDir, PRE_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === 0 ? pre : { ...pre, recordsUsed: pre.recordsUsed + 1000 * i }, new Date(startMs + i * 60_000).toISOString(), generatedMs, c.readOnlyRun === true)));
+    const preAt = new Date(startMs + i * 60_000).toISOString();
+    fs.writeFileSync(path.join(shardDir, PRE_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === 0 ? pre : { ...pre, recordsUsed: pre.recordsUsed + 1000 * i }, preAt, generatedMs, c.readOnlyRun === true, noLive ? undefined : liveFor(pre, preAt, null))));
     if (c.post) {
       const post = { ...pre, ...c.post };
-      fs.writeFileSync(path.join(shardDir, POST_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === shards - 1 ? post : { ...post, recordsUsed: post.recordsUsed - 500 }, new Date(startMs + 12 * 60_000 + i * 60_000).toISOString(), generatedMs, false)));
+      const postAt = new Date(startMs + 12 * 60_000 + i * 60_000).toISOString();
+      // the LATEST shard's post-run reading carries everything the run created; an earlier shard saw only part of it
+      const part = i === shards - 1 ? created : created ? Object.fromEntries(Object.entries(created).map(([k, v]) => [k, Math.floor(v / 2)])) : null;
+      fs.writeFileSync(path.join(shardDir, POST_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === shards - 1 ? post : { ...post, recordsUsed: post.recordsUsed - 500 }, postAt, generatedMs, false, noLive ? undefined : liveFor(post, postAt, part, c.liveReadOnlyFirst))));
     }
   }
 }

@@ -25,5 +25,12 @@ Before any test, `globalSetup` makes ONE read-only `GET /v1/tenants/usage` as ad
 - A gate stop makes the email BLOCKED (verdict, subject, no health score), also when no report exists; a missing snapshot renders one "capacity data unavailable" line.
 - The plan **price is left out**: it is not in the API and the gate opens no browser. Period and currency come from `GET /v1/tenants/subscription-details` (one more read-only call per shard, never fatal).
 
+## Billing figures lag creates (amendment 2026-11-26)
+- Kylas counts a **delete** in the billing record count at once but a **create** only at its nightly refresh, so post minus pre of `GET /v1/tenants/usage` shows deletions only. The email therefore labels every billing figure "as of the last refresh" and no longer shows a billing "change during the run".
+- **Created during the run** = the live total after minus the live total before, per entity, from one small list search per entity (`src/modules/billing/liveCounts.ts`: lead, deal, contact, company, task, meeting, call log, quotation, note), read by the gate and the teardown and saved in the same snapshots. Nine sequential read-only POST searches of size 1 (about 1.5 s) each time; a 429 or 5xx stops the rest. Skipped on a read-only run. The live totals are not comparable with the billing counts (see KI-77), only with themselves; the search index can lag, so the figure is labelled as possibly including other activity or missing records still being indexed.
+- "Expected after the next refresh: about N" = records left (billing) minus created; "at most" when some entities could not be read.
+- The refresh time shown is `usage.updatedAt` only when it can be one (not after the reading and not equal to `renewalAt`); on QA it equals `renewalAt`, so the label carries no time (KI-77).
+- The gate's stop stays on the **billing** figures: that is what Kylas enforces.
+
 ## Consequences
-A run that creates records on a full or unreadable account stops at globalSetup; the read-only prod selection only warns. Each CI shard runs the gate and the teardown once: two or three extra read-only GETs per shard and a few KB of artifact.
+A run that creates records on a full or unreadable account stops at globalSetup; the read-only prod selection only warns. Each CI shard runs the gate and the teardown once: three read-only GETs plus 18 small searches (9 at each end) on a run that creates records; 3 GETs on a read-only run; a few KB of artifact.

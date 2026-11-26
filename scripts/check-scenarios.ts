@@ -66,8 +66,8 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '45-run-start-unavailable-in-ci', title: 'CI run where no start time could be read', expect: 'the Run line says "start unavailable" instead of showing the tests window as the run; the Tests line is unchanged', first: base(30), rerun: false, attemptTimes: true, runStart: 'none' },
   { name: '46-jenkins-build-start', title: 'A Jenkins run: the build\'s own start', expect: 'Run starts at the Jenkins build start (RUN_STARTED_AT_MS), 12 minutes before the first test', first: base(30), rerun: false, attemptTimes: true, runSource: 'jenkins', branch: 'qa', env: 'qa', runStart: { minutesBeforeTests: 12 } },
   { name: '47-local-run-no-run-line', title: 'A local run has no workflow', expect: 'no Run line at all (nothing to show), only Tests', first: base(30), rerun: false, attemptTimes: true, runSource: 'local' },
-  { name: '48-capacity-plenty', title: 'Account capacity: plenty left, three shards (the earliest pre-run snapshot and the latest post-run reading are used)', expect: 'green bars; records 78,311 of 300,000; +1,240 this run, labelled as possibly including other activity; Elevate green; no warning banner', first: base(30), rerun: false, capacity: { shards: 3, pre: {}, post: { recordsUsed: 79551, entityCounts: { LEAD: 16000, DEAL: 12496, CONTACT: 11365, COMPANY: 10026, TASK: 7811, CALL: 7590, QUOTATION: 7498, MEETING: 5582, NOTE: 561 } } } },
-  { name: '49-capacity-under-threshold', title: 'Account capacity: under the threshold (3,800 records left of 300,000)', expect: 'records bar yellow "low", a yellow warning near the top; the run is not blocked', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 295000 }, post: { recordsUsed: 296200 } } },
+  { name: '48-capacity-plenty', title: 'Account capacity: plenty left, three shards (the earliest pre-run snapshot and the latest post-run reading are used)', expect: 'green bars; billing records 78,311 of 300,000 labelled as of the last refresh (no time: updatedAt equals the renewal); created this run 503 from the live counts; expected after the next refresh about 221,689 - 503 = 221,186; Elevate green; no warning banner', first: base(30), rerun: false, capacity: { shards: 3, pre: {}, post: {} } },
+  { name: '49-capacity-under-threshold', title: 'Account capacity: under the threshold (3,800 records left of 300,000)', expect: 'records bar yellow "low", a yellow warning near the top and a yellow ESTIMATE (3,800 - 503 = 3,297 after the next refresh); the run is not blocked', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 295000 }, post: { recordsUsed: 296200 } } },
   { name: '50-capacity-at-zero-with-report', title: 'Account capacity: 0 records left, the gate stopped the run, a report still exists', expect: 'BLOCKED — NO RECORDS LEFT banner and subject; records bar red; no health score', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 300000 } } },
   { name: '51-capacity-at-zero-no-report', title: 'Account capacity: 0 records left, no report at all (every shard stopped in globalSetup)', expect: 'the report-unavailable alert says BLOCKED — NO RECORDS LEFT and why', first: base(30), noResults: true, capacity: { pre: { recordsUsed: 300000 } } },
   { name: '52-capacity-read-only-at-zero', title: 'Account capacity: 0 records left but the run only reads (--grep @prodSafe)', expect: 'NOT blocked; a red warning "none left, but the run only reads"; records bar red', first: base(30), rerun: false, env: 'prod', branch: 'prod', capacity: { readOnlyRun: true, pre: { recordsUsed: 300000 }, post: { recordsUsed: 300000 } } },
@@ -79,6 +79,10 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '58-capacity-unreadable-stopped', title: 'Account capacity: the usage call failed and the run was stopped', expect: 'BLOCKED — ACCOUNT CAPACITY UNREADABLE; "unavailable" in the section with the reason', first: base(30), rerun: false, capacity: { error: { message: 'GET /v1/tenants/usage failed: HTTP 403 {"code":"001019"}', readOnlyRun: false } } },
   { name: '59-capacity-custom-fields-low', title: 'Account capacity: 5 custom fields left', expect: 'Custom Fields bar yellow, a yellow warning, never blocked', first: base(30), rerun: false, capacity: { pre: { customFieldsUsed: 120 }, post: { customFieldsUsed: 120 } } },
   { name: '60-every-module-incl-billing', title: 'Every kind of module in one run: Billing, Dashboard, Reports and formFields, UI and RBAC', expect: 'one row per module in Module Analytics, each on its own UI or RBAC side with its own test count (Billing UI 6 + RBAC 2, Dashboard UI 3 + RBAC 2, Reports UI 2 + RBAC 2, "Leads — Field Limits" UI 2 + RBAC 2)', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(3, 'passed', 'dashboard ui', 'ui/dashboard/dashboard.spec.ts', 300), ...many(2, 'passed', 'dashboard rbac', 'rbac/dashboard.rbac.spec.ts', 400), ...many(2, 'passed', 'reports ui', 'ui/reports/reports.spec.ts', 500), ...many(2, 'passed', 'reports rbac', 'rbac/reports.rbac.spec.ts', 600), ...many(2, 'passed', 'leads field limits ui', 'ui/formFields/leadFieldLimits.spec.ts', 700), ...many(2, 'passed', 'leads field limits rbac', 'rbac/formFields/leadFieldLimits.rbac.spec.ts', 800)], rerun: false, expectModules: [{ name: 'Billing', type: 'UI', total: 6 }, { name: 'Billing', type: 'RBAC', total: 2 }, { name: 'Dashboard', type: 'UI', total: 3 }, { name: 'Dashboard', type: 'RBAC', total: 2 }, { name: 'Reports', type: 'UI', total: 2 }, { name: 'Reports', type: 'RBAC', total: 2 }, { name: 'Leads — Field Limits', type: 'UI', total: 2 }, { name: 'Leads — Field Limits', type: 'RBAC', total: 2 }] },
+  { name: '61-capacity-created-pushes-over-the-limit', title: 'Account capacity: billing still shows 200 left (it counts creates only at the nightly refresh), the run created 503 records', expect: 'records bar yellow (200 left); a red ESTIMATE "none left (over by 303)" near the top; the run is NOT blocked (the gate stops on the billing figures only)', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 299800 }, post: {} } },
+  { name: '62-capacity-refresh-time-known', title: 'Account capacity: Kylas sends a real refresh time (5 hours before the email)', expect: 'the billing figures are labelled "as of the last refresh: <time> IST"', first: base(30), rerun: false, capacity: { pre: { refreshedMinutesAgo: 300 }, post: { refreshedMinutesAgo: 300 } } },
+  { name: '63-capacity-live-counts-incomplete', title: 'Account capacity: a throttled search stopped the live per-entity reading after the first three entities', expect: 'created is shown only for the entities read, the total says how many could not be read, n/a for the rest, and the estimate says "at most"', first: base(30), rerun: false, capacity: { pre: {}, post: {}, liveReadOnlyFirst: 3 } },
+  { name: '64-capacity-no-live-counts', title: 'Account capacity: no live counts were taken (older snapshots)', expect: 'billing figures as before; "Created during this run: not available"; no estimate line', first: base(30), rerun: false, capacity: { pre: {}, post: {}, created: 'none' } },
 ];
 
 // every branch with its environment (the deployment/PR advice differs by branch)
@@ -387,12 +391,32 @@ export function invariants(s: ScenarioResult): Violation[] {
       const sum = view.entities.reduce((n, e) => n + e.used, 0);
       const pool = view.rows[0];
       if (sum !== pool.used) bad('capacity-entities-sum', `per-entity used ${sum} != the pool's used ${pool.used}`);
+      // created during the run = the LIVE total after minus before, per entity, from the snapshots themselves (never the billing figures)
+      const preLive = ctx.capacity!.pre!.live?.counts;
+      const postLive = ctx.capacity!.post?.live?.counts;
       for (const e of view.entities) {
-        const pre = ctx.capacity!.pre!.entityCounts[e.entity] ?? 0;
-        const post = ctx.capacity!.post?.entityCounts[e.entity];
-        if (post !== undefined && e.change !== post - pre) bad('capacity-change', `${e.entity}: change ${e.change} != post ${post} - pre ${pre}`);
-        if (post === undefined && e.change !== null) bad('capacity-change', `${e.entity}: a change without a post-run reading`);
+        const a = preLive?.[e.entity];
+        const b = postLive?.[e.entity];
+        const want = typeof a === 'number' && typeof b === 'number' ? Math.max(0, b - a) : null;
+        if (e.created !== want) bad('capacity-created', `${e.entity}: created ${e.created} != live after ${b} - live before ${a}`);
       }
+      const known = view.entities.map((e) => e.created).filter((n): n is number => n !== null);
+      if (view.created.total !== (known.length > 0 ? known.reduce((x, y) => x + y, 0) : null)) bad('capacity-created-total', `created total ${view.created.total} is not the sum of the entities ${known.join('+')}`);
+      if (view.created.total !== null) {
+        if (!s.html.includes(`Created during this run: ${view.created.total.toLocaleString('en-US')} `)) bad('capacity-created-line', 'the created total is not stated in the section');
+        const left = (ctx.capacity!.post ?? ctx.capacity!.pre!).records.remaining;
+        const expected = left === null ? null : left - view.created.total;
+        if (view.created.expectedLeft !== expected) bad('capacity-estimate', `expected after the next refresh ${view.created.expectedLeft} != records left ${left} - created ${view.created.total}`);
+        if (expected !== null && !s.html.includes(`Expected after the next refresh: ${view.created.partial ? 'at most ' : ''}about ${expected <= 0 ? `none left (over by ${(-expected).toLocaleString('en-US')})` : expected.toLocaleString('en-US') + ' records left'}`)) bad('capacity-estimate-line', `the estimate line for ${expected} is missing`);
+        if (!/can include other activity or miss records/.test(s.html)) bad('capacity-label', 'the created figure is not labelled as possibly including other activity / index lag');
+      } else if (!/Created during this run: not available/.test(s.html)) bad('capacity-created-line', 'no created figure and the section does not say "not available"');
+      else if (/Expected after the next refresh/.test(s.html)) bad('capacity-estimate', 'an estimate without a created figure');
+      // the billing figures are labelled with their refresh, and a refresh time is shown only when it can be one
+      const snap = (ctx.capacity!.post ?? ctx.capacity!.pre!);
+      if (!s.html.includes(`Billing figures below are ${view.refreshLabel.replace(/&/g, '&amp;')}`)) bad('capacity-refresh-label', `the billing figures are not labelled "${view.refreshLabel}"`);
+      const plausible = !!snap.usageUpdatedAt && Date.parse(snap.usageUpdatedAt) <= Date.parse(snap.capturedAt) && snap.usageUpdatedAt !== snap.renewalAt;
+      if (plausible !== / IST$/.test(view.refreshLabel)) bad('capacity-refresh-time', `the refresh label ${plausible ? 'should' : 'must not'} carry a time: "${view.refreshLabel}" (updatedAt ${snap.usageUpdatedAt}, renewalAt ${snap.renewalAt})`);
+      if (/Change during this run|this run<\/td>/.test(s.html.slice(s.html.indexOf('id="section-account-capacity"'), s.html.indexOf('id="section-account-capacity"') + 6000)) && /Used \(billing\)[\s\S]{0,40}Change/.test(s.html)) bad('capacity-no-billing-change', 'a billing "change during this run" is back');
       if (view.postMissing !== !ctx.capacity!.post) bad('capacity-post-missing', 'postMissing does not match the data');
       if (ctx.capacity!.pre!.capturedAt !== [...(ctx.capacity!.pre ? [ctx.capacity!.pre.capturedAt] : [])][0]) bad('capacity-earliest', 'internal');
       if (view.preCount !== (s.spec.capacity?.shards ?? 1)) bad('capacity-shard-count', `${view.preCount} pre-run snapshots read, ${s.spec.capacity?.shards ?? 1} written`);
@@ -401,7 +425,6 @@ export function invariants(s: ScenarioResult): Violation[] {
       const want = !plan.planIsExpected || (plan.daysLeft !== null && plan.daysLeft < 0) ? 'red' : plan.daysLeft !== null && plan.daysLeft <= 14 ? 'yellow' : 'green';
       if (plan.colour !== want) bad('capacity-plan-colour', `plan header is ${plan.colour}, the rule says ${want} (days left ${plan.daysLeft}, expected plan ${plan.expectedPlan}, found ${plan.name})`);
       if (!/Billing period/.test(s.html) || /INR\s?\d/.test(s.html.slice(s.html.indexOf('id="section-account-capacity"'), s.html.indexOf('id="section-account-capacity"') + 4000))) bad('capacity-no-price', 'the plan header must show the billing period and never a price');
-      if (!/can include records created by other activity/.test(s.html) && !view.postMissing) bad('capacity-label', 'the change is not labelled as possibly including other activity');
     }
   }
 

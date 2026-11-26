@@ -10,7 +10,10 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { parseUsage, RawUsage, Usage } from '../src/modules/billing/BillingApi';
+import { Quota, parseUsage, RawUsage, Usage } from '../src/modules/billing/BillingApi';
+import { UsageSectionNumbers } from '../src/modules/billing/BillingPage';
+import { bracketViolations } from '../src/modules/billing/bracket';
+import { LIVE_ENDPOINTS, LiveCounts, createdPerEntity, readLiveCounts } from '../src/modules/billing/liveCounts';
 import {
   CapacityThresholds,
   GATE_ERROR_FILE,
@@ -186,6 +189,59 @@ async function main(): Promise<void> {
     creatingZero = String(error);
   }
   check(/No records left on qa/.test(creatingZero), 'a run that creates records still stops at 0 records left');
+
+  // BL3's bracketed comparison (src/modules/billing/bracket.ts): the page is read between two API reads while other shards create records
+  const q = (used: number, total: number): Quota => ({ used, total, remaining: Math.max(0, total - used), unlimited: false });
+  const pg = (total: number, remaining: number, used: number): UsageSectionNumbers => ({ total, remaining, used });
+  const br = (ui: UsageSectionNumbers, before: Quota, after: Quota, d = 0): string[] => bracketViolations('Records Count', ui, before, after, d);
+  check(br(pg(300000, 221689, 78311), q(78311, 300000), q(78311, 300000)).length === 0, 'bracket: a quiet account (before = page = after) passes');
+  check(br(pg(300000, 221000, 79000), q(78311, 300000), q(79560, 300000)).length === 0, 'bracket: records created meanwhile (page Used between before and after) passes');
+  check(br(pg(300000, 221689, 78311), q(78311, 300000), q(79560, 300000)).length === 0 && br(pg(300000, 220440, 79560), q(78311, 300000), q(79560, 300000)).length === 0, 'bracket: the page Used equal to either bound passes (inclusive)');
+  check(br(pg(300000, 222000, 78000), q(78311, 300000), q(79560, 300000)).some((m) => /Used: page 78000 is outside/.test(m)), 'bracket (red): a page Used below the API before value is reported');
+  check(br(pg(300000, 220000, 80000), q(78311, 300000), q(79560, 300000)).some((m) => /Used: page 80000 is outside/.test(m)), 'bracket (red): a page Used above the API after value is reported');
+  check(br(pg(300000, 221000, 79000), q(79560, 300000), q(78311, 300000)).length === 0, 'bracket: records deleted meanwhile (after < before) passes');
+  check(br(pg(300000, 221689, 78311), q(78311, 300000), q(78311, 500000)).some((m) => /the limit changed during the test/.test(m)), 'bracket (red): a limit that changed between the reads is reported');
+  check(br(pg(100000, 21689, 78311), q(78311, 300000), q(78311, 300000)).some((m) => /Total: page 100000/.test(m)), 'bracket (red): a page Total that differs from the API is reported');
+  check(br(pg(300000, 200000, 78311), q(78311, 300000), q(78311, 300000)).some((m) => /Remaining: page 200000 is not Total 300000 - Used 78311/.test(m)), 'bracket (red): a Remaining that is not Total minus the page Used is reported');
+  check(br(pg(1, 0.99, 0.01), q(0.01, 1), q(0.0104, 1), 2).length === 0 && br(pg(1, 0.98, 0.02), q(0.01, 1), q(0.0104, 1), 2).length > 0, 'bracket: storage in GB is compared at the two decimals the page shows (0.0104 shows as 0.01; 0.02 is outside)');
+  check(br(pg(1, 0.99, 0.01), q(0.01, 1), q(0.01, 1), 2).length === 0 && br(pg(1, 0.98, 0.01), q(0.01, 1), q(0.01, 1), 2).length === 0, 'bracket: storage Remaining may differ from Total - Used by the page\'s own last-digit rounding only');
+
+  // live per-entity totals (what a run created: billing counts creates only at its nightly refresh)
+  const fakeApi = (answer: (path: string, call: number) => { status: number; totalElements?: number }) => {
+    const calls: string[] = [];
+    return { calls, api: { searchTotal: async (path: string): Promise<{ status: number; ok: boolean; body: { totalElements?: number } }> => { calls.push(path); const a = answer(path, calls.length); return { status: a.status, ok: a.status < 300, body: a.totalElements === undefined ? {} : { totalElements: a.totalElements } }; } } };
+  };
+  const all = fakeApi((_p, n) => ({ status: 200, totalElements: 1000 + n }));
+  const liveAll = await readLiveCounts(all.api, NOW);
+  check(all.calls.length === 9 && all.calls.length === LIVE_ENDPOINTS.length && Object.values(liveAll.counts).every((n) => typeof n === 'number') && !liveAll.incomplete, 'live counts: nine sequential searches, one per billing entity, every total read');
+  check(['/search/lead', '/search/deal', '/search/contact', '/search/company', '/tasks/search', '/meetings/search', '/call-logs/search', '/quotations/search', '/notes/search'].every((p2, i) => all.calls[i] === p2), 'live counts: the endpoints are the proven ones, in order');
+  const throttled = fakeApi((_p, n) => (n >= 4 ? { status: 429 } : { status: 200, totalElements: 5 }));
+  const liveThrottled = await readLiveCounts(throttled.api, NOW);
+  check(throttled.calls.length === 4 && liveThrottled.incomplete && liveThrottled.counts.LEAD === 5 && liveThrottled.counts.TASK === null && liveThrottled.counts.NOTE === null, 'live counts: a 429 stops the remaining searches at once (4 calls, not 9) and marks the reading incomplete');
+  const oneBad = fakeApi((_p, n) => (n === 2 ? { status: 404 } : { status: 200, totalElements: 7 }));
+  const liveOneBad = await readLiveCounts(oneBad.api, NOW);
+  check(oneBad.calls.length === 9 && liveOneBad.counts.DEAL === null && liveOneBad.counts.LEAD === 7 && !liveOneBad.incomplete, 'live counts: a 404 on one entity leaves only that entity unread (all nine are still tried, the reading is not "incomplete")');
+  const mk = (c: Record<string, number | null>): LiveCounts => ({ capturedAt: NOW.toISOString(), counts: c, incomplete: false });
+  const cr = createdPerEntity(mk({ LEAD: 100, DEAL: 50, CONTACT: 10, COMPANY: null }), mk({ LEAD: 130, DEAL: 40, CONTACT: 10, COMPANY: 3 }));
+  check(cr.LEAD === 30 && cr.DEAL === 0 && cr.CONTACT === 0 && cr.COMPANY === null && cr.TASK === null, 'created = live after minus before per entity; a drop is 0 (deletes are not created); a missing reading is null');
+  check(createdPerEntity(null, mk({ LEAD: 5 })).LEAD === null && createdPerEntity(mk({ LEAD: 5 }), null).LEAD === null, 'created: no pre-run or no post-run live reading gives null');
+  let liveCalls = 0;
+  const liveDeps = (readOnly: boolean) => ({ ...deps(async () => usage()), readOnlyRun: selectionIsReadOnly(readOnly ? ['test', '--grep', '@prodSafe'] : ['test', '--project=chromium']), fetchLive: async () => { liveCalls++; return mk({ LEAD: 9 }); } });
+  await runCapacityGate(liveDeps(false));
+  check(liveCalls === 1 && readSnapshot(dir)?.live?.counts.LEAD === 9 && readSnapshot(dir)?.usageUpdatedAt === '2027-05-21T11:04:37.000+0000', 'gate: a run that creates records saves the live counts and the usage updatedAt in the snapshot');
+  await runCapacityGate(liveDeps(true));
+  check(liveCalls === 1 && readSnapshot(dir)?.live === undefined, 'gate: a read-only run takes no live counts (nothing to count, nine requests saved)');
+  const liveFails = await runCapacityGate({ ...liveDeps(false), fetchLive: async () => { throw new Error('HTTP 500'); } });
+  check(liveFails?.level === 'ok' && readSnapshot(dir)?.live === undefined, 'gate: a failing live reading never fails the gate (the email says "created: not available")');
+  const stopsOnBilling = await runCapacityGate({ ...liveDeps(false), fetchLive: async () => mk({ LEAD: 1 }) }).then(() => 'ran');
+  check(stopsOnBilling === 'ran', 'gate: live counts do not change the verdict');
+  let stoppedBilling = '';
+  try {
+    await runCapacityGate({ ...liveDeps(false), fetchUsage: async () => usage({ records: [300000, 300000] }), fetchLive: async () => mk({ LEAD: 10 ** 9 }) });
+  } catch (error) {
+    stoppedBilling = String(error);
+  }
+  check(/No records left on qa/.test(stoppedBilling), 'gate: the stop stays on the BILLING figures (what Kylas enforces), whatever the live counts say');
 
   fs.rmSync(dir, { recursive: true, force: true });
   out(failures === 0 ? '\ncheck:capacity-gate — all checks passed' : `\ncheck:capacity-gate — ${failures} check(s) FAILED`);

@@ -21,6 +21,7 @@ import {
 import { recordSessionInfo } from './sessionInfo';
 import { BillingApi } from '../modules/billing/BillingApi';
 import { capacityDir, runCapacityGate, selectionIsReadOnly } from '../modules/billing/capacity';
+import { readLiveCounts } from '../modules/billing/liveCounts';
 import { redactTokens } from '../utils/apiClient';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
@@ -153,6 +154,8 @@ async function runCapacityGateStep(): Promise<void> {
       },
       dir: CAPACITY_DIR,
       now: new Date(),
+      // what the run starts from, per entity (creates show only here: billing counts them at the nightly refresh)
+      fetchLive: () => readLiveCounts(api, new Date()),
       // billing period and currency for the email's plan header (the price is not in the API and the gate opens no browser)
       fetchBilling: async () => {
         const details = await withTransientRetry('capacity gate: GET /v1/tenants/subscription-details', () => api.getSubscriptionDetails());

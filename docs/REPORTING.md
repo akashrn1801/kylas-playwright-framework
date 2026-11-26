@@ -60,7 +60,7 @@ In the order `EmailTemplate.html()` renders them: incomplete-run banner (only wh
 
 Run Details shows two labelled clocks (2026-11-26, `RunTimes.ts`): "Run" = the workflow (GitHub `run_started_at`, else the first job's start; Jenkins `RUN_STARTED_AT_MS`) to the moment the email is generated, and "Tests" = first attempt start to last attempt end (`ReportParser.testsStart/testsEnd`).
 
-Account capacity (`AccountCapacity.ts`, ADR 0019): a warnings banner near the top and a section after Module Analytics, built from the earliest pre-run snapshot and the latest post-run reading of the shards (artifacts `capacity-<env>-*`); a gate stop turns the email into BLOCKED. Missing data renders one "capacity data unavailable" line.
+Account capacity (`AccountCapacity.ts`, ADR 0019): a warnings banner near the top and a section after Module Analytics, built from the earliest pre-run snapshot and the latest post-run reading of the shards (artifacts `capacity-<env>-*`); billing figures are labelled "as of the last refresh" and "created during this run" comes from live per-entity counts (`liveCounts.ts`); a gate stop turns the email into BLOCKED. Missing data renders one "capacity data unavailable" line.
 
 ## 4–5. Run history ledger; suite drift and scope
 
