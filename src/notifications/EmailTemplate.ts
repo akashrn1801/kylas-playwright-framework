@@ -176,6 +176,7 @@ const NO_LIMIT = Number.MAX_SAFE_INTEGER;
 /** Content-ID of the donut PNG the notify step attaches inline (nodemailer `cid`). */
 export const DONUT_CID = 'run-outcome@kylas-report';
 
+export const CAPACITY_GREEN_LABEL = 'Account warning (does not change the test result)';
 const INK = '#1B1F24';
 const SLATE = '#57606A';
 const MUTED = '#8C959F';
@@ -443,7 +444,7 @@ export class EmailTemplate {
       this.buildTopSummary(ctx, verdict),
       // a failed run keeps the cause directly under the verdict; when nothing failed in the end it is a quiet note below the summary (build #242)
       ctx.report.failed > 0 ? this.buildCauseBanner(ctx.causeSummary, false) : '',
-      this.buildCapacityWarnings(capacityView),
+      this.buildCapacityWarnings(capacityView, verdict.verdict === 'clear'),
       this.buildStatusBadgeRow(ctx),
       this.buildExecutiveSummary(ctx, health, clusters, verdict),
       ctx.report.failed > 0 ? '' : this.buildCauseBanner(ctx.causeSummary, true),
@@ -646,6 +647,7 @@ ${body}
     'environment-suspected': 'environment',
     'application-bug-suspected': 'application',
     'test-or-code-suspected': 'test/code',
+    'known-bug-fixed': 'known bug fixed: remove test.fail()',
     flaky: 'flaky',
     unclassified: 'unclassified',
   };
@@ -654,7 +656,7 @@ ${body}
   // a second verdict — the status banner above stays the only red/amber/green element about the run's outcome.
   private causeBadge(cause: FailureDetail['cause']): string {
     if (!cause) return '';
-    const suspected = cause.label !== 'unclassified' && cause.label !== 'flaky';
+    const suspected = cause.label !== 'unclassified' && cause.label !== 'flaky' && cause.label !== 'known-bug-fixed';
     const text = `${suspected ? 'suspected: ' : ''}${EmailTemplate.CAUSE_LABEL_TEXT[cause.label]}`;
     const color = suspected ? ACCENT : SLATE;
     return `<span style="display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;background:#ffffff;color:${color};border:1px solid ${suspected ? '#C9D2F5' : BORDER};border-radius:3px;padding:1px 6px;margin-left:4px;">${this.esc(text)}</span>`;
@@ -713,7 +715,7 @@ ${body}
     const heading = plural(summary.total, 'test') + ' that did not pass first time';
     const failedPart =
       summary.failedTotal > 0
-        ? `of the ${summary.failedTotal} still failing, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified`
+        ? `of the ${summary.failedTotal} still failing, ${c['environment-suspected']} environment, ${c['application-bug-suspected']} application, ${c['test-or-code-suspected']} test/code, ${c.unclassified} unclassified${c['known-bug-fixed'] > 0 ? `, ${c['known-bug-fixed']} known bug fixed (remove test.fail())` : ''}`
         : 'none is still failing';
     const retryPart = groups.length > 0 ? `; ${groups.join(', ')}` : '';
     return `
@@ -988,7 +990,8 @@ ${body}
   private static readonly ENTITY_LABELS: Record<string, string> = { LEAD: 'Leads', DEAL: 'Deals', CONTACT: 'Contacts', COMPANY: 'Companies', TASK: 'Tasks', CALL: 'Call logs', QUOTATION: 'Quotations', MEETING: 'Meetings', NOTE: 'Notes' };
 
   /** The warnings of the account's capacity, near the top: yellow rows for a warning, red for none left or an unexpected plan or a passed renewal. Nothing when there is none. */
-  private buildCapacityWarnings(view: CapacityView): string {
+  /** On a green run the warning sits under a verdict that says Passed: one line says it is about the account, not the tests (2026-11-26, scenario matrix). */
+  private buildCapacityWarnings(view: CapacityView, greenRun: boolean): string {
     if (view.warnings.length === 0) return '';
     const red = view.warnings.some((w) => w.colour === 'red');
     const lines = view.warnings
@@ -996,7 +999,7 @@ ${body}
       .join('');
     return `
 <tr><td id="section-capacity-warnings" style="background:${red ? FAIL_BG : WARN_BG};padding:10px 28px;border-bottom:1px solid ${red ? FAIL_BORDER : WARN_BORDER};">
-  <div style="font-size:13px;font-weight:700;color:${red ? FAIL : WARN};">Account capacity ${red ? 'needs action' : 'warning'}</div>
+  ${greenRun ? `<div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${SLATE};margin-bottom:3px;">${CAPACITY_GREEN_LABEL}</div>` : ''}<div style="font-size:13px;font-weight:700;color:${red ? FAIL : WARN};">Account capacity ${red ? 'needs action' : 'warning'}</div>
   ${lines}
 </td></tr>`;
   }

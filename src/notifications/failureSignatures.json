@@ -209,6 +209,24 @@
       "added": "2026-11-26",
       "confirmed": false,
       "why": "The failure text itself says the app showed its plan-upgrade modal, so one test is enough and no test logic is involved. Reported 2026-11-26: after Add, Kylas showed the modal and 57 tests failed with a bare locator-not-found. Not reproduced live (the modal's selectors are unverified), so confirmed stays false."
+    },
+    {
+      "id": "known-bug-now-passes",
+      "title": "A test marked test.fail() passed: the known bug it documents is fixed",
+      "label": "known-bug-fixed",
+      "errorPatterns": [
+        "Expected to fail, but passed"
+      ],
+      "errorPatternNotes": [
+        "Playwright's own message for a test.fail() test that passed: the Kylas bug it documents (for example BLR2, KI-75) is fixed, so remove test.fail() and close the KI entry"
+      ],
+      "minTests": 1,
+      "minModules": 1,
+      "kiRef": "KI-75",
+      "kiFile": "docs/KNOWN_ISSUES_ACTIVE.md",
+      "added": "2026-11-26",
+      "confirmed": false,
+      "why": "Playwright's message names no environment or application cause: the test was expected to fail and did not. One test is enough. Matrix scenario 68 (BLR2 passing), not yet seen in a real run."
     }
   ]
 }

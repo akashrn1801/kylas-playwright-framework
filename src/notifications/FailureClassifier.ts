@@ -26,6 +26,8 @@ export type SuspectedCause =
   | 'environment-suspected'
   | 'application-bug-suspected'
   | 'test-or-code-suspected'
+  // A test.fail() test PASSED: the product bug it documents is fixed, so the marker must go. A fact, not a guess (2026-11-26).
+  | 'known-bug-fixed'
   | 'flaky'
   | 'unclassified';
 
@@ -33,6 +35,7 @@ export const SUSPECTED_CAUSES: SuspectedCause[] = [
   'environment-suspected',
   'application-bug-suspected',
   'test-or-code-suspected',
+  'known-bug-fixed',
   'flaky',
   'unclassified',
 ];
@@ -150,14 +153,14 @@ export function parseSignatureRegistry(raw: unknown): SignatureRegistry {
   if (!o || typeof o !== 'object' || !Array.isArray(o.signatures) || !Array.isArray(o.ambiguousCodes)) {
     throw new Error('failure signature registry: expected { version, ambiguousCodes[], signatures[] }');
   }
-  const labels = new Set(['environment-suspected', 'application-bug-suspected']);
+  const labels = new Set(['environment-suspected', 'application-bug-suspected', 'known-bug-fixed']);
   const ids = new Set<string>();
   for (const s of o.signatures) {
     const where = `signature "${String((s as FailureSignature)?.id)}"`;
     if (!s || typeof s.id !== 'string' || !s.id) throw new Error('failure signature registry: entry without id');
     if (ids.has(s.id)) throw new Error(`failure signature registry: duplicate id ${s.id}`);
     ids.add(s.id);
-    if (!labels.has(s.label)) throw new Error(`${where}: label must be environment-suspected or application-bug-suspected`);
+    if (!labels.has(s.label)) throw new Error(`${where}: label must be environment-suspected, application-bug-suspected or known-bug-fixed`);
     if (!(s.errorPatterns?.length || s.misc)) throw new Error(`${where}: needs errorPatterns or misc`);
     for (const p of s.errorPatterns ?? []) new RegExp(p, 'i'); // throws on a bad pattern
     if (s.errorPatterns?.length) {
@@ -458,6 +461,7 @@ export function summarizeCauses(
     'environment-suspected': 0,
     'application-bug-suspected': 0,
     'test-or-code-suspected': 0,
+    'known-bug-fixed': 0,
     flaky: 0,
     unclassified: 0,
   };

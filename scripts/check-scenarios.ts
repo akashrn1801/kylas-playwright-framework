@@ -17,7 +17,7 @@ import { runTimesViolations } from '../src/notifications/RunTimes';
 import { buildCapacityView, capacityBlock } from '../src/notifications/AccountCapacity';
 import { capacityColour } from '../src/modules/billing/capacity';
 import { RenewalFailure } from '../src/auth/renewalFailure';
-import { DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
+import { CAPACITY_GREEN_LABEL, DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
 import { RETRY, infoSwatch } from '../src/notifications/EmailPalette';
 import { Def, SKIP_REASON_TEXT, ScenarioResult, ScenarioSpec, def, many, runScenario } from './lib/scenarioKit';
@@ -83,6 +83,8 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '67-known-bug-blr2-fails-as-expected', title: 'Known-bug test BLR2 (test.fail()) fails as expected, the rest pass', expect: 'green; BLR2 counts as Passed first time, never "failed first"; Billing RBAC has no problem highlight', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(1, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(1, 'known-bug', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210)], rerun: false },
   { name: '68-known-bug-blr2-unexpectedly-passes', title: 'Known-bug test BLR2 passes although it is expected to fail (the product bug looks fixed)', expect: 'red: one failed test, and the failure text says "Expected to fail, but passed" so the reader knows to remove test.fail()', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(1, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(1, 'known-bug-passes', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210)], rerun: false },
   { name: '69-plan-limit-modal', title: 'The plan-limit modal ("Upgrade your plan") blocks 12 tests in 3 modules', expect: 'red; the cause banner says the plan limit was reached, not a list of locator failures', first: [...base(18), ...many(4, 'plan-limit', 'leads', 'ui/leads/leads.spec.ts', 300), ...many(4, 'plan-limit', 'deals', 'ui/deals/deals.spec.ts', 400), ...many(4, 'plan-limit', 'contacts', 'ui/contacts/contacts.spec.ts', 500)], rerun: false },
+  { name: '70-failures-with-account-warning', title: 'A red run (2 failed) while the account has few records left (3,800 of 300,000)', expect: 'red; the capacity warning is shown WITHOUT the "does not change the test result" label (the label is only for a green run)', first: [...base(26), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky')], rerun: false, capacity: { pre: { recordsUsed: 295000 }, post: { recordsUsed: 296200 } } },
+  { name: '71-known-bug-fixed-with-a-real-failure', title: 'Two known-bug tests (BLR2 and another) pass although marked test.fail(), next to one ordinary failure', expect: 'red; the two known-bug tests say "known bug fixed: remove test.fail()", the ordinary failure is not given that label; the summary counts 2 known bug fixed', first: [...base(20), ...many(1, 'known-bug-passes', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210), ...many(1, 'known-bug-passes', 'L77 known bug', 'rbac/leads.rbac.spec.ts', 220), ...many(1, 'failed', 'ordinary failure', 'ui/many/many.spec.ts', 230)], rerun: false },
   { name: '65-smoke-only-not-selected', title: 'A run that selects by tag (@regression): Billing UI ran 4 of its 6 tests, because BL1 and BL5 are tagged only @smoke (build #242)', expect: 'Billing UI shows 4 tests and the badge "UI 2 of 6 not selected"; the footnote says CI selects by tag; the verdict is unaffected', first: [...many(4, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 } },
   { name: '61-capacity-created-pushes-over-the-limit', title: 'Account capacity: billing still shows 200 left (it counts creates only at the nightly refresh), the run created 503 records', expect: 'records bar yellow (200 left); a red ESTIMATE "none left (over by 303)" near the top; the run is NOT blocked (the gate stops on the billing figures only)', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 299800 }, post: {} } },
   { name: '62-capacity-refresh-time-known', title: 'Account capacity: Kylas sends a real refresh time (5 hours before the email)', expect: 'the billing figures are labelled "as of the last refresh: <time> IST"', first: base(30), rerun: false, capacity: { pre: { refreshedMinutesAgo: 300 }, post: { refreshedMinutesAgo: 300 } } },
@@ -397,6 +399,25 @@ export function readerTextViolations(html: string): string[] {
   const verb = /\b1 (are|were|have)\b|\b([02-9]|[1-9]\d+) (is|was|has)\b/.exec(t); if (verb) out.push(`count and verb disagree: "${verb[0]}"`);
   return out;
 }
+/** Capacity warnings on a green run carry the one-line label saying they do not change the test result; on any other run the label is absent. */
+export function capacityLabelViolations(html: string, greenRun: boolean): string[] {
+  const at = html.indexOf('id="section-capacity-warnings"');
+  if (at < 0) return [];
+  const block = html.slice(at, html.indexOf('</td></tr>', at));
+  const has = block.includes(CAPACITY_GREEN_LABEL);
+  return greenRun && !has ? [`a green run's capacity warning lacks "${CAPACITY_GREEN_LABEL}"`] : !greenRun && has ? ['the label "does not change the test result" is on a run that is not green'] : [];
+}
+/** A test.fail() test that passed says "known bug fixed: remove test.fail()" (once per such test in the summary), and nothing else says it. */
+export function knownBugFixedViolations(html: string, expected: number): string[] {
+  const t = readerText(html);
+  const n = (t.match(/known bug fixed: remove test\.fail\(\)/g) ?? []).length;
+  const inSummary = /(\d+) known bug fixed \(remove test\.fail\(\)\)/.exec(t);
+  if (expected === 0) return n > 0 ? [`"known bug fixed" appears ${n} time(s) but no test.fail() test passed`] : [];
+  const out: string[] = [];
+  if (n < expected) out.push(`${expected} known-bug test(s) passed but "known bug fixed: remove test.fail()" appears ${n} time(s)`);
+  if (!inSummary || Number(inSummary[1]) !== expected) out.push(`the cause summary does not count ${expected} known bug fixed (${inSummary?.[0] ?? 'absent'})`);
+  return out;
+}
 /** Exactly one status banner, and a run that is not clear is never called clean anywhere. */
 export function verdictViolations(html: string, clear: boolean): string[] {
   const out: string[] = [];
@@ -709,6 +730,8 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (s.kind === 'email' && s.ctx) {
     for (const msg of readerTextViolations(s.html)) bad('reader-text', msg);
     for (const msg of verdictViolations(s.html, s.ctx.verdict?.verdict === 'clear')) bad('one-verdict', msg);
+    for (const msg of capacityLabelViolations(s.html, s.ctx.verdict?.verdict === 'clear')) bad('capacity-label', msg);
+    for (const msg of knownBugFixedViolations(s.html, (s.spec.first ?? []).filter((d) => d.kind === 'known-bug-passes').length)) bad('known-bug-fixed', msg);
   }
   // 5-6: verdict, colour and icon
   if (r.failed > 0 && (verdict.verdict === 'clear' || verdict.bannerTone === 'success' || subjectIcon === 'green')) bad('failure-never-green', `a run with ${r.failed} failed tests is shown green (${verdict.bannerLabel})`);
@@ -876,6 +899,8 @@ function main(): void {
   // Red samples for the reader-text and verdict invariants: each doctored email must be reported, the real one must not
   {
     const clean = results.find((x) => x.spec.name === '01-all-pass-first-time')!.html;
+    const kb = results.find((x) => x.spec.name === '68-known-bug-blr2-unexpectedly-passes')!;
+    const gw = results.find((x) => x.spec.name === '49-capacity-under-threshold')!;
     const inject = (extra: string): string => clean.replace('</body>', `<p>${extra}</p></body>`);
     const banner = '<span style="font-size:16px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">';
     const samples2: Array<[string, string[], boolean]> = [
@@ -889,6 +914,13 @@ function main(): void {
       ['"2 failure" (plural count, singular noun)', readerTextViolations(inject('2 failure in Leads')), true],
       ['"1 are" (count and verb disagree)', readerTextViolations(inject('1 are rerun attempts')), true],
       ['"0 test/code" is a label, not a plural error', readerTextViolations(inject('0 test/code, 2 unclassified')), false],
+      ['a green run with a capacity warning: the label is there', capacityLabelViolations(gw.html, true), false],
+      ['the same email without the label: reported', capacityLabelViolations(gw.html.replace(CAPACITY_GREEN_LABEL, ''), true), true],
+      ['the label on a run that is not green: reported', capacityLabelViolations(gw.html, false), true],
+      ['an unexpectedly passing known-bug test says what to do', knownBugFixedViolations(kb.html, 1), false],
+      ['the same email without the sentence: reported', knownBugFixedViolations(kb.html.split('known bug fixed: remove test.fail()').join('unclassified'), 1), true],
+      ['a run with no such test must not say it', knownBugFixedViolations(clean, 0), false],
+      ['the sentence on a run where no test.fail() test passed: reported', knownBugFixedViolations(kb.html, 0), true],
       ['two verdict banners', verdictViolations(clean.replace(banner, `${banner}PASSED</span><br>${banner}`), true), true],
       ['no verdict banner', verdictViolations(clean.split(banner).join('<span>'), true), true],
       ['"this run is clean" on a run that is not clear', verdictViolations(clean, false), true],
