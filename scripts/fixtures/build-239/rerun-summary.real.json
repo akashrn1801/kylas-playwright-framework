@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "runId": "45553181980",
+  "runAttempt": 2,
+  "maxTests": 60,
+  "retries": 0,
+  "includeFlaky": false,
+  "candidates": 1,
+  "firstRun": {
+    "passed": 940,
+    "failed": 1,
+    "flaky": 1,
+    "skipped": 1,
+    "didNotRun": 0,
+    "total": 943
+  },
+  "excluded": [
+    {
+      "file": "ui/dashboard/dashboard.spec.ts",
+      "title": "DB14 mark a dashboard as Primary, reload, confirm active + option disabled",
+      "reason": "the run has failed tests: only those are rerun, flaky tests are not"
+    }
+  ],
+  "ran": true,
+  "durationMs": 63911.158935546875,
+  "afterRerun": {
+    "passed": 942,
+    "failed": 0,
+    "flaky": 0,
+    "skipped": 1,
+    "didNotRun": 0,
+    "total": 943
+  },
+  "rows": [
+    {
+      "key": "chromium|ui/leads/leads.spec.ts:904|ui/leads/leads.spec.ts > Leads > @regression admin cannot create a lead with an e-mail that another lead already uses",
+      "file": "ui/leads/leads.spec.ts",
+      "line": 904,
+      "title": "admin cannot create a lead with an e-mail that another lead already uses",
+      "first": "failed",
+      "rerun": "passed",
+      "final": "passed",
+      "reason": "failed"
+    }
+  ],
+  "recovered": 1,
+  "stillFailing": 0
+}

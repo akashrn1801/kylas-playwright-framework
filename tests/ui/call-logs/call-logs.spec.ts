@@ -10,6 +10,7 @@ import {
   generateCallLogData,
   formatDateForCalendarLabel,
 } from '../../../src/data/factories/callLogFactory';
+import { appToday } from '../../../src/utils/appTime';
 import { logger } from '../../../src/utils/logger';
 import { config } from '../../../config/config';
 
@@ -75,10 +76,12 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Contact', outcome: 'Busy' });
+    // run-owned contact (with a phone) instead of a random existing one
+    const contactName = await callLogsPage.ensureOwnedContactExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Contact');
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, contactName);
     await callLogsPage.assertDurationDisabled();
     const callLogId = await callLogsPage.saveCallLog();
     expect(callLogId).not.toBeNull();
@@ -132,10 +135,13 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Deal', outcome: 'Rejected' });
+    // run-owned deal and Associated Contact (the contact has the phone the form auto-populates)
+    const dealName = await callLogsPage.ensureOwnedDealExists();
+    const contactName = await callLogsPage.ensureOwnedContactExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Deal');
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, dealName, false, contactName);
     await callLogsPage.assertPhoneFieldDisabled();
     await callLogsPage.assertDurationDisabled();
     const callLogId = await callLogsPage.saveCallLog();
@@ -165,11 +171,13 @@ test.describe('Call Logs', () => {
   test('@regression admin should verify duration field enables when outcome is connected and disables when outcome is changed to busy', async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
     await callLogsPage.fillEntityType('Lead');
     await callLogsPage.fillCreateForm(
-      generateCallLogData({ entityType: 'Lead', outcome: 'Connected' })
+      generateCallLogData({ entityType: 'Lead', outcome: 'Connected' }),
+      leadName
     );
     await callLogsPage.assertDurationEnabled();
     logger.info('Duration enabled for Connected — verified');
@@ -193,9 +201,10 @@ test.describe('Call Logs', () => {
       outcome: 'Connected',
       duration: { value: 61, type: 'seconds' },
     });
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, leadName);
     await callLogsPage['saveButton']().scrollIntoViewIfNeeded();
     await callLogsPage['saveButton']().click();
     // WHY: Check form stayed open or error appeared — either means validation worked
@@ -216,25 +225,43 @@ test.describe('Call Logs', () => {
   test('@regression admin should verify future date is not selectable in the date picker', async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
+    // Run-owned lead WITH a phone number: the form's Phone Number step needs one, and the old random pick of an existing lead
+    // landed on leads without a phone ("No options", staging 2026-11-25, two different leads) before the date step was reached.
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage['calendarIcon']().click({ force: true });
-    await adminPage.waitForTimeout(500);
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // The Date field is disabled until the form's earlier steps are done (CL10 screenshot and traces, B6: still
+    // disabled after the entity type, and after the entity), so a click on the calendar icon before that opens
+    // nothing and the old checks passed without checking anything. Same steps 1-6 as fillCreateForm(), which
+    // selects the date right after the outcome.
+    const clData = generateCallLogData({ entityType: 'Lead', outcome: 'Busy' });
+    await callLogsPage.fillEntityType(clData.entityType);
+    await callLogsPage['searchAndSelectEntity'](callLogsPage['associatedEntityInput'](), clData.entityType, leadName);
+    await callLogsPage.fillPhoneNumber();
+    await callLogsPage.fillCallType(clData.callType);
+    await callLogsPage.fillOutcome(clData.outcome);
+    await expect(callLogsPage['calendarIcon'](), 'Date picker icon should be enabled once the outcome is selected').toBeEnabled();
+    await callLogsPage['calendarIcon']().click();
+    await callLogsPage['calendarForwardButton']().waitFor({ state: 'visible', timeout: 10000 });
+    // The picker's "today" is the app's (account time zone), not the runner's: from 18:30 UTC the runner's "tomorrow" is the app's
+    // today, which is selectable (sandbox run 45457800405). appToday() gives the app's day.
+    const tomorrow = appToday(1);
     const tomorrowLabel = formatDateForCalendarLabel(tomorrow);
-    const tomorrowCell = adminPage.locator(`.SingleDatePicker td[aria-label="${tomorrowLabel}"]`);
-    const cellExists = await tomorrowCell.isVisible().catch(() => false);
-    if (cellExists) {
-      const isBlocked = await adminPage.evaluate((label: string) => {
-        const cell = document.querySelector(`.SingleDatePicker td[aria-label="${label}"]`);
-        if (!cell) return true;
-        return cell.classList.contains('CalendarDay__blocked_out_of_range') ||
-          cell.classList.contains('CalendarDay__blocked_calendar') ||
-          cell.getAttribute('aria-disabled') === 'true';
-      }, tomorrowLabel);
-      if (!isBlocked) throw new Error('Tomorrow date should be blocked but is selectable');
+    // suffix match: a blocked day's aria-label has a prefix before the date (the exact match never found it)
+    const tomorrowCell = adminPage.locator(`.SingleDatePicker td[aria-label$="${tomorrowLabel}"]`);
+    // tomorrow is on the next month's page when today is the last day of the month
+    if (!(await tomorrowCell.isVisible())) {
+      await callLogsPage['calendarForwardButton']().click();
     }
+    await expect(tomorrowCell, 'Tomorrow should be shown in the calendar').toBeVisible({ timeout: 10000 });
+    const isBlocked = await adminPage.evaluate((label: string) => {
+      const cell = document.querySelector(`.SingleDatePicker td[aria-label$="${label}"]`);
+      if (!cell) return false;
+      return cell.classList.contains('CalendarDay__blocked_out_of_range') ||
+        cell.classList.contains('CalendarDay__blocked_calendar') ||
+        cell.getAttribute('aria-disabled') === 'true';
+    }, tomorrowLabel);
+    if (!isBlocked) throw new Error('Tomorrow date should be blocked but is selectable');
     await adminPage.keyboard.press('Escape');
     logger.info('Future date correctly blocked in calendar');
     logger.success('CL10 passed');
@@ -246,9 +273,10 @@ test.describe('Call Logs', () => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
     const data = generateCallLogData({ entityType: 'Lead', outcome: 'Connected' });
+    const leadName = await callLogsPage.ensureOwnedLeadExists();
     await callLogsPage.goToCallLogsList();
     await callLogsPage.openLogACallForm();
-    await callLogsPage.fillCreateForm(data);
+    await callLogsPage.fillCreateForm(data, leadName);
     // WHY: capture ID before save — toast appears immediately after save button click
     const toastIdPromise = callLogsPage['captureIdFromToast']();
     await callLogsPage['saveButton']().scrollIntoViewIfNeeded();
@@ -565,9 +593,16 @@ test.describe('Call Logs', () => {
   // validation on the backend (unlike Meeting/Quotation/Task which do enforce it).
   // This test will be re-enabled once backend validation is introduced for Call Log
   // custom fields. See docs/known-issues/README.md for details. (2026-08-03)
-  test.skip('@regression admin should see validation errors for invalid call log custom field values and not save the call log', async ({
-    adminPage,
-  }) => {
+  test.skip(
+    '@regression admin should see validation errors for invalid call log custom field values and not save the call log',
+    {
+      annotation: {
+        type: 'skip-reason',
+        description:
+          'Call Log custom fields are not validated by the backend yet (Meeting, Quotation and Task are); re-enable once backend validation exists (docs/known-issues/README.md, 2026-08-03)',
+      },
+    },
+    async ({ adminPage }) => {
     test.setTimeout(480000);
     const callLogsPage = new CallLogsPage(adminPage);
 

@@ -7,7 +7,7 @@ import { test, expect, withContactFormFieldLock } from './contactFormFieldLock';
 // READS field config, never calls configureFieldLimit()/
 // configureFieldRegex()/clearAllFieldConfigurations().
 import { test as baseTest } from '../../../src/fixtures/index';
-import { Page } from '@playwright/test';
+import { BrowserContext, Page } from '@playwright/test';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
 import {
   FormFieldsConfigPage,
@@ -31,8 +31,7 @@ import {
 } from '../../../src/data/factories/contactFactory';
 import { faker } from '@faker-js/faker';
 import { logger } from '../../../src/utils/logger';
-import { config } from '../../../config/config';
-import * as path from 'path';
+import { AuthManager } from '../../../src/auth/authManager';
 
 // WHY this is the Contact rollout of the Form Field Limit feature — the
 // SAME reusable architecture already proven for Lead (58/58 tests passing,
@@ -404,21 +403,18 @@ test.describe('Contact Field Limits', () => {
     // and this describe block's lack of a .serial override means
     // Playwright's parallelWithHooks chunking can run multiple copies of
     // this hook concurrently).
-    const adminStorageStatePath = path.join(
-      __dirname,
-      '../../../src/auth/storageStates',
-      config.env,
-      'admin.json'
-    );
-    const context = await browser.newContext({ storageState: adminStorageStatePath });
-    const page = await context.newPage();
+    // ADR 0016: the context comes from AuthManager, inside the try. The old raw read of the state file threw ENOENT
+    // outside the try (sandbox run 41825279669, P&S) when a session recovery had cleared it, failing the hook.
+    let context: BrowserContext | null = null;
     try {
+      context = await new AuthManager(browser).getContextWithUsableSession('admin');
+      const page = await context.newPage();
       await withContactFormFieldLock(() => clearAllFieldConfigurations(page));
       logger.success('afterAll safety-net cleanup completed');
     } catch (error) {
       logger.warn(`afterAll safety-net cleanup failed (non-fatal): ${String(error)}`);
     } finally {
-      await context.close();
+      await context?.close();
     }
   });
 

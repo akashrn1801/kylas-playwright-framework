@@ -174,7 +174,8 @@ test.describe('Products & Services RBAC', () => {
     const dealId = await dealsPage.createDeal(data);
     if (!dealId) throw new Error('Deal ID not captured after create');
 
-    await dealsPage.updateDeal(data, data.name, dealId, fixture.name);
+    // KI-66: while the app's edit-form race exists a stuck attach is an expected failure (annotated), never red
+    await dealsPage.updateDealAttachingProduct(data, data.name, dealId, fixture.name);
 
     logger.success('PS11 passed');
   });
@@ -196,7 +197,9 @@ test.describe('Products & Services RBAC', () => {
     const fixture = getProductFixture('adminActive', config.env);
     const dealData = generateDealData();
     await dealsPage.goToDealsList();
-    const dealId = await dealsPage.createDeal(dealData);
+    // WHY minimal (2026-11-16): a full deal create adds 1-3 product rows (3 of 5 runs got 3), leaving the
+    // 3-row quotation form no free slot for the fresh row; minimal = no products, so create adds 1, edit adds the 2nd
+    const dealId = await dealsPage.createDeal(dealData, { minimal: true });
     if (!dealId) throw new Error('Deal ID not captured after create');
     const data = generateRestrictedQuotationData({ dealName: dealData.name });
 

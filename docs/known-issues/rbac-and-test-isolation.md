@@ -3,7 +3,7 @@
 > **Purpose:** Resolved RBAC test-isolation bugs, retracted app-bug claims, Lead lookup-field fixes, and durable per-module Hide-Empty-Fields behavior.
 > **Read when:** writing an RBAC test, suspecting an "app bug" in permissions/sharing, or touching Hide Empty Fields tests.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 4a85ad7
+> **Last verified:** 2026-11-25 @ c12c85c
 
 Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22, KI-43). Real product bugs are tracked outside this repo. Rules: [../PATTERNS.md](../PATTERNS.md).
 
@@ -113,3 +113,8 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-04, KI-22
 - **KI-54 (sessions):** both roles reported invalid within 20 s at the start of two runs; the restricted page rendered blank for 60 s; the next test recovered. Tokens from other helper sessions stayed valid, so a plain "newer login kills older token" does not explain it.
 - **KI-55 (meeting id, inconclusive, hardened):** "Meeting ID not captured" was not reproduced; `MeetingsPage.captureIdFromResponse` now matches only the create URL and L18/L20 prove the meeting by its unique title (Meetings regression 10/10 passed).
 - **KI-56 (resolved by removal, root cause not confirmed):** the L60 test "admin can add a pipeline to a lead that has none, which makes the Close Lead button appear" timed out after 10 s waiting for the first Pipeline dropdown option in the edit modal (`attachPipelineFromDetail`). Sandbox run 41066366856 and the rerun of 41169599837 on staging (06:18 UTC 2026-11-02, original attempt and retry, both at that wait). The lead had no pipeline (400 `002056`), Close Lead was absent and the modal opened. Not reproduced locally: 10/10 headed (2026-10-30), 3/3 headless (2026-11-02), menu open in about 0.4 s; the CI trace was never read. The `is-invalid__option` prefix theory was wrong (the failure stayed after the locator change). Decision 2026-11-02: test, `attachPipelineFromDetail`, `LeadApi.getLeadPipelineOf` and the unused `editFormGroup` locator removed.
+
+## KI-73 (closed 2026-11-25): call-log UI tests picked a random existing entity
+- **What:** `fillCreateForm(data)` without an owned name took a random existing lead/contact/deal. On staging 2026-11-25 two different random leads had no phone ("No options" at Phone Number), so CL10 stopped before its date step (the same session found CL10's time-zone bug, `src/utils/appTime.ts`).
+- **Fix:** CL3, CL6, CL8, CL9, CL10 and CL11 create run-owned entities first (`ensureOwnedLeadExists` is public, run-stamped last name, phone; owned contact for CL3; owned deal plus Associated Contact for CL6) and pass the name to `fillCreateForm`. The RBAC specs already did this.
+- **Evidence:** staging, `--workers=2 --retries=0`, 2026-11-25: CL2, CL6, CL7, CL8, CL9, CL10, CL11 passed; CL3 failed once on `POST /v1/call-logs/` 400 `000000` "Connection prematurely closed BEFORE response" (known gateway failure, request well formed), then passed on its own rerun (1.5 min, owned contact CLG1795580951025 Contact, phone +917331337019).

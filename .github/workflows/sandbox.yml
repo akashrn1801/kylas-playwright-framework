@@ -338,15 +338,80 @@ jobs:
           echo "formFields matrix: track=$RUN_FORMFIELDS_TRACK entities=$FF_ENTITIES_JSON"
           echo "run_scoped_tests=$RUN_SCOPED_TESTS" >> "$GITHUB_OUTPUT"
 
+  # WHY ONE job here (ADR 0017, amended 2026-11-20): run 44664301850 (same code as green build #227) failed 4 of 5 shards
+  # near a session end, the app's token-refresh cascade. A login inside a live session returns the SAME token, so only a
+  # logout can give a run a fresh 12 h. Doing it once, before any test job, is safe because the workflow-level
+  # `kylas-staging` concurrency group (cancel-in-progress: false) allows one staging CI run at a time: no other job
+  # holds the old token. API only (PUT /v1/users/login, expiry read from the JWT): no browser, no install step. Less
+  # than the full run window (4 h) left = DELETE /v1/tokens/logout once + fresh login; else untouched. Shards, rerun and formFields then log in
+  # from globalSetup and get this session's token. Nothing secret is uploaded: only role/end times, for the email.
+  # Local runs stay opt-in (SESSION_RENEW=1).
+  renew-session:
+    name: renew session if under the run window
+    needs: detect
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Renew the sessions when under the run window
+        env:
+          ENV: staging
+          CI: true
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+        run: npx ts-node scripts/renew-session.ts
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: session-info-sandbox
+          overwrite: true
+          # renew-session-failed.json (2026-11-24) says WHY the job failed; merge-and-report downloads this artifact for the email
+          path: |
+            reports/staging/session-info.json
+            reports/staging/renew-session-failed.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   run-tests:
     name: playwright-selective (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
-    needs: detect
+    needs: [detect, renew-session]
     # WHY (2026-10-07): skipped when the selection was formFields-only — all of
     # it runs in run-formfields-tests, so nothing is left here and a "no tests
     # found" failure cannot happen. Skipped (not failed) lets
     # run-formfields-tests (`!cancelled()`) and merge-and-report proceed.
     if: ${{ needs.detect.outputs.run_scoped_tests == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     # WHY 180 (2026-09-09, comment corrected 2026-10-07): sized for the
     # escalated (~90 min/shard projected, qa.yml's shard budget) case.
     # Non-escalated runs are NOT always "minutes": before 2026-10-07 a
@@ -367,6 +432,15 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
+      # WHY (2026-11-24, canary: "fatal: detected dubious ownership in repository at '/__w/...'", exit 128): in a
+      # container job the checked-out workspace belongs to another uid than the job user, and actions/checkout sets
+      # safe.directory only in its own temporary HOME, so every later git call (estimateDuration.ts: git remote
+      # get-url / fetch / show) would fail. Only when the job runs in a container (PLAYWRIGHT_IMAGE set); on the host
+      # the condition is false and nothing changes.
+      - name: Trust the workspace for git (container jobs)
+        if: ${{ job.container.id != '' }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
@@ -378,8 +452,20 @@ jobs:
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      # WHY (ADR 0017, S3): every shard logs in from globalSetup at the same second, and the staging login answers
+      # 400 {"code":"000004","message":"Database error"} under such a burst (run 42034935606 lost a whole job to it).
+      # A fixed 20 s offset per shard id spreads the logins; it never decides pass or fail.
+      - name: Stagger login start (shard ${{ matrix.shard.shardId }})
+        env:
+          SHARD_ID: ${{ matrix.shard.shardId }}
+        run: |
+          DELAY=$(( (SHARD_ID % 8) * 20 ))
+          echo "Waiting ${DELAY}s so parallel jobs do not log in at the same moment"
+          sleep "$DELAY"
 
       - name: Run selective tests (shard ${{ matrix.shard.shardId }}/${{ needs.detect.outputs.shard_total }})
         env:
@@ -466,6 +552,7 @@ jobs:
         if: always()
         with:
           name: blob-report-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
           path: blob-report/
           retention-days: 3
           if-no-files-found: warn
@@ -478,6 +565,7 @@ jobs:
         if: always()
         with:
           name: misc-errors-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
           path: reports/staging/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
@@ -486,6 +574,183 @@ jobs:
         if: always()
         with:
           name: playwright-test-results-sandbox-${{ matrix.shard.shardId }}
+          overwrite: true
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-sandbox-${{ matrix.shard.shardId }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # WHY this job (2026-11-03, ADR 0015): after the core shards, run every failed or flaky core test ONCE more in a
+  # single job, so a transient failure shows up as "recovered on rerun" instead of a red test, and report both
+  # results in the one email. Order: detect -> core shards -> THIS -> formFields -> reset -> merge. It `needs`
+  # run-tests, so re-running one core shard in the Actions UI re-runs it again (it always re-selects from the
+  # latest shard blobs and always uploads its manifest, even "nothing to rerun"); formFields `needs` it, and its
+  # own attempt gate still skips formFields entities that already passed. Behind the repo variable RERUN_SHARD:
+  # runs only when it is exactly 'on'; any other value skips this job and the run behaves as before. Optional
+  # variables: RERUN_MAX_TESTS (default 60, more failures than that = no rerun), RERUN_RETRIES (default 0),
+  # RERUN_INCLUDE_FLAKY (default false: a flaky test already passed, so a rerun cannot change a number or the colour). Tests are picked from the shard BLOBS (scripts/rerun-select.ts), never
+  # .last-run.json; a serial file is rerun whole; formFields tests are not rerun (they run after this job, and
+  # share account-wide config). Artifact names deliberately do NOT match blob-report-sandbox-* or
+  # misc-errors-sandbox-*, which merge-and-report and verify-shard-completeness count as shards. The job never
+  # fails the run for a rerun failure: results are data (merge-and-report combines them).
+  rerun-failed:
+    name: playwright-rerun (failed+flaky)
+    needs: [detect, renew-session, run-tests]
+    if: ${{ !cancelled() && needs.renew-session.result == 'success' && vars.RERUN_SHARD == 'on' && needs.detect.outputs.run_scoped_tests == 'true' }}
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PIPELINE_TOKEN }}
+
+      # WHY (2026-11-24, canary: "fatal: detected dubious ownership in repository at '/__w/...'", exit 128): in a
+      # container job the checked-out workspace belongs to another uid than the job user, and actions/checkout sets
+      # safe.directory only in its own temporary HOME, so every later git call (estimateDuration.ts: git remote
+      # get-url / fetch / show) would fail. Only when the job runs in a container (PLAYWRIGHT_IMAGE set); on the host
+      # the condition is false and nothing changes.
+      - name: Trust the workspace for git (container jobs)
+        if: ${{ job.container.id != '' }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Core shards only (numeric ids): formFields has not run yet in this attempt, and an earlier attempt's
+      # formFields blobs must not be selected from.
+      - name: Download core shard blob reports
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          pattern: blob-report-sandbox-[0-9]*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge core blobs into one JSON (the first run)
+        run: |
+          mkdir -p reports/rerun
+          if ls all-blob-reports/*.zip >/dev/null 2>&1; then
+            PLAYWRIGHT_JSON_OUTPUT_NAME=reports/rerun/first-run.json npx playwright merge-reports --config=merge-json.config.ts ./all-blob-reports \
+              || echo "::warning title=Rerun shard::merge-reports failed — nothing will be rerun"
+          else
+            echo "::warning title=Rerun shard::no core shard blob reports found — nothing will be rerun"
+          fi
+
+      - name: Select failed and flaky tests
+        id: select
+        env:
+          RERUN_MAX_TESTS: ${{ vars.RERUN_MAX_TESTS || '60' }}
+          RERUN_RETRIES: ${{ vars.RERUN_RETRIES || '0' }}
+          RERUN_INCLUDE_FLAKY: ${{ vars.RERUN_INCLUDE_FLAKY || 'false' }}
+        run: npx ts-node scripts/rerun-select.ts --report reports/rerun/first-run.json --out reports/rerun/rerun-list.json --targets reports/rerun/targets.txt
+
+      # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
+      # timeout + attempts live in the script; step timeout is the backstop.
+      - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.select.outputs.run == 'true') }}
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-browsers.sh --with-deps
+
+      - name: Rerun the selected tests once
+        if: steps.select.outputs.run == 'true'
+        env:
+          ENV: staging
+          CI: true
+          NAVIGATION_TIMEOUT: 120000
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+          STAGING_RESTRICTED_EMAIL: ${{ secrets.STAGING_RESTRICTED_EMAIL }}
+          STAGING_RESTRICTED_PASSWORD: ${{ secrets.STAGING_RESTRICTED_PASSWORD }}
+          RERUN_RETRIES: ${{ vars.RERUN_RETRIES || '0' }}
+        run: |
+          mapfile -t TARGETS < reports/rerun/targets.txt
+          echo "Rerunning ${#TARGETS[@]} target(s) with --retries=$RERUN_RETRIES: ${TARGETS[*]}"
+          RC=0
+          npx playwright test --project=chromium --workers=2 --retries="$RERUN_RETRIES" --timeout=120000 \
+            "${TARGETS[@]}" --reporter=blob,list,./src/reporters/MiscErrorReporter.ts || RC=$?
+          echo "rerun exit code: $RC (a failing rerun is data, not a gate: merge-and-report combines the results)"
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning title=Rerun shard::some rerun tests still failed (playwright exit $RC). This job stays green by design (ADR 0015); merge-and-report counts them as failed."
+          fi
+          exit 0
+
+      - name: Merge the rerun blob into one JSON
+        if: steps.select.outputs.run == 'true'
+        run: |
+          if ls blob-report/*.zip >/dev/null 2>&1; then
+            PLAYWRIGHT_JSON_OUTPUT_NAME=reports/rerun/rerun-run.json npx playwright merge-reports --config=merge-json.config.ts ./blob-report \
+              || echo "::warning title=Rerun shard::merge-reports of the rerun blob failed — the rerun result is lost, first-run results stand"
+          else
+            echo "::warning title=Rerun shard::the rerun produced no blob report — first-run results stand"
+          fi
+
+      # The manifest is uploaded EVEN when nothing was rerun, and replaces the earlier attempt's one, so a re-run
+      # of a core shard never merges a stale list (the combiner also checks run id and attempt inside it).
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: rerun-manifest-sandbox
+          overwrite: true
+          path: |
+            reports/rerun/rerun-list.json
+            reports/rerun/rerun-run.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always() && steps.select.outputs.run == 'true'
+        with:
+          name: rerun-blob-sandbox
+          overwrite: true
+          path: blob-report/
+          retention-days: 3
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always() && steps.select.outputs.run == 'true'
+        with:
+          name: rerun-misc-errors-sandbox
+          overwrite: true
+          path: reports/staging/misc-errors.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v6
+        if: always() && steps.select.outputs.run == 'true'
+        with:
+          name: rerun-test-results-sandbox
+          overwrite: true
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
@@ -526,9 +791,24 @@ jobs:
     # is skipped by its own gate, exactly as before; if detect succeeded and
     # run-tests were skipped for any other reason, `!cancelled()` still lets
     # formFields run.
-    needs: [detect, run-tests]
-    if: ${{ !cancelled() && needs.detect.outputs.run_formfields_track == 'true' }}
+    # rerun-failed (2026-11-03, ADR 0015) sits between the core shards and this job; it may be skipped (kill switch
+    # off) or fail, and `!cancelled()` still lets formFields run.
+    needs: [detect, renew-session, run-tests, rerun-failed]
+    if: ${{ !cancelled() && needs.renew-session.result == 'success' && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     # WHY 180 (2026-09-29): real measured per-entity total test time (this
     # entity's UI+RBAC files combined, first-attempt durations summed from
     # sandbox run 36520337903) ranged ~80-110 min at workers=2 — see
@@ -541,27 +821,74 @@ jobs:
         entity: ${{ fromJSON(needs.detect.outputs.formfields_entities_json) }}
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
+      # WHY (2026-11-24, canary: "fatal: detected dubious ownership in repository at '/__w/...'", exit 128): in a
+      # container job the checked-out workspace belongs to another uid than the job user, and actions/checkout sets
+      # safe.directory only in its own temporary HOME, so every later git call (estimateDuration.ts: git remote
+      # get-url / fetch / show) would fail. Only when the job runs in a container (PLAYWRIGHT_IMAGE set); on the host
+      # the condition is false and nothing changes.
+      - name: Trust the workspace for git (container jobs)
+        if: ${{ job.container.id != '' }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # WHY this gate (2026-11-03, ADR 0015): re-running one failed core shard
+      # ("Re-run failed jobs" / "Re-run job") also re-runs this job, because it
+      # `needs` run-tests. If THIS entity's job (same name) passed its tests in an
+      # earlier attempt of this run, skip everything below in seconds: that
+      # attempt's blob-report-sandbox-formfields-<entity> / misc-errors artifacts
+      # stay in the run and merge-and-report reads them. A job that failed or did
+      # not run earlier runs normally. The script never skips on doubt and never
+      # fails the job (.github/scripts/formfields-attempt-gate.sh). Nothing below
+      # uploads when skipped, so the earlier artifacts are neither overwritten nor
+      # duplicated. The name in JOB_NAME must equal this job's `name:` above, and
+      # the test step's name must keep the prefix "Run formFields tests for ".
+      - name: Skip if this formFields entity already passed in an earlier attempt
+        id: gate
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          JOB_NAME: playwright-formFields (${{ matrix.entity }})
+          ARTIFACT_NAME: blob-report-sandbox-formfields-${{ matrix.entity }}
+          LABEL: ${{ matrix.entity }}
+        run: bash .github/scripts/formfields-attempt-gate.sh ff
+
       - uses: actions/setup-node@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
         run: npm ci
 
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
+      # WHY (ADR 0017, S3): same login burst as the core shards. The entity name maps to a fixed 0-7 slot
+      # (cksum), 20 s apart; two entities may share a slot, which only means they start together as before.
+      - name: Stagger login start (${{ matrix.entity }})
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ENTITY: ${{ matrix.entity }}
+        run: |
+          SLOT=$(( $(printf '%s' "$ENTITY" | cksum | cut -d' ' -f1) % 8 ))
+          DELAY=$(( SLOT * 20 ))
+          echo "Waiting ${DELAY}s so parallel jobs do not log in at the same moment"
+          sleep "$DELAY"
+
       - name: Run formFields tests for ${{ matrix.entity }} (UI + RBAC together, always one shard)
+        if: steps.gate.outputs.skip != 'true'
         env:
           ENV: staging
           CI: true
@@ -596,28 +923,41 @@ jobs:
           exit $EXIT_CODE
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: blob-report-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: blob-report/
           retention-days: 3
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: misc-errors-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: reports/staging/misc-errors.json
           retention-days: 3
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: playwright-test-results-sandbox-formfields-${{ matrix.entity }}
+          overwrite: true
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-sandbox-formfields-${{ matrix.entity }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
 
   # WHY this job exists and how it is isolated from the verdict (ADR 0009): the
   # formFields tests clean up after themselves, but a killed/cancelled run or a
@@ -642,29 +982,71 @@ jobs:
     needs: [detect, run-tests, run-formfields-tests]
     if: ${{ always() && needs.detect.outputs.run_formfields_track == 'true' }}
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    # PLAYWRIGHT_IMAGE (repository variable, empty = off): when set (e.g. mcr.microsoft.com/playwright:v1.60.0-noble) the job
+    # runs inside that image, browsers and system libraries included, so there is no apt-get here at all (sandbox runs
+    # 37669596623, 37753304635, 39934344278, 44464192762 lost jobs to the install). Empty keeps today's host job. The
+    # expression is proven by the container-canary job in runner-image-canary.yml; tag = locked Playwright
+    # (scripts/check-playwright-image.ts). See docs/CI_PIPELINES.md.
+    container: ${{ vars.PLAYWRIGHT_IMAGE && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', vars.PLAYWRIGHT_IMAGE)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
     timeout-minutes: 35
     continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.PIPELINE_TOKEN }}
 
+      # WHY (2026-11-24, canary: "fatal: detected dubious ownership in repository at '/__w/...'", exit 128): in a
+      # container job the checked-out workspace belongs to another uid than the job user, and actions/checkout sets
+      # safe.directory only in its own temporary HOME, so every later git call (estimateDuration.ts: git remote
+      # get-url / fetch / show) would fail. Only when the job runs in a container (PLAYWRIGHT_IMAGE set); on the host
+      # the condition is false and nothing changes.
+      - name: Trust the workspace for git (container jobs)
+        if: ${{ job.container.id != '' }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # WHY this gate (2026-11-03, ADR 0015): on a re-run of a core shard every
+      # formFields job that already passed skips itself, and then nothing touched
+      # the form-field limits in this attempt, so the reset has nothing to undo (the
+      # earlier attempt's reset result and artifact stand). Runs as today in
+      # attempt 1, in "Re-run all jobs", and whenever any formFields job ran tests
+      # in this attempt. Never skips on doubt.
+      - name: Skip if no formFields job ran tests in this attempt
+        id: gate
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PIPELINE_TOKEN || github.token }}
+        run: bash .github/scripts/formfields-attempt-gate.sh reset
+
       - uses: actions/setup-node@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
         run: npm ci
 
       # WHY bounded (2026-10-08): run 37669596623 hung 3h in apt-get update here. Per-attempt
       # timeout + 3 attempts live in the script; step timeout is the backstop.
       - name: Install Playwright browsers
+        if: ${{ !vars.PLAYWRIGHT_IMAGE && (steps.gate.outputs.skip != 'true') }}
         timeout-minutes: 10
         run: bash .github/scripts/install-playwright-browsers.sh --with-deps
 
       - name: Reset dedicated form-field limits
         id: reset
+        if: steps.gate.outputs.skip != 'true'
         continue-on-error: true
         timeout-minutes: 25
         env:
@@ -686,9 +1068,10 @@ jobs:
           exit 0
 
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: field-config-reset-staging
+          overwrite: true
           path: reports/staging/field-config-reset.json
           retention-days: 3
           if-no-files-found: ignore
@@ -701,7 +1084,7 @@ jobs:
   # Build #167 false-"PASSED" incident.
   merge-and-report:
     name: merge report + notify
-    needs: [detect, run-tests, run-formfields-tests, reset-field-config]
+    needs: [detect, renew-session, run-tests, rerun-failed, run-formfields-tests, reset-field-config]
     if: always()
     runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
     timeout-minutes: 30
@@ -710,6 +1093,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # E1 (2026-11-25): the notify step shows the feature branch's own head commit for a merge push; that commit is the merge's second parent, so the clone must hold the history
+          fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
       - uses: actions/setup-node@v5
@@ -755,6 +1140,8 @@ jobs:
         # counts as a shard.
         env:
           FF_ENTITIES_JSON: ${{ needs.detect.outputs.formfields_entities_json }}
+          # the renew-session job's result: a failure there skips every test job (2026-11-24); the cause is named, not "Incomplete run"
+          RENEW_SESSION_RESULT: ${{ needs.renew-session.result }}
         run: |
           FORMFIELDS_SHARDS=0
           if [ "${{ needs.detect.outputs.run_formfields_track }}" = "true" ]; then
@@ -771,8 +1158,57 @@ jobs:
           pattern: misc-errors-sandbox-*
           path: all-misc-errors
 
+      # WHY (2026-11-24, build #235 email): the rerun shard's misc-errors artifact (rerun-misc-errors-sandbox) does not match the
+      # pattern above on purpose (that pattern counts shards), so its background errors and load events never reached the
+      # email and its Load Signals row read "(no shard data)". It is downloaded into a directory named like a shard
+      # ("misc-errors-sandbox-rerun" -> label "sandbox-rerun") so merge-misc-errors.ts includes it. No rerun job: no artifact,
+      # the step is skipped by continue-on-error.
+      - name: Download the rerun shard's misc-errors report
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: rerun-misc-errors-sandbox
+          path: all-misc-errors/misc-errors-sandbox-rerun
+
       - name: Aggregate misc-errors.json across all shards
         run: npx ts-node scripts/merge-misc-errors.ts staging all-misc-errors
+
+      # WHY (2026-11-03, ADR 0015): lay the rerun shard's results over the first-run report. Without a manifest
+      # of THIS attempt (kill switch off, rerun job skipped or failed) the script changes nothing and the email is
+      # exactly as before. The merged HTML report stays the first run; results.json (read by history and the
+      # email) becomes the combined report, results.first-run.json keeps the original.
+      - name: Download rerun shard result
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: rerun-manifest-sandbox
+          path: reports/rerun
+
+      - name: Combine rerun results into the report
+        if: always()
+        env:
+          ENV: staging
+        run: npx ts-node scripts/combine-rerun.ts --first reports/playwright-report/results.json --rerun reports/rerun/rerun-run.json --list reports/rerun/rerun-list.json --summary reports/staging/rerun-summary.json || true
+
+      # Makes "the rerun job is green" readable: the rerun step always exits 0 (ADR 0015), so a test that failed again
+      # showed only as a green job. Reads the summary combine-rerun just wrote; annotation and step summary only,
+      # never changes the job result.
+      - name: Annotate tests still failing after the rerun
+        if: always()
+        run: |
+          SUMMARY=reports/staging/rerun-summary.json
+          if [ -f "$SUMMARY" ]; then
+            STILL=$(node -e "const s=require('./$SUMMARY'); process.stdout.write(String(s.ran ? s.stillFailing : 0))")
+            REC=$(node -e "const s=require('./$SUMMARY'); process.stdout.write(String(s.ran ? s.recovered : 0))")
+            if [ "$STILL" -gt 0 ]; then
+              echo "::warning title=Rerun::$STILL test(s) still failing after the rerun ($REC recovered). The run stays red (ADR 0015, option A)."
+              {
+                echo "### Rerun result"
+                echo "- recovered on rerun: $REC"
+                echo "- still failing after the rerun: $STILL"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
 
       # WHY: see qa.yml for the full explanation. NOTE: sandbox runs a different,
       # dynamically-selected test subset each time (see the detect job above),
@@ -802,6 +1238,14 @@ jobs:
       # partial reset shows as a line in the email. continue-on-error + the
       # reader's own graceful absence mean a skipped/missing artifact just omits
       # the line; it can never fail this job or touch the verdict.
+      - name: Download session info (renewal line for the email)
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: session-info-sandbox
+          path: reports/staging
+
       - name: Download field-config reset result
         if: always()
         continue-on-error: true
@@ -809,6 +1253,16 @@ jobs:
         with:
           name: field-config-reset-staging
           path: reports/staging
+
+      # WHY (2026-11-26, ADR 0019): the shards' capacity files for the email's "Account capacity" section (the earliest pre-run snapshot, the
+      # latest post-run reading). continue-on-error: a missing artifact only makes the email say "capacity data unavailable".
+      - name: Download per-shard capacity snapshots
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          pattern: capacity-sandbox-*
+          path: reports/staging/capacity
 
       - name: Send notification email
         if: always()
@@ -829,9 +1283,26 @@ jobs:
           REPORT_PATH: reports/playwright-report/results.json
         run: npm run notify || true
 
+      # WHY (ADR 0015): what the manual rerun workflow (rerun-failed.yml) needs from this run besides the merged
+      # report: the completeness verdict (an INCOMPLETE run must stay INCOMPLETE), the aggregated misc errors
+      # (failure labels) and the earlier rerun summary and field-reset result.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: run-meta-sandbox
+          overwrite: true
+          path: |
+            reports/staging/shard-completeness.json
+            reports/staging/misc-errors.json
+            reports/staging/rerun-summary.json
+            reports/staging/field-config-reset.json
+          retention-days: 14
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: playwright-report-sandbox
+          overwrite: true
           path: reports/playwright-report/
           retention-days: 7

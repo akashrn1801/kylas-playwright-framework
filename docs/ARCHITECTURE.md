@@ -3,28 +3,29 @@
 > **Purpose:** How the framework is built — layers, fixtures, auth, recovery combinators, locking, sharding and CI flow. The single place to learn the shape of the system before changing it.
 > **Read when:** Touching `src/core`, `src/fixtures`, `src/auth`, the error collector, a lock, or a CI workflow; or onboarding to a module you have not worked in.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-11-26 @ bfc345c
 
 Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident history in [known-issues/](./known-issues/session-expiry-and-auth.md); CI detail in [CI_PIPELINES.md](./CI_PIPELINES.md). Terms: [GLOSSARY.md](./GLOSSARY.md).
 
 ## 1. Suite at a glance
 
 <!-- GEN:suite-totals:START -->
-**955 tests** in **35 spec files** (UI 524 · RBAC 431)
+**965 tests** in **37 spec files** (UI 531 · RBAC 434)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
+| Billing | 6 | 2 | 8 |
 | Call-logs | 30 | 28 | 58 |
 | Companies | 23 | 26 | 49 |
 | Companies — Field Limits | 39 | 31 | 70 |
 | Contacts | 23 | 23 | 46 |
 | Contacts — Field Limits | 42 | 28 | 70 |
 | Dashboard | 34 | 29 | 63 |
-| Deals | 26 | 30 | 56 |
+| Deals | 27 | 30 | 57 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 40 | 39 | 79 |
+| Leads | 40 | 40 | 80 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,7 +34,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **524** | **431** | **955** |
+| **Total** | **531** | **434** | **965** |
 <!-- GEN:module-table:END -->
 
 ## 2. Repository layout
@@ -213,8 +214,8 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 123 / 125 / 123 / 28 | 6 |
-| full suite (stage, main) | 5 | 124 / 123 / 125 / 124 / 42 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 124 / 123 / 36 | 6 |
+| full suite (stage, main) | 5 | 125 / 125 / 125 / 124 / 49 | 6 |
 <!-- GEN:shard-plan:END -->
 
 ```mermaid
@@ -238,6 +239,7 @@ Per-pipeline triggers, scopes and worker counts (generated, never hand-typed):
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `rerun-failed.yml` | manual | full suite / selective | 2 | no |
 | `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |

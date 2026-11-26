@@ -1014,6 +1014,10 @@ test.describe('Reports', () => {
     expect(leadId).not.toBeNull();
     const windowEnd = new Date();
 
+    // Fix 2 (2026-11-18): the baseline. verifyRunCountForEntity() compares the report with the UNPADDED window, so the
+    // +-5 minute total this test relies on afterwards was never checked. It is bracketed by two API reads (see
+    // waitForReportTotalToMatchApi()) so concurrent leads from other shards cannot flip it.
+    const baselineApiBefore = await reportsPage.getNarrowWindowApiCount('Lead', windowStart, windowEnd);
     const { reportId, reportTotal: beforeTotal } = await reportsPage.verifyRunCountForEntity(
       'Lead',
       windowStart,
@@ -1022,17 +1026,33 @@ test.describe('Reports', () => {
       undefined,
       true
     );
+    const baselineApiAfter = await reportsPage.getNarrowWindowApiCount('Lead', windowStart, windowEnd);
+    const baselineMessage =
+      `Baseline: the report total should lie within the API count of the same window read before ` +
+      `(${baselineApiBefore}) and after (${baselineApiAfter}), so the new lead is counted`;
+    expect(beforeTotal, baselineMessage).toBeGreaterThanOrEqual(Math.min(baselineApiBefore, baselineApiAfter));
+    expect(beforeTotal, baselineMessage).toBeLessThanOrEqual(Math.max(baselineApiBefore, baselineApiAfter));
     expect(beforeTotal).toBeGreaterThan(0);
 
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
     await leadsPage.deleteLead();
 
-    const afterTotal = await reportsPage.waitForReportTotalBelow(reportId, beforeTotal, 'Lead');
+    // WHY not `afterTotal < beforeTotal` any more (2026-11-04): this window has no filter, so concurrent tests' leads
+    // move the total too and made it fail twice in the 2026-11-03 sandbox run; see waitForReportTotalToMatchApi().
+    // The report must lie within the live API count of the same window (read before and after the report), which
+    // excludes the deleted lead; a report that still counted it would stay above the high bound. (Failure is raised
+    // by waitForReportTotalToMatchApi() itself, by name, with both API reads.)
+    const { reportTotal: afterTotal, apiLow, apiHigh } = await reportsPage.waitForReportTotalToMatchApi(
+      reportId,
+      'Lead',
+      windowStart,
+      windowEnd
+    );
     expect(
       afterTotal,
       'Report total should reflect the deleted lead no longer counting, using the narrow window alone (no filters)'
-    ).toBeLessThan(beforeTotal);
-    logger.success('R65 passed');
+    ).toBeLessThanOrEqual(apiHigh);
+    logger.success(`R65 passed (before ${beforeTotal}, after ${afterTotal} within API [${apiLow}, ${apiHigh}])`);
   });
 
   // WHY this test exists at all: found missing during a final numbering

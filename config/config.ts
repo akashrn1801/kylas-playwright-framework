@@ -51,6 +51,32 @@ export const config = {
     navigation: Number(process.env.NAVIGATION_TIMEOUT) || 60000,
     expect: Number(process.env.EXPECT_TIMEOUT) || 10000,
   },
+  // ADR 0017: a login inside a live session returns the SAME token and expiry, so a session with less than
+  // `minRemainingForRunMs` left cannot be extended by logging in again. globalSetup then fails by name (local),
+  // or only warns (CI). `renewSession` (SESSION_RENEW=1, local only, never CI) does DELETE /v1/tokens/logout and a
+  // fresh login instead; that revokes the token for EVERY holder of the account (CI, other laptops).
+  auth: {
+    minRemainingForRunMs: Number(process.env.SESSION_MIN_REMAINING_FOR_RUN_MS) || 4 * 60 * 60 * 1000,
+    renewSession: process.env.SESSION_RENEW === '1',
+  },
+  // Billing (Account capacity): per-environment thresholds and the plan each environment is expected to be on.
+  // WHY the thresholds are per environment: QA and staging run on a shared, uncleaned data set, so "records left" is the
+  // early warning; prod gets its own knob (BILLING_RECORDS_WARN_BELOW) once its real headroom is known. Custom Fields
+  // warn under 10 left and never stop a run. `expectedPlan` is the plan NAME as /v1/tenants/usage reports it: Elevate on
+  // every environment (prod's was confirmed by the team, 2026-11-26); PROD_EXPECTED_PLAN overrides it if prod moves plan.
+  billing: {
+    recordsWarnBelow: {
+      qa: 10000,
+      staging: 10000,
+      prod: Number(process.env.BILLING_RECORDS_WARN_BELOW) || 10000,
+    },
+    customFieldsWarnBelow: 10,
+    expectedPlan: {
+      qa: 'Elevate',
+      staging: 'Elevate',
+      prod: process.env.PROD_EXPECTED_PLAN || 'Elevate',
+    },
+  },
   browser: {
     name: process.env.BROWSER || 'chromium',
     headless: process.env.HEADLESS === 'true',
@@ -88,7 +114,9 @@ export const config = {
   },
   execution: {
     workers: Number(process.env.WORKERS) || 2,
-    retryCount: Number(process.env.RETRY_COUNT) || 1,
+    // RETRY_COUNT=0 is honoured (measurement runs: every failure is a first-attempt failure);
+    // unset or non-numeric keeps the default of 1. CI never sets it to 0.
+    retryCount: process.env.RETRY_COUNT !== undefined && process.env.RETRY_COUNT !== '' && Number.isInteger(Number(process.env.RETRY_COUNT)) && Number(process.env.RETRY_COUNT) >= 0 ? Number(process.env.RETRY_COUNT) : 1,
   },
 };
 

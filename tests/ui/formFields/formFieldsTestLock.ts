@@ -3,6 +3,7 @@ import * as path from 'path';
 import { test as base } from '../../../src/fixtures/index';
 import { config } from '../../../config/config';
 import { logger } from '../../../src/utils/logger';
+import { LOCK_WAIT_FIXTURE_TIMEOUT_MS } from './formFieldLockFactory';
 
 // WHY this file exists at all, and why it is NOT a page-object method
 // (real, confirmed CI risk, 2026-09-21 — full worker-count evidence in the
@@ -393,8 +394,28 @@ function refreshTicket(ticketId: string): void {
   }
 }
 
+// ADR 0016 (B2): same named failure as formFieldLockFactory.ts, a little before the fixture timeout.
+function describeLeadLockHolder(): string {
+  let marker = 'marker unreadable';
+  try {
+    marker = fs.readFileSync(LOCK_MARKER_PATH, 'utf8').trim();
+  } catch {
+    /* the holder released between the failed acquire and this read */
+  }
+  const heartbeatAtMs = readLockHeartbeatAtMs();
+  const heartbeat = heartbeatAtMs === null ? 'no heartbeat recorded' : `last heartbeat ${Math.round((Date.now() - heartbeatAtMs) / 1000)}s ago`;
+  return `${marker} (${heartbeat})`;
+}
+
 async function acquireLeadFormFieldLockInner(holderId: string, ticketId: string): Promise<LockAcquisition> {
+  const waitStartedAtMs = Date.now();
   while (true) {
+    if (Date.now() - waitStartedAtMs > LOCK_WAIT_FIXTURE_TIMEOUT_MS - 15000) {
+      throw new Error(
+        `[formFieldLock:leads] ${holderId} waited ${Math.round((Date.now() - waitStartedAtMs) / 1000)}s for the lock and gave up; ` +
+          `current holder: ${describeLeadLockHolder()}. The holder is another test still running (it keeps heartbeating), not a stale lock.`
+      );
+    }
     refreshTicket(ticketId);
     if (!isMyTicketAtFront(ticketId)) {
       await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
@@ -604,7 +625,8 @@ export const test = base.extend<{ leadFormFieldLock: void }>({
         await use();
       });
     },
-    { auto: true, scope: 'test' },
+    // Own budget for waiting on the lock: see LOCK_WAIT_FIXTURE_TIMEOUT_MS in formFieldLockFactory.ts for why.
+    { auto: true, scope: 'test', timeout: LOCK_WAIT_FIXTURE_TIMEOUT_MS },
   ],
 });
 

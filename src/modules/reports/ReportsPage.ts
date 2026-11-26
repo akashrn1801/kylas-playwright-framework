@@ -1,8 +1,10 @@
 import { Page, Locator, Response, expect, ConsoleMessage, test } from '@playwright/test';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import * as fs from 'fs';
 import { BasePage } from '../../core/BasePage';
 import { config, buildApiUrl } from '../../../config/config';
 import { logger } from '../../utils/logger';
+import { ReportApi } from '../../utils/reportApi';
 import {
   ReportData,
   ReportCategory,
@@ -706,10 +708,13 @@ export class ReportsPage extends BasePage {
   // POST carrying a `jsonRule` filter body (confirmed live — see
   // REPORT_VERIFICATION_API_CONFIG's own comment). Mirrors the exact same
   // token-extraction technique, just with `method`/`body` added.
-  private async postAuthenticatedApiData(
+  private async postAuthenticatedApiDataOnce(
     url: string,
     body: Record<string, unknown>
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<
+    | { ok: true; data: Record<string, unknown> | null }
+    | { ok: false; retryable: boolean; detail: string }
+  > {
     const result = await this.page.evaluate(
       async ({ fetchUrl, fetchBody }) => {
         try {
@@ -751,12 +756,34 @@ export class ReportsPage extends BasePage {
         result.reason === 'http-error'
           ? `HTTP ${result.status}${result.body ? ` — ${result.body}` : ''}`
           : result.reason === 'exception'
-            ? result.message
+            ? (result.message ?? 'exception')
             : result.reason;
-      logger.warn(`postAuthenticatedApiData: POST ${url} did not return usable data (${detail})`);
-      return null;
+      // ADR 0014 section 1: only a transport error, 429 or 5xx is retryable; a 400/401/403/404 is final
+      const retryable =
+        result.reason === 'exception' || (result.reason === 'http-error' && isRetryableHttpStatus(result.status ?? 0));
+      return { ok: false, retryable, detail };
     }
-    return result.data;
+    return { ok: true, data: result.data };
+  }
+
+  // ADR 0016 (B3, plan section 11 #8): this POST is a read (a search with a filter body), so it is safe
+  // to repeat; it is retried only for transport errors, 429 and 5xx (ADR 0014 section 1), logged each
+  // time, and the final error carries the status and body instead of a bare null.
+  private async postAuthenticatedApiData(
+    url: string,
+    body: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    const maxAttempts = 3;
+    let lastDetail = '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const outcome = await this.postAuthenticatedApiDataOnce(url, body);
+      if (outcome.ok) return outcome.data;
+      lastDetail = outcome.detail;
+      logger.warn(`postAuthenticatedApiData: POST ${url} attempt ${attempt}/${maxAttempts} failed (${outcome.detail})`);
+      if (!outcome.retryable || attempt === maxAttempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+    throw new Error(`POST ${url} did not return usable data: ${lastDetail}`);
   }
 
   private async getApiCountForWindow(
@@ -867,7 +894,10 @@ export class ReportsPage extends BasePage {
     logger.info('Opening Create Report form');
     await this.goToReportsList();
     await this.click(this.createReportButton(), 'Create New Report button');
-    await this.categoryControl().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    // WHY waitForRendered (2026-11-04, reports.spec.ts:594, 2026-11-03 sandbox run): `GET /v1/reports/config/leads`
+    // answered HTTP 400 after 27 s and the app replaced the form with its "Something is broken" screen; the plain
+    // waitFor then sat 120 s on a control that could not appear.
+    await this.waitForRendered(this.categoryControl(), 'Create Report form (Category)');
     logger.success('Create Report form opened');
   }
 
@@ -1317,19 +1347,15 @@ export class ReportsPage extends BasePage {
   async searchReportsList(term: string): Promise<void> {
     logger.info(`Searching reports list: ${term}`);
     await this.fill(this.searchInput(), term, 'Reports search input');
-    await this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v3\/reports\/search(?:\?.*)?$/) !== null && res.request().method() === 'POST',
-      'searchReportsList: search POST',
-      15000
-    ).catch(() => null);
-    await this.page.keyboard.press('Enter');
-    await this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v3\/reports\/search(?:\?.*)?$/) !== null && res.request().method() === 'POST',
-      'searchReportsList: search POST after Enter',
-      15000
-    ).catch(() => null);
+    // B6 (staging probe 2026-11-17): typing sends no request; only Enter fires `POST /v3/reports/search`. The old
+    // code waited for a request after the fill (always the full 15 s, swallowed), pressed Enter, then waited again
+    // (swallowed). One strict wait armed before Enter.
+    await this.saveAndAwait(() => this.page.keyboard.press('Enter'), {
+      method: 'POST',
+      urlRe: /^\/v3\/reports\/search\/?$/,
+      description: 'searchReportsList: POST /v3/reports/search',
+      timeout: 15000,
+    });
   }
 
   async openReportFromList(name: string): Promise<void> {
@@ -1411,14 +1437,37 @@ export class ReportsPage extends BasePage {
     // WHY (2026-11-03, reports.spec "save as"): Save As POSTs /v3/reports like a create, and it
     // can return the same HTTP 500 01403004. Without reading that response the test waited out
     // the whole waitForURL timeout. Armed before the click; a rejected save fails at once.
-    const saveResponse = this.page
-      .waitForResponse(
-        (res) => res.request().method() === 'POST' && this.isReportCreatePath(res),
-        { timeout: config.timeouts.navigation }
-      )
-      .catch(() => null);
-    await this.click(this.saveAsConfirmButton(), 'Save As — confirm');
-    await this.failIfReportSaveRejected(await saveResponse, 'Save As');
+    const clickSaveAsConfirm = async (): Promise<Response | null> => {
+      const saveResponse = this.page
+        .waitForResponse(
+          (res) => res.request().method() === 'POST' && this.isReportCreatePath(res),
+          { timeout: config.timeouts.navigation }
+        )
+        .catch(() => null);
+      await this.click(this.saveAsConfirmButton(), 'Save As — confirm');
+      return saveResponse;
+    };
+    const firstResponse = await clickSaveAsConfirm();
+    if (await this.isKnownTransientReportSaveBug(firstResponse)) {
+      // WHY one retry here, with a check first (2026-11-19, sandbox 44361216176 reports.spec:866: Save As answered
+      // 500 / 01403004 on the attempt and on Playwright's retry, passed on the next run; shard 1 logged 9 such
+      // 500s in 18 min, KI-60). Same exact status + code as createReport's retry. ADR 0017: a create is repeated
+      // only after a check shows it was not written; an unavailable check fails by name.
+      await this.assertSaveAsNotWrittenBeforeRetry(finalName, originalId);
+      logger.warn(
+        `Save As: POST /v3/reports returned 500/${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} (known backend defect, ` +
+          'KI-60); report not found by name — confirming Save As once more'
+      );
+      if (!(await this.saveAsModal().isVisible())) {
+        await this.openSaveAsDialog();
+      }
+      if ((await this.saveAsNameInput().inputValue()) !== finalName) {
+        await this.fill(this.saveAsNameInput(), finalName, 'Save As — new name (retry)');
+      }
+      await this.failIfReportSaveRejected(await clickSaveAsConfirm(), 'Save As (after the one 01403004 retry)');
+    } else {
+      await this.failIfReportSaveRejected(firstResponse, 'Save As');
+    }
     await this.page.waitForURL(
       (url) => /\/reports\/details\/\d+/.test(url.pathname) && !url.pathname.endsWith(`/${originalId}`),
       { timeout: config.timeouts.navigation }
@@ -1730,6 +1779,68 @@ export class ReportsPage extends BasePage {
       total = await dataPromise;
     }
     return total;
+  }
+
+  // WHY this exists next to waitForReportTotalBelow() (2026-11-04, reports.spec.ts R65 "narrow time-scoped window (no
+  // filters)", failed on BOTH attempts of the 2026-11-03 sandbox run and passed only on the rerun): that test's report
+  // window is the ±5-minute narrowWindow around the test's own lead and has no filter, so it counts EVERY lead any other
+  // test creates or deletes in those ~10 minutes. The trace shows the report total moving by itself (6, then 5, then 5
+  // before this test deleted anything) and, after this test's DELETE (HTTP 200), reading 5, 5, 5 and 6, 6, 6 again: other
+  // workers' new leads offset the one deletion, so `after < before` cannot hold under concurrency. It is NOT report-engine
+  // lag: on QA and staging with nothing else running the total dropped on the very first re-read (+2 s) in 3 of 3 runs.
+  // The sound unfiltered check is report == live truth over the SAME window: the API (`/v1/search/*`, which already
+  // excludes the deleted lead) is read right after each report read, and a report that still counted the deleted lead
+  // would stay above the API count. Bounded by the navigation timeout, re-navigating (no sleep) like the other loops.
+  // Fix 1 (2026-11-18, R65 scan): the report read and the API read cannot happen at the same instant, and other
+  // shards keep creating and deleting leads in the unfiltered window, so a single "report == API after the report"
+  // pair flips with the churn. The report read is therefore BRACKETED by two API reads, and the report must lie
+  // between them (inclusive): the report was computed at some instant between the reads, and the count moves in
+  // small steps, so a value outside [low, high] cannot come from that window. Limit: an excursion that goes up and
+  // comes back down entirely between the two reads is invisible to the bracket (it can only make the check more
+  // tolerant, never fail it). A report that still counted the deleted lead stays above the high bound.
+  async waitForReportTotalToMatchApi(
+    reportId: string,
+    entityType: ReportEntityType,
+    windowStart: Date,
+    windowEnd: Date
+  ): Promise<{ reportTotal: number; apiLow: number; apiHigh: number }> {
+    const deadline = Date.now() + config.timeouts.navigation;
+    for (let attempt = 1; ; attempt++) {
+      const apiBefore = await this.getNarrowWindowApiCount(entityType, windowStart, windowEnd);
+      const dataPromise = this.armReportDataResponseCapture(entityType);
+      await this.goToReportDetails(reportId);
+      const reportTotal = await dataPromise;
+      const apiAfter = await this.getNarrowWindowApiCount(entityType, windowStart, windowEnd);
+      const apiLow = Math.min(apiBefore, apiAfter);
+      const apiHigh = Math.max(apiBefore, apiAfter);
+      if (reportTotal >= apiLow && reportTotal <= apiHigh) {
+        logger.success(
+          `waitForReportTotalToMatchApi(${entityType}): report=${reportTotal} within API [${apiLow}, ${apiHigh}] on attempt ${attempt}`
+        );
+        return { reportTotal, apiLow, apiHigh };
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `waitForReportTotalToMatchApi(${entityType}): report shows ${reportTotal} but the API shows [${apiLow}, ${apiHigh}] ` +
+            `(read before and after the report) for the +-${this.NARROW_WINDOW_PADDING_MINUTES} min window of ` +
+            `[${windowStart.toISOString()}, ${windowEnd.toISOString()}] after ${attempt} read(s) over ` +
+            `${Math.round(config.timeouts.navigation / 1000)} s`
+        );
+      }
+      logger.info(
+        `waitForReportTotalToMatchApi: report=${reportTotal} api=[${apiLow}, ${apiHigh}] on attempt ${attempt} — re-reading`
+      );
+    }
+  }
+
+  // The live API count of the same +-5 minute window the narrow-window report uses (verifyRunCountForEntity() compares
+  // the report with the UNPADDED window, so on its own it never checks the padded one).
+  async getNarrowWindowApiCount(entityType: ReportEntityType, windowStart: Date, windowEnd: Date): Promise<number> {
+    const paddedStart = new Date(windowStart);
+    const paddedEnd = new Date(windowEnd);
+    paddedStart.setMinutes(paddedStart.getMinutes() - this.NARROW_WINDOW_PADDING_MINUTES);
+    paddedEnd.setMinutes(paddedEnd.getMinutes() + this.NARROW_WINDOW_PADDING_MINUTES);
+    return this.getApiCountForWindow(entityType, paddedStart, paddedEnd);
   }
 
   async assertMetricTotal(expectedTotal: number): Promise<void> {
@@ -2138,6 +2249,57 @@ export class ReportsPage extends BasePage {
       `${action} rejected by the server: HTTP ${response.status()} code ${code} message ` +
         `"${body?.message ?? ''}" on POST /v3/reports${known}`
     );
+  }
+
+  private async isKnownTransientReportSaveBug(response: Response | null): Promise<boolean> {
+    if (!response || response.ok() || response.status() !== 500) return false;
+    const body = (await response.json().catch(() => null)) as { code?: string } | null;
+    return body?.code === this.REPORT_CREATE_TRANSIENT_ERROR_CODE;
+  }
+
+  // Before the Save As retry: was the report written anyway? Polls the search API (the index trails the write,
+  // 15 s) for the new name. Found -> fails by name, no retry. The check must be non-vacuous: it first looks up
+  // the ORIGINAL report (known to exist) with the same query and requires its name in the answer; if that control
+  // fails (API shape, 4xx/5xx, no name) the check cannot be made and the step fails by name, it does not guess.
+  private async assertSaveAsNotWrittenBeforeRetry(newName: string, originalId: string | null): Promise<void> {
+    const unavailable = (why: string): never => {
+      throw new Error(
+        `Save As answered HTTP 500 / ${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} and the existence check could not be made ` +
+          `(${why}); not retrying, a retry could create a second report.`
+      );
+    };
+    if (!originalId) unavailable('the original report id was not readable from the URL');
+    const api = await ReportApi.forPage(this.page).catch((error) =>
+      unavailable(`no API access: ${String(error).split('\n')[0]}`)
+    );
+    let found = false;
+    try {
+      const originalName = await api.nameOf(originalId as string).catch((error) =>
+        unavailable(`original report not readable: ${String(error).split('\n')[0]}`)
+      );
+      if (!originalName) unavailable('the original report has no readable name');
+      const control = await api.searchText(originalName as string).catch((error) =>
+        unavailable(`search failed: ${String(error).split('\n')[0]}`)
+      );
+      if (!control.includes(originalName as string)) {
+        unavailable('control failed: the search did not list the original report by name');
+      }
+      await expect
+        .poll(async () => (found = (await api.searchText(newName)).includes(newName)), {
+          timeout: 15000,
+          intervals: [1000, 2000, 3000],
+        })
+        .toBe(true)
+        .catch(() => undefined);
+    } finally {
+      await api.dispose();
+    }
+    if (found) {
+      throw new Error(
+        `Save As answered HTTP 500 / ${this.REPORT_CREATE_TRANSIENT_ERROR_CODE} but a report named "${newName}" exists, ` +
+          'so it was written; not retrying (a retry would create a duplicate).'
+      );
+    }
   }
 
   private async attemptSaveOnceAndClassify(): Promise<{

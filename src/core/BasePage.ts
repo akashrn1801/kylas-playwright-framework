@@ -1,5 +1,5 @@
 import { config } from '../../config/config';
-import { Page, Locator, Response, expect, test } from '@playwright/test';
+import { Page, Locator, Request, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -8,20 +8,41 @@ import {
   tryRecoverSessionForPage,
   isPageRegisteredForRecovery,
   armSessionExpirySignal,
+  isSignInUrl,
   isRateLimitedPage,
   RATE_LIMIT_PAGE_PATTERN,
   tryRecoverFromRateLimit,
   isAppErrorBoundaryPage,
-  tryRecoverFromAppErrorBoundary,
 } from '../auth/authManager';
 import { safeWaitForURL } from '../utils/navigation';
 import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { SENSITIVE_FIELD_PATTERN } from '../utils/sensitiveFieldPattern';
-import { trackFailedWrites, recentFailedWrite } from '../utils/failedWriteTracker';
+import { describeRequestAge } from '../utils/requestAge';
+import { trackFailedWrites, recentFailedWrite, recentFailedRead } from '../utils/failedWriteTracker';
+import { trackPageErrors, pageErrorSignal } from '../utils/pageErrorTracker';
 
 // See BasePage.customFieldSuffix()'s own comment for what these mean and why
 // this is an opt-in parameter rather than an unconditional dual-match.
 export type CustomFieldSuffixStyle = 'legacy' | 'plain';
+
+// Thrown by saveAndAwait() when the save's answer never came: says whether the request was sent at all, so a caller can
+// check before it repeats the save (ADR 0017) and a failure names "NEVER SENT" or "SENT but NO ANSWER".
+export class SaveAnswerMissedError extends Error {
+  constructor(
+    message: string,
+    readonly sentCount: number
+  ) {
+    super(message);
+    this.name = 'SaveAnswerMissedError';
+  }
+}
+
+export interface RequestWatch {
+  sentCount(): number;
+  unansweredCount(): number;
+  describe(onlyUnanswered?: boolean): string;
+  stop(): void;
+}
 
 export class BasePage {
   protected page: Page;
@@ -29,6 +50,36 @@ export class BasePage {
   constructor(page: Page) {
     this.page = page;
     trackFailedWrites(page);
+    trackPageErrors(page);
+  }
+
+  /**
+   * expect(locator).toBeVisible() that stops early when the app throws an uncaught page error and the element
+   * still has not rendered PAGE_ERROR_GRACE_MS later, failing with that error instead of waiting the whole
+   * timeout for a page that crashed. The grace keeps an unrelated, harmless page error (third-party widget)
+   * from failing a page that is merely slow: it only ends the wait when the element is really not coming.
+   */
+  protected async expectVisibleFailingOnPageError(locator: Locator, message: string, timeout: number): Promise<void> {
+    const PAGE_ERROR_GRACE_MS = 2000;
+    const crash = pageErrorSignal(this.page);
+    const visible = expect(locator, message).toBeVisible({ timeout });
+    visible.catch(() => undefined);
+    const crashed = crash.promise.then(async (error) => {
+      const rendered = await locator
+        .waitFor({ state: 'visible', timeout: PAGE_ERROR_GRACE_MS })
+        .then(() => true, () => false);
+      return rendered ? new Promise<never>(() => undefined) : error;
+    });
+    try {
+      const outcome = await Promise.race([visible.then(() => null), crashed]);
+      if (outcome) {
+        throw new Error(
+          `${message}: the app threw an uncaught page error and the element did not render within ${PAGE_ERROR_GRACE_MS}ms of it. ${outcome.name}: ${outcome.message}`
+        );
+      }
+    } finally {
+      crash.stop();
+    }
   }
 
   // WHY a public getter, not just leaving `page` protected (added
@@ -131,7 +182,15 @@ export class BasePage {
     description: string,
     timeout = 30000
   ): Promise<Response> {
-    const responsePromise = this.page.waitForResponse(predicate, { timeout });
+    const armedAt = Date.now();
+    // Label only: a plain Playwright timeout names no step. Same error, same moment,
+    // now saying what was awaited and for how long (B0, ADR 0016).
+    const responsePromise = this.page.waitForResponse(predicate, { timeout }).catch((error: Error) => {
+      if (/Timeout \d+ms exceeded/i.test(error.message)) {
+        throw new Error(`${description}: no matching response within ${Date.now() - armedAt}ms (limit ${timeout}ms). ${error.message}`);
+      }
+      throw error;
+    });
 
     // WHY: a page never registered for recovery (e.g. login.spec.ts's plain
     // `page` fixture) gets the exact pre-existing behavior, unchanged — see
@@ -171,6 +230,54 @@ export class BasePage {
       // inline `signal.cancel()` calls above.
       signal.cancel();
     });
+  }
+
+  // ADR 0016 (B3): the one way to click a save-like control and know what the backend answered.
+  // Arms the strict response wait BEFORE the click (method + path pattern, so an unrelated request
+  // cannot satisfy it), runs the click, awaits the answer and fails with status/code/message when it
+  // is not 2xx. The caller then waits for the app's own follow-up (modal hidden, list/detail refetch).
+  protected async saveAndAwait(
+    click: () => Promise<void>,
+    expected: { method: string | string[]; urlRe: RegExp; description: string; timeout?: number }
+  ): Promise<Response> {
+    const methods = (Array.isArray(expected.method) ? expected.method : [expected.method]).map((m) => m.toUpperCase());
+    const waiting = this.armResponseWaitWithRecovery(
+      (response) => methods.includes(response.request().method()) && expected.urlRe.test(new URL(response.url()).pathname),
+      expected.description,
+      expected.timeout ?? 30000
+    );
+    // a failing click must not leave this rejection unhandled
+    waiting.catch(() => undefined);
+    // Sandbox 44533064234, contacts.rbac:839: "no matching response within 30003ms" could not say whether the PUT was
+    // sent. The watcher sees every request of the same method and path, whatever its answer.
+    const watch = this.watchRequests(
+      (r) => methods.includes(r.method()) && expected.urlRe.test(new URL(r.url()).pathname)
+    );
+    let response: Response;
+    try {
+      await click();
+      response = await waiting;
+    } catch (error) {
+      throw new SaveAnswerMissedError(
+        `${String(error)} — ${watch.sentCount() === 0 ? 'the request was NEVER SENT' : 'the request was SENT but got NO ANSWER'}: ${watch.describe()}`,
+        watch.sentCount()
+      );
+    } finally {
+      watch.stop();
+    }
+    if (!response.ok()) {
+      throw new Error(`${expected.description}: ${await this.describeMatchedResponse(response)}`);
+    }
+    return response;
+  }
+
+  // ADR 0016 (B3): click only once the control is visible and enabled, with a labelled failure.
+  // Playwright's click() then still checks stable/not-covered; the labelled expects make a
+  // stuck control fail by name instead of as an anonymous "locator.click: Timeout".
+  protected async clickWhenReady(locator: Locator, description: string, timeout = 15000): Promise<void> {
+    await expect(locator, `${description} should be visible before clicking`).toBeVisible({ timeout });
+    await expect(locator, `${description} should be enabled before clicking`).toBeEnabled({ timeout });
+    await locator.click({ timeout });
   }
 
   // WHY these two exist (2026-10-28, qa run 40477938102): every create flow
@@ -213,12 +320,165 @@ export class BasePage {
     return error;
   }
 
-  protected describeMissedResponse(error: unknown, waitedMs: number): string {
+  // Records the requests a step sends (matched by `match`) and whether each was answered, so a timeout can say
+  // "sent, no answer" (backend) or "never sent" (lost click) instead of "either". Nothing is logged here; the
+  // caller reads `describe()` only when it is about to fail. Paths only (no query string, no body, no headers),
+  // unless the caller passes `labelOf` to add one non-sensitive query value (e.g. the lookup's `name`).
+  protected watchRequests(match: (request: Request) => boolean, labelOf?: (request: Request) => string): RequestWatch {
+    const t0 = Date.now();
+    const seen = new Map<Request, { sentAt: number; status?: number; answeredAt?: number; failure?: string }>();
+    const onRequest = (r: Request): void => {
+      if (match(r)) seen.set(r, { sentAt: Date.now() - t0 });
+    };
+    const onResponse = (r: Response): void => {
+      const entry = seen.get(r.request());
+      if (entry) Object.assign(entry, { status: r.status(), answeredAt: Date.now() - t0 });
+    };
+    const onFailed = (r: Request): void => {
+      const entry = seen.get(r);
+      if (entry) entry.failure = r.failure()?.errorText ?? 'failed';
+    };
+    this.page.on('request', onRequest);
+    this.page.on('response', onResponse);
+    this.page.on('requestfailed', onFailed);
+    const label = labelOf ?? ((r: Request): string => `${r.method()} ${new URL(r.url()).pathname}`);
+    return {
+      sentCount: () => seen.size,
+      unansweredCount: () => [...seen.values()].filter((e) => e.status === undefined && !e.failure).length,
+      describe: (onlyUnanswered = false) => {
+        const now = Date.now() - t0;
+        const rows = [...seen.entries()]
+          .filter(([, e]) => !onlyUnanswered || (e.status === undefined && !e.failure))
+          .slice(0, 8)
+          .map(([r, e]) =>
+            e.failure
+              ? `${label(r)} sent +${e.sentAt}ms, failed: ${e.failure}`
+              : e.status === undefined
+                ? `${label(r)} sent +${e.sentAt}ms, NO ANSWER after ${now - e.sentAt}ms`
+                : `${label(r)} sent +${e.sentAt}ms, HTTP ${e.status} after ${(e.answeredAt ?? 0) - e.sentAt}ms`
+          );
+        return `${seen.size} request(s) seen, ${[...seen.values()].filter((e) => e.status === undefined && !e.failure).length} unanswered${rows.length ? `: ${rows.join('; ')}` : ''}`;
+      },
+      stop: () => {
+        this.page.off('request', onRequest);
+        this.page.off('response', onResponse);
+        this.page.off('requestfailed', onFailed);
+      },
+    };
+  }
+
+  // Count-bounded attempts (sandbox 44464192762, deals.rbac:666): the B6 `expect(...).toPass({ timeout: retries * (5000 + wait) })`
+  // put the navigation inside a 30 s (staging) budget, so one list that took 38 s expired it mid-step and
+  // `catch { return false }` hid the cause. Each attempt is now run to its own bounds (the steps inside carry them),
+  // at most `attempts` times; the failure names the last error. No pause between attempts: every attempt already ends
+  // in a real bounded wait (the results/row wait), which is the pacing the old fixed pause stood in for.
+  protected async retryAttempts(attempts: number, description: string, attempt: (n: number) => Promise<void>): Promise<void> {
+    let last: unknown;
+    for (let n = 1; n <= attempts; n++) {
+      try {
+        await attempt(n);
+        return;
+      } catch (error) {
+        last = error;
+        logger.info(`${description}: attempt ${n}/${attempts} did not succeed: ${String(error).split('\n')[0].slice(0, 200)}`);
+      }
+    }
+    throw new Error(`${description}: not satisfied after ${attempts} attempt(s). Last error: ${String(last)}`);
+  }
+
+  // Detail pages (sandbox 44464192762, deals.rbac:323): the page's own requests were held, the app gave up on them
+  // after about 60 s (action-logs ERR_FAILED, pipeline ERR_ABORTED), rendered nothing and never asked again, while the
+  // test kept waiting a further 60 s on a page that could not recover. ADR 0014: a transport failure may be retried,
+  // so on such a failure (and only then) the page is reloaded ONCE. A page whose requests did not fail is not touched:
+  // the wait runs to its bound and fails by name with the page state. The reload is skipped when the element shows up
+  // within 5 s after the failure (an unrelated aborted request).
+  async waitForDetailElement(locator: Locator, description: string, timeout = config.timeouts.navigation): Promise<void> {
+    let failure = '';
+    let signal: () => void = () => undefined;
+    const failed = new Promise<'failed'>((resolve) => {
+      signal = () => resolve('failed');
+    });
+    const onFailed = (r: Request): void => {
+      const type = r.resourceType();
+      const text = r.failure()?.errorText ?? '';
+      if ((type === 'xhr' || type === 'fetch') && /ERR_(FAILED|ABORTED)/.test(text) && !failure) {
+        failure = `${r.method()} ${new URL(r.url()).pathname} (${text})`;
+        signal();
+      }
+    };
+    this.page.on('requestfailed', onFailed);
+    try {
+      const first = await Promise.race([
+        locator.waitFor({ state: 'visible', timeout }).then(() => 'visible' as const),
+        failed,
+      ]);
+      if (first === 'visible') return;
+      const settled = await locator.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+      if (settled) return;
+      logger.warn(`${description}: a page request failed at transport level (${failure}) and the element did not appear — reloading once (ADR 0014)`);
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+      await locator.waitFor({ state: 'visible', timeout });
+    } catch (error) {
+      throw new Error(`${description}: not visible${failure ? ` (page request failed: ${failure}; reloaded once)` : ' (no page request failed at transport level)'}. ${String(error).split('\n')[0]} ${await this.describePageStall()}`);
+    } finally {
+      this.page.off('requestfailed', onFailed);
+    }
+  }
+
+  // Failure-only: what the page looked like when an element that should have rendered did not (call-logs.spec:554,
+  // sandbox 44464192762: Leads list table missing for 3 x 120 s, cause unknown). Reads Playwright's own record of
+  // the last 100 requests, so it also covers requests sent before this call; nothing is armed or waited for.
+  // Paths and states only: no query string, no body, no page text.
+  protected async describePageStall(): Promise<string> {
+    try {
+      const url = new URL(this.page.url());
+      const now = Date.now();
+      const api = (await this.page.requests()).filter((r) => /^\/v1\//.test(new URL(r.url()).pathname));
+      const unanswered = api.filter((r) => r.existingResponse() === null && r.failure() === null);
+      const failed = api.filter((r) => r.failure() !== null);
+      const rows = (list: Request[], what: (r: Request) => string): string =>
+        list
+          .slice(0, 6)
+          .map((r) => `${r.method()} ${new URL(r.url()).pathname} sent ${describeRequestAge(now, r.timing().startTime)}${what(r)}`)
+          .join('; ');
+      const state = await this.page
+        .evaluate(() => ({
+          ready: document.readyState,
+          tables: document.querySelectorAll('.rt-table').length,
+          skeletons: document.querySelectorAll('.react-loading-skeleton').length,
+          splash: /^\s*Loading/i.test(document.body?.innerText ?? ''),
+        }))
+        .catch(() => null);
+      const rateLimited = await this.page
+        .getByText(RATE_LIMIT_PAGE_PATTERN)
+        .first()
+        .isVisible()
+        .catch(() => false);
+      return (
+        `[page state] ${url.origin}${url.pathname}; signed-out page: ${isSignInUrl(this.page.url())}; rate-limit page: ${rateLimited}; ` +
+        (state
+          ? `readyState=${state.ready}, .rt-table=${state.tables}, skeleton rows=${state.skeletons}, "Loading" splash=${state.splash}; `
+          : 'DOM not readable; ') +
+        `${api.length} /v1/ request(s) in the last 100: ${unanswered.length} unanswered, ${failed.length} failed` +
+        (unanswered.length ? `; unanswered: ${rows(unanswered, () => '')}` : '') +
+        (failed.length ? `; failed: ${rows(failed, (r) => ` (${r.failure()?.errorText ?? 'failed'})`)}` : '')
+      );
+    } catch (error) {
+      return `[page state] could not be read (${String(error).slice(0, 120)})`;
+    }
+  }
+
+  protected describeMissedResponse(error: unknown, waitedMs: number, watch?: RequestWatch): string {
     const text = String(error);
     if (/session expired while waiting for a response/i.test(text)) {
       return 'no create response: the session expired while waiting (session was recovered, the request could not be resumed)';
     }
     if (/Timeout \d+ms exceeded/i.test(text)) {
+      if (watch) {
+        return watch.sentCount() === 0
+          ? `no matching create request was SENT within ${waitedMs}ms (the request never fired: the Save click or submit was lost)`
+          : `the create request was SENT but got no answer within ${waitedMs}ms (backend did not answer): ${watch.describe()}`;
+      }
       return `no matching create request completed within ${waitedMs}ms (the request never fired or the backend did not answer)`;
     }
     return `no create response captured: ${text}`;
@@ -399,23 +659,27 @@ export class BasePage {
       if (!rateLimited && !appErrorBoundary) {
         throw error;
       }
-      if (rateLimited) {
-        logger.warn(
-          'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+      if (appErrorBoundary) {
+        // ADR 0017 (B4): no blind reload on the app's "Something is broken" page. A reload hides the cause
+        // and can repeat a write; the page is the app's answer to a failed request or an uncaught render
+        // error, so fail now and name both. (Only the 429 page is reload-fixable: the app asks to retry.)
+        const failedRequest = recentFailedWrite(this.page, 60000) ?? recentFailedRead(this.page, 60000)?.summary;
+        ErrorCollector.recordRecoveryEvent({ kind: 'error-boundary-page', outcome: 'failed' });
+        throw new Error(
+          `The app showed its error page ("Something is broken") while: ${String(error).split('\n')[0]}. ` +
+            `Last failed request: ${failedRequest ?? 'none seen'}. Not reloading (a reload would hide the cause).`
         );
-        await tryRecoverFromRateLimit(this.page);
-      } else {
-        logger.warn(
-          'A wrapped call failed while the app showed its own generic error-boundary ("Something is broken") state — attempting one-time recovery'
-        );
-        await tryRecoverFromAppErrorBoundary(this.page);
       }
+      logger.warn(
+        'A wrapped call failed while the app showed its own rate-limit ("Too many requests at once") error page — attempting one-time recovery'
+      );
+      await tryRecoverFromRateLimit(this.page);
       // WHY the retry is wrapped only to RECORD the outcome (2026-10-06, load
       // measurement — see ErrorCollector.recordRecoveryEvent): the same fn() is
       // still awaited exactly once, and any error it throws is rethrown
       // unchanged, so this method's return/throw behavior is identical to
       // before. recordRecoveryEvent() itself can never throw.
-      const kind = rateLimited ? 'rate-limit-page' : 'error-boundary-page';
+      const kind = 'rate-limit-page';
       try {
         const result = await fn();
         ErrorCollector.recordRecoveryEvent({ kind, outcome: 'recovered' });
@@ -425,6 +689,185 @@ export class BasePage {
         throw retryError;
       }
     }
+  }
+
+  // ── Fail-fast waits (2026-11-04, sandbox run of 2026-11-03: 5 of 14 flaky tests were unbounded waits) ──────────────
+  // Evidence (traces of that run): `playwright.config.ts` had no actionTimeout, so a raw click/waitFor/scrollIntoView
+  // waited for the whole 480 s test timeout whenever the app showed its error screen or a form never rendered:
+  //  - FFRTK6: `<div class="app-error something-is-broken">` intercepted the pointer for 657 click retries;
+  //  - the Edit Deal / Edit Contact modals stayed grey skeletons after `GET /v1/deals/{id}` and `GET /v1/contacts/{id}`
+  //    answered 429; Add Deal's "Product or Services" after `GET /v1/products/layout` answered 500;
+  //  - the Reports create form after `GET /v1/reports/config/leads` answered 400 after 27 s.
+  // None of these can heal by waiting. These helpers name the real cause and stop within seconds.
+
+  /**
+   * If the page is showing the app's own rate-limit page or its "Something is broken" error screen, an Error that says
+   * so (original message kept); otherwise the original error unchanged. Always returns, so callers `throw await ...`.
+   */
+  protected async explainAppErrorPage(description: string, error: unknown): Promise<unknown> {
+    const original = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    // WHY recorded here (2026-11-24): this fail-fast path (2026-11-04) throws instead of reloading, so withRateLimitRecovery()'s
+    // own recording never ran for these and the email's Load Signals said none had happened. recordRecoveryEvent() never throws.
+    if (await isRateLimitedPage(this.page).catch(() => false)) {
+      ErrorCollector.recordRecoveryEvent({ kind: 'rate-limit-page', outcome: 'failed', detail: description });
+      return new Error(`${description}: the app is showing its rate-limit page ("Too many requests at once"), not the expected UI — backend 429. Original: ${original}`);
+    }
+    if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+      ErrorCollector.recordRecoveryEvent({ kind: 'error-boundary-page', outcome: 'failed', detail: description });
+      return new Error(`${description}: the app is showing its error screen ("Something is broken") over the page — an app/backend failure, not a missing element. Original: ${original}`);
+    }
+    const overlay = await this.overlayError(description, error);
+    if (overlay) return overlay;
+    return error;
+  }
+
+  /**
+   * A modal or overlay visible over the page, named by its title (2026-11-26: Kylas showed the "Upgrade your plan"
+   * modal (`plan-upgrade-modal`) after Add, and 57 tests failed with a bare "locator not found"). null when none is open.
+   * `planOnly` looks only for that known modal, which is cheap enough to check every wait slice; the generic scan
+   * (any `.modal.show` / dialog / full-cover fixed layer) runs only when something is already failing.
+   * WHY the plan modal's selectors are a guess: the id, test id and class `plan-upgrade-modal` come from the report of
+   * that failure and were NOT reproduced live (the account was nowhere near its limit afterwards); the visible text
+   * "Upgrade your plan" is matched too, so either one names it. Verify against the real DOM next time it shows.
+   */
+  private async findBlockingOverlay(planOnly = false): Promise<{ title: string; planLimit: boolean } | null> {
+    return this.page
+      .evaluate((onlyPlan) => {
+        const visible = (el: Element): boolean => {
+          const r = el.getBoundingClientRect();
+          const st = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+        };
+        const titleOf = (el: Element): string =>
+          (el.querySelector('.modal-title, [class*="modal-title"], h1, h2, h3, h4, [role="heading"]')?.textContent || el.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80);
+        const planText = /upgrade your plan/i;
+        const plan = [...document.querySelectorAll('[data-testid="plan-upgrade-modal"], #plan-upgrade-modal, [class*="plan-upgrade-modal"]')].find(visible);
+        if (plan) return { title: titleOf(plan), planLimit: true };
+        const dialogs = [...document.querySelectorAll('.modal.show, [role="dialog"], [aria-modal="true"]')].filter(visible);
+        const byText = dialogs.find((d) => planText.test(d.textContent || ''));
+        if (byText) return { title: titleOf(byText), planLimit: true };
+        if (onlyPlan) return null;
+        if (dialogs[0]) return { title: titleOf(dialogs[0]), planLimit: false };
+        for (const el of document.querySelectorAll('body *')) {
+          const st = getComputedStyle(el);
+          if (st.position !== 'fixed') continue;
+          const r = el.getBoundingClientRect();
+          if (visible(el) && r.width >= innerWidth * 0.8 && r.height >= innerHeight * 0.8 && (el.textContent || '').trim()) {
+            return { title: titleOf(el), planLimit: false };
+          }
+        }
+        return null;
+      }, planOnly)
+      .catch(() => null);
+  }
+
+  /** The error that names the modal or overlay covering the page, or null when nothing covers it. */
+  private async overlayError(description: string, error: unknown, planOnly = false): Promise<Error | null> {
+    const overlay = await this.findBlockingOverlay(planOnly);
+    if (!overlay) return null;
+    const original = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    if (overlay.planLimit) {
+      return new Error(
+        `${description}: Kylas showed '${overlay.title}' (account plan limit reached) instead of the expected UI — the account hit a plan limit (records, custom fields, …); nothing in the test can fix that. Original: ${original}`
+      );
+    }
+    return new Error(
+      `${description}: a modal or overlay is open over the page ('${overlay.title}') instead of the expected UI, so the element is covered or was never rendered. Original: ${original}`
+    );
+  }
+
+  /**
+   * Waits for `locator` to be visible for up to `timeout` (default: the navigation timeout, as the plain waitFor it
+   * replaces), but gives up early with the real reason when the control can never appear: the page shows the rate-limit
+   * page or the "Something is broken" screen, or a page-critical API read failed (HTTP 400/429/5xx, see
+   * failedWriteTracker.recentFailedRead) and the control is still missing 15 s later. The final fallback is the same
+   * TimeoutError the plain waitFor threw, so nothing that passes today changes.
+   */
+  protected async waitForRendered(locator: Locator, description: string, timeout = config.timeouts.navigation): Promise<void> {
+    const SLICE_MS = 5000;
+    const FAILED_READ_GRACE_MS = 15000;
+    const startedAt = Date.now();
+    // ADR 0016 (session-expiry batch): a sign-out (the app navigating to /signIn, or a 401 on an API read: the same signal armResponseWaitWithRecovery uses) ends the wait at once and runs the
+    // existing session recovery, instead of the locator waiting out its slices on the sign-in page. One recovery per
+    // call; a second sign-out in the same wait is reported by name.
+    const urlBeforeWait = this.page.url();
+    const recoverable = isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeWait);
+    let signOut = recoverable ? armSessionExpirySignal(this.page) : null;
+    let recovered = false;
+    try {
+      for (;;) {
+        const left = timeout - (Date.now() - startedAt);
+        try {
+          const outcome = await Promise.race([
+            locator
+              .waitFor({ state: 'visible', timeout: Math.max(1000, Math.min(SLICE_MS, left)) })
+              .then(() => 'visible' as const),
+            signOut ? signOut.promise.then(() => 'signed-out' as const) : new Promise<never>(() => undefined),
+          ]);
+          if (outcome === 'visible') return;
+          signOut?.cancel();
+          if (recovered) {
+            throw new Error(`${description}: the app signed the user out again right after the session was recovered`);
+          }
+          logger.warn(`${description}: the app signed out (sign-in page or 401) while waiting — recovering the session now`);
+          await tryRecoverSessionForPage(this.page, urlBeforeWait);
+          recovered = true;
+          signOut = armSessionExpirySignal(this.page);
+          continue;
+        } catch (error) {
+          // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
+          // or context) cannot change by waiting and used to spin here until the budget ran out.
+          if (!(error instanceof errors.TimeoutError)) throw error;
+          // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
+          // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
+          // wait has run out (below).
+          if (await this.isAppWideErrorScreen()) throw await this.explainAppErrorPage(description, error);
+          if (await isRateLimitedPage(this.page).catch(() => false)) throw await this.explainAppErrorPage(description, error);
+          // The plan-limit modal cannot go away by waiting: named at once (any other overlay only once the wait has run out, below).
+          const planModal = await this.overlayError(description, error, true);
+          if (planModal) throw planModal;
+          if (left <= SLICE_MS) {
+            const covered = await this.overlayError(description, error);
+            if (covered) throw covered;
+            if (await isAppErrorBoundaryPage(this.page).catch(() => false)) {
+              throw new Error(
+                `${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s; the page also shows a "Something is broken" message in a widget, which may be the cause. Original: ${error.message.split('\n')[0]}`
+              );
+            }
+            throw new Error(`${description}: not rendered within ${Math.round((Date.now() - startedAt) / 1000)} s. Original: ${error.message.split('\n')[0]}`);
+          }
+          const failedRead = recentFailedRead(this.page, Date.now() - startedAt + FAILED_READ_GRACE_MS);
+          if (failedRead && Date.now() - Math.max(failedRead.at, startedAt) >= FAILED_READ_GRACE_MS) {
+            throw new Error(
+              `${description}: not rendered ${Math.round((Date.now() - startedAt) / 1000)} s after the page asked for it — ` +
+                `a read the page makes failed and has not been answered successfully since (${failedRead.summary}), so the control may never render. Original: ${error.message.split('\n')[0]}`
+            );
+          }
+        }
+      }
+    } finally {
+      signOut?.cancel();
+    }
+  }
+
+  // The app's root-scoped error fallback (`<div class="app-error something-is-broken">`, plan evidence FFRTK6), as opposed
+  // to the same message inside one card (`span.error-msg`).
+  private async isAppWideErrorScreen(): Promise<boolean> {
+    return this.page.locator('.app-error, .something-is-broken').first().isVisible().catch(() => false);
+  }
+
+  /**
+   * One reload, only when the page is the app's own 429 rate-limit page (ADR 0014); true if it reloaded. The "Something
+   * is broken" error screen and every other state are NOT recovered here: they fail fast and name the cause
+   * (explainAppErrorPage / waitForRendered).
+   */
+  protected async recoverIfRateLimitPage(): Promise<boolean> {
+    if (!(await isRateLimitedPage(this.page).catch(() => false))) return false;
+    await tryRecoverFromRateLimit(this.page);
+    return true;
   }
 
   async reloadPage(): Promise<void> {
@@ -453,7 +896,7 @@ export class BasePage {
       // WHY: Explicit timeout prevents silent infinite hang when an element never renders.
       // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
       // then hangs until Playwright teardown instead of failing with an actionable error.
-      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.waitForRendered(locator, description);
       await locator.click({ timeout: 15000, force });
     } catch (error) {
       // WHY: mid-test session recovery (2026-07-09) — confirmed live and via
@@ -479,7 +922,7 @@ export class BasePage {
       // expected signIn state. See isPageRegisteredForRecovery()'s own
       // comment for the full explanation.
       if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
-        throw error;
+        throw await this.explainAppErrorPage(description, error);
       }
       logger.warn(
         `"${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
@@ -596,7 +1039,7 @@ export class BasePage {
     // HTTP 400) held the test until the 480000ms test timeout. Bounded by the
     // same config.timeouts.navigation the Add Quotation waitFor uses.
     try {
-      await locator.waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+      await this.waitForRendered(locator, description);
       await locator.clear();
       await locator.fill(value);
     } catch (error) {
@@ -605,7 +1048,7 @@ export class BasePage {
       // non-recursive retry of the exact same calls. Same registration
       // check as click() too — see isPageRegisteredForRecovery()'s comment.
       if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
-        throw error;
+        throw await this.explainAppErrorPage(description, error);
       }
       logger.warn(
         `Filling "${description}" failed while on a signIn/login or Forbidden page — attempting one-time session recovery`
@@ -832,7 +1275,10 @@ export class BasePage {
       try {
         if (attempt > 1) {
           await searchInput.fill('');
-          await this.page.waitForTimeout(200);
+          // B6: the cleared input is the state the re-typed term replaces (no pause)
+          await expect(searchInput, `${description}: the search input should be empty before re-typing`).toHaveValue('', {
+            timeout: config.timeouts.expect,
+          });
         }
         await searchInput.fill(searchTerm);
         optionsAppeared = await options
@@ -1132,9 +1578,12 @@ export class BasePage {
     // should mean here — this floor guarantees a real, small, still-
     // meaningful wait is attempted (and can still fail fast on its own
     // terms) rather than silently becoming an unbounded wait.
-    const MIN_STEP_BUDGET_MS = 5000;
-    const boundedTimeout = (): number =>
-      Math.max(MIN_STEP_BUDGET_MS, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    // ADR 0016 (B1): no 5 s floor — a step never waits longer than the budget that is really left (1 ms is the
+    // smallest bound, because 0 would mean "wait forever"). An already spent budget fails by name, here.
+    const boundedTimeout = (): number => Math.max(1, Math.min(config.timeouts.navigation, deadline - Date.now()));
+    if (Number.isFinite(deadline) && deadline - Date.now() <= 0) {
+      throw new Error(`${description} list: this test's own time budget is already spent before the list could be waited for`);
+    }
 
     await this.page.waitForLoadState('domcontentloaded');
     // WHY a third racer for the app's own 429 page (2026-10-16, sandbox run
@@ -1152,22 +1601,48 @@ export class BasePage {
     // Purely additive: any non-429 load behaves exactly as before (the first
     // racer to settle wins; a false match only costs one harmless Refresh).
     // Read-only, so safe for the @prodSafe callers of this shared method.
-    const firstSignal = await Promise.race([
+    // Measurement label (B0, ADR 0016): which racer ended the wait and after how
+    // long. 'timed-out' = that racer hit its bound; the outcome handling below is
+    // unchanged (every non-rate-limit result is still 'settled').
+    const raceStartedAt = Date.now();
+    const racerResult = (label: string, outcome: 'settled' | 'rate-limited' | 'signed-out') => ({ label, outcome, timedOut: false });
+    const racerTimedOut = (label: string) => ({ label, outcome: 'settled' as const, timedOut: true });
+    // ADR 0016 (session-expiry batch): a fourth racer for the app signing the user out (sandbox run 41825279669: the
+    // list wait sat on the /signIn page for 2 x 120 s before the existing recovery ran). The signal is the existing one
+    // (navigation to sign-in or a 401 on /v1/), only for pages that can recover (registered role); the recovery below is the existing one.
+    // The signal is cancelled the moment the race settles, so it cannot become the zombie listener that this
+    // method's top comment (2026-10, three concurrent recoveries) removed an earlier signal for.
+    const urlBeforeRace = this.page.url();
+    const signOut =
+      isPageRegisteredForRecovery(this.page) && !isSignInUrl(urlBeforeRace)
+        ? armSessionExpirySignal(this.page)
+        : null;
+    const winner = await Promise.race([
       this.page
         .waitForResponse(responsePredicate, { timeout: boundedTimeout() })
-        .then(() => 'settled' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('list response', 'settled'))
+        .catch(() => racerTimedOut('list response')),
       tableLocator
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
-        .then(() => 'settled' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('list table visible', 'settled'))
+        .catch(() => racerTimedOut('list table visible')),
       this.page
         .getByText(RATE_LIMIT_PAGE_PATTERN)
         .first()
         .waitFor({ state: 'visible', timeout: boundedTimeout() })
-        .then(() => 'rate-limited' as const)
-        .catch(() => 'settled' as const),
+        .then(() => racerResult('rate-limit page', 'rate-limited'))
+        .catch(() => racerTimedOut('rate-limit page')),
+      ...(signOut ? [signOut.promise.then(() => racerResult('signed out (navigated to sign-in)', 'signed-out'))] : []),
     ]);
+    signOut?.cancel();
+    const firstSignal = winner.outcome;
+    logger.info(
+      `${description} list ready-wait: ${winner.label}${winner.timedOut ? ' TIMED OUT' : ''} after ${Date.now() - raceStartedAt}ms`
+    );
+    if (firstSignal === 'signed-out') {
+      logger.warn(`${description} list: the app signed out (sign-in page or 401) while the list loaded — recovering the session now`);
+      await tryRecoverSessionForPage(this.page, urlBeforeRace);
+    }
     if (firstSignal === 'rate-limited') {
       logger.warn(
         `${description} list showed the app's rate-limit page ("Too many requests at once") — recovering now instead of waiting out the navigation timeout`
@@ -1212,16 +1687,21 @@ export class BasePage {
       // confusing downstream Playwright-teardown error.
       const MIN_VIABLE_RETRY_BUDGET_MS = 15000;
       const remaining = deadline - Date.now();
+      const stall = await this.describePageStall();
       if (Number.isFinite(deadline) && remaining < MIN_VIABLE_RETRY_BUDGET_MS) {
         throw new Error(
-          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)}`
+          `${description} list table not visible, and only ${Math.max(0, Math.round(remaining))}ms remains before this test's own timeout budget — too little to safely attempt a reload-and-retry (needs at least ${MIN_VIABLE_RETRY_BUDGET_MS}ms). If this test doesn't already call test.setTimeout(...), consider whether it needs one, matching this file's sibling tests. Original error: ${String(error)} ${stall}`
         );
       }
       logger.warn(
-        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)}`
+        `${description} list table not visible (possible navigation drift) — reloading and retrying once, ${Number.isFinite(deadline) ? `${Math.round(remaining)}ms` : 'unlimited'} remaining: ${String(error)} ${stall}`
       );
       await this.page.reload({ waitUntil: 'domcontentloaded' });
-      await assertTableVisible();
+      try {
+        await assertTableVisible();
+      } catch (retryError) {
+        throw new Error(`${String(retryError)}\nAfter the reload: ${await this.describePageStall()}`);
+      }
     }
   }
 
@@ -1254,6 +1734,48 @@ export class BasePage {
         ).toHaveCount(0, { timeout: 15000 })
       );
     return { card, rows, waitForSettled };
+  }
+
+  // B6: one Notes-panel add for Contacts, Companies and Deals (was three copies, Deals' without a baseline: any
+  // existing note row passed). The caller opens the Notes panel (`clickRightPanelIcon` is per module). Baseline
+  // from the settled Notes card, add, then the card must hold exactly one more note; the Add button is scoped to
+  // the Notes card. Leads keeps its own `addNote()` (it also reports the record).
+  protected async addNoteInOpenPanel(noteText: string): Promise<void> {
+    logger.info(`Adding note from the detail panel: "${noteText}"`);
+    const { card, rows, waitForSettled } = this.notesPanel();
+    await waitForSettled();
+    const baseline = await rows.count();
+    // WHY: Click textarea first to activate CKEditor initialisation
+    await this.click(card.locator('textarea.notes-textarea'), 'notes textarea');
+    const editor = card.getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await editor.fill(noteText, { timeout: config.timeouts.expect });
+    await this.click(card.getByText('Add', { exact: true }), 'add note');
+    await this.withSessionExpiryRecovery(() =>
+      expect(rows, 'Note count after adding').toHaveCount(baseline + 1, { timeout: config.timeouts.navigation })
+    );
+    logger.success(`Note added: "${noteText}"`);
+  }
+
+  // Note text lives in CKEditor iframes: skip the active editor iframe and read the saved ones
+  async assertNoteTextPresent(text: string): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate((expected) => {
+            for (const iframe of Array.from(document.querySelectorAll('iframe'))) {
+              if (iframe.title && iframe.title.includes('Rich Text Editor')) continue;
+              try {
+                if (iframe.contentDocument?.body?.innerText?.includes(expected)) return true;
+              } catch {
+                /* cross-origin iframe — not a note */
+              }
+            }
+            return false;
+          }, text),
+        { timeout: config.timeouts.navigation, message: `Note "${text}" should be listed` }
+      )
+      .toBe(true);
   }
 
   // ─── Assertion Helpers ────────────────────────────────────
@@ -1315,12 +1837,28 @@ export class BasePage {
     await locator.waitFor({ state: 'visible' });
     return (await locator.textContent()) || '';
   }
-  async assertNoFormErrors(context = 'form'): Promise<void> {
+  // `confirmedSave` (B6, KI-64): the save's own answer, already awaited by the caller (saveAndAwait). With it the
+  // outcome is known, so a non-2xx fails by name and the 1.5 s grace is skipped (nothing is left to wait for).
+  // Without it the grace stays: no sleep-free signal separates "no error" from "toast not rendered yet".
+  async assertNoFormErrors(context = 'form', confirmedSave?: Response): Promise<void> {
     logger.info(`Checking for validation errors in ${context}`);
+
+    if (confirmedSave) {
+      if (!confirmedSave.ok()) {
+        throw new Error(`Save in ${context} was not accepted: ${await this.describeMatchedResponse(confirmedSave)}`);
+      }
+      await this.failOnVisibleFormErrors(context);
+      return;
+    }
 
     // WHY: Wait briefly for any error messages to appear after save action
     await this.page.waitForTimeout(1500);
 
+    await this.failOnVisibleFormErrors(context);
+  }
+
+  // The error read shared by both assertNoFormErrors paths (with and without a confirmed save response).
+  private async failOnVisibleFormErrors(context: string): Promise<void> {
     // Field level errors
     const fieldErrors = await this.page
       .locator('input.is-invalid, select.is-invalid, textarea.is-invalid')
@@ -1615,7 +2153,12 @@ export class BasePage {
   // Opens the select and waits for its options. If nothing appears and NO menu is open, the click did not
   // register (the React "click lands, nothing happens" race), so click again; if a menu IS open but still
   // empty it is loading, so only wait (a second click would close it). Bounded; fails loudly.
-  protected async openReactSelectAndWaitForOptions(control: Locator, description: string): Promise<Locator> {
+  protected async openReactSelectAndWaitForOptions(
+    control: Locator,
+    description: string,
+    failureDetail?: () => string,
+    nothingInFlight?: () => boolean
+  ): Promise<Locator> {
     const options = this.reactSelectOpenOptions();
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1629,13 +2172,157 @@ export class BasePage {
         if (attempt === maxAttempts) {
           throw new Error(
             `${description}: react-select showed no options after ${maxAttempts} open attempts ` +
-              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}`
+              `(menu open: ${(await this.reactSelectOpenMenu().count()) > 0}): ${String(error)}` +
+              (failureDetail ? `\n[requests during the open] ${failureDetail()}` : '')
           );
         }
         logger.warn(`${description}: no react-select options yet (attempt ${attempt}/${maxAttempts})`);
+        // WHY (sandbox build #240, leads.rbac:398, Products or Services: "menu open: true" on all 3 attempts and "0 request(s) seen"): a menu that is
+        // open and empty is normally LOADING, so only waiting is right (a second click would close it). With no request in flight there is nothing to
+        // wait for: the option lookup was never started (the menu opened before its loader was bound), so waiting 3 x 10 s cannot help. Only a caller that
+        // watches the requests passes `nothingInFlight`; then the open, empty, idle menu is closed with Escape and opened again, which starts a fresh
+        // load. Hardened, root cause not confirmed (no trace): other callers keep the wait-only behaviour.
+        if (nothingInFlight?.() && (await this.reactSelectOpenMenu().count()) > 0) {
+          await this.page.keyboard.press('Escape');
+        }
       }
     }
     throw new Error(`${description}: react-select did not open`);
+  }
+
+  // Opens a toggle-driven menu (Bootstrap dropdown, Assigned To, due-date options) and waits for one item of it.
+  // `openBy: 'hover'` (KI-70, root cause found in the app bundle 2026-11-19): the quick-task Assigned To, due-date and
+  // Priority buttons open on `onMouseEnter`, and Assigned To's lookup field has `autoFocus` and an `onBlur` that closes it.
+  // Playwright's click moves the pointer (menu renders, input focused) and then presses the mouse: the button takes
+  // focus, the input blurs, the menu closes, and a second click cannot reopen it (no new mouseenter). Those toggles are
+  // hovered, never clicked; a retry parks the pointer away and hovers again. Bootstrap dropdowns (Tasks Add) are
+  // click-driven (`data-toggle="dropdown"`) and keep the default.
+  // HARDENING, ROOT CAUSE NOT CONFIRMED for click-opened toggles (KI-70, 2026-11-18): the click lands and the menu never shows. Seen in full
+  // Companies runs (CO10, COR9), in sandbox 44258530411 (deals.rbac:574, Assigned To: lookup 200, the menu was probably
+  // rendered and removed within one poll, focus back on the button) and on the Tasks Add dropdown (tasks.rbac:273,
+  // "Detailed Task" option never visible). Shape (ADR 0014 section 4): click only when NO menu is open (a click on an
+  // open toggle closes it), wait for the item, bounded, at most 2 attempts, fail by name. The re-click behaviour is
+  // unchanged on purpose until the diagnostics below say what removes the menu.
+  // Diagnostics, failure only (nothing is logged on success): an ordered event buffer is kept silently in the page
+  // (`menuSelector` added/removed, focusin/focusout with relatedTarget) and in Node (clicks, `lookupUrlPart`
+  // request/response), and both are read into the error. The page and Node clocks start within a few ms of each other.
+  protected async openMenuAndWaitForItem(
+    toggle: Locator,
+    menuSelector: string,
+    item: Locator,
+    description: string,
+    options: { lookupUrlPart?: string; openBy?: 'click' | 'hover' } = {}
+  ): Promise<void> {
+    const maxAttempts = 2;
+    const openBy = options.openBy ?? 'click';
+    const menu = this.page.locator(menuSelector);
+    const t0 = Date.now();
+    const nodeEvents: string[] = [];
+    const at = (): string => `+${Date.now() - t0}ms`;
+    const onRequest = (r: Request): void => {
+      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) nodeEvents.push(`${at()} lookup request`);
+    };
+    const onResponse = (r: Response): void => {
+      if (options.lookupUrlPart && r.url().includes(options.lookupUrlPart)) {
+        nodeEvents.push(`${at()} lookup response ${r.status()}`);
+      }
+    };
+    this.page.on('request', onRequest);
+    this.page.on('response', onResponse);
+    const stopPageBuffer = async (): Promise<void> => {
+      await this.page.evaluate(() => (window as unknown as { __omwStop?: () => void }).__omwStop?.()).catch(() => undefined);
+    };
+    try {
+      await this.page
+        .evaluate((selector: string) => {
+          const w = window as unknown as { __omwStop?: () => void; __omwEvents?: string[] };
+          w.__omwStop?.();
+          const events: string[] = [];
+          w.__omwEvents = events;
+          const start = Date.now();
+          const push = (text: string): void => {
+            if (events.length < 80) events.push(`+${Date.now() - start}ms ${text}`);
+          };
+          const hits = (n: Node): boolean => n instanceof Element && (n.matches(selector) || !!n.querySelector(selector));
+          const describe = (n: EventTarget | null): string =>
+            n instanceof Element ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null';
+          const observer = new MutationObserver((records) => {
+            for (const record of records) {
+              record.addedNodes.forEach((n) => hits(n) && push('menu ADDED'));
+              record.removedNodes.forEach((n) => hits(n) && push(`menu REMOVED (active=${describe(document.activeElement)})`));
+            }
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+          const onFocusIn = (e: FocusEvent): void => push(`focusin ${describe(e.target)} from ${describe(e.relatedTarget)}`);
+          const onFocusOut = (e: FocusEvent): void => push(`focusout ${describe(e.target)} to ${describe(e.relatedTarget)}`);
+          document.addEventListener('focusin', onFocusIn, true);
+          document.addEventListener('focusout', onFocusOut, true);
+          w.__omwStop = () => {
+            observer.disconnect();
+            document.removeEventListener('focusin', onFocusIn, true);
+            document.removeEventListener('focusout', onFocusOut, true);
+          };
+        }, menuSelector)
+        .catch(() => undefined);
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if ((await menu.count()) === 0) {
+          if (openBy === 'hover') {
+            // The pointer is parked at the corner first, so the move onto the toggle is always a fresh mouseenter
+            // (a second hover with the pointer already on the toggle fires nothing).
+            nodeEvents.push(`${at()} hover ${attempt}/${maxAttempts}`);
+            logger.info(`Hovering: ${description}: open toggle (${attempt}/${maxAttempts})`);
+            await this.page.mouse.move(0, 0);
+            await toggle.hover({ timeout: config.timeouts.expect });
+          } else {
+            nodeEvents.push(`${at()} click ${attempt}/${maxAttempts}`);
+            await this.click(toggle, `${description}: open toggle (${attempt}/${maxAttempts})`);
+          }
+        }
+        try {
+          await this.withSessionExpiryRecovery(() =>
+            expect(item, `${description} should appear`).toBeVisible({ timeout: config.timeouts.expect })
+          );
+          return;
+        } catch (error) {
+          if (attempt === maxAttempts) {
+            throw new Error(`${String(error)}\n${await this.describeMenuFailure(toggle, menu, nodeEvents)}`);
+          }
+          logger.warn(
+            `${description}: not visible yet (attempt ${attempt}/${maxAttempts}), menu open: ${(await menu.count()) > 0}`
+          );
+        }
+      }
+    } finally {
+      this.page.off('request', onRequest);
+      this.page.off('response', onResponse);
+      await stopPageBuffer();
+    }
+  }
+
+  private async describeMenuFailure(toggle: Locator, menu: Locator, nodeEvents: string[]): Promise<string> {
+    const snapshot = await toggle
+      .evaluate(
+        (el) => {
+          const rect = el.getBoundingClientRect();
+          const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          const active = document.activeElement;
+          const name = (n: Element | null): string => (n ? `${n.tagName}.${String(n.className).slice(0, 40)}` : 'null');
+          return {
+            activeElement: name(active),
+            coveringElement: name(top),
+            toggleReceivesClicks: !!top && (el === top || el.contains(top)),
+            documentHasFocus: document.hasFocus(),
+            pageEvents: (window as unknown as { __omwEvents?: string[] }).__omwEvents ?? [],
+          };
+        },
+        undefined,
+        { timeout: 2000 }
+      )
+      .catch((e: unknown) => ({ error: String(e).slice(0, 100) }));
+    return (
+      `Menu diagnostics (KI-70, hardening, root cause not confirmed): ${JSON.stringify(snapshot)}; ` +
+      `menu element now present: ${(await menu.count()) > 0}; node events: ${nodeEvents.length ? nodeEvents.join(', ') : 'none'}`
+    );
   }
 
   // Picks the option whose whole text is `name`, then clicks it.
@@ -1930,10 +2617,9 @@ export class BasePage {
       logger.warn(
         `User search: "${exactName}" not found on attempt ${attempt}/${maxAttempts} — retrying`
       );
+      // B6: no pauses: the next iteration's bounded wait for the exact option is the signal
       await userInput.fill('', { timeout: config.timeouts.expect }).catch(() => {});
-      await this.page.waitForTimeout(500);
       await userInput.fill(searchTerm, { timeout: config.timeouts.expect });
-      await this.page.waitForTimeout(800);
     }
     if (!found) {
       throw new Error(`User search: "${exactName}" did not appear after ${maxAttempts} attempts`);
@@ -2477,9 +3163,22 @@ export class BasePage {
     // reopen-clicks in the loop below switch to clicking the control's own
     // <input> instead — see that comment for why.
     const controlInput = control.locator('input').first();
-    await this.click(control, `multi-select control: ${description}`);
+    // WHY the shared open helper (2026-11-19, sandbox 44361216176 call-logs:485, "Products or Services": a bare click then a
+    // 10 s wait timed out with no clue why): it clicks only while no menu is open, waits, re-clicks once if the click
+    // did not register, and fails by name. Failure-only detail: the API requests sent during the open and whether each
+    // was answered (that run: a staging-wide stall, every request held ~58 s).
     const menuOptions = this.page.locator('.is-invalid__menu .is-invalid__option');
-    await menuOptions.first().waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    const openWatch = this.watchRequests((r) => /\/v[13]\//.test(r.url()));
+    try {
+      await this.openReactSelectAndWaitForOptions(
+        control,
+        `multi-select control: ${description}`,
+        () => openWatch.describe(true),
+        () => openWatch.unansweredCount() === 0
+      );
+    } finally {
+      openWatch.stop();
+    }
     const allOptionTexts = (await menuOptions.allInnerTexts()).map((t) => t.trim());
     if (allOptionTexts.length === 0) {
       throw new Error(
@@ -2544,7 +3243,6 @@ export class BasePage {
         .filter({ hasText: optionText })
         .first();
       await option.click();
-      await this.page.waitForTimeout(200);
 
       // WHY: confirmed live (2026-07-08) — a click here can silently fail to
       // register a new chip (e.g. a stale menu reference during rapid
@@ -2553,12 +3251,15 @@ export class BasePage {
       // discrepancy previously only surfaced much later, confusingly, during
       // detail-page verification — confirm the chip actually landed before
       // trusting it, and retry once if it didn't.
+      // B6: a real bounded wait for the chip. `isVisible({ timeout })` ignores its timeout (it answers at once), so
+      // the 200 ms pause that used to precede it was the only thing giving the chip time to render.
       const chipLanded = (locator: string) =>
         control
           .locator('.is-invalid__multi-value__label')
           .filter({ hasText: locator })
           .first()
-          .isVisible({ timeout: 2000 })
+          .waitFor({ state: 'visible', timeout: 2000 })
+          .then(() => true)
           .catch(() => false);
 
       if (!(await chipLanded(optionText))) {
@@ -2582,7 +3283,6 @@ export class BasePage {
           .filter({ hasText: optionText })
           .first()
           .click();
-        await this.page.waitForTimeout(200);
         if (!(await chipLanded(optionText))) {
           throw new Error(
             `${description}: chip for "${optionText}" still did not appear after a retry — selection is unreliable`
@@ -3221,7 +3921,16 @@ export class BasePage {
     const gpsVisible = gpsCount === 1 && (await gpsButton.isVisible().catch(() => false));
     if (gpsVisible) {
       await this.click(gpsButton, `Get GPS Address button (${description})`);
-      await this.page.waitForTimeout(1500);
+      // B6: the click's consequence is the search box, or the add-on upsell dialog described below
+      await this.gpsAddressSearchInput()
+        .or(this.page.locator('text=purchase').first())
+        .first()
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .catch(() => {
+          throw new Error(
+            `${description}: neither the GPS address search box nor the add-on dialog appeared after clicking "Get GPS Address"`
+          );
+        });
       // WHY: Kylas gates this feature behind a paid "Field Sales" addon on
       // some accounts/environments — confirmed live (Meetings module) this
       // shows a purchase-upsell dialog instead of the search box. Detect it
@@ -3246,8 +3955,11 @@ export class BasePage {
           .catch(() => false);
         if (predictionsVisible) {
           await this.gpsAddressPrediction().click();
-          await this.page.waitForTimeout(500);
-          const gpsValue = await addressInput.inputValue().catch(() => '');
+          // B6: the picked prediction is committed when the address input holds a value
+          await expect(addressInput, `${description}: the GPS prediction should fill the address input`).not.toHaveValue('', {
+            timeout: config.timeouts.expect,
+          });
+          const gpsValue = await addressInput.inputValue();
           logger.success(`GPS ${description} selected: ${gpsValue}`);
           return gpsValue;
         }
@@ -3301,12 +4013,18 @@ export class BasePage {
     searchInput: Locator,
     optionList: Locator,
     name: string,
-    expectFound: boolean
+    expectFound: boolean,
+    beforeSearch?: (rowControl: Locator) => Promise<void>
   ): Promise<void> {
     await this.click(addRowTrigger, 'Add New product row');
     const control = searchInput.locator(
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
+    if (beforeSearch) {
+      // opt-in guard only (Quotations); existing callers' behaviour is unchanged
+      await control.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+      await beforeSearch(control);
+    }
     // WHY click the control div, not the input: the "Search ..." placeholder
     // overlays the input and intercepts pointer events on first open — the
     // same confirmed race as selectLookupCustomField() and this app's own

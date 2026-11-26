@@ -2,7 +2,8 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { loadDotEnv } from './loadDotEnv';
 import { NotificationInput } from '../NotificationService';
-import { loadJobStats } from '../JobStats';
+import { fetchGitHubRunStartedAt, loadJobStats } from '../JobStats';
+import { RunStart, jenkinsRunStart } from '../RunTimes';
 
 // Manually load .env before anything else
 loadDotEnv();
@@ -112,6 +113,24 @@ async function loadJobStatsForCurrentRun(
   return (await loadJobStats(repo, runId, token)) ?? undefined;
 }
 
+// The run's own start for the email's "Run" line (see RunTimes.ts): GitHub's run_started_at, else the earliest job start of the
+// run; Jenkins' build start; never guessed (a local run has no workflow, so there is none).
+async function resolveRunStart(
+  input: Omit<NotificationInput, 'jsonReportPath'>,
+  jobStats: NotificationInput['jobStats']
+): Promise<RunStart | undefined> {
+  if (input.runSource === 'jenkins') return jenkinsRunStart(process.env) ?? undefined;
+  if (input.runSource !== 'github-actions') return undefined;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const runId = process.env.GITHUB_RUN_ID;
+  const token = process.env.PIPELINE_TOKEN || process.env.GITHUB_TOKEN;
+  if (repo && runId && token) {
+    const iso = await fetchGitHubRunStartedAt(repo, runId, token);
+    if (iso) return { iso, source: 'github-run' };
+  }
+  return jobStats?.firstJobStartedAt ? { iso: jobStats.firstJobStartedAt, source: 'github-first-job' } : undefined;
+}
+
 async function main() {
   const { NotificationService } = await import('../NotificationService');
   const service = new NotificationService();
@@ -133,7 +152,8 @@ async function main() {
 
   const baseInput = resolveNotificationInput();
   const jobStats = await loadJobStatsForCurrentRun(baseInput);
-  await service.notify({ jsonReportPath, ...baseInput, jobStats });
+  const runStartedAt = await resolveRunStart(baseInput, jobStats);
+  await service.notify({ jsonReportPath, ...baseInput, jobStats, runStartedAt });
 }
 
 // WHY: guarded behind require.main === module (2026-07-14, added after a

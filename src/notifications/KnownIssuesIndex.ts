@@ -27,10 +27,13 @@ export interface KnownIssueCandidate {
   line: number;
   phrase: string;
   kind: KnownIssueCandidateKind;
+  // The KI number of the entry the phrase sits in (the nearest heading above it that starts with `KI-nn`), when there is one (item 22).
+  kiId?: string;
 }
 
 export interface KnownIssueMatch {
   file?: string;
+  kiId?: string;
   line: number;
   matchedPhrase: string;
   kind: KnownIssueCandidateKind;
@@ -89,14 +92,18 @@ function isGenericFrameworkMessage(phrase: string): boolean {
 export function buildKnownIssuesIndex(markdown: string, file?: string): KnownIssueCandidate[] {
   const candidates: KnownIssueCandidate[] = [];
   const lines = markdown.split('\n');
+  let kiId: string | undefined;
   lines.forEach((lineText, idx) => {
     const line = idx + 1;
+    const heading = /^#{2,4}\s+(KI-\d+)\b/.exec(lineText);
+    if (heading) kiId = heading[1];
+    else if (/^#{1,3}\s/.test(lineText)) kiId = undefined;
     let match: RegExpExecArray | null;
     BACKTICK_SPAN_PATTERN.lastIndex = 0;
     while ((match = BACKTICK_SPAN_PATTERN.exec(lineText)) !== null) {
       const phrase = match[1];
       if (phrase.length >= MIN_SUBSTRING_MATCH_LENGTH && !isGenericFrameworkMessage(phrase)) {
-        candidates.push({ file, line, phrase, kind: 'quoted-substring' });
+        candidates.push({ file, line, phrase, kind: 'quoted-substring', ...(kiId ? { kiId } : {}) });
       }
       // WHY strip a trailing "()" before testing the method-name shape: this
       // file's own convention backtick-quotes method references as
@@ -105,7 +112,7 @@ export function buildKnownIssuesIndex(markdown: string, file?: string): KnownIss
       // matchKnownIssue() can compare like-for-like.
       const withoutParens = phrase.endsWith('()') ? phrase.slice(0, -2) : phrase;
       if (METHOD_NAME_PATTERN.test(withoutParens)) {
-        candidates.push({ file, line, phrase: withoutParens, kind: 'method-name' });
+        candidates.push({ file, line, phrase: withoutParens, kind: 'method-name', ...(kiId ? { kiId } : {}) });
       }
     }
   });
@@ -126,11 +133,11 @@ export function matchKnownIssue(
 ): KnownIssueMatch | null {
   if (stackMethodName) {
     const methodHit = index.find((c) => c.kind === 'method-name' && c.phrase === stackMethodName);
-    if (methodHit) return { file: methodHit.file, line: methodHit.line, matchedPhrase: methodHit.phrase, kind: methodHit.kind };
+    if (methodHit) return { file: methodHit.file, line: methodHit.line, matchedPhrase: methodHit.phrase, kind: methodHit.kind, ...(methodHit.kiId ? { kiId: methodHit.kiId } : {}) };
   }
   const substringHit = index.find((c) => c.kind === 'quoted-substring' && errorText.includes(c.phrase));
   if (substringHit) {
-    return { file: substringHit.file, line: substringHit.line, matchedPhrase: substringHit.phrase, kind: substringHit.kind };
+    return { file: substringHit.file, line: substringHit.line, matchedPhrase: substringHit.phrase, kind: substringHit.kind, ...(substringHit.kiId ? { kiId: substringHit.kiId } : {}) };
   }
   return null;
 }
@@ -173,6 +180,25 @@ export function loadKnownIssuesIndex(repoRoot: string): KnownIssueCandidate[] {
     }
   }
   return index;
+}
+
+/**
+ * Where each KI number lives (item 22): the doc and the line of the heading that names it ("### KI-43 — ...", or a compound heading such
+ * as "### KI-40 / KI-41 / KI-42 ..." which registers each). Lets the email turn "see KI-43" into a link to the entry in its topic file.
+ */
+export function locateKnownIssues(repoRoot: string): Record<string, { file: string; line: number }> {
+  const out: Record<string, { file: string; line: number }> = {};
+  for (const file of listKnownIssueSources(repoRoot)) {
+    try {
+      fs.readFileSync(path.join(repoRoot, file), 'utf-8').split('\n').forEach((text, i) => {
+        if (!/^#{2,4}\s+KI-\d+/.test(text)) return;
+        for (const id of text.match(/KI-\d+/g) ?? []) if (!out[id]) out[id] = { file, line: i + 1 };
+      });
+    } catch {
+      // unreadable source: skip it
+    }
+  }
+  return out;
 }
 
 /**

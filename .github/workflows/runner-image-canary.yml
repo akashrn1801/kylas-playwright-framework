@@ -78,3 +78,159 @@ jobs:
             fi
             echo "::warning title=Informational::Playwright $pw does not install on ${{ matrix.os }} (not an alarm; job stays green)"
           fi
+
+  # Proves the `container:` expression the pipelines use for the PLAYWRIGHT_IMAGE variable (see sandbox.yml) before any
+  # pipeline relies on it: an empty value must leave the job on the host, a value must run it inside that image with the
+  # browsers already there (no apt-get). The image tag is the locked Playwright version: scripts/check-playwright-image.ts.
+  container-canary:
+    name: container canary (${{ matrix.image || 'host, no image' }})
+    runs-on: ${{ vars.RUNNER_IMAGE || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    container: ${{ matrix.image && fromJSON(format('{{"image":"{0}","options":"--ipc=host"}}', matrix.image)) || null }}
+    # WHY (2026-11-24, canary: "sh: 8: Syntax error: redirection unexpected"): nothing here sets a shell, and GitHub runs
+    # a step in a container under `sh -e {0}` (not bash), so bash syntax (here-strings, mapfile/arrays, [[ ]]) breaks
+    # only there. `bash -e {0}` is exactly the host's implicit default (explicit `shell: bash` would add `-o pipefail`
+    # and change host behaviour), so the container and the host now run every step under the same bash.
+    defaults:
+      run:
+        shell: bash -e {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: '', expect: host }
+          - { image: 'mcr.microsoft.com/playwright:v1.60.0-noble', expect: container }
+    steps:
+      # BEFORE checkout and setup-node on purpose: these are the tools the image itself must provide. REQUIRED: git
+      # (checkout with fetch-depth 0, estimateDuration.ts), bash (every step runs under `bash -e {0}`, see defaults), node and npm per package.json "engines". INFORMATIONAL:
+      # gh, jq and curl, which the Playwright image lacks (canary run 45379221092): no pipeline step may depend on
+      # them inside the container (formfields-attempt-gate.js uses Node's fetch; nothing else in the containerized
+      # sandbox jobs calls gh, jq or curl). Nothing here installs anything.
+      - name: Tools the image must provide (container row only)
+        if: matrix.expect == 'container'
+        # POSIX sh on purpose (overrides the job's bash default): this step must run, and report, even if the image had no bash.
+        shell: sh -e {0}
+        run: |
+          echo "image tools check started: $(date -u +%FT%TZ)"
+          missing=0
+          for tool in bash git node npm; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "  required, found $tool: $(command -v "$tool")"; else echo "::error title=container canary::the image has no $tool"; missing=1; fi
+          done
+          for tool in gh jq curl; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "  informational, found $tool: $(command -v "$tool")"; else echo "  informational, NOT found: $tool (no containerized pipeline step may call it)"; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          git --version
+          echo "image node $(node --version), npm $(npm --version)"
+          node -e "if (typeof fetch !== 'function') { console.error('::error title=container canary::this node has no built-in fetch (formfields-attempt-gate.js needs it)'); process.exit(1); } console.log('built-in fetch: ok')"
+          node_major=$(node --version | sed 's/^v//; s/\..*//')
+          npm_major=$(npm --version | sed 's/\..*//')
+          [ "$node_major" -ge 20 ] || { echo "::error title=container canary::image node $(node --version) is below package.json engines >=20"; exit 1; }
+          [ "$npm_major" -ge 10 ] || { echo "::error title=container canary::image npm $(npm --version) is below package.json engines >=10"; exit 1; }
+          echo "image tools check finished: $(date -u +%FT%TZ)"
+
+      # fetch-depth 0 like the sandbox jobs that call estimateDuration.ts and the checkout below it.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # actions/checkout puts safe.directory only in its own temporary HOME, so in the container the next git call
+      # fails with "detected dubious ownership" (canary 2026-11-24, exit 128). The pipelines add this same step
+      # (sandbox.yml, "Trust the workspace for git"); here it is proven: the probe before it is informational, the
+      # check after it fails the job if git STILL reports dubious ownership.
+      - name: Trust the workspace for git, then prove it (container row only)
+        if: matrix.expect == 'container'
+        run: |
+          echo "git ownership check started: $(date -u +%FT%TZ)"
+          if before=$(git rev-parse --git-dir 2>&1); then echo "before the fix: git works already (no dubious ownership)"; else echo "before the fix (informational): ${before}"; fi
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if after=$(git status --porcelain 2>&1); then
+            echo "after the fix: git status ok"
+          else
+            echo "$after"
+            if printf '%s\n' "$after" | grep -qi "dubious ownership"; then
+              echo "::error title=container canary::git still reports dubious ownership after safe.directory $GITHUB_WORKSPACE"
+            else
+              echo "::error title=container canary::git status failed after safe.directory: ${after}"
+            fi
+            exit 1
+          fi
+
+      - name: git in the image (full history, fetch with the checkout's credentials)
+        if: matrix.expect == 'container'
+        run: |
+          echo "git check started: $(date -u +%FT%TZ)"
+          shallow=$(git rev-parse --is-shallow-repository)
+          echo "is-shallow-repository=$shallow, commits reachable: $(git rev-list --count HEAD)"
+          [ "$shallow" = "false" ] || { echo "::error title=container canary::fetch-depth 0 left a shallow clone in the container"; exit 1; }
+          # the same shape as estimateDuration.ts: a shallow fetch of one ref from origin
+          git fetch --no-tags --depth=1 origin "$GITHUB_REF" || { echo "::error title=container canary::git fetch origin $GITHUB_REF failed inside the container"; exit 1; }
+          echo "git fetch origin $GITHUB_REF ok (FETCH_HEAD $(git rev-parse --short FETCH_HEAD))"
+          echo "git check finished: $(date -u +%FT%TZ)"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Where this job runs
+        run: |
+          if [ -f /.dockerenv ]; then where=container; else where=host; fi
+          echo "VERDICT job runs in: $where (expected ${{ matrix.expect }})"
+          grep PRETTY_NAME /etc/os-release
+          git --version
+          echo "node $(node --version), npm $(npm --version) (after setup-node)"
+          [ "$(node --version | sed 's/^v//; s/\..*//')" = "22" ] || { echo "::error title=container canary::node after setup-node is not the pipelines' major 22"; exit 1; }
+          echo "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-unset}"
+          [ "$where" = "${{ matrix.expect }}" ] || { echo "::error title=container canary::the container expression put this job on the $where, expected ${{ matrix.expect }}"; exit 1; }
+
+      - name: Launch the preinstalled Chromium (container row only)
+        if: matrix.expect == 'container'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          echo "chromium launch started: $(date -u +%FT%TZ)"
+          pw=$(npx --no-install playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          case "$IMAGE" in *":v$pw-"*) echo "image tag matches the locked Playwright $pw" ;; *) echo "::error title=container canary::image $IMAGE does not carry the locked Playwright $pw"; exit 1 ;; esac
+          node -e "const { chromium } = require('@playwright/test'); (async () => { const b = await chromium.launch(); const p = await b.newPage(); await p.goto('data:text/html,<title>ok</title>'); console.log('VERDICT Chromium launched, title=' + await p.title()); await b.close(); })().catch((e) => { console.error(e); process.exit(1); });"
+          echo "VERDICT Playwright $pw runs on the preinstalled image with no apt-get"
+          echo "chromium launch finished: $(date -u +%FT%TZ)"
+
+      # The image pull happens before the first step, so no step can time it. The run's own job list does: GitHub
+      # records "Set up job" and "Initialize containers" (the pull and the container start) with timestamps.
+      # Node's built-in fetch, not gh/jq: the image has neither (the first version of this step used `gh api`,
+      # which is why canary run 45379221092 printed "could not read the run's job list": `gh: command not found`,
+      # not permissions or the API path). Soft on purpose: a warning, never a failure.
+      - name: Image pull and container start time (container row only)
+        if: always() && matrix.expect == 'container'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          THIS_JOB_NAME: container canary (${{ matrix.image || 'host, no image' }})
+        run: |
+          echo "pull-time step started: $(date -u +%FT%TZ)"
+          node - <<'NODE'
+          const { GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_API_URL, THIS_JOB_NAME, RUNNER_NAME } = process.env;
+          const warn = (m) => console.log(`::warning title=container canary::${m}, pull time not measured`);
+          (async () => {
+            const url = `${GITHUB_API_URL || 'https://api.github.com'}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100`;
+            const res = await fetch(url, { headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'kylas-container-canary' }, signal: AbortSignal.timeout(30000) });
+            if (!res.ok) return warn(`GET ${url} answered ${res.status}`);
+            const { jobs = [] } = await res.json();
+            const job = jobs.find((j) => j.name === THIS_JOB_NAME) || jobs.find((j) => j.runner_name === RUNNER_NAME);
+            if (!job) return warn(`no job named '${THIS_JOB_NAME}' (or running on ${RUNNER_NAME}) among ${jobs.length} job(s) of the run`);
+            const steps = job.steps || [];
+            const wanted = steps.filter((s) => s.name === 'Set up job' || s.name === 'Initialize containers');
+            console.log(`job '${job.name}' started ${job.started_at}; its first steps: ${steps.slice(0, 4).map((s) => s.name).join(' | ')}`);
+            if (wanted.length === 0) return warn("no 'Set up job' / 'Initialize containers' step found");
+            for (const s of wanted) {
+              const secs = s.started_at && s.completed_at ? `${Math.round((Date.parse(s.completed_at) - Date.parse(s.started_at)) / 1000)}s` : 'not finished';
+              console.log(`VERDICT ${s.name}: ${s.started_at} -> ${s.completed_at} = ${secs}`);
+            }
+          })().catch((e) => warn(`${e.message}`));
+          NODE

@@ -275,6 +275,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-qa-${{ matrix.shard.shardId }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
+
   # WHY this job exists, separate from run-tests' own dynamic shard matrix
   # (2026-09-29): confirmed via real sandbox run 36520337903 that formFields'
   # per-entity cross-process config lock (formFieldLockFactory.ts/
@@ -399,6 +409,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-qa-formfields-${{ matrix.entity }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
+
   # WHY this job exists and how it is isolated from the verdict (ADR 0009): the
   # formFields tests clean up after themselves, but a killed/cancelled run or a
   # failed afterAll can leave Min/Max/Regex limits on the 18 dedicated fields
@@ -490,6 +510,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # E1 (2026-11-25): the notify step shows the feature branch's own head commit for a merge push; that commit is the merge's second parent, so the clone must hold the history
+          fetch-depth: 0
           token: ${{ secrets.PIPELINE_TOKEN }}
 
       - uses: actions/setup-node@v5
@@ -559,6 +581,16 @@ jobs:
         with:
           name: field-config-reset-qa
           path: reports/qa
+
+      # WHY (2026-11-26, ADR 0019): the shards' capacity files for the email's "Account capacity" section (the earliest pre-run snapshot, the
+      # latest post-run reading). continue-on-error: a missing artifact only makes the email say "capacity data unavailable".
+      - name: Download per-shard capacity snapshots
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          pattern: capacity-qa-*
+          path: reports/qa/capacity
 
       - name: Send notification email
         if: always()

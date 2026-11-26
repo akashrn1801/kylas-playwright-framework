@@ -1,5 +1,7 @@
 import { test, expect } from '../../src/fixtures/index';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
+import { LeadsPage } from '../../src/modules/leads/LeadsPage';
+import { generateLeadData } from '../../src/data/factories/leadFactory';
 import { DealsPage } from '../../src/modules/deals/DealsPage';
 import { ContactsPage } from '../../src/modules/contacts/ContactsPage';
 import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
@@ -34,13 +36,17 @@ async function createSharedMeetingRecords(
   adminPage: ConstructorParameters<typeof ContactsPage>[0]
 ): Promise<{ contactName: string; companyName: string; dealName: string }> {
   const companiesPage = new CompaniesPage(adminPage);
-  const companyData = generateCompanyData();
+  // WHY unique names (sandbox 44683950030, meetings.rbac:189): the Associated and Related To searches type the name's
+  // first word, and a faker first name ("Ron", "James") is slow and ambiguous across every staging contact. A
+  // run-stamped first word is unique, so the search returns this run's record and nothing else.
+  const stamp = `MTG${Date.now()}`;
+  const companyData = generateCompanyData({ name: `${stamp} Company` });
   await companiesPage.goToCompaniesList();
   const companyId = await companiesPage.createCompany(companyData);
   if (!companyId) throw new Error('Fresh company ID not captured — cannot proceed');
 
   const contactsPage = new ContactsPage(adminPage);
-  const contactData = generateContactData({ company: companyData.name });
+  const contactData = generateContactData({ company: companyData.name, firstName: stamp, lastName: 'Contact' });
   await contactsPage.goToContactsList();
   const contactId = await contactsPage.createContact(contactData);
   if (!contactId) throw new Error('Fresh contact ID not captured — cannot proceed');
@@ -129,8 +135,9 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.assertMeetingInList(originalData.title, originalId);
 
     // Reschedule first
-    await meetingsPage.rescheduleMeeting(originalData.title);
+    const outcome = await meetingsPage.rescheduleMeeting(originalData.title, originalId);
     await meetingsPage.assertMeetingInList(originalData.title, originalId);
+    await meetingsPage.assertMeetingRescheduled(originalId, outcome);
 
     // Then Edit
     await meetingsPage.updateMeeting(
@@ -232,7 +239,7 @@ test.describe('Meetings RBAC', () => {
 
     // Click the meeting to open it
     await restrictedPage.locator('h2.meeting__title.text-truncate').first().click();
-    await restrictedPage.waitForTimeout(800);
+    // B6: no pause: assertMeetingDetailTitle() below waits for the detail panel
 
     // Assert detail title visible
     await restrictedMeetings.assertMeetingDetailTitle(adminData.title);
@@ -264,8 +271,9 @@ test.describe('Meetings RBAC', () => {
     await meetingsPage.goToMeetingsList();
     const meetingId1 = await meetingsPage.createMeeting(meetingData, 'Restricted');
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
-    await meetingsPage.rescheduleMeeting(meetingData.title);
+    const outcome = await meetingsPage.rescheduleMeeting(meetingData.title, meetingId1);
     await meetingsPage.assertMeetingInList(meetingData.title, meetingId1);
+    await meetingsPage.assertMeetingRescheduled(meetingId1, outcome);
     logger.success('M13 passed');
   });
 
@@ -277,45 +285,45 @@ test.describe('Meetings RBAC', () => {
   }) => {
     test.setTimeout(600000);
 
-    const _adminMeetings = new MeetingsPage(adminPage);
+    const adminMeetings = new MeetingsPage(adminPage);
     const restrictedMeetings = new MeetingsPage(restrictedPage);
 
-    // Admin creates a lead with ADM prefix so we can search for it
-    // We verify restricted user cannot find it in Related To dropdown
+    // WHY a fresh, never-shared admin lead with a unique first name (B6: this test was vacuous): it used to
+    // look once, 1.5 s after typing "ADM", for an option starting with ADM. On staging the restricted user DOES
+    // see ADM leads (other tests share admin leads with them), so the check only passed because it ran before
+    // the results arrived. The lookup searches by first name.
+    const token = `NOSHARE${Date.now()}`;
+    const adminLeads = new LeadsPage(adminPage);
+    await adminLeads.goToLeadsList();
+    const leadId = await adminLeads.createLead(generateLeadData({ firstName: token }));
+    expect(leadId, 'Admin lead should be created').not.toBeNull();
+
+    // positive control 1: the admin's own Related To lookup finds the lead (so it is searchable at all and the
+    // restricted user's empty answer below means "not visible", not "not indexed yet")
+    await adminMeetings.goToMeetingsList();
+    await adminMeetings.openAddForm();
+    await adminMeetings.openRelatedToSearch('Lead');
+    await expect(async () => {
+      const body = await adminMeetings.lookupRelatedTo(token);
+      expect(body, `Admin Related To lookup should list the new lead ${token}`).toContain(token);
+    }).toPass({ timeout: 60000 });
 
     // Open Add Meeting form as restricted user
     await restrictedMeetings.goToMeetingsList();
     await restrictedMeetings.openAddForm();
-
-    // Fill title only
     await restrictedMeetings.fillTitleOnly('RBAC Entity Test Meeting');
+    await restrictedMeetings.openRelatedToSearch('Lead');
 
-    // Open Related To — select Lead entity type
-    await restrictedPage.locator('.entity-lookup').locator('.is-invalid__control').first().click();
-    await restrictedPage.waitForTimeout(400);
-    // WHY: Scope to dropdown options only — getByText matches invitee chips too
-    await restrictedPage.locator('.is-invalid__option').filter({ hasText: 'Lead' }).first().click();
-    await restrictedPage.waitForTimeout(500);
+    // positive control 2: the restricted user's lookup lists records at all (it answers and is not empty)
+    // (the lookup needs at least 3 characters: three spaces list the first records, as fillRelatedTo does)
+    const visibleBody = await restrictedMeetings.lookupRelatedTo('   ');
+    expect(visibleBody.length, 'Restricted Related To lookup should answer with records').toBeGreaterThan(10);
 
-    // Open search dropdown and search for ADM prefix (admin-created leads)
-    await restrictedPage.getByText('Search ...').last().click();
-    await restrictedPage.waitForTimeout(400);
-    await restrictedPage.locator('[id="1_71_input_relatedTo"]').fill('ADM');
-    await restrictedPage.waitForTimeout(1500);
+    // the absence check, on the lookup's own answer for the admin-only lead
+    const body = await restrictedMeetings.lookupRelatedTo(token);
+    expect(body, 'Restricted user should NOT see the unshared admin lead in Related To').not.toContain(token);
+    logger.success('Restricted user correctly cannot see the unshared admin lead in Related To');
 
-    // Assert no ADM results appear for restricted user
-    const adminLeadOption = restrictedPage.locator('.is-invalid__option', { hasText: /^ADM/ });
-    const adminLeadVisible = await adminLeadOption.isVisible().catch(() => false);
-    if (adminLeadVisible) {
-      throw new Error(
-        'Restricted user should NOT see admin-owned ADM leads in Related To dropdown'
-      );
-    }
-    logger.success('Restricted user correctly cannot see admin ADM entities in Related To');
-
-    // Close form
-    await restrictedPage.keyboard.press('Escape');
-    await restrictedPage.waitForTimeout(500);
     logger.success('M14 passed');
   });
 

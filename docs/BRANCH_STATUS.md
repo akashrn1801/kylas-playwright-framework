@@ -3,24 +3,30 @@
 > **Purpose:** Where the current feature branch stands (PR, CI result, open questions); a dated snapshot, not a rulebook.
 > **Read when:** You start a session on this branch, or need to know what is unmerged and unproven.
 > **Size budget:** 4k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 9e60850
+> **Last verified:** 2026-11-25 @ c59da69
 
-Snapshot of 2026-10-31. Git facts come from the maintainer's statements; it decays: re-check before trusting.
+Snapshot of 2026-11-25. Git facts come from the maintainer's statements; re-check before trusting.
 
-## `feature/leads-coverage-gaps-20261030`
+## `feature/framework-hardening-20261104` (first-attempt hardening, [ADR 0016](./adr/0016-first-attempt-hardening-framework-wide.md))
 
-- Four commits pushed (foundation, page objects, tests, docs; last `3373bfe`). Sandbox run 41066366856 on staging: all passed except two new lead tests: the duplicate e-mail test (staging uniqueness was NONE, now EMAIL_PHONE; the test now checks the setting first) and the attach-pipeline test (not reproducible; removed 2026-11-02 by decision, KI-56 closed in [rbac-and-test-isolation.md](./known-issues/rbac-and-test-isolation.md), root cause not confirmed).
-- **Uncommitted (this working tree):** `uniqueValues.ts` (unique e-mail/phone for the lead, contact and company factories, clone flows and `LeadApi`), the lead `has-duplicates` pre-check (`GET /leads/has-duplicates`; a duplicate fails loudly, an endpoint that does not answer OK is skipped with a warning, no `@prodSafe` test creates a lead), and their doc updates.
-- **Checked live 2026-10-31 (QA and staging, one run each, no repeats; sandbox CI is the stability proof):**
-  - QA 6/6 pass: duplicate e-mail, attach pipeline, lead create with all fields, lead with pipeline stage, contact create, company create.
-  - Staging 1/6: company create passes; lead and contact creates fail with 400 `000000`, including the duplicate-e-mail and attach-pipeline tests (they create a lead first).
-  - Probe on staging (unique e-mail and phone, `has-duplicates` false): name only 200; e-mail only, phone only, both 400. The unique values did not fix it: [KI-58](./KNOWN_ISSUES_ACTIVE.md), backend/config suspected, not a test-data problem.
-- **Next:** commit the working tree; have staging's lead/contact create checked (backend log for the failed requests, uniqueness config); sandbox CI after that.
+- **Final state:** B-1 to B6, the rerun shard, the email redesign (donut, solid tiles, preview tools; [REPORTING](./REPORTING.md)) and the Playwright container are committed. Last sandbox run with evidence here, with `vars.PLAYWRIGHT_IMAGE` on (paths `/__w/`): run 45553181980, #239 on staging: 942 passed (DB14 flaky, L54 passed on the rerun), 1 skipped of 943. DB14 and L54 were fixed afterwards (CHANGELOG); a later run replaces this line.
+- **Left out on purpose:**
+  - `reports.rbac.spec.ts:248`: an id-based locator.
+  - The other create-then-search tests that could use `waitForRecordSearchable` (`leads.spec` 1387 and 1509, `leads.rbac` 1468 and 1577, `quotations.rbac:451`, `meetings.rbac:301`).
+  - Quotations serial mode.
+  - The container for the other workflows (only sandbox uses it).
+  - A 429 policy (shared backoff with `Retry-After`) for the Kylas API: #239's 690 429s were Sentry telemetry, none from the Kylas API.
+  - The Kylas bug report (kept outside the repo).
+- **B6/B8 plan (2026-11-16, not fixed):** `MeetingsPage.saveEditedMeeting` swallows the modal-hidden wait and sleeps 1 s; `TasksPage.saveEditedTask` waits only for the modal to close; `BasePage.fillTextLikeCustomField` and siblings skip a missing field with a log line; no test verifies Customer Emotion after save; CL24 (`call-logs.spec.ts:582`) unconditional `test.skip`, reason contradicted by locators-and-timing.md: re-verify. KI-65.
+- **Run window:** the 4 h window is strict for short local runs; scale it to the selected tests, or document `SESSION_MIN_REMAINING_FOR_RUN_MS` in RUNBOOK.
+- **Auth:** sandbox only: `renew-session` logs out once and logs in fresh when under 4 h is left (ADR 0017 amendment); qa/stage/main never log out. 429 on headless re-login in the refresh cascade: recorded, not fixed.
+
+## `feature/ci-rerun-shard-20261103` (fully contained in the hardening branch)
+
+- Per the maintainer (2026-11-19): no separate PR; one PR `feature/framework-hardening-20261104` -> `dev`, then delete the CI branch. Contents: formFields attempt gate, `rerun-failed` shard behind `vars.RERUN_SHARD == 'on'`, combined report/email/history ([ADR 0015](./adr/0015-skip-passed-formfields-on-rerun-and-rerun-shard.md)); follow-ups in [CHANGELOG_ARCHIVE.md](./CHANGELOG_ARCHIVE.md).
 
 ## Still open
 
-- [KI-58](./KNOWN_ISSUES_ACTIVE.md): staging create 400 `000000` with e-mail/phone. The attach-pipeline test (KI-56) was removed 2026-11-02.
-- 400 `000000` is no longer classified transient (ADR 0014, 2026-11-02); the sandbox run is the proof.
-- [KI-52](./KNOWN_ISSUES_ACTIVE.md) to KI-55: lead coverage known app bugs and watch items; the tests stay green until Kylas fixes them.
-- Jenkins sharded-path items ([KI-45](./KNOWN_ISSUES_ACTIVE.md) to KI-47) and KI-48/49/51 carry over from the previous snapshot (2026-10-29) and were not re-checked.
+- [KI-58](./KNOWN_ISSUES_ACTIVE.md): staging create 400 `000000` with e-mail/phone. [KI-52](./KNOWN_ISSUES_ACTIVE.md) to KI-55: known app bugs and watch items; the tests stay green until Kylas fixes them.
+- Jenkins sharded-path items (KI-45 to KI-47, KI-48/49/51) were not re-checked.
 - `check:docs` compares "Last verified" with the commit author date; a checkout or reset can show false errors.

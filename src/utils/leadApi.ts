@@ -259,6 +259,12 @@ export class LeadApi extends ApiClient {
     });
   }
 
+  /** Ids the search index returns for an e-mail: the filter the "View Lead" link applies (`emails=equal&emails=<value>`). */
+  async searchLeadIdsByEmail(email: string): Promise<number[]> {
+    const result = await this.searchLeads(LeadApi.rule('emails', 'equal', email), { fields: ['id'], size: 20 });
+    return result.content.map((lead) => lead.id);
+  }
+
   async getSmartLists(): Promise<Array<{ id: number; name: string; searchRequest: { jsonRule: ApiJsonRule } }>> {
     const result = await this.sendOrThrow<{ content?: unknown[] } | unknown[]>(
       'getSmartLists',

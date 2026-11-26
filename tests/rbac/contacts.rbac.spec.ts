@@ -7,11 +7,13 @@ import {
   generateRestrictedContactData,
   generateMinimalContactData,
 } from '../../src/data/factories/contactFactory';
+import { config } from '../../config/config';
 import { logger } from '../../src/utils/logger';
 import { TasksPage } from '../../src/modules/tasks/TasksPage';
 import { generateTaskData } from '../../src/data/factories/taskFactory';
 import { MeetingsPage } from '../../src/modules/meetings/MeetingsPage';
 import { CallLogsPage } from '../../src/modules/call-logs/CallLogsPage';
+import { waitForRecordAction } from '../../src/utils/recordActionsApi';
 import { generateCallLogData } from '../../src/data/factories/callLogFactory';
 import { CompaniesPage } from '../../src/modules/companies/CompaniesPage';
 import { generateCompanyData, generateSharedCompanyData } from '../../src/data/factories/companyFactory';
@@ -157,20 +159,13 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.shareContact(restrictedUserName, ['note']);
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Notes');
-    await restrictedContactsPage.clickRightPanelIcon('Notes');
-    // WHY: Click textarea first to activate CKEditor
-    await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
+    // B6: addNoteFromPanel opens the Notes panel, waits for it to settle (no skeleton rows), adds the note and
+    // asserts the Notes card count went up by one; the note's own text is then asserted (the old check only saw
+    // that the first `div.row.pt-2.pl-2.pr-2` was visible, which also matches a loading skeleton row)
     const noteText = `Test note from restricted user ${Date.now()}`;
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill(noteText);
-    await restrictedPage.waitForTimeout(500);
-    await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
-    // WHY: Verify note row appears after adding
-    const noteRow = restrictedPage.locator('div.row.pt-2.pl-2.pr-2').first();
-    await expect(noteRow).toBeVisible({ timeout: 10000 });
-    const noteRowText = await noteRow.textContent();
-    logger.success(`Note added and verified: ${noteRowText?.trim().substring(0, 80)}`);
+    await restrictedContactsPage.addNoteFromPanel(noteText);
+    await restrictedContactsPage.assertNoteTextPresent(noteText);
+    logger.success(`Note added and verified: ${noteText}`);
     logger.success('CR7 passed');
   });
 
@@ -203,7 +198,7 @@ test.describe('Contacts RBAC', () => {
     logger.success(`Task created: ${taskId}`);
     // WHY: Click Tasks icon again to refresh task list and verify task appears
     await restrictedContactsPage.clickRightPanelIcon('Tasks');
-    await restrictedPage.waitForTimeout(1000);
+    // B6: no pause: the retrying expect below waits for the task row
     const taskLocator = restrictedPage.locator('.task-details-wrapper').getByText(taskData.name).first();
     await expect(taskLocator).toBeVisible({ timeout: 10000 });
     logger.success(`Task verified in list: ${taskData.name}`);
@@ -282,9 +277,7 @@ test.describe('Contacts RBAC', () => {
     const meetingPostPromise = restrictedPage
       .waitForResponse(
         (res) =>
-          res.url().includes('/v1/meetings') &&
-          !res.url().includes('/reports/') &&
-          res.request().method() === 'POST',
+          /^\/v1\/meetings\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
         { timeout: 15000 }
       )
       .then(async (res) => ({ status: res.status(), body: await res.json().catch(() => ({})) }))
@@ -302,6 +295,7 @@ test.describe('Contacts RBAC', () => {
     ).toBe(true);
 
     const response = await meetingPostPromise;
+    expect(response, 'The meeting POST (/v1/meetings) should have been sent and answered').not.toBeNull();
     expect(response?.status, 'Expected the meeting POST to return 422').toBe(422);
     expect(
       response?.body?.errorCode,
@@ -371,7 +365,7 @@ test.describe('Contacts RBAC', () => {
 
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.clickRightPanelIcon('Meetings');
-    await restrictedPage.waitForTimeout(1000);
+    // B6: no pause: the retrying expect below waits for the meeting row
     const meetingEntry = restrictedPage.locator('.meeting__title').filter({ hasText: meetingTitle });
     await expect(meetingEntry).toBeVisible({ timeout: 10000 });
     logger.success(`Meeting verified in contact panel: ${meetingTitle}`);
@@ -394,28 +388,25 @@ test.describe('Contacts RBAC', () => {
     await adminContactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
     const restrictedUserName = await adminContactsPage.getLoggedInUserName('restricted');
     await adminContactsPage.shareContact(restrictedUserName, ['call']);
+    // B6: the share must have applied for the restricted user before Log a call opens
+    await waitForRecordAction(restrictedPage, 'contacts', contactId!, 'call');
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.assertRightPanelIconVisible('Call Logs');
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
+    const callLogsPage = new CallLogsPage(restrictedPage);
     // WHY: Reload page to ensure Log a call button is fully loaded
     await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(2000);
-    await restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' }).click();
-    await restrictedPage.waitForTimeout(1000);
+    // B6: the page has its data (skeleton gone) and the button is usable before it is clicked
+    await callLogsPage.waitForNoLoadingSkeleton();
+    const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    await expect(logACallButton).toBeEnabled({ timeout: config.timeouts.expect });
+    await logACallButton.click();
+    await restrictedPage.locator('#callLogModal').waitFor({ state: 'visible', timeout: config.timeouts.expect });
     // WHY: Remove aria-hidden so Playwright can interact with modal — same as Leads pattern
     await restrictedPage.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
-    const callLogsPage = new CallLogsPage(restrictedPage);
     const callLogData = generateCallLogData({ outcome: 'Connected' });
-    await restrictedPage.waitForTimeout(500);
-    // WHY: Check if call type dropdown already open — select first option if so
-    const callTypeMenu = restrictedPage.locator('.is-invalid__menu');
-    const callTypeMenuVisible = await callTypeMenu.isVisible().catch(() => false);
-    if (callTypeMenuVisible) {
-      await callTypeMenu.locator('.is-invalid__option').first().click({ force: true });
-      await restrictedPage.waitForTimeout(300);
-    } else {
-      await callLogsPage.fillCallType(callLogData.callType);
-    }
+    // B6: the Type menu opens together with the form (Leads traces), so it is picked from there, never toggled shut
+    await callLogsPage.fillCallTypeFromPanel(callLogData.callType);
     await callLogsPage.fillOutcome('Connected');
     await callLogsPage.fillPhoneNumber();
     await callLogsPage.fillCallSummary(callLogData.callSummary);
@@ -428,7 +419,7 @@ test.describe('Contacts RBAC', () => {
     // WHY: Navigate back to contact detail and verify call log appears in Call Logs section
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
-    await restrictedPage.waitForTimeout(1000);
+    // B6: no pause: the retrying expect below waits for the call log row
     const callLogEntry = restrictedPage.locator('.call-log-info').first();
     await expect(callLogEntry).toBeVisible({ timeout: 10000 });
     logger.success('Call log verified in contact panel');
@@ -502,6 +493,10 @@ test.describe('Contacts RBAC', () => {
     // a bare/empty-permissions share.
     await adminCompaniesPage.goToCompanyDetailsById(companyId!);
     await adminCompaniesPage.shareCompany(restrictedUserName, ['meeting']);
+    // B6: the shares must have applied for the restricted user before the call (and the other three) are
+    // used: the contact needs `call`, its company needs read
+    await waitForRecordAction(restrictedPage, 'contacts', contactId!, 'call');
+    await waitForRecordAction(restrictedPage, 'companies', Number(companyId), 'read');
     await restrictedContactsPage.goToContactDetailsById(contactId!);
     // WHY: Verify all 4 icons visible (Notes, Tasks, Meetings, Call Logs)
     await restrictedContactsPage.assertRightPanelIconVisible('Notes');
@@ -510,14 +505,10 @@ test.describe('Contacts RBAC', () => {
     await restrictedContactsPage.assertRightPanelIconVisible('Call Logs');
 
     // WHY: Verify Note — click Notes icon, add note, verify note row appears
-    await restrictedContactsPage.clickRightPanelIcon('Notes');
-    await restrictedPage.locator('textarea.notes-textarea').click();
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.getByRole('textbox', { name: 'Rich Text Editor, main' }).fill(`Note-${Date.now()}`);
-    await restrictedPage.waitForTimeout(500);
-    await restrictedPage.getByText('Add', { exact: true }).click();
-    await restrictedPage.waitForTimeout(1500);
-    await expect(restrictedPage.locator('div.row.pt-2.pl-2.pr-2').first()).toBeVisible({ timeout: 10000 });
+    // B6: see CR7 (settled panel, count + the note's own text)
+    const noteText = `Note-${Date.now()}`;
+    await restrictedContactsPage.addNoteFromPanel(noteText);
+    await restrictedContactsPage.assertNoteTextPresent(noteText);
     logger.success('Note created and verified');
 
     // WHY: Verify Task — click Tasks icon, create quick task
@@ -530,8 +521,10 @@ test.describe('Contacts RBAC', () => {
     expect(taskId).not.toBeNull();
     logger.success(`Task created: ${taskId}`);
     // WHY: Reload page after task creation before moving to next operation
+    const callLogsPage = new CallLogsPage(restrictedPage);
     await restrictedPage.reload({ waitUntil: 'domcontentloaded' });
-    await restrictedPage.waitForTimeout(2000);
+    // B6: the reloaded page has its data (skeleton gone) before the next panel icon is used
+    await callLogsPage.waitForNoLoadingSkeleton();
 
     // WHY: Verify Meeting — click Meetings icon, then #addMeeting button to open form
     await restrictedContactsPage.clickRightPanelIcon('Meetings');
@@ -543,31 +536,24 @@ test.describe('Contacts RBAC', () => {
     // WHY: same entity-summary permission-propagation lag tolerance as CR9b
     // — the company here was also just shared moments earlier.
     const meetingId = await meetingsPage.saveMeetingRetryOnEntitySummaryLag();
-    if (meetingId) {
-      logger.success(`Meeting created: ${meetingId}`);
-    } else {
-      logger.warn('Meeting ID not captured — meeting still created successfully');
-    }
+    // B6: the old branch only warned when no id was captured and went on, an unverified "still created"
+    expect(meetingId, 'Meeting creation should succeed (company also shared)').not.toBeNull();
+    logger.success(`Meeting created: ${meetingId}`);
     // WHY: Navigate back to contact detail page after meeting creation
     await restrictedContactsPage.goToContactDetailsById(contactId!);
 
     // WHY: Verify Call — click Call Logs icon, log call
     await restrictedContactsPage.clickRightPanelIcon('Call Logs');
-    await restrictedPage.waitForTimeout(1000);
-    await restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' }).click();
-    await restrictedPage.waitForTimeout(1000);
+    // B6: the panel has its data (skeleton gone) and the button is usable before it is clicked
+    await callLogsPage.waitForNoLoadingSkeleton();
+    const logACallButton = restrictedPage.locator('button.btn.btn-primary', { hasText: 'Log a call' });
+    await expect(logACallButton).toBeEnabled({ timeout: config.timeouts.expect });
+    await logACallButton.click();
+    await restrictedPage.locator('#callLogModal').waitFor({ state: 'visible', timeout: config.timeouts.expect });
     await restrictedPage.evaluate('document.querySelector("#callLogModal")?.removeAttribute("aria-hidden")');
-    const callLogsPage = new CallLogsPage(restrictedPage);
     const callLogData = generateCallLogData({ outcome: 'Connected' });
-    await restrictedPage.waitForTimeout(800);
-    const callTypeMenu = restrictedPage.locator('.is-invalid__menu');
-    const callTypeMenuOpen = await callTypeMenu.isVisible().catch(() => false);
-    if (callTypeMenuOpen) {
-      await callTypeMenu.locator('.is-invalid__option').first().click({ force: true });
-      await restrictedPage.waitForTimeout(300);
-    } else {
-      await callLogsPage.fillCallType(callLogData.callType);
-    }
+    // B6: the Type menu opens together with the form (Leads traces), so it is picked from there, never toggled shut
+    await callLogsPage.fillCallTypeFromPanel(callLogData.callType);
     await callLogsPage.fillOutcome('Connected');
     await callLogsPage.fillPhoneNumber();
     await callLogsPage.fillCallSummary(callLogData.callSummary);

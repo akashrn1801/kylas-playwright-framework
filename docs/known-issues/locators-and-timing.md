@@ -3,9 +3,9 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 4a85ad7
+> **Last verified:** 2026-11-26 @ bfc345c
 
-Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
+Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) and [watch-items.md](./watch-items.md) (KI-21, KI-23, KI-24 moved there 2026-11-26). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
 ### Navigation drift across 6 modules — 2026-07-27
 - **Symptom:** Generic element-not-found timeouts long after a list/detail page "loaded".
@@ -170,3 +170,8 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 - **Root cause:** (1) the 4 s "create request seen" window started before the click, so a loaded runner used it up; the retry clicked the disabled, in-flight button. Reproduced on staging with 6x CPU throttling (old code: warning after 5.8 s, lead 173559 created, second click hung). (2) the Notes panel opened before the lead details loaded. Reproduced on QA and staging by delaying `GET /v1/leads/{id}` by 6 s: 400, never refetched. (3) the pipeline menu case was not reproduced; hardened only.
 - **Fix:** window starts after the click, disabled/gone Save counts as submitted; Notes click waits for the lead name in the header and throws with the request if the list still fails; `BasePage.openReactSelectAndWaitForOptions()`. Proof (local, 3 repeats at 2 workers, QA and staging): call-logs:721, page size/sort/Kanban, contact create; lead note tests re-run after the header-signal change: 12 passed on each (3 of them the expected-failure KI-52 test). With `GET /v1/leads/{id}` delayed 6 s the first notes request is now 200 with the owner id. Full spec files were left to sandbox CI.
 - **Revert:** see ADR 0014.
+
+### KI-20 / KI-22 closed — `openUserShareTypeSearch()` catch backoff, `saveEditedContact()` confirmation (2026-11-18)
+- **KI-20:** the `waitForTimeout(500)` after the `Escape` keypress in `openUserShareTypeSearch()` is gone from `CompaniesPage`, `LeadsPage`, `ContactsPage` and `DealsPage` (B6 per module; verified by grep: no `waitForTimeout` call remains in those four files).
+- **KI-22:** `ContactsPage.saveEditedContact()` awaits `PUT /v1/contacts/{id}` through `saveAndAwait` (ADR 0016, B3) and, since 2026-11-18, passes that response to `assertNoFormErrors('contact edit form', saved)`.
+- **Not verified here:** the Contacts full spec was not run after the 2026-11-18 change (planned for the sandbox run).

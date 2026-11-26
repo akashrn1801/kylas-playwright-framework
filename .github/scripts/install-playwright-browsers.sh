@@ -51,6 +51,11 @@
 # (about 245 s). Each attempt now logs its elapsed time so a slow mirror is
 # visible even when the install succeeds.
 #
+# Apt mirror override, widened to ec2 mirrors (2026-11-24: the failing log showed "Get:1
+# file:/etc/apt/apt-mirrors.txt Mirrorlist" resolving to us-east-2.ec2.archive.ubuntu.com at ~90 kB/s):
+# the host pattern is azure.archive.ubuntu.com OR <region>.ec2.archive.ubuntu.com, and the mirror list file
+# /etc/apt/apt-mirrors.txt is rewritten like any other file under /etc/apt. Smoke test:
+# .github/scripts/test-install-playwright-browsers.sh (npm run check:apt-mirror).
 # Apt mirror override (default on; APT_MIRROR_OVERRIDE=off disables it, or change
 # the default below). On ubuntu-24.04 runners apt reads
 # "URIs: mirror+file:///etc/apt/apt-mirrors.txt", and every download in our logs
@@ -58,7 +63,7 @@
 # That mirror regularly degrades to a trickle that apt's timeouts cannot catch
 # because the connection stays alive: 5 of 21 installs were slow in sandbox run
 # 39934344278 (159 kB/s, 216 kB/s, three jobs stalled). Before the install,
-# with --with-deps, every file under /etc/apt that names azure.archive.ubuntu.com
+# with --with-deps, every file under /etc/apt that names azure.archive.ubuntu.com (or an ec2 mirror, see above)
 # is rewritten to http://archive.ubuntu.com/ubuntu/ (the security pocket moves
 # with it: same archive, apt signature checks unchanged), each changed file is
 # logged with its matching lines before and after, and if an azure reference
@@ -138,25 +143,25 @@ fail_unsupported_os() {
   exit 1
 }
 
-# Rewrite azure.archive.ubuntu.com to archive.ubuntu.com under $APT_DIR and
-# verify. Logs every changed file. Exits 1 only when a rewrite changed at least
+# Rewrite azure.archive.ubuntu.com and <region>.ec2.archive.ubuntu.com to
+# archive.ubuntu.com under $APT_DIR (apt-mirrors.txt included) and verify. Logs every changed file. Exits 1 only when a rewrite changed at least
 # one file and an azure reference still survives.
 rewrite_apt_mirror() {
   if [ "$APT_MIRROR_OVERRIDE" = "off" ]; then
     echo "apt mirror override is off (APT_MIRROR_OVERRIDE=off): leaving $APT_DIR as configured"
     return 0
   fi
-  local host_re='azure\.archive\.ubuntu\.com' files f changed=0 left sum_before sum_after
+  local host_re='(azure|[a-z0-9-]+\.ec2)\.archive\.ubuntu\.com' files f changed=0 left sum_before sum_after
   # shellcheck disable=SC2086 # APT_SUDO is empty or "sudo" (word-split on purpose)
-  files=$($APT_SUDO grep -rIl -e "$host_re" "$APT_DIR" 2>/dev/null)
+  files=$($APT_SUDO grep -rIlE -e "$host_re" "$APT_DIR" 2>/dev/null)
   if [ -z "$files" ]; then
-    echo "apt mirror: nothing to rewrite (no azure.archive.ubuntu.com reference under $APT_DIR)"
+    echo "apt mirror: nothing to rewrite (no azure/ec2 archive.ubuntu.com reference under $APT_DIR)"
     return 0
   fi
   while IFS= read -r f; do
     echo "apt mirror: rewriting $f to http://archive.ubuntu.com/ubuntu/ (before):"
     # shellcheck disable=SC2086
-    $APT_SUDO grep -n -e "$host_re" "$f" | sed 's/^/    /'
+    $APT_SUDO grep -nE -e "$host_re" "$f" | sed 's/^/    /'
     # shellcheck disable=SC2086
     sum_before=$($APT_SUDO cksum "$f" 2>/dev/null)
     # shellcheck disable=SC2086
@@ -176,26 +181,26 @@ rewrite_apt_mirror() {
     fi
   done <<<"$files"
   # shellcheck disable=SC2086
-  left=$($APT_SUDO grep -rIn -e "$host_re" "$APT_DIR" 2>/dev/null)
+  left=$($APT_SUDO grep -rInE -e "$host_re" "$APT_DIR" 2>/dev/null)
   if [ -z "$left" ]; then
-    echo "apt mirror: rewrote $changed file(s); no azure.archive.ubuntu.com reference left under $APT_DIR"
+    echo "apt mirror: rewrote $changed file(s); no azure/ec2 archive.ubuntu.com reference left under $APT_DIR"
     return 0
   fi
   if [ "$changed" -ge 1 ]; then
-    echo "::error title=apt mirror rewrite incomplete::azure.archive.ubuntu.com is still referenced under $APT_DIR after rewriting $changed file(s): ${left//$'\n'/ | }"
+    echo "::error title=apt mirror rewrite incomplete::an azure/ec2 archive.ubuntu.com mirror is still referenced under $APT_DIR after rewriting $changed file(s): ${left//$'\n'/ | }"
     exit 1
   fi
-  echo "::warning::apt mirror: could not rewrite any file, azure.archive.ubuntu.com stays in use (relying on the bounded attempts)"
+  echo "::warning::apt mirror: could not rewrite any file, the azure/ec2 mirror stays in use (relying on the bounded attempts)"
   return 0
 }
 
 FLAGS="$*"
 if [[ " $FLAGS " == *" --with-deps "* ]]; then
   if printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\nDPkg::Lock::Timeout "60";\n' \
-    | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null 2>&1; then
+    | $APT_SUDO tee "$APT_DIR/apt.conf.d/99-ci-timeouts" >/dev/null 2>&1; then
     echo "apt timeouts configured (20s per connection, 2 retries, 60s dpkg lock wait)"
   else
-    echo "::warning::could not write /etc/apt/apt.conf.d/99-ci-timeouts — relying on the per-attempt timeout only"
+    echo "::warning::could not write $APT_DIR/apt.conf.d/99-ci-timeouts — relying on the per-attempt timeout only"
   fi
   rewrite_apt_mirror
 fi

@@ -1,4 +1,5 @@
-import { test, expect } from '../../../src/fixtures/index';
+import { expect } from '../../../src/fixtures/index';
+import { test, LIST_PREFS_WRITER_TAG } from './leadListPreferences';
 import { safeWaitForURL } from '../../../src/utils/navigation';
 import { LeadsPage } from '../../../src/modules/leads/LeadsPage';
 import { ContactsPage } from '../../../src/modules/contacts/ContactsPage';
@@ -22,6 +23,7 @@ import { logger } from '../../../src/utils/logger';
 import { reportCreatedRecord } from '../../../src/utils/createdRecords';
 import { uniqueEmail } from '../../../src/data/factories/uniqueValues';
 import { LeadApi } from '../../../src/utils/leadApi';
+import { waitForRecordSearchable } from '../../../src/utils/waitForRecordSearchable';
 
 // WHY the server read-back: the stage text on the detail page is an unscoped text match, so the
 // persisted stage is read from the lead itself (GET /v1/leads/{id} -> pipeline.stage.name)
@@ -261,8 +263,9 @@ test.describe('Leads', () => {
     const leadId = await leadsPage.createLead(leadData);
     expect(leadId).not.toBeNull();
     await leadsPage.searchAndOpenLead(leadData.firstName, leadId ?? undefined);
-    const clonedId = await leadsPage.cloneLead();
+    const clonedId = await leadsPage.cloneLead({ firstName: leadData.firstName });
     expect(clonedId).not.toBeNull();
+    expect(clonedId, 'Saving the clone should create a NEW lead').not.toBe(leadId);
     await leadsPage.assertClonedLeadLastName(leadData.lastName, clonedId!);
     logger.success('L35 passed');
   });
@@ -944,6 +947,14 @@ test.describe('Leads', () => {
       await leadsPage.assertFieldInlineError('emails[0].value', 'Lead with this email already exists');
       await leadsPage.assertFormErrorSummary('Emails Lead with email already exists');
       await leadsPage.assertViewLeadLinkTargets(existing.email);
+      // ADR 0016 (B3): the list is read from the search index, which trails the write. Ask the same index, with the
+      // same e-mail filter the link applies, as the admin who will see the list, before opening any tab.
+      await waitForRecordSearchable({
+        entity: 'lead',
+        id: created.id,
+        request: 'POST /v1/search/lead (emails equal the duplicate e-mail)',
+        search: () => api.searchLeadIdsByEmail(existing.email),
+      });
       // The link opens the Leads list for that e-mail: the existing lead is listed
       await expect
         .poll(async () => leadsPage.getLeadIdsListedByViewLeadLink(), {
@@ -1396,7 +1407,7 @@ test.describe('Leads', () => {
   // HOW: UI only, read-only on lead data — for every page size the control offers, the rows shown
   //   and the footer must match; each sort click must show the heading direction and rows in that
   //   order. Sort and page size are remembered per user, so the original settings are restored.
-  test('@regression admin can change how many leads are shown per page and sort the list by last name', async ({
+  test('@regression admin can change how many leads are shown per page and sort the list by last name', { tag: LIST_PREFS_WRITER_TAG }, async ({
     adminPage,
     leadCleanup,
   }) => {
@@ -1542,7 +1553,7 @@ test.describe('Leads', () => {
   // HOW: server — the pipeline's stage list; UI — the board's columns must equal it in order, and
   //   with the list filtered to one new lead only the Open column counts it. The view mode is
   //   remembered per user, so it is switched back and restored afterwards.
-  test('@regression the lead list can be switched to a board view that shows pipeline stages as columns', async ({
+  test('@regression the lead list can be switched to a board view that shows pipeline stages as columns', { tag: LIST_PREFS_WRITER_TAG }, async ({
     adminPage,
     leadCleanup,
   }) => {
