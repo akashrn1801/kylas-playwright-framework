@@ -79,6 +79,7 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '58-capacity-unreadable-stopped', title: 'Account capacity: the usage call failed and the run was stopped', expect: 'BLOCKED — ACCOUNT CAPACITY UNREADABLE; "unavailable" in the section with the reason', first: base(30), rerun: false, capacity: { error: { message: 'GET /v1/tenants/usage failed: HTTP 403 {"code":"001019"}', readOnlyRun: false } } },
   { name: '59-capacity-custom-fields-low', title: 'Account capacity: 5 custom fields left', expect: 'Custom Fields bar yellow, a yellow warning, never blocked', first: base(30), rerun: false, capacity: { pre: { customFieldsUsed: 120 }, post: { customFieldsUsed: 120 } } },
   { name: '60-every-module-incl-billing', title: 'Every kind of module in one run: Billing, Dashboard, Reports and formFields, UI and RBAC', expect: 'one row per module in Module Analytics, each on its own UI or RBAC side with its own test count (Billing UI 6 + RBAC 2, Dashboard UI 3 + RBAC 2, Reports UI 2 + RBAC 2, "Leads — Field Limits" UI 2 + RBAC 2)', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(3, 'passed', 'dashboard ui', 'ui/dashboard/dashboard.spec.ts', 300), ...many(2, 'passed', 'dashboard rbac', 'rbac/dashboard.rbac.spec.ts', 400), ...many(2, 'passed', 'reports ui', 'ui/reports/reports.spec.ts', 500), ...many(2, 'passed', 'reports rbac', 'rbac/reports.rbac.spec.ts', 600), ...many(2, 'passed', 'leads field limits ui', 'ui/formFields/leadFieldLimits.spec.ts', 700), ...many(2, 'passed', 'leads field limits rbac', 'rbac/formFields/leadFieldLimits.rbac.spec.ts', 800)], rerun: false, expectModules: [{ name: 'Billing', type: 'UI', total: 6 }, { name: 'Billing', type: 'RBAC', total: 2 }, { name: 'Dashboard', type: 'UI', total: 3 }, { name: 'Dashboard', type: 'RBAC', total: 2 }, { name: 'Reports', type: 'UI', total: 2 }, { name: 'Reports', type: 'RBAC', total: 2 }, { name: 'Leads — Field Limits', type: 'UI', total: 2 }, { name: 'Leads — Field Limits', type: 'RBAC', total: 2 }] },
+  { name: '65-smoke-only-not-selected', title: 'A run that selects by tag (@regression): Billing UI ran 4 of its 6 tests, because BL1 and BL5 are tagged only @smoke (build #242)', expect: 'Billing UI shows 4 tests and the badge "UI 2 of 6 not selected"; the footnote says CI selects by tag; the verdict is unaffected', first: [...many(4, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 } },
   { name: '61-capacity-created-pushes-over-the-limit', title: 'Account capacity: billing still shows 200 left (it counts creates only at the nightly refresh), the run created 503 records', expect: 'records bar yellow (200 left); a red ESTIMATE "none left (over by 303)" near the top; the run is NOT blocked (the gate stops on the billing figures only)', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 299800 }, post: {} } },
   { name: '62-capacity-refresh-time-known', title: 'Account capacity: Kylas sends a real refresh time (5 hours before the email)', expect: 'the billing figures are labelled "as of the last refresh: <time> IST"', first: base(30), rerun: false, capacity: { pre: { refreshedMinutesAgo: 300 }, post: { refreshedMinutesAgo: 300 } } },
   { name: '63-capacity-live-counts-incomplete', title: 'Account capacity: a throttled search stopped the live per-entity reading after the first three entities', expect: 'created is shown only for the entities read, the total says how many could not be read, n/a for the rest, and the estimate says "at most"', first: base(30), rerun: false, capacity: { pre: {}, post: {}, liveReadOnlyFirst: 3 } },
@@ -199,15 +200,16 @@ export function normalizeTags(html: string): string {
 }
 
 /** The all-modules table: per entity, the UI and RBAC cells as numbers (null for a missing side), and each cell's background. */
-export interface ModuleRow { name: string; UI: number[] | null; RBAC: number[] | null; bgs: string[] }
+export interface ModuleRow { name: string; UI: number[] | null; RBAC: number[] | null; bgs: string[]; badges: string; hiddenCells: number }
 export function allModulesTable(html: string): ModuleRow[] | null {
   const i = html.indexOf('id="all-modules"');
   if (i < 0) return null;
   const end = html.indexOf('</table>', html.indexOf('<table', i));
   const rows: ModuleRow[] = [];
   for (const tr of html.slice(i, end).split('<tr style="border-bottom').slice(1)) {
-    const cells = [...tr.matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/g)].map((c) => ({ attrs: c[1], t: text(c[2]) }));
+    const cells = [...tr.matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/g)].map((c) => ({ attrs: c[1], t: text(c[2].replace(/<div>[\s\S]*<\/div>/, '')), raw: c[2] }));
     const name = cells[0].t;
+    const badges = text(/<div>([\s\S]*)<\/div>/.exec(cells[0].raw)?.[1] ?? '');
     const rest = cells.slice(1);
     const side = (): number[] | null => {
       if (rest[0] && /colspan="7"/.test(rest[0].attrs)) { rest.shift(); return null; }
@@ -216,7 +218,9 @@ export function allModulesTable(html: string): ModuleRow[] | null {
     };
     const bgs: string[] = [];
     for (const c of cells.slice(1)) bgs.push(/background:(#[0-9A-Fa-f]{6})/.exec(c.attrs)?.[1]?.toUpperCase() ?? '');
-    rows.push({ name, UI: side(), RBAC: side(), bgs });
+    // a Tests or Skip cell hidden on phones makes a side's numbers not add up for a phone reader (build #242, Billing: 6 tests, 2 skipped, "4" shown)
+    const hiddenCells = cells.slice(1).filter((c) => /class="mh"/.test(c.attrs) && /^\d+$/.test(c.t)).length;
+    rows.push({ name, UI: side(), RBAC: side(), bgs, badges, hiddenCells });
   }
   return rows;
 }
@@ -258,6 +262,24 @@ export function moduleCoverageViolations(html: string, expected: ExpectedModule[
     else if (side[0] !== e.total) out.push(`${e.name} ${e.type}: the row says ${side[0]} tests, the results have ${e.total}`);
   }
   if (!opts.allowExtra) for (const row of rows) if (!expected.some((e) => lower(e.name) === lower(row.name))) out.push(`the row "${row.name}" is not in the results`);
+  return out;
+}
+/** Rows whose Tests or Skip cell is hidden on phones: such a side shows "First 4" for 6 tests of which 2 were skipped (build #242, Billing). */
+export function hiddenCountViolations(html: string): string[] {
+  return (allModulesTable(html) ?? []).filter((r) => r.hiddenCells > 0).map((r) => `${r.name}: ${r.hiddenCells} count cell(s) are hidden on phones, so the visible numbers do not add up to the module's tests`);
+}
+/** A module that ran fewer tests than the suite has says so in its row, and one that ran them all does not (build #242: Billing UI 4 of 6 looked like missing tests). */
+export function notSelectedViolations(html: string, baseline: Record<string, number>): string[] {
+  const modRows = allModulesTable(html) ?? [];
+  const out: string[] = [];
+  for (const [key, full] of Object.entries(baseline)) {
+    const [type, name] = key.split(':');
+    const row = modRows.find((x) => x.name === name);
+    const ran = (type === 'UI' ? row?.UI : row?.RBAC)?.[0];
+    if (ran === undefined) continue;
+    if (ran < full && !new RegExp(`${type} ${full - ran} of ${full} not selected`).test(row?.badges ?? '')) out.push(`${name} ${type} ran ${ran} of ${full} tests but its row does not say ${full - ran} were not selected`);
+    if (ran >= full && new RegExp(row?.UI && row?.RBAC ? `${type} \\d+ of \\d+ not selected` : 'not selected').test(row?.badges ?? '')) out.push(`${name} ${type} ran all ${full} tests but its row says some were not selected`);
+  }
   return out;
 }
 export interface RerunRow { first: number; final: number; note: string }
@@ -593,6 +615,10 @@ export function invariants(s: ScenarioResult): Violation[] {
           if (side[1] + side[2] + side[3] + side[4] + side[5] !== side[0]) bad('all-modules-adds-up', `${row.name}: first ${side[1]} + retry ${side[2]} + rerun ${side[3]} + failed ${side[4]} + skipped ${side[5]} != tests ${side[0]}`);
         }
       }
+      if (t['Modules'] && t['Modules'].value !== String(modRows.length)) bad('modules-tile-matches-table', `the Modules tile says ${t['Modules'].value}, the table has ${modRows.length} rows: a reader counts the rows`);
+      { const head = /All (\d+) (module|modules), UI and RBAC/.exec(text(s.html)); if (!head || head[2] !== (head[1] === '1' ? 'module' : 'modules') || Number(head[1]) !== modRows.length) bad('modules-heading-plural', `the table heading "${head?.[0]}" does not agree with ${modRows.length} row(s)`); }
+      for (const msg of hiddenCountViolations(s.html)) bad('all-modules-counts-visible', msg);
+      for (const msg of notSelectedViolations(s.html, s.spec.suiteBaseline ?? {})) bad('not-selected-explained', msg);
       if (totalTests !== r.total) bad('all-modules-total', `the table's tests add up to ${totalTests}, the run has ${r.total}`);
       const fails = modRows.reduce((n, x) => n + (x.UI?.[4] ?? 0) + (x.RBAC?.[4] ?? 0), 0);
       const retries = modRows.reduce((n, x) => n + (x.UI?.[2] ?? 0) + (x.RBAC?.[2] ?? 0), 0);
@@ -745,6 +771,7 @@ function main(): void {
   {
     const every = results.find((x) => x.spec.name === '60-every-module-incl-billing')!;
     const exp = every.spec.expectModules!;
+    const sel = results.find((x) => x.spec.name === '65-smoke-only-not-selected')!;
     const dropRow = (html: string, name: string): string => {
       const at = html.indexOf(`>${name}</td>`, html.indexOf('id="all-modules"'));
       const start = html.lastIndexOf('<tr style="border-bottom', at);
@@ -757,6 +784,11 @@ function main(): void {
       ['the Billing row dropped', moduleCoverageViolations(dropRow(every.html, 'Billing'), exp), true],
       ['the Dashboard row dropped', moduleCoverageViolations(dropRow(every.html, 'Dashboard'), exp), true],
       ['a module the run does not have (extra row)', moduleCoverageViolations(every.html, exp.filter((e) => e.name !== 'Reports')), true],
+      ['the full email: no count cell is hidden on phones', hiddenCountViolations(every.html), false],
+      ['Tests and Skip cells hidden on phones (the #242 Billing "4")', hiddenCountViolations(((h: string, at: number) => h.slice(0, at) + h.slice(at).replace(/(<td style="[^"]*)(">\d+<\/td>)/, '$1" class="mh$2'))(every.html, every.html.indexOf('id="all-modules"'))), true],
+      ['the #242 run (Billing UI 4 of 6): the row explains the 2 not selected', notSelectedViolations(sel.html, sel.spec.suiteBaseline!), false],
+      ['the same email without the badge: reported', notSelectedViolations(sel.html.replace(/UI 2 of 6 not selected/, ''), sel.spec.suiteBaseline!), true],
+      ['a module that ran all its tests must not claim some were not selected', notSelectedViolations(sel.html, { 'UI:Billing': 4, 'RBAC:Billing': 2 }), true],
       ['a miscounted side (Billing UI expected 7, the row says 6)', moduleCoverageViolations(every.html, exp.map((e) => (e.name === 'Billing' && e.type === 'UI' ? { ...e, total: 7 } : e))), true],
     ];
     for (const [what, found, shouldFail] of samples) {

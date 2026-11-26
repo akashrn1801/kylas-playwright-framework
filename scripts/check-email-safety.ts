@@ -41,7 +41,7 @@ const INLINE_BANNED: Array<[string, RegExp]> = [
 ];
 // properties the <style> block may set outside @media (cosmetic only), and inside the phone @media
 const STYLE_COSMETIC = new Set(['font-size', 'font-weight', 'letter-spacing', 'text-transform', 'line-height', 'margin-top', 'padding', 'padding-bottom', 'border-bottom', 'border', 'border-radius', 'background', 'color', 'width', 'min-width', 'box-sizing', 'overflow-x']);
-const STYLE_PHONE = new Set([...STYLE_COSMETIC, 'display', 'max-width', 'padding-left', 'padding-right', 'white-space', 'overflow-wrap', 'vertical-align', 'height']);
+const STYLE_PHONE = new Set([...STYLE_COSMETIC, 'display', 'max-width', 'padding-left', 'padding-right', 'white-space', 'overflow-wrap', 'vertical-align', 'height', 'min-height']);
 
 /** Returns "rule: detail" for every problem in one rendered email; empty when it is safe. */
 export function lintEmailHtml(html: string): string[] {

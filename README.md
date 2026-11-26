@@ -40,7 +40,7 @@ Current suite size (generated; do not edit by hand):
 Tag counts:
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 53 · `@regression` 931 · `@prodSafe` 62
+`@smoke` 53 · `@regression` 947 · `@prodSafe` 62
 <!-- GEN:tag-counts:END -->
 
 Module names in the table come from `deriveModuleFromFile()` (the same labels the notification email uses). Login's spec lives in `tests/ui/dashboard/` and is counted under Dashboard.

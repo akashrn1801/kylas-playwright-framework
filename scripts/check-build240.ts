@@ -106,14 +106,14 @@ function main(): void {
   const cov240 = moduleCoverageViolations(r.html, fx.modules.map((m) => ({ name: m.name, type: m.type, total: m.total })));
   check(cov240.length === 0, `every module in the results has its row, on its own side, with its own test count (${fx.modules.length} sides: ${[...new Set(fx.modules.map((m) => m.name))].join(', ')})`, cov240.join('; '));
   const byName = new Map(mt.map((x) => [x.name, x]));
-  check(mt.length === new Set(fx.modules.map((m) => m.name)).size && /All 34 modules, UI and RBAC side by side/.test(t) && !/passed every test first time/.test(t), 'E6: one row per entity (every module of the 34 is shown), the "27 modules passed every test first time" one-liner is gone', `${mt.length} rows`);
+  check(mt.length === new Set(fx.modules.map((m) => m.name)).size && /All 17 modules, UI and RBAC side by side/.test(t) && !/passed every test first time/.test(t), 'E6: one row per entity (every module of the 34 is shown), the "27 modules passed every test first time" one-liner is gone', `${mt.length} rows`);
   const dash = byName.get('Dashboard');
   const leads = byName.get('Leads');
   check(JSON.stringify(dash?.UI) === '[33,33,0,0,0,0]' && JSON.stringify(dash?.RBAC) === '[28,26,2,0,0,0]' && JSON.stringify(leads?.UI) === '[40,39,1,0,0,0]' && JSON.stringify(leads?.RBAC) === '[40,39,1,0,0,0]', 'E6: Dashboard (UI 33 | 33 | 0 | 0 | 0 | 0, RBAC 28 | 26 | 2 | 0 | 0 | 0) and Leads (1 retry on each side): tests, first time, retry, rerun, failed, skipped', JSON.stringify([dash, leads]));
   check(JSON.stringify(byName.get('Call-logs')?.UI) === '[29,27,1,0,0,1]' && mt.slice(0, 6).every((x) => [x.UI, x.RBAC].some((sd) => sd && sd[2] + sd[3] + sd[4] > 0)) && mt.slice(6).every((x) => [x.UI, x.RBAC].every((sd) => !sd || sd[2] + sd[3] + sd[4] === 0)), 'E6: the 6 entities with a retry (7 modules) come first, the other rows are clean; Call-logs UI 29 | 27 | 1 | 0 | 0 | 1', mt.slice(0, 9).map((x) => x.name).join(', '));
   check((byName.get('Dashboard')?.bgs ?? []).includes(RETRY.bg.toUpperCase()), 'E6: a cell with a retry is highlighted in the retry yellow');
-  const detailRows = (r.html.match(/<td style="padding:8px;font-size:12px;color:#1B1F24;font-weight:500;">/g) ?? []).length;
-  check(detailRows === 7 && !/more modules? with failures or flaky tests/.test(t), 'E7: the Module Analytics rows are not capped (all 7 modules with news, no "N more modules" line)', String(detailRows));
+  const moduleTables = (r.html.match(/<table class="am"/g) ?? []).length;
+  check(moduleTables === 1 && mt.length === 17 && !/more modules? with failures or flaky tests/.test(t) && !r.html.includes('>Pass (final)</th>'), 'E7: ONE Module Analytics table with all 17 entities (34 sides), not capped, no separate problem-modules table', String(moduleTables));
 
   // ── E7: sizes, content kept, nothing lost by the compaction ──
   const kib = (h: string): number => Buffer.byteLength(h) / 1024;

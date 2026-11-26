@@ -14,7 +14,7 @@ All figures in tables below are generated (`npm run docs:refresh`), never hand-t
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 53 · `@regression` 931 · `@prodSafe` 62
+`@smoke` 53 · `@regression` 947 · `@prodSafe` 62
 <!-- GEN:tag-counts:END -->
 
 ## 2. Pipeline matrix (generated from the workflow / Jenkinsfile text)
@@ -102,7 +102,7 @@ Replaces Playwright's blind count-based `--shard=N/M`. It runs `playwright test 
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 124 / 123 / 36 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 125 / 125 / 124 / 49 | 6 |
 | full suite (stage, main) | 5 | 125 / 125 / 125 / 124 / 49 | 6 |
 <!-- GEN:shard-plan:END -->
 

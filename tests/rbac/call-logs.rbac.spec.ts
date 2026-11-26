@@ -668,7 +668,7 @@ test.describe('Call Logs — RBAC', () => {
   );
 
   test(
-    '@prodSafe Restricted user should navigate to Call Logs list page on production and verify list is accessible without errors',
+    '@regression @prodSafe Restricted user should navigate to Call Logs list page on production and verify list is accessible without errors',
     async ({ restrictedPage }) => {
       const callLogsPage = new CallLogsPage(restrictedPage);
       await callLogsPage.goToCallLogsList();

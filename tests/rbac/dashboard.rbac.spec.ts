@@ -15,7 +15,7 @@ import { logger } from '../../src/utils/logger';
 // numbering space across both files from the start (mirrors Reports'
 // R1-R64 precedent).
 test.describe('Dashboard RBAC', () => {
-  test('@smoke @prodSafe DB16 restricted user can view dashboard', async ({ restrictedPage }) => {
+  test('@smoke @regression @prodSafe DB16 restricted user can view dashboard', async ({ restrictedPage }) => {
     const dashboardPage = new DashboardPage(restrictedPage);
     await dashboardPage.goToDefaultDashboard();
     await dashboardPage.assertDefaultSectionsVisible();

@@ -13,7 +13,7 @@ import { buildJobRecoveryRows } from '../src/notifications/JobStats';
 import { RunHistoryRecord, buildPassRateSeries } from '../src/notifications/RunHistory';
 import { BUILD_235, SKIP_REASON_AFTER, loadFixture, replayBuild235 } from './lib/build235Fixture';
 import { RenewalFailure } from '../src/auth/renewalFailure';
-import { moduleCoverageViolations } from './check-scenarios';
+import { allModulesTable, moduleCoverageViolations } from './check-scenarios';
 
 let failed = 0;
 let total = 0;
@@ -76,17 +76,14 @@ function main(): void {
   check(JSON.stringify(buildPassRateSeries(mixed, cur).map((p) => p.buildNumber)) === JSON.stringify(['231', '100', '235']), 'item 3: sorted by run time, not by file position or build number across workflows; other branches left out');
 
   // ── item 4: module analytics ──
-  const rowOf = (name: string, type: string): string => {
-    const rowsHtml = html.split('<tr style="border-bottom:1px solid').filter((x) => x.includes(`>${name}</td>`) && x.includes(`>${type}</span>`));
-    return text(rowsHtml[0] ?? '');
-  };
-  const mr = rowOf('Meetings', 'RBAC');
-  check(/unstable this run: 3 of 12 \(1 failed first, 2 flaky\)/.test(mr), 'item 4: Meetings RBAC (3 of 12 unstable this run) says so in words', mr);
+  // one table of every module (2026-11-26): the old detail table is gone; its facts are cell highlights and badges under the module name
+  const mtab = allModulesTable(html) ?? [];
+  const meetings = mtab.find((x) => x.name === 'Meetings');
+  check(JSON.stringify(meetings?.RBAC) === '[12,9,2,1,0,0]' && /RBAC 2 retries/.test(meetings?.badges ?? '') && /RBAC 1 on rerun/.test(meetings?.badges ?? ''), 'item 4: Meetings RBAC (3 of 12 unstable this run) says so in its row: 12 tests, 9 first time, 2 retries, 1 on rerun, and the badges "RBAC 2 retries", "RBAC 1 on rerun"', JSON.stringify([meetings?.RBAC, meetings?.badges]));
   check(!/– stable/.test(t) && !/stable \(\d+% unstable/.test(t), 'item 4: no bare "– stable (N% unstable / last N)" badge is left');
-  check(/last \d+ runs: \d+% unstable, /.test(mr), 'item 4: the rolling window has its own label ("last N runs: N% unstable, ...")', mr);
-  check(/All 34 modules, UI and RBAC side by side/.test(t) && /Call-logs 29 /.test(t) && !/passed every test first time/.test(t), 'item 4 / E6: every module is in the all-modules table (34 rows, UI and RBAC side by side); the "N modules passed every test first time" one-liner is gone');
-  check(html.includes('>vs last run</th>') && html.includes('>Stability</th>'), 'item 4: the Trend column is split into "vs last run" and "Stability"');
-
+  check(html.includes('>Unstable, last runs</th>') && /\d+% (worse|better)/.test(t), 'item 4: the rolling window has its own column ("Unstable, last runs") with the rate and "worse" / "better" in words');
+  check(/All 17 modules, UI and RBAC side by side/.test(t) && /Call-logs UI 2 retries/.test(t) && !/passed every test first time/.test(t) && !html.includes('>Pass (final)</th>'), 'item 4 / E6: every module is in the ONE all-modules table (34 rows, UI and RBAC side by side, problem rows tinted with badges); no second table, no "N modules passed every test first time" line');
+  check(mtab.every((x) => x.hiddenCells === 0), 'item 4: Tests and Skip are never hidden on phones (a side must add up on a phone too)');
   // ── Final result rule (second amendment of ADR 0015, 2026-11-24): tiles, executive summary, modules, subject ──
   const tileText = (label: string): string => (t.match(new RegExp(`(\\d+) ${label}.{0,90}`)) ?? [])[0] ?? '';
   check(r.report.finalPassed === 940 && /^940 Passed 6 after a retry, 2 after the rerun/.test(tileText('Passed')), 'tiles: Passed 940 "6 after a retry, 2 after the rerun"', tileText('Passed'));
@@ -95,8 +92,7 @@ function main(): void {
   check(940 + 2 + 1 === 943 && r.report.finalPassed + r.report.failed + (r.report.skipped - r.report.didNotRun) + r.report.didNotRun === r.report.total, 'tiles: Passed + Failed + Skipped (+ Did not run) add up to the total');
   check(/\b6 Flaky passed on a retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
   check(/940 of 943 tests passed in the end: 6 passed on their retry and 2 only on the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
-  const mr2 = rowOf('Meetings', 'RBAC');
-  check(/Meetings RBAC 12 100% of 12 3 needed a retry or rerun/.test(mr2) && !html.includes('>Flaky</th>') && html.includes('>Pass (final)</th>'), 'modules: Meetings RBAC Pass (final) 12 with "3 needed a retry or rerun" inside it; no separate Flaky column', mr2);
+  check(!html.includes('>Flaky</th>') && !html.includes('>Pass (final)</th>'), 'modules: no separate Flaky column and no second detail table (Retry and Rerun are columns of the one table)');
   check(r.report.passRate === 98.8 && /98\.8%/.test(t) && /Passed first time/.test(t), 'signals kept: "Passed first time" 98.8%, and the Flaky Tests section still lists each flaky test with its error');
 
   // ── item 5: background errors reconcile ──

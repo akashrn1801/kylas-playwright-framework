@@ -20,6 +20,7 @@ import { computeHealthScore, computeOverallVerdict, healthNotApplicableReason } 
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { JobStats } from './JobStats';
+import { loadSuiteBaseline } from './SuiteBaseline';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { loadSessionInfo } from '../auth/sessionInfo';
 import { loadKnownIssuesIndex, locateKnownIssues } from './KnownIssuesIndex';
@@ -67,6 +68,8 @@ export function withRenewalCause(c: ShardCompleteness | null, failure: RenewalFa
 }
 
 export interface NotificationInput {
+  // Tests per module in the whole suite (SuiteBaseline.ts); omitted = read config/expected-test-counts.json, null = say nothing about modules that ran fewer.
+  suiteBaseline?: Record<string, number> | null;
   jsonReportPath: string;
   env: string;
   branch: string;
@@ -364,6 +367,7 @@ export class NotificationService {
       moduleStabilityTrend: historyDeltaFile.moduleStabilityTrend,
       slowTestTrend: historyDeltaFile.slowTestTrend,
       suiteDrift: historyDeltaFile.suiteDrift,
+      suiteBaseline: input.suiteBaseline === undefined ? loadSuiteBaseline() : input.suiteBaseline,
       passRateSeries: historyDeltaFile.passRateSeries,
       health,
       verdict,

@@ -142,7 +142,7 @@ test.describe('Meetings', () => {
     logger.success('M5 passed');
   });
 
-  test('@prodSafe meetings list page should be accessible', async ({ adminPage }) => {
+  test('@regression @prodSafe meetings list page should be accessible', async ({ adminPage }) => {
     const meetingsPage = new MeetingsPage(adminPage);
 
     await meetingsPage.goToMeetingsList();
@@ -152,7 +152,7 @@ test.describe('Meetings', () => {
 
   // ── Test: prodSafe — GPS address field works ─────────────────────────────
 
-  test('@prodSafe meetings Add form GPS address field should work', async ({ adminPage }) => {
+  test('@regression @prodSafe meetings Add form GPS address field should work', async ({ adminPage }) => {
     test.setTimeout(120000);
 
     const meetingsPage = new MeetingsPage(adminPage);

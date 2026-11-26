@@ -14,7 +14,7 @@ import {
   passRatePercent,
 } from './RunHistory';
 import { HealthScore, VerdictResult, branchAdvice, computeOverallVerdict, computeHealthScore } from './AutomationHealth';
-import { FailureCategory } from './FailureAnalyzer';
+import { FailureCategory, normalizeTestTitle } from './FailureAnalyzer';
 import { EnrichedCluster, FailureDetail, RegressionStatus } from './FailureDetailBuilder';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
 import { redactSensitiveText } from './redact';
@@ -24,7 +24,7 @@ import { FieldConfigResetReport } from './FieldConfigReset';
 import { ShardCompleteness, isIncompleteRun, isScopedRun } from './ShardCompleteness';
 import { RerunSummary, RerunTestRow, FIRST_LABEL, RERUN_LABEL, FINAL_LABEL, rerunRowKey } from './RerunSummary';
 import { CauseSummary, SuspectedCause, splitText } from './FailureClassifier';
-import { nounFor } from './wording';
+import { nounFor, plural as pluralize } from './wording';
 import { DonutSegment, renderDonutPng } from './DonutChart';
 import { RETRY, infoSwatch } from './EmailPalette';
 import { logger } from '../utils/logger';
@@ -131,6 +131,8 @@ export interface EmailContext {
   // WHY optional: suspected-cause hints (FailureClassifier.ts). Rendered only; nothing here feeds the verdict, health
   // score, counts, dedup key, subject or history.
   causeSummary?: CauseSummary;
+  // Tests per module in the whole suite (SuiteBaseline.ts), for the "N not selected" note on a module that ran fewer; null or absent = no note.
+  suiteBaseline?: Record<string, number> | null;
   // WHY: distinguishes "the history mechanism has never had a chance to
   // compare" (no prior run recorded at all) from "compared, and this
   // specific module/test had no prior entry" — see the Module Analytics
@@ -338,7 +340,7 @@ export class EmailTemplate {
     const result = nothingRan ? verdict.bannerLabel.replace(/^[^\w]+/, '') : `${verdict.bannerLabel.replace(/^[^\w]+/, '')}: ${this.countsLine(r)} of ${r.total}`;
     let action: string;
     if (r.failed > 0) {
-      const names = (ctx.clusters ?? []).flatMap((c) => c.details.map((d) => d.test.title)).slice(0, 2).map((t) => this.truncate(t, 80));
+      const names = (ctx.clusters ?? []).flatMap((c) => c.details.map((d) => normalizeTestTitle(d.test.title))).slice(0, 2).map((t) => this.truncate(t, 80));
       action = `Fix ${r.failed} failing test${r.failed === 1 ? '' : 's'}${names.length > 0 ? `: ${names.join('; ')}${r.failed > names.length ? '; …' : ''}` : ''}`;
     } else if (verdict.verdict === 'blocked') {
       action = verdict.headline;
@@ -373,12 +375,12 @@ export class EmailTemplate {
     const r = ctx.report;
     const lines: string[] = [this.subject(ctx), '', `Result: ${t.result}`, `Action: ${t.action}`, `Run: ${t.link ?? 'no run link (local execution)'}`, ''];
     lines.push(`Health: ${health.notApplicable ? `n/a (${health.notApplicable})` : `${health.label} ${health.score}/100`}`);
-    lines.push(`Passed first time: ${health.notApplicable ? 'n/a' : `${r.passRate}%`}; duration ${this.formatDuration(r.duration)}; ${r.modules.length} modules`);
+    lines.push(`Passed first time: ${health.notApplicable ? 'n/a' : `${r.passRate}%`}; duration ${this.formatDuration(r.duration)}; ${new Set(r.modules.map((m) => m.name)).size} modules`);
     const failed = (ctx.clusters ?? []).flatMap((c) => c.details);
     if (failed.length > 0) {
       lines.push('', `FAILED (${r.failed})`);
       for (const d of failed) {
-        lines.push(`- ${d.test.title} (${d.test.file.split('/').pop()}): ${this.truncate(d.primaryError.replace(/\s+/g, ' '), 200)}`);
+        lines.push(`- ${normalizeTestTitle(d.test.title)} (${d.test.file.split('/').pop()}): ${this.truncate(d.primaryError.replace(/\s+/g, ' '), 200)}`);
         const cmd = this.rerunCommand(ctx.env, d.test);
         if (cmd) lines.push(`    ${cmd}`);
       }
@@ -386,7 +388,7 @@ export class EmailTemplate {
     const unstable = [...r.flakyTests, ...r.passedOnRerunTests];
     if (unstable.length > 0) {
       lines.push('', `FLAKY / PASSED ON RERUN (${unstable.length})`);
-      for (const x of unstable) lines.push(`- ${x.title}`);
+      for (const x of unstable) lines.push(`- ${normalizeTestTitle(x.title)}`);
     }
     if (ctx.miscErrors && ctx.miscErrors.totalErrors > 0) lines.push('', `Background errors: ${ctx.miscErrors.unexpectedErrors} unexpected + ${ctx.miscErrors.expectedRbacErrors} expected RBAC + known noise = ${ctx.miscErrors.totalErrors} (details: background-errors.html in the report artifact)`);
     lines.push('', 'Traces, screenshots, page snapshots and the full lists are in the report artifact on the run page.');
@@ -439,10 +441,12 @@ export class EmailTemplate {
       this.buildMasthead(ctx, health),
       this.buildStatusBanner(verdict),
       this.buildTopSummary(ctx, verdict),
-      this.buildCauseBanner(ctx.causeSummary),
+      // a failed run keeps the cause directly under the verdict; when nothing failed in the end it is a quiet note below the summary (build #242)
+      ctx.report.failed > 0 ? this.buildCauseBanner(ctx.causeSummary, false) : '',
       this.buildCapacityWarnings(capacityView),
       this.buildStatusBadgeRow(ctx),
       this.buildExecutiveSummary(ctx, health, clusters, verdict),
+      ctx.report.failed > 0 ? '' : this.buildCauseBanner(ctx.causeSummary, true),
       this.buildCauseSummaryLine(ctx.causeSummary),
       this.buildHealthScoreBlock(health),
       this.buildRunMetadata(ctx),
@@ -482,7 +486,7 @@ export class EmailTemplate {
 <meta name="supported-color-schemes" content="light">
 <style>
   @media only screen and (max-width: 480px) {
-    .kpi { display: inline-block !important; width: 44% !important; box-sizing: border-box; vertical-align: top; }
+    .kpi { display: inline-block !important; width: 44% !important; box-sizing: border-box; vertical-align: top; min-height: 98px; }
     td[style*="28px"] { padding-left: 16px !important; padding-right: 16px !important; }
     table { width: 100% !important; max-width: 100% !important; }
     table.lt { width: auto !important; }
@@ -490,6 +494,8 @@ export class EmailTemplate {
     .col { display: block !important; width: 100% !important; padding: 0 0 12px !important; box-sizing: border-box; }
     .mh { display: none !important; }
     table.am th, table.am td { padding: 3px 1px !important; font-size: 9px !important; }
+    table.am th { font-size: 8px !important; letter-spacing: -0.2px; }
+    table.am .nm { font-size: 10px !important; padding-right: 3px !important; }
     .wr { white-space: normal !important; }
     td, div, a { overflow-wrap: break-word; }
     a { overflow-wrap: anywhere; }
@@ -662,7 +668,7 @@ ${body}
 
   // Returns '' when there is nothing to show (same convention as buildIncompleteRunBanner()). Sits directly under the
   // status banner and does not touch it: the verdict above is unchanged by anything here.
-  private buildCauseBanner(summary: CauseSummary | undefined): string {
+  private buildCauseBanner(summary: CauseSummary | undefined, quiet: boolean): string {
     const d = summary?.dominant;
     if (!d) return '';
     // WHY dated and labelled: the observation is a one-off manual probe stored in the registry, not something this
@@ -673,10 +679,19 @@ ${body}
       : '';
     const split = splitText(d.failedCount, d.retryCount, d.rerunCount);
 
+    const title = `Likely environment problem: ${d.count} of ${d.total} failed or flaky tests share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.kiLinked(this.esc(d.kiRef))}`;
+    const detail = `A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal, d.rerunTotal))}. A flaky test (${d.rerunTotal > 0 ? 'passed on retry or recovered on rerun' : 'passed on retry'}) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.`;
+    if (quiet) {
+      return `
+<tr><td id="section-suspected-environment" style="padding:6px 28px 0;">
+  <div style="font-size:11px;color:${SLATE};"><strong style="color:${INK};">Note:</strong> ${title}. Nothing failed in the end, so this does not change the verdict. ${detail}</div>
+  ${ask}
+</td></tr>`;
+    }
     return `
 <tr><td id="section-suspected-environment" style="background:#EEF1FF;padding:12px 28px;border-bottom:1px solid #C9D2F5;">
-  <div style="font-size:13px;font-weight:700;color:${INK};">Likely environment problem: ${d.count} of ${d.total} failed or flaky tests share the signature “${this.esc(d.title)}” (${this.esc(split)}) — see ${this.kiLinked(this.esc(d.kiRef))}</div>
-  <div style="font-size:12px;color:${SLATE};margin-top:4px;">A suspected cause only — the run status above is unchanged and every failure is still listed below. Of the ${d.total}: ${this.esc(splitText(d.failedTotal, d.retryTotal, d.rerunTotal))}. A flaky test (${d.rerunTotal > 0 ? 'passed on retry or recovered on rerun' : 'passed on retry'}) counts here because its failing attempt matched. Signature registered ${this.esc(d.added)}.</div>
+  <div style="font-size:13px;font-weight:700;color:${INK};">${title}</div>
+  <div style="font-size:12px;color:${SLATE};margin-top:4px;">${detail}</div>
   ${ask}
 </td></tr>`;
   }
@@ -807,7 +822,7 @@ ${body}
     if (afterRetry + afterRerun + ranOnly > 0) {
       // plain words (2026-11-25): "1 passed on its retry and 1 only on the rerun", not "1 after an in-job retry (flaky) and 1 after the rerun"
       const parts = [afterRetry > 0 ? `${afterRetry} passed on ${afterRetry === 1 ? 'its' : 'their'} retry` : '', afterRerun > 0 ? `${afterRerun} ${afterRetry > 0 ? '' : 'passed '}only on the rerun` : '', ranOnly > 0 ? `${ranOnly} that did not run in the first run, only on the rerun` : ''].filter(Boolean);
-      sentences.push(`${report.finalPassed} of ${report.total} tests passed in the end: ${parts.join(' and ')} — not clean the first time.`);
+      sentences.push(`${report.finalPassed} of ${report.total} ${nounFor(report.total, 'test')} passed in the end: ${parts.join(' and ')} — not clean the first time.`);
     }
     if (drift?.occurred) {
       sentences.push(
@@ -1086,11 +1101,11 @@ ${body}
     // nonzero" convention.
     // Rerun shard attempts are counted in the tile too (each rerun result is one more result of its test), so the
     // tile and the rerun section's "(N in-job retries)" (the rerun shard's own retry budget) are told apart here.
+    // Said in tests, plainly (2026-11-26, build #242: "1 genuine, 3 swept" and "from failed/flaky tests" were unexplained).
     const retriesSubtext = [
-      report.retriesFromRerun > 0 ? `${report.retriesFromRerun} from the rerun, ${report.totalRetries - report.retriesFromRerun} from retries` : '',
-      report.retriesFromCleanSweeps > 0
-        ? `${report.retriesFromNonCleanTests} from failed/flaky tests, ${report.retriesFromCleanSweeps} from tests that passed every attempt but were swept into another test's serial-block retry`
-        : '',
+      report.testsNeedingRetry > 0 ? `${report.testsNeedingRetry} ${report.testsNeedingRetry === 1 ? 'test needed a retry' : 'tests needed a retry'}` : '',
+      report.testsSweptByRetry > 0 ? `${report.testsSweptByRetry} ${report.testsSweptByRetry === 1 ? 'other re-ran only because it shares' : 'others re-ran only because they share'} a serial block with a test that did` : '',
+      report.retriesFromRerun > 0 ? `the rerun added ${report.retriesFromRerun} ${report.retriesFromRerun === 1 ? 'attempt' : 'attempts'}` : '',
     ]
       .filter(Boolean)
       .join('; ') || undefined;
@@ -1124,7 +1139,8 @@ ${body}
         subtext: report.firstRun.flaky > 0 || report.recoveredOnRerun > 0 ? `passed on a retry (inside Passed)${report.recoveredOnRerun > 0 ? `; +${report.recoveredOnRerun} passed only on the rerun` : ''}` : undefined,
       },
       { value: this.formatDuration(report.duration), label: 'Duration' },
-      { value: String(report.modules.length), label: 'Modules' },
+      // one per module name, UI and RBAC together: the same count as the rows of the Module Analytics table (build #242 said 36 here and showed 18 rows)
+      { value: String(new Set(report.modules.map((m) => m.name)).size), label: 'Modules', subtext: 'UI and RBAC together' },
       {
         value: String(report.totalRetries),
         label: 'Retries',
@@ -1331,7 +1347,7 @@ ${body}
     const dark = text.toLowerCase() === '#ffffff'; // white text: the subtext keeps the light tone of the .ts class
     const valueHtml = anchor ? `<a href="${this.escAttr(anchor)}" style="color:${text};text-decoration:none;">${this.esc(value)}</a>` : this.esc(value);
     return `
-  <td style="width:${widthPct}%;background:${fill};border:3px solid #ffffff;border-radius:10px;padding:12px 4px 10px;text-align:center;color:${text};" class="kpi">
+  <td style="width:${widthPct}%;background:${fill};border:3px solid #ffffff;border-radius:10px;padding:12px 4px 10px;height:62px;text-align:center;color:${text};" class="kpi">
     <div class="tv" style="font-size:22px;font-weight:700;">${valueHtml}</div>
     <div class="tl" style="font-size:9px;">${this.esc(label)}</div>
     ${subtext ? `<div class="ts" style="font-size:10px;${dark ? '' : `color:${text};`}">${subtext.replace(/color:#[0-9A-Fa-f]{6};?/g, '')}</div>` : ''}
@@ -1413,7 +1429,7 @@ ${body}
 
     const deltaLine = delta
       ? delta.previousRun === null
-        ? `<div style="font-size:12px;color:${SLATE};">No prior run to compare — this is the first recorded run for this environment.</div>`
+        ? `<div style="font-size:12px;color:${SLATE};">No earlier run with the same branch and test selection to compare with, so no change is shown.</div>`
         : `<div style="font-size:12.5px;color:${INK};">
              <strong>Δ vs previous run</strong> (build ${this.mono(`#${delta.previousRun.buildNumber}`)}):
              <div style="padding:2px 0;">${this.deltaSubtext(delta.passedDelta, '', 'passed')}</div>
@@ -1438,8 +1454,8 @@ ${body}
                .map((i) => {
                  const anchor = testAnchors.get(i.title);
                  const titleHtml = anchor
-                   ? `<a href="${this.escAttr(`#${anchor}`)}" style="color:#6B5300;font-weight:600;">${this.esc(i.title)}</a>`
-                   : this.esc(i.title);
+                   ? `<a href="${this.escAttr(`#${anchor}`)}" style="color:#6B5300;font-weight:600;">${this.esc(normalizeTestTitle(i.title))}</a>`
+                   : this.esc(normalizeTestTitle(i.title));
                  return `<div style="font-size:11.5px;color:#6B5300;padding:2px 0;">${titleHtml} — ${i.countInLastNRuns} of last ${i.ofLastNRuns} runs</div>`;
                })
                .join('')}
@@ -1506,7 +1522,7 @@ ${body}
     const rows = flaky
       .map((i) => {
         const anchor = testAnchors.get(i.title);
-        const title = anchor ? `<a href="${this.escAttr(`#${anchor}`)}" style="color:${INK};">${this.esc(this.truncate(i.title, 90))}</a>` : this.esc(this.truncate(i.title, 90));
+        const title = anchor ? `<a href="${this.escAttr(`#${anchor}`)}" style="color:${INK};">${this.esc(this.truncate(normalizeTestTitle(i.title), 90))}</a>` : this.esc(this.truncate(normalizeTestTitle(i.title), 90));
         const ratio = i.countInLastNRuns / i.ofLastNRuns;
         const level = ratio > 0.5 ? ['high risk', FAIL] : ratio > 0.2 ? ['medium risk', WARN] : ['low risk', SLATE];
         return `<tr style="border-bottom:1px solid ${CANVAS_TINT};"><td style="padding:4px 0;font-size:11.5px;color:${INK};">${title}</td><td style="padding:4px 8px;font-size:11.5px;font-weight:700;color:${INK};white-space:nowrap;">${i.countInLastNRuns} of ${i.ofLastNRuns} runs</td><td style="padding:4px 8px;font-size:10.5px;font-weight:700;color:${level[1]};white-space:nowrap;">${level[0]}</td><td style="padding:4px 0 4px 8px;font-size:10.5px;color:${SLATE};white-space:nowrap;">${inThisRun.has(i.title) ? 'flaky in this run too' : 'passed clean in this run'}</td></tr>`;
@@ -1524,143 +1540,39 @@ ${body}
 
   // ===================== Module analytics (incl. Test Type Split caption) =====================
 
+  /**
+   * ONE table of every module (2026-11-26, build #242: a 3-row "problem modules" table above "All 36 modules" made readers think modules were
+   * missing). One row per entity (Leads, Deals, "Leads — Field Limits", ...) with UI and RBAC side by side, each side
+   * Tests | First | Retry | Rerun | Failed | Skip | Unstable (last runs). A row with a problem is tinted and carries short badges under its name
+   * ("1 retry", "1 failed", "worse than last run"); problem rows come first, the others alphabetically. A cell with something in it is
+   * highlighted: retry and rerun yellow, failed red, skipped slate; a zero is grey. Per side the five outcomes add up to Tests (check:scenarios).
+   * Tests and Skip are never hidden on phones: with them hidden a module with 6 tests and 2 skipped read "4" (build #242, Billing).
+   */
   private buildModuleAnalytics(ctx: EmailContext): string {
     const { report } = ctx;
     const trendByKey = new Map((ctx.moduleTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
-    // WHY a separate lookup, not merged into trendByKey (2026-09-29, Phase 3
-    // item 5): the two answer different questions — see ModuleStabilityTrend's
-    // own WHY comment in RunHistory.ts. Rendered as a second, smaller line
-    // under the existing single-run arrow rather than a whole new table,
-    // per the "extend the existing mechanism, don't build parallel" note.
     const stabilityByKey = new Map((ctx.moduleStabilityTrend ?? []).map((m) => [`${m.type}:${m.name}`, m]));
-
-    const scored = report.modules
-      .map((m) => ({
-        ...m,
-        score: (m.total > 0 ? (m.passed / m.total) * 100 : 0) - m.failed * 10 - m.flaky * 5,
-      }))
-      .sort((a, b) => b.score - a.score);
-
-    // Size (commit 2, 2026-11-25): a module whose tests all passed first time, with no worsening trend, is one name in a footer line instead of
-    // a 700-byte row; every module with something to say keeps its full row. The numbers in the footer are the same as in the rows above.
-    const isQuiet = (m: (typeof scored)[number]): boolean => {
-      const trend = trendByKey.get(`${m.type}:${m.name}`);
-      const stability = stabilityByKey.get(`${m.type}:${m.name}`);
-      return m.failed === 0 && m.firstRun.failed === 0 && m.firstRun.flaky === 0 && m.passedOnRerun === 0 && m.flaky === 0 && m.totalRetries === 0 && trend?.direction !== 'worsening' && stability?.direction !== 'worsening';
-    };
-    // Every module with something to say keeps its full row; every module, with or without news, is also in the all-modules table below.
-    const withNews = scored.filter((m) => !isQuiet(m)).sort((a, b) => b.score - a.score);
-    const rows = withNews
-      .map((m) => {
-        // Pass = the FINAL outcome (second amendment of ADR 0015, 2026-11-24): clean + after an in-job retry + after the rerun. The tests
-        // that needed a retry or the rerun are counted INSIDE it and said so under the number.
-        const finalPassed = m.passed + m.flaky;
-        const needed = m.flaky + m.passedOnRerun;
-        const passRate = m.total > 0 ? Math.round((finalPassed / m.total) * 100) : 0;
-        const barColor = m.failed > 0 ? FAIL : needed > 0 ? WARN : SUCCESS;
-        const typeStyle =
-          m.type === 'UI'
-            ? `background:#EFF3FE;color:${ACCENT};`
-            : m.type === 'RBAC'
-              ? `background:${SUCCESS_BG};color:${SUCCESS};`
-              : `background:${CANVAS_TINT};color:${SLATE};`;
-        const trend = trendByKey.get(`${m.type}:${m.name}`);
-        // WHY words next to every glyph (2026-11-24, item 21 started here): "▼" alone says nothing without the colour.
-        // "vs last run" is the single comparison with the previous comparable run; "no history yet" / "new module" stay
-        // distinct from a real "same", as before.
-        const trendGlyph = !ctx.hasHistoryEverExisted
-          ? `<span style="color:${MUTED};font-size:10px;">no history yet</span>`
-          : !trend
-            ? `<span style="color:${MUTED};font-size:10px;">new module</span>`
-            : trend.direction === 'improving'
-              ? `<span style="color:${SUCCESS};">▲ better than last run</span>`
-              : trend.direction === 'worsening'
-                ? `<span style="color:${FAIL};">▼ worse than last run</span>`
-                : `<span style="color:${MUTED};">same</span>`;
-        // WHY two separate lines in the stability column (2026-11-24, build #235: Meetings RBAC with 3 of 12 tests unstable
-        // read "– stable (4% unstable / last 10)"): the badge is the direction of the last N runs averaged, so one bad run
-        // is diluted into "stable". This run's own instability (the FIRST run's failed + flaky, before the rerun) comes
-        // first, in words, and the rolling window follows under its own label.
-        const unstableNow = m.firstRun.failed + m.firstRun.flaky;
-        const thisRun =
-          unstableNow > 0
-            ? `<div style="font-size:10px;font-weight:700;color:${m.firstRun.failed > 0 ? FAIL : WARN};">unstable this run: ${unstableNow} of ${m.total} (${[m.firstRun.failed > 0 ? `${m.firstRun.failed} failed first` : '', m.firstRun.flaky > 0 ? `${m.firstRun.flaky} flaky` : ''].filter(Boolean).join(', ')})</div>`
-            : `<div style="font-size:10px;color:${MUTED};">clean this run</div>`;
-        const stability = stabilityByKey.get(`${m.type}:${m.name}`);
-        const stabilityBadge =
-          !stability || stability.direction === 'insufficient-data'
-            ? ''
-            : `<div style="font-size:9px;margin-top:2px;color:${
-                stability.direction === 'worsening' ? FAIL : stability.direction === 'improving' ? SUCCESS : MUTED
-              };">last ${stability.runsConsidered} runs: ${stability.failRate + stability.flakyRate}% unstable, ${
-                stability.direction === 'worsening' ? 'getting worse' : stability.direction === 'improving' ? 'getting better' : 'no clear trend'
-              }</div>`;
-        const neededNote =
-          needed > 0
-            ? `<div style="font-size:9px;font-weight:400;margin-top:2px;"><a href="#section-flaky-tests" style="color:${WARN};text-decoration:none;">${needed} needed a retry or rerun</a></div>`
-            : '';
-        const failedCell = m.failed > 0
-          ? `<a href="#section-failed-tests" style="color:${FAIL};text-decoration:none;">${m.failed}</a>`
-          : String(m.failed);
-        // WHY this cell exists (2026-09-29, Phase 3 item 4a): see
-        // ModuleStats.totalRetries' own WHY comment — a per-module retry
-        // count, honestly split the same way the whole-run KPI tile already
-        // is, so a reader can tell which module is actually driving the
-        // run's total retries rather than only seeing one aggregate number.
-        // Rendered as "–" when zero (matches this table's other zero-value
-        // conventions), a plain count when every retry there is genuine, or
-        // a count plus a small swept-count annotation when any exist —
-        // mirrors buildKpiDashboard()'s retriesSubtext shape exactly.
-        const retriesCell =
-          m.totalRetries === 0
-            ? `<span style="color:${MUTED};">–</span>`
-            : `<span style="color:${WARN};font-weight:700;">${m.totalRetries}</span>${
-                m.retriesFromCleanSweeps > 0
-                  ? `<div style="font-size:9px;color:${MUTED};margin-top:2px;">${m.retriesFromNonCleanTests} genuine, ${m.retriesFromCleanSweeps} swept</div>`
-                  : ''
-              }`;
-        return `<tr style="border-bottom:1px solid ${CANVAS_TINT};">
-        <td style="padding:8px;font-size:12px;color:${INK};font-weight:500;">${this.esc(m.name)}</td>
-        <td style="padding:8px;" class="mh"><span style="${typeStyle}padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;">${m.type}</span></td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${SUCCESS};font-weight:700;">${finalPassed}<div style="font-size:9px;font-weight:400;color:${barColor};">${passRate}% of ${m.total}</div>${neededNote}</td>
-        <td style="padding:8px;text-align:center;font-size:12px;color:${m.failed > 0 ? FAIL : MUTED};font-weight:${m.failed > 0 ? '700' : '400'};">${failedCell}</td>
-        <td style="padding:8px;text-align:center;font-size:12px;">${retriesCell}</td>
-        <td style="padding:8px;text-align:center;font-size:11px;" class="mh">${trendGlyph}</td>
-        <td style="padding:8px;text-align:left;">${thisRun}${stabilityBadge}</td>
-      </tr>`;
-      })
-      .join('');
-
     return `
 <tr><td id="section-module-analytics" style="padding:8px 28px;">
   <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:4px;">Module Analytics</div>
-  <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${report.total} tests · ${report.uiCount} UI · ${report.rbacCount} RBAC — ranked by health (best first)</div>
+  <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${report.total} tests · ${report.uiCount} UI · ${report.rbacCount} RBAC. Modules with a problem come first, tinted, with a short note under the name.</div>
   ${this.buildDevEquivalentRunNote(ctx.suiteDrift)}
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-    <tr style="background:${CANVAS_TINT};">
-      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Module</th>
-      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;" class="mh">Type</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SUCCESS};font-weight:600;">Pass (final)</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${FAIL};font-weight:600;">Fail</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;">Retries</th>
-      <th style="padding:6px 8px;text-align:center;font-size:11px;color:${SLATE};font-weight:600;" class="mh">vs last run</th>
-      <th style="padding:6px 8px;text-align:left;font-size:11px;color:${SLATE};font-weight:600;">Stability</th>
-    </tr>
-    ${rows}
-  </table>
-  ${this.buildAllModulesTable(report, stabilityByKey)}
+  ${this.buildAllModulesTable(report, stabilityByKey, trendByKey, isIncompleteRun(ctx.shardCompleteness) || isScopedRun(ctx.shardCompleteness) ? null : ctx.suiteBaseline ?? null)}
 </td></tr>`;
   }
 
-  /**
-   * Every module, compactly (E6, 2026-11-25): one row per entity (Leads, Deals, "Leads — Field Limits", ...) with UI and RBAC side by side, each side
-   * Tests | First time | Retry | Rerun | Failed | Skipped. A cell with something in it is highlighted: retry and rerun yellow, failed red, skipped slate;
-   * a zero is grey. The rows with a problem come first, the others alphabetically. Per side the five outcomes add up to Tests (check:scenarios). The last
-   * cell of a side is the module's stability over the last runs (main's "stable (x% unstable / last N)"): the unstable rate, with "worse" / "better" in words.
-   */
-  private buildAllModulesTable(report: ParsedReport, stabilityByKey: Map<string, { direction: string; runsConsidered: number; failRate: number; flakyRate: number }>): string {
-    type Side = { total: number; first: number; retry: number; rerun: number; failed: number; skipped: number };
-    const side = (m: ModuleStats): Side => ({ total: m.total, first: m.firstRun.passed, retry: m.firstRun.flaky, rerun: m.passedOnlyOnRerun, failed: m.failed, skipped: m.skipped });
+  private buildAllModulesTable(
+    report: ParsedReport,
+    stabilityByKey: Map<string, { direction: string; runsConsidered: number; failRate: number; flakyRate: number }>,
+    trendByKey: Map<string, { direction: string }>,
+    baseline: Record<string, number> | null
+  ): string {
+    type Side = { total: number; first: number; retry: number; rerun: number; failed: number; skipped: number; swept: number; trend: string | undefined; notSelected: number };
+    const side = (m: ModuleStats): Side => ({
+      total: m.total, first: m.firstRun.passed, retry: m.firstRun.flaky, rerun: m.passedOnlyOnRerun, failed: m.failed, skipped: m.skipped,
+      swept: m.testsSweptByRetry, trend: trendByKey.get(`${m.type}:${m.name}`)?.direction,
+      notSelected: Math.max(0, (baseline?.[`${m.type}:${m.name}`] ?? 0) - m.total),
+    });
     const byName = new Map<string, { UI?: Side; RBAC?: Side }>();
     for (const m of report.modules) {
       const e = byName.get(m.name) ?? {};
@@ -1668,46 +1580,74 @@ ${body}
       else if (m.type === 'RBAC') e.RBAC = side(m);
       byName.set(m.name, e);
     }
-    const problem = (e: { UI?: Side; RBAC?: Side }): number => [e.UI, e.RBAC].reduce((n, x) => n + (x ? x.failed * 1000 + x.retry + x.rerun : 0), 0);
+    const sides = (e: { UI?: Side; RBAC?: Side }): Array<[string, Side]> => (['UI', 'RBAC'] as const).flatMap((k) => (e[k] ? [[k, e[k]!] as [string, Side]] : []));
+    const problem = (e: { UI?: Side; RBAC?: Side }): number => sides(e).reduce((n, [, x]) => n + x.failed * 1000 + x.retry + x.rerun, 0);
     const names = [...byName.keys()].sort((a, b) => problem(byName.get(b)!) - problem(byName.get(a)!) || a.localeCompare(b));
-    const td = (n: number, kind: 'tests' | 'first' | 'retry' | 'rerun' | 'failed' | 'skipped', hide = false): string => {
-      const cls = `${hide ? 'mh ' : ''}`.trim();
+    // The row's tint: red when anything failed, yellow when anything needed a retry or a rerun. A tinted row keeps its own text colours (dark on light), so it reads the same in light and dark clients.
+    const ROW_FAIL = '#FFF5F4';
+    const ROW_RETRY = '#FFFCE8';
+    const td = (n: number, kind: 'tests' | 'first' | 'retry' | 'rerun' | 'failed' | 'skipped', tint: string): string => {
       const base = 'padding:3px 4px;text-align:center;font-size:11px;';
-      let style = `${base}color:${MUTED};`;
+      const rowBg = tint ? `background:${tint};` : '';
+      let style = `${base}${rowBg}color:${MUTED};`;
       if (n > 0) {
         style =
           kind === 'retry' || kind === 'rerun' ? `${base}font-weight:700;background:${RETRY.bg};color:${RETRY.text};`
           : kind === 'failed' ? `${base}font-weight:700;background:${FAIL_BG};color:${FAIL};`
           : kind === 'skipped' ? `${base}font-weight:700;background:${CANVAS_TINT};color:${SLATE};`
-          : `${base}color:${INK};`;
+          : `${base}${rowBg}color:${INK};`;
       }
-      return `<td style="${style}"${cls ? ` class="${cls}"` : ''}>${n}</td>`;
+      return `<td style="${style}">${n}</td>`;
     };
-    const stab = (type: 'UI' | 'RBAC', name: string): string => {
+    const stab = (type: 'UI' | 'RBAC', name: string, tint: string): string => {
       const st = stabilityByKey.get(`${type}:${name}`);
-      if (!st || st.direction === 'insufficient-data') return `<td style="padding:3px 4px;text-align:center;font-size:10px;color:${MUTED};" class="mh">–</td>`;
+      const bg = tint ? `background:${tint};` : '';
+      if (!st || st.direction === 'insufficient-data') return `<td style="padding:3px 4px;text-align:center;font-size:10px;${bg}color:${MUTED};" class="mh">–</td>`;
       const rate = st.failRate + st.flakyRate;
       const word = st.direction === 'worsening' ? ' worse' : st.direction === 'improving' ? ' better' : '';
       const color = st.direction === 'worsening' ? FAIL : st.direction === 'improving' ? SUCCESS : MUTED;
-      return `<td style="padding:3px 4px;text-align:center;font-size:10px;color:${color};" class="mh">${rate}%${word}</td>`;
+      return `<td style="padding:3px 4px;text-align:center;font-size:10px;${bg}color:${color};" class="mh">${rate}%${word}</td>`;
     };
-    const cells = (x: Side | undefined, type: 'UI' | 'RBAC', name: string): string =>
+    const cells = (x: Side | undefined, type: 'UI' | 'RBAC', name: string, tint: string): string =>
       x
-        ? td(x.total, 'tests', true) + td(x.first, 'first') + td(x.retry, 'retry') + td(x.rerun, 'rerun') + td(x.failed, 'failed') + td(x.skipped, 'skipped', true) + stab(type, name)
-        : `<td colspan="7" style="padding:3px 4px;text-align:center;font-size:11px;color:${MUTED};">–</td>`;
+        ? td(x.total, 'tests', tint) + td(x.first, 'first', tint) + td(x.retry, 'retry', tint) + td(x.rerun, 'rerun', tint) + td(x.failed, 'failed', tint) + td(x.skipped, 'skipped', tint) + stab(type, name, tint)
+        : `<td colspan="7" style="padding:3px 4px;text-align:center;font-size:11px;${tint ? `background:${tint};` : ''}color:${MUTED};">–</td>`;
     const th = (t: string, hide = false): string => `<th style="padding:2px 4px;text-align:center;font-size:9.5px;color:${SLATE};font-weight:600;"${hide ? ' class="mh"' : ''}>${t}</th>`;
-    const group = `${th('Tests', true)}${th('First')}${th('Retry')}${th('Rerun')}${th('Failed')}${th('Skip', true)}${th('Unstable, last runs', true)}`;
+    const group = `${th('Tests')}${th('First')}${th('Retry')}${th('Rerun')}${th('Fail')}${th('Skip')}${th('Unstable, last runs', true)}`;
+    const badge = (text: string, fg: string, bg: string): string => `<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 5px;border-radius:8px;font-size:9px;font-weight:700;background:${bg};color:${fg};">${text}</span>`;
+    const anyNotSelected = [...byName.values()].some((e) => sides(e).some(([, x]) => x.notSelected > 0));
     const rows = names
       .map((n) => {
         const e = byName.get(n)!;
-        return `<tr style="border-bottom:1px solid ${CANVAS_TINT};"><td style="padding:3px 4px;font-size:11.5px;color:${INK};">${this.esc(n)}</td>${cells(e.UI, 'UI', n)}${cells(e.RBAC, 'RBAC', n)}</tr>`;
+        const all = sides(e).map(([, x]) => x);
+        const failed = all.reduce((s, x) => s + x.failed, 0);
+        const retry = all.reduce((s, x) => s + x.retry, 0);
+        const rerun = all.reduce((s, x) => s + x.rerun, 0);
+        const worse = all.some((x) => x.trend === 'worsening');
+        const better = !worse && all.some((x) => x.trend === 'improving');
+        const tint = failed > 0 ? ROW_FAIL : retry + rerun > 0 ? ROW_RETRY : '';
+        // per side, so "2 retries" says where ("UI 2 retries"); the side is left out when the module has only one
+        const lead = (k: string): string => (all.length > 1 ? `${k} ` : '');
+        const badges = [
+          ...sides(e).flatMap(([k, x]) => [
+            x.failed > 0 ? badge(`${lead(k)}${x.failed} failed`, FAIL, FAIL_BG) : '',
+            x.retry > 0 ? badge(`${lead(k)}${pluralize(x.retry, 'retry', 'retries')}`, RETRY.text, RETRY.bg) : '',
+            x.rerun > 0 ? badge(`${lead(k)}${x.rerun} on rerun`, RETRY.text, RETRY.bg) : '',
+            x.swept > 0 ? badge(`${lead(k)}${x.swept} re-ran with a serial block`, SLATE, CANVAS_TINT) : '',
+            x.notSelected > 0 ? badge(`${lead(k)}${x.notSelected} of ${x.total + x.notSelected} not selected`, SLATE, CANVAS_TINT) : '',
+          ]),
+          worse ? badge('▼ worse than last run', FAIL, FAIL_BG) : better ? badge('▲ better than last run', SUCCESS, SUCCESS_BG) : '',
+        ].join('');
+        // a border colour of its own keeps these rows out of the zebra rule of compactStyles(), which would paint over the row tints
+        return `<tr style="border-bottom:1px solid #EAEEF2;"><td class="nm" style="padding:3px 4px;font-size:11.5px;color:${INK};${tint ? `background:${tint};` : ''}">${this.esc(n)}${badges ? `<div>${badges}</div>` : ''}</td>${cells(e.UI, 'UI', n, tint)}${cells(e.RBAC, 'RBAC', n, tint)}</tr>`;
       })
       .join('');
-    return `<div id="all-modules" style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 4px;">All ${report.modules.length} modules, UI and RBAC side by side</div>
+    return `<div id="all-modules" style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:6px 0 4px;">All ${byName.size} ${byName.size === 1 ? 'module' : 'modules'}, UI and RBAC side by side</div>
  <table class="am" role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
     <tr><th rowspan="2" style="padding:2px 4px;text-align:left;font-size:10px;color:${SLATE};font-weight:600;">Module</th><th colspan="7" style="padding:2px 4px;text-align:center;font-size:10px;color:${ACCENT};font-weight:700;border-bottom:2px solid ${ACCENT};">UI</th><th colspan="7" style="padding:2px 4px;text-align:center;font-size:10px;color:${SUCCESS};font-weight:700;border-bottom:2px solid ${SUCCESS};">RBAC</th></tr>
     <tr>${group}${group}</tr>${rows}
-  </table>`;
+  </table>
+  <div style="font-size:10px;color:${MUTED};margin-top:4px;">First = passed first time. Retry = passed on a retry in the same run. Rerun = passed only on the rerun. Skip = skipped or did not run.${anyNotSelected ? ' "Not selected" = tests of that module this run did not pick: CI selects by tag, so tests tagged only @smoke are not part of a @regression run.' : ''}</div>`;
   }
 
   // ===================== Slowest tests =====================
@@ -1727,9 +1667,9 @@ ${body}
               : `<span style="color:${SLATE};">${this.formatDurationDelta(trend.diffMs ?? 0)} vs last seen</span>`;
         return `
       <tr style="border-bottom:1px solid ${CANVAS_TINT};">
-        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}</td>
-        <td style="padding:6px 0;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(this.formatDuration(t.duration))}</td>
-        <td style="padding:6px 0 6px 12px;font-size:11px;white-space:nowrap;" class="wr">${trendCell}</td>
+        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(normalizeTestTitle(t.title))}</td>
+        <td style="padding:6px 0;width:70px;text-align:right;font-size:12px;color:${SLATE};font-weight:600;white-space:nowrap;">${this.mono(this.formatDuration(t.duration))}</td>
+        <td style="padding:6px 0 6px 12px;width:270px;font-size:11px;white-space:nowrap;" class="wr">${trendCell}</td>
       </tr>`;
       })
       .join('');
@@ -1769,7 +1709,7 @@ ${body}
               ? `background:${SUCCESS_BG};color:${SUCCESS};`
               : `background:${CANVAS_TINT};color:${SLATE};`;
         const rows = m.slowestTests
-          .map((t: TestResult) => `<tr><td style="padding:3px 0 3px 12px;">${this.esc(this.truncate(t.title, 60))}</td><td style="text-align:right;color:${SLATE};font-weight:600;white-space:nowrap;font-family:${MONO_FONT};">${this.formatDuration(t.duration)}</td></tr>`)
+          .map((t: TestResult) => `<tr><td style="padding:3px 0 3px 12px;">${this.esc(this.truncate(normalizeTestTitle(t.title), 60))}</td><td style="text-align:right;color:${SLATE};font-weight:600;white-space:nowrap;font-family:${MONO_FONT};">${this.formatDuration(t.duration)}</td></tr>`)
           .join('');
         return `
       <tr>
@@ -1957,7 +1897,7 @@ ${body}
         <td style="padding:8px 0;">
           <div style="font-size:12px;color:${INK};margin-bottom:2px;">
             <span style="${typeStyle}padding:1px 5px;border-radius:3px;font-size:9.5px;font-weight:700;margin-right:6px;">${name}</span>
-            ${this.esc(t.title)}
+            ${this.esc(normalizeTestTitle(t.title))}
           </div>
           <div style="font-size:11px;padding-left:2px;">${reason}</div>
         </td>
@@ -2074,7 +2014,7 @@ ${body}
 
     return `
         <div id="${this.escAttr(d.anchorId)}" style="border-left:3px solid ${accentColor};background:#ffffff;padding:10px 12px;margin-bottom:10px;border-radius:0 4px 4px 0;border-top:1px solid ${CANVAS_TINT};border-right:1px solid ${CANVAS_TINT};border-bottom:1px solid ${CANVAS_TINT};">
-          ${showTitle ? `<div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(d.test.title)}</div>` : ''}
+          ${showTitle ? `<div style="font-size:12.5px;font-weight:700;color:${INK};margin-bottom:4px;">${this.esc(normalizeTestTitle(d.test.title))}</div>` : ''}
           <div style="margin-bottom:6px;">${this.categoryBadge(d.category)}${this.regressionBadge(d.regressionStatus, d.chronicRatio)}${this.causeBadge(d.cause)}</div>
           ${this.rerunCommand(env, d.test) ? '' : `<div style="font-size:10.5px;color:${SLATE};margin-bottom:4px;">${this.esc(d.test.file.split('/').pop() || '')}</div>`}
           <div style="font-size:12.5px;font-weight:600;line-height:1.45;color:${accentColor};font-family:${MONO_FONT};white-space:pre-wrap;word-break:break-word;">${this.esc(this.errorMessageOnly(d.primaryError))}</div>
@@ -2135,9 +2075,9 @@ ${body}
     const label = (t: string, color: string): string => `<td style="padding:5px 8px;font-size:12px;color:${color};font-weight:600;">${t}</td>`;
     return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr>${th('', 'left')}${th('First run')}${th('Final result')}</tr>
-      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${f.flaky + passedOnRerun + ranOnly > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[f.flaky > 0 ? `${f.flaky} after a retry` : '', passedOnRerun > 0 ? `${passedOnRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</span>` : ''}`)}</tr>
+      <tr>${label('Passed', SUCCESS)}${cell(String(f.passed))}${cell(`${a.passed}${f.flaky + passedOnRerun + ranOnly > 0 ? ` <div style="font-weight:400;font-size:10.5px;color:${SLATE};">(${[f.flaky > 0 ? `${f.flaky} after a retry` : '', passedOnRerun > 0 ? `${passedOnRerun} after the rerun` : '', ranOnly > 0 ? `${ranOnly} ran only on rerun` : ''].filter(Boolean).join(', ')})</div>` : ''}`)}</tr>
       <tr>${label('Failed', FAIL)}${cell(String(f.failed))}${cell(String(a.failed), a.failed > 0 ? FAIL : INK)}</tr>
-      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${f.flaky > 0 ? ` <span style="font-weight:400;font-size:10.5px;color:${SLATE};">(the ${f.flaky} ended Passed)</span>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
+      <tr>${label('Flaky', WARN)}${cell(String(f.flaky))}${cell(`${a.flaky}${f.flaky > 0 ? ` <div style="font-weight:400;font-size:10.5px;color:${SLATE};">(the ${f.flaky} ended Passed)</div>` : ''}`, a.flaky > 0 ? WARN : INK)}</tr>
       ${f.total !== undefined && a.total !== undefined ? `<tr>${label('Skipped', MUTED)}${cell(String(f.skipped ?? 0), MUTED)}${cell(String(a.skipped ?? 0), MUTED)}</tr>
       <tr>${label('Did not run', MUTED)}${cell(String(f.didNotRun ?? 0), MUTED)}${cell(String(a.didNotRun ?? 0), MUTED)}</tr>
       <tr>${label('Total', INK)}${cell(String(f.total))}${cell(String(a.total))}</tr>` : ''}
@@ -2152,8 +2092,8 @@ ${body}
     return `<div style="font-size:11.5px;color:${SLATE};margin-top:${marginTop}px;">${[...byReason]
       .map(([reason, titles]) => {
         const why = this.notRerunWhy(reason, titles.length);
-        if (titles.length === 1) return `<div style="margin-top:3px;">${this.esc(this.truncate(titles[0], 90))} was not rerun: ${this.esc(why)}.</div>`;
-        const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(t, 90))).join('; ');
+        if (titles.length === 1) return `<div style="margin-top:3px;">${this.esc(this.truncate(normalizeTestTitle(titles[0]), 90))} was not rerun: ${this.esc(why)}.</div>`;
+        const shown = titles.slice(0, 5).map((t) => this.esc(this.truncate(normalizeTestTitle(t), 90))).join('; ');
         return `<div style="margin-top:3px;">${titles.length} tests were not rerun: ${this.esc(why)} (${shown}${titles.length > 5 ? ` and ${titles.length - 5} more` : ''}).</div>`;
       })
       .join('')}</div>`;
@@ -2211,9 +2151,9 @@ ${body}
       .map(
         (r) => `
       <tr style="border-bottom:1px solid ${BORDER};">
-        <td style="padding:5px 8px 5px 0;font-size:11.5px;color:${INK};">${this.esc(r.title)}<div style="font-size:10px;color:${MUTED};">${this.esc(r.file.split('/').pop() ?? r.file)}${r.reason ? ` &middot; ${this.esc(r.reason)}` : ''}</div></td>
-        <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(FIRST_LABEL[r.first])}</td>
-        <td style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(RERUN_LABEL[r.rerun])}</td>
+        <td style="padding:5px 8px 5px 0;font-size:11.5px;color:${INK};">${this.esc(normalizeTestTitle(r.title))}<div style="font-size:10px;color:${MUTED};">${this.esc(r.file.split('/').pop() ?? r.file)}${r.reason ? ` &middot; ${this.esc(r.reason)}` : ''}</div></td>
+        <td class="mh" style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(FIRST_LABEL[r.first])}</td>
+        <td class="mh" style="padding:5px 8px;font-size:11.5px;color:${SLATE};white-space:nowrap;">${this.esc(RERUN_LABEL[r.rerun])}</td>
         <td style="padding:5px 0 5px 8px;font-size:11.5px;white-space:nowrap;">${this.pill(this.finalLabel(r), this.rerunColor(r.final))}</td>
       </tr>`
       )
@@ -2221,7 +2161,7 @@ ${body}
     const testTable =
       rerun.rows.length > 0
         ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${th('Test', 'left')}${th('First run', 'left')}${th('Rerun', 'left')}${th('Final', 'left')}</tr>${rows}
+      <tr>${th('Test', 'left')}${th('First run', 'left').replace('<th ', '<th class="mh" ')}${th('Rerun', 'left').replace('<th ', '<th class="mh" ')}${th('Final', 'left')}</tr>${rows}
     </table>`
         : '';
     const excluded = this.notRerunHtml(rerun);
@@ -2318,11 +2258,11 @@ ${body}
         const detailHtml = detail ? this.buildFailureDetailCard(detail, ctx.knownIssuesUrl, WARN, rerunRows, ctx.env, false) : '';
         return `
       <tr${detail ? ` id="${this.escAttr(detail.anchorId)}"` : ''} style="border-bottom:1px solid ${WARN_BORDER};">
-        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(t.title)}${this.rerunTestLine(rerunRows?.get(rerunRowKey(t.file, t.title)))}</td>
-        <td style="padding:6px 0;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} ${t.retries === 1 ? 'retry' : 'retries'}</td>
-        <td style="padding:6px 0 6px 10px;font-size:11px;color:${riskColor};font-weight:700;white-space:nowrap;">${risk} risk</td>
-        <td style="padding:6px 0 6px 10px;font-size:10.5px;color:${SLATE};">${this.esc(history)}</td>
-        <td style="padding:6px 0 6px 10px;font-size:10px;color:${MUTED};">${t.tracePath ? '' : 'no trace captured'}</td>
+        <td style="padding:6px 0;font-size:12px;color:${INK};">${this.esc(normalizeTestTitle(t.title))}${this.rerunTestLine(rerunRows?.get(rerunRowKey(t.file, t.title)))}</td>
+        <td style="padding:6px 0;width:70px;text-align:right;font-size:11px;color:${WARN};font-weight:600;white-space:nowrap;">${t.retries} ${t.retries === 1 ? 'retry' : 'retries'}</td>
+        <td style="padding:6px 0 6px 10px;width:70px;font-size:11px;color:${riskColor};font-weight:700;white-space:nowrap;">${risk} risk</td>
+        <td class="mh" style="padding:6px 0 6px 10px;width:130px;font-size:10.5px;color:${SLATE};">${this.esc(history)}</td>
+        <td class="mh" style="padding:6px 0 6px 10px;font-size:10px;color:${MUTED};">${t.tracePath ? '' : 'no trace captured'}</td>
       </tr>
       ${detailHtml ? `<tr><td colspan="5" style="padding:0 0 8px;">${detailHtml}</td></tr>` : ''}`;
       })
@@ -2362,7 +2302,7 @@ ${body}
         const sameCause = c.details.slice(shown.length);
         const sameCauseHtml =
           sameCause.length > 0
-            ? `<div style="font-size:11px;color:${SLATE};margin-top:2px;">Same cause, ${sameCause.length} more test${sameCause.length === 1 ? '' : 's'}:${sameCause.map((d) => `<div style="padding:2px 0;">${this.esc(this.truncate(d.test.title, 80))}${this.rerunTestLine(rerunRows?.get(rerunRowKey(d.test.file, d.test.title)))}${this.rerunCommandHtml(env, d.test)}</div>`).join('')}${sameCause.length > 20 ? `<div>and ${sameCause.length - 20} more</div>` : ''}</div>`
+            ? `<div style="font-size:11px;color:${SLATE};margin-top:2px;">Same cause, ${sameCause.length} more test${sameCause.length === 1 ? '' : 's'}:${sameCause.map((d) => `<div style="padding:2px 0;">${this.esc(this.truncate(normalizeTestTitle(d.test.title), 80))}${this.rerunTestLine(rerunRows?.get(rerunRowKey(d.test.file, d.test.title)))}${this.rerunCommandHtml(env, d.test)}</div>`).join('')}${sameCause.length > 20 ? `<div>and ${sameCause.length - 20} more</div>` : ''}</div>`
             : '';
         // WHY the category badge/header is now unconditional (2026-08-24,
         // item 8/2 fix): it used to render ONLY for clusters with 2+ tests —

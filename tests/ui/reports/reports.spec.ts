@@ -82,7 +82,7 @@ test.describe('Reports', () => {
     };
   }
 
-  test('@smoke @prodSafe reports list page should load successfully', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe reports list page should load successfully', async ({ adminPage }) => {
     const reportsPage = new ReportsPage(adminPage);
     await reportsPage.goToReportsList();
     await reportsPage.assertReportsListLoaded();

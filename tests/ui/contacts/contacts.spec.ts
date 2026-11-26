@@ -228,7 +228,7 @@ test.describe('Contacts', () => {
 
   // ── C13 ───────────────────────────────────────────────────
 
-  test('@prodSafe admin should view contacts list safely', async ({ adminPage }) => {
+  test('@regression @prodSafe admin should view contacts list safely', async ({ adminPage }) => {
     const contactsPage = new ContactsPage(adminPage);
     await contactsPage.goToContactsList();
     await contactsPage.assertOnContactsListPage();

@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-11-26 @ 3c48a02
+> **Last verified:** 2026-11-26 @ aad153e
 
 **Rules.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -157,6 +157,8 @@
 
 ## D. Accepted behavior / decisions needed
 
+- **KI-79 — formFields tests tagged `@smoke @prodSafe` but not `@regression`** (18 tests: FF…1 to 3 for company, contact, deal, lead, productsAndServices, task). Status: decision needed · Since: 2026-11-26. A `--grep @regression` run skips them (found via Billing in build #242; the 14 other offenders were tagged). Tagging them changes the formFields matrix in regression selections, so it is decided separately. `check:conventions` rule `missing-regression-tag` allows these 6 files through `MISSING_REGRESSION_ALLOWLIST`; remove the entries when decided.
+- **KI-78 — the parser keeps a second leading tag in `TestResult.title`** (`@prodSafe admin: ...`, 41 tests; build #242 showed it in the slowest-tests list). Status: accepted · Since: 2026-11-26. `ReportParser` strips only the first tag because run history keys on the title (see `normalizeTestTitle`); changing it would reset recurring-flaky history for those 41 tests once. The email strips every leading tag for display only. Next: strip in the parser with a one-time history migration, if ever worth it.
 - **KI-11, KI-16, KI-21, KI-23, KI-24, KI-25, KI-26, KI-35, KI-44, KI-50, KI-53/54/55** (framework hygiene and one-off watch items) moved verbatim to [known-issues/watch-items.md](./known-issues/watch-items.md) (2026-11-26).
 - **KI-30 / KI-31 / KI-32 / KI-33** (accepted behavior and decisions needed: display names, Lead edit fields, Company Website negative test, Quotation report entity on QA only) moved verbatim to [known-issues/watch-items.md](./known-issues/watch-items.md) (2026-11-18), text unchanged, IDs stable.
 

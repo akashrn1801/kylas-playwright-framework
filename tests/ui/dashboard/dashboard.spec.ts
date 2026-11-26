@@ -25,7 +25,7 @@ import { logger } from '../../../src/utils/logger';
 // collapse/expand sections or enter-then-cancel edit mode — never add or
 // save a dashlet there.
 test.describe('Dashboard', () => {
-  test('@smoke @prodSafe DB1 default sections + dashlets visible on load', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe DB1 default sections + dashlets visible on load', async ({ adminPage }) => {
     const dashboardPage = new DashboardPage(adminPage);
     await dashboardPage.goToDefaultDashboard();
     await dashboardPage.assertDefaultSectionsVisible();

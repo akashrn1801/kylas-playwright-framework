@@ -606,7 +606,7 @@ test.describe('Companies RBAC', () => {
 
   // ── COR20 ─────────────────────────────────────────────────
 
-  test('@prodSafe restricted user should navigate to companies list page on production', async ({
+  test('@regression @prodSafe restricted user should navigate to companies list page on production', async ({
     restrictedPage,
   }) => {
     const companiesPage = new CompaniesPage(restrictedPage);

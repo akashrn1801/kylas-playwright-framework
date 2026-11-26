@@ -87,7 +87,7 @@ test.describe('Quotations — UI', () => {
   });
 
   // ─── Q4 ───────────────────────────────────────────────────────────────────
-  test('@prodSafe admin should view quotations list', async ({ adminPage }) => {
+  test('@regression @prodSafe admin should view quotations list', async ({ adminPage }) => {
     const quotationsPage = new QuotationsPage(adminPage);
 
     await quotationsPage.goToQuotationsList();

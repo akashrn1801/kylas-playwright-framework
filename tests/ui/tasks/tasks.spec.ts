@@ -214,7 +214,7 @@ test.describe('Tasks', () => {
 
   // ── Test 7: prodSafe — read-only navigation ────────────────────────────────
 
-  test('@prodSafe tasks list page should be accessible', async ({ adminPage }) => {
+  test('@regression @prodSafe tasks list page should be accessible', async ({ adminPage }) => {
     const tasksPage = new TasksPage(adminPage);
 
     await tasksPage.goToTasksList();

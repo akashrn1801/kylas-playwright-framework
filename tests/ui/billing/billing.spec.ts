@@ -25,7 +25,7 @@ test.describe('Billing (admin, read-only)', () => {
   // ── BL1 ───────────────────────────────────────────────────
   // WHAT: GET /v1/tenants/usage answers 200 with the fields this suite relies on, typed as proven live.
   // WHY: every other billing check (and the pre-run gate) reads this body; a renamed or retyped field must fail here, by name.
-  test('@smoke @prodSafe admin: GET /v1/tenants/usage has the expected shape', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin: GET /v1/tenants/usage has the expected shape', async ({ adminPage }) => {
     const api = await BillingApi.forPage(adminPage);
     try {
       const result = await api.getUsageRaw();
@@ -145,7 +145,7 @@ test.describe('Billing (admin, read-only)', () => {
   // WHAT: capacity check. Records left: under the per-env threshold = warning + annotation, 0 = FAIL.
   //   Custom Fields left: under the threshold = warning + annotation, never a failure.
   // WHY: a run on an account with no records left fails far from the cause; this names it first.
-  test('@smoke @prodSafe admin: account has records left (warns under the threshold, fails at 0)', async ({ adminPage }) => {
+  test('@smoke @regression @prodSafe admin: account has records left (warns under the threshold, fails at 0)', async ({ adminPage }) => {
     const api = await BillingApi.forPage(adminPage);
     try {
       const usage = await api.getUsage();

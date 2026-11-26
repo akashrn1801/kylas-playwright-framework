@@ -722,7 +722,7 @@ test.describe('Quotations — RBAC', () => {
   });
 
   // ─── Q28 ──────────────────────────────────────────────────────────────────
-  test('@prodSafe restricted user should navigate to quotations list on production', async ({
+  test('@regression @prodSafe restricted user should navigate to quotations list on production', async ({
     restrictedPage,
   }) => {
     const qp = new QuotationsPage(restrictedPage);

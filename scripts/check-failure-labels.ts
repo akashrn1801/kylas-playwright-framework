@@ -159,6 +159,8 @@ function build(specs: Spec[], reg: SignatureRegistry = registry, expectedReason?
     }
     return {
       report, env: 'staging', branch: 'sandbox', buildNumber: '1', buildUrl: 'u', gitCommit: 'abc1234', triggeredBy: 't',
+      // a fixed email time: without it Run Details says "email generated <now>" with seconds, so two renders a second apart differ (the flaky kill-switch check)
+      runTimes: { runStart: null, runEnd: report.testsEnd },
       runSource: 'github-actions', miscErrors: misc, health, verdict, clusters, flakyFailureDetails: flaky,
       causeSummary: withCauses ? summary : undefined,
     } as EmailContext;
@@ -286,6 +288,13 @@ function main(): void {
     htmlAfter.includes('Likely environment problem: 62 of 75 failed or flaky tests share the signature “search lookup returned no match for a record” (42 failed outright, 20 passed on retry) — see KI-43'),
     'banner text names N of M, the failed/passed-on-retry split and KI-43'
   );
+  // build #242: when nothing failed in the end, the environment-problem line is a quiet note BELOW the verdict and the summary, never a headline above them
+  {
+    const green = tpl.htmlReadable({ ...withC, report: { ...withC.report, failed: 0, failedTests: [] }, verdict: undefined });
+    const at = green.indexOf('id="section-suspected-environment"');
+    check(at > green.indexOf('Executive Summary') && />Note:<\/strong> Likely environment problem/.test(green) && !green.includes('background:#EEF1FF;padding:12px 28px'), 'green run: "Likely environment problem" is a quiet note below the Executive Summary, not a banner above it');
+    check(htmlAfter.indexOf('id="section-suspected-environment"') < htmlAfter.indexOf('Executive Summary') && !/>Note:<\/strong> Likely environment problem/.test(htmlAfter), 'run with failures: the cause banner stays directly under the verdict');
+  }
   // item 22 (commit 3): "see KI-43" is a link to its entry, naming the topic file, once the doc locations and the blob base are known
   const linked = tpl.htmlReadable({ ...withC, knownIssuesUrl: 'https://github.com/o/r/blob/abc1234', kiLocations: locateKnownIssues(path.resolve(__dirname, '..')) });
   check(/see <a href="https:\/\/github\.com\/o\/r\/blob\/abc1234\/docs\/known-issues\/watch-items\.md#L\d+"[^>]*>KI-43<\/a> \(watch-items\.md\)/.test(linked), 'item 22: the cause banner links KI-43 to its entry in watch-items.md');
@@ -564,6 +573,7 @@ function main(): void {
     { file: 'ui/a.spec.ts', title: 'dependent did not run', status: 'skipped', res: ['skipped', 'skipped'] },
     { file: 'ui/a.spec.ts', title: 'passed in a swept block', status: 'expected', res: ['passed', 'passed'] },
   ]);
+  check(sweep.testsNeedingRetry === 1 && sweep.testsSweptByRetry === 1, 'parser: the retry split is also counted in tests (1 needed a retry, 1 swept in by a serial block)', `${sweep.testsNeedingRetry}/${sweep.testsSweptByRetry}`);
   check(sweep.totalRetries === 2 && sweep.retriesFromNonCleanTests === 1 && sweep.retriesFromCleanSweeps === 1, 'parser: a serial dependent that did not run ([skipped, skipped]) adds no retry; the swept count is only tests that really passed twice', `${sweep.totalRetries}/${sweep.retriesFromNonCleanTests}/${sweep.retriesFromCleanSweeps}`);
   check(sweep.skipped === 1 && sweep.total === 3 && sweep.passed + sweep.failed + sweep.flaky + sweep.skipped === sweep.total, 'parser: passed + failed + flaky + skipped = total');
   const twoRetries = mkReport([{ file: 'ui/a.spec.ts', title: 'flaky twice', status: 'flaky', res: ['failed', 'failed', 'passed'] }, { file: 'ui/a.spec.ts', title: 'flaky once', status: 'flaky', res: ['failed', 'passed'] }]);
@@ -588,8 +598,8 @@ function main(): void {
   ]);
   const viaRerunHtml = tpl.htmlReadable({ ...rr, report: viaRerun, clusters: [], flakyFailureDetails: [] });
   check(viaRerun.totalRetries === 5 && viaRerun.retriesFromRerun === 2, 'parser: 3 flaky tests = 5 retries, 2 of them rerun-shard attempts', `${viaRerun.totalRetries}/${viaRerun.retriesFromRerun}`);
-  check(viaRerunHtml.includes('2 from the rerun, 3 from retries'), 'email: the Retries tile says how many retries came from the rerun and how many from retries, in plain words');
-  check(!baseHtml.includes('from the rerun,'), 'email: a run without a rerun has no "from the rerun" in the Retries tile');
+  check(/\d+ tests? needed a retry; the rerun added 2 attempts/.test(viaRerunHtml) || /needed a retry[^<]*; the rerun added 2 attempts/.test(viaRerunHtml), 'email: the Retries tile says in tests how many needed a retry and how many attempts the rerun added, in plain words');
+  check(!baseHtml.includes('the rerun added') && !baseHtml.includes('from the rerun,'), 'email: a run without a rerun has no rerun attempts in the Retries tile');
   { const sec = rerunHtml.slice(rerunHtml.indexOf('id="section-rerun"')).replace(/<[^>]*>/g, ' '); check(/2 tests were rerun after the main run|1 test was rerun after the main run|tests were rerun after the main run/.test(sec) && !/rerun shard|in-job retr|Retries tile counts/.test(sec), 'email: the rerun section says what was rerun in plain words, without "rerun shard", "in-job retries" or "the Retries tile counts"'); }
   check(/id="section-rerun"[\s\S]*First run<\/th>/.test(tpl.htmlReadable({ ...rr, rerun: { ...rerunSummary, retries: 2 } })), 'email: the First run / Final result counts stay in the Rerun section');
   const unstableViaRerun = [...viaRerun.flakyTests, ...viaRerun.passedOnRerunTests];

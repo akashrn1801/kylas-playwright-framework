@@ -147,6 +147,8 @@ export interface ScenarioSpec {
   };
   /** The modules the run's results contain, written by hand (independent of the parser): used when the files alone do not say, e.g. formFields. */
   expectModules?: Array<{ name: string; type: 'UI' | 'RBAC'; total: number }>;
+  /** Tests per module in the whole suite ("UI:Billing": 6): a module that ran fewer says "N of M not selected". Default none. */
+  suiteBaseline?: Record<string, number>;
   /** Give every attempt its own start time, so the tests window comes from the attempts and differs from the stats window. */
   attemptTimes?: boolean;
 }
@@ -251,7 +253,7 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
   fs.symlinkSync(path.join(REPO_ROOT, 'docs'), path.join(dir, 'docs'));
   const jsonPath = path.join(dir, 'reports', 'playwright-report', 'results.json');
   const input: NotificationInput = {
-    jsonReportPath: jsonPath, env, branch, buildNumber: '100', buildUrl: 'https://example.invalid/run/100', gitCommit: 'abc1234', triggeredBy: 'ci', runSource: 'github-actions',
+    jsonReportPath: jsonPath, env, branch, buildNumber: '100', buildUrl: 'https://example.invalid/run/100', gitCommit: 'abc1234', triggeredBy: 'ci', runSource: 'github-actions', suiteBaseline: spec.suiteBaseline ?? null,
   };
   const cwd = process.cwd();
   process.chdir(dir);

@@ -47,6 +47,18 @@ const PLAYWRIGHT_TEST_IMPORT_EXCEPTIONS = new Set(['tests/ui/dashboard/login.spe
 // boundary requirement means only a real "verbNoun" method name matches.
 const MUTATING_METHOD_PATTERN = /^(create|update|delete|save|edit|add|remove|clone|reassign)[A-Z]/;
 
+// TEMPORARY allowlist for rule 7 (2026-11-26, KI-79): the 18 formFields tests tagged @smoke @prodSafe (FF…1 to 3 per entity) have no @regression.
+// Tagging them changes what the formFields matrix runs in a `--grep @regression` selection, so that is a separate decision. Remove an entry when its file is
+// fixed; any other file without @regression still fails.
+const MISSING_REGRESSION_ALLOWLIST = new Set([
+  'tests/ui/formFields/companyFieldLimits.spec.ts',
+  'tests/ui/formFields/contactFieldLimits.spec.ts',
+  'tests/ui/formFields/dealFieldLimits.spec.ts',
+  'tests/ui/formFields/leadFieldLimits.spec.ts',
+  'tests/ui/formFields/productsAndServicesFieldLimits.spec.ts',
+  'tests/ui/formFields/taskFieldLimits.spec.ts',
+]);
+
 interface Violation {
   rule: string;
   file: string;
@@ -193,6 +205,17 @@ function checkFile(
         file: relPath,
         line: lineOf(sourceFile, node),
         message: `test has no @tag ("${title}") — every test must carry at least one of @smoke/@regression/@prodSafe (CLAUDE.md's Key Conventions)`,
+      });
+    }
+
+    // Rule 7 (2026-11-26, build #242): a test tagged @smoke or @prodSafe must also be @regression. CI picks tests by tag (sandbox and qa run
+    // `--grep @regression`), so a test without it is silently left out of every full selection (Billing UI ran 4 of 6).
+    if (/@(smoke|prodSafe)\b/.test(title) && !/@regression\b/.test(title) && !MISSING_REGRESSION_ALLOWLIST.has(relPath)) {
+      violations.push({
+        rule: 'missing-regression-tag',
+        file: relPath,
+        line: lineOf(sourceFile, node),
+        message: `test ("${title}") has @smoke or @prodSafe but no @regression — a \`--grep @regression\` run (sandbox escalation, qa) would skip it`,
       });
     }
 

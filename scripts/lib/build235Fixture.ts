@@ -386,6 +386,7 @@ function replayActive(opts: ReplayOptions): Replay {
 
     const input: NotificationInput = {
       jsonReportPath: jsonPath,
+      suiteBaseline: null,
       env: ACTIVE.env,
       branch: ACTIVE.branch,
       buildNumber: ACTIVE.buildNumber,

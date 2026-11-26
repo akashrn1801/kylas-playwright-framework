@@ -707,7 +707,7 @@ test.describe('Deals', () => {
   // Production-safe navigation check
   // ──────────────────────────────────────────────────────────
 
-  test('@prodSafe admin should navigate to deals list page', async ({ adminPage }) => {
+  test('@regression @prodSafe admin should navigate to deals list page', async ({ adminPage }) => {
     const dealsPage = new DealsPage(adminPage);
     await dealsPage.goToDealsList();
     await dealsPage.assertOnDealsListPage();

@@ -729,7 +729,7 @@ test.describe('Contacts RBAC', () => {
 
   // ── CR19 ──────────────────────────────────────────────────
 
-  test('@prodSafe restricted user should navigate to contacts list page on production', async ({
+  test('@regression @prodSafe restricted user should navigate to contacts list page on production', async ({
     restrictedPage,
   }) => {
     const contactsPage = new ContactsPage(restrictedPage);

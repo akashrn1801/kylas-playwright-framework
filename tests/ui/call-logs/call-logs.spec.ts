@@ -459,7 +459,7 @@ test.describe('Call Logs', () => {
     logger.success('CL19 passed');
   });
 
-  test('@prodSafe admin should navigate to call logs list page on production and verify list is accessible without errors', async ({ adminPage }) => {
+  test('@regression @prodSafe admin should navigate to call logs list page on production and verify list is accessible without errors', async ({ adminPage }) => {
     const callLogsPage = new CallLogsPage(adminPage);
     await callLogsPage.goToCallLogsList();
     await callLogsPage.assertOnCallLogsListPage();

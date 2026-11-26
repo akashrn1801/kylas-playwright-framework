@@ -278,6 +278,10 @@ export interface ModuleStats {
   totalRetries: number;
   retriesFromNonCleanTests: number;
   retriesFromCleanSweeps: number;
+  // The same split counted in TESTS, not attempts (2026-11-26, build #242: "1 genuine, 3 swept" counted attempts and read as tests): tests that needed
+  // a retry (failed, flaky or passed only on the rerun) and tests that passed every attempt but re-ran because they share a serial block with one that did.
+  testsNeedingRetry: number;
+  testsSweptByRetry: number;
 }
 
 export interface ParsedReport {
@@ -353,6 +357,9 @@ export interface ParsedReport {
   // email state the real reconciliation instead of a bare, confusing total.
   retriesFromNonCleanTests: number;
   retriesFromCleanSweeps: number;
+  // The same split in tests (see ModuleStats.testsNeedingRetry).
+  testsNeedingRetry: number;
+  testsSweptByRetry: number;
   // Part of totalRetries that is the rerun shard's own attempt (a result flagged `rerun`), not an in-job retry.
   retriesFromRerun: number;
   // WHY: sourced from Playwright's own raw.config — real, not guessed. Feeds
@@ -591,6 +598,8 @@ export class ReportParser {
           totalRetries: 0,
           retriesFromNonCleanTests: 0,
           retriesFromCleanSweeps: 0,
+          testsNeedingRetry: 0,
+          testsSweptByRetry: 0,
         });
         moduleTestsMap.set(key, []);
       }
@@ -612,6 +621,9 @@ export class ReportParser {
       mod.totalRetries += r.retries;
       if (r.status === 'failed' || r.status === 'flaky' || r.passedOnRerun) {
         mod.retriesFromNonCleanTests += r.retries;
+        if (r.retries > 0) mod.testsNeedingRetry++;
+      } else if (r.retries > 0) {
+        mod.testsSweptByRetry++;
       }
       moduleTestsMap.get(key)!.push(r);
     }
@@ -638,6 +650,8 @@ export class ReportParser {
       .filter((r) => r.status === 'failed' || r.status === 'flaky' || r.passedOnRerun)
       .reduce((sum, r) => sum + r.retries, 0);
     const retriesFromCleanSweeps = totalRetries - retriesFromNonCleanTests;
+    const testsNeedingRetry = modules.reduce((n, m) => n + m.testsNeedingRetry, 0);
+    const testsSweptByRetry = modules.reduce((n, m) => n + m.testsSweptByRetry, 0);
     const retriesFromRerun = results.reduce((sum, r) => sum + (r.rerunAttempts ?? 0), 0);
     const projects: string[] = Array.isArray(raw.config?.projects)
       ? [...new Set(raw.config.projects.map((p) => p.name).filter((name): name is string => Boolean(name)))] // a merged report has one config per shard job (build #239 listed "chromium" 11 times)
@@ -674,6 +688,8 @@ export class ReportParser {
       totalRetries,
       retriesFromNonCleanTests,
       retriesFromCleanSweeps,
+      testsNeedingRetry,
+      testsSweptByRetry,
       retriesFromRerun,
       playwrightVersion: raw.config?.version,
       workers: raw.config?.workers,
