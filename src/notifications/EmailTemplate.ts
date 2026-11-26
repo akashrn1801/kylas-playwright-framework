@@ -454,7 +454,7 @@ export class EmailTemplate {
       this.buildNotVerifiedNote(ctx.report),
       // Essentials first (2026-11-25): nothing is capped for size, so a very bad run can pass Gmail's clip; what must always be above it is the verdict,
       // the tiles, How the run ended, what needs attention (Action Required) and Module Analytics. Cards and the long lists come after.
-      this.buildActionRequiredSection(ctx, health, clusters),
+      this.buildActionRequiredSection(ctx, health, clusters, verdict),
       this.buildModuleAnalytics(ctx),
       this.buildAccountCapacitySection(capacityView),
       this.buildRerunSummarySection(ctx.rerun),
@@ -1642,6 +1642,7 @@ ${body}
         return `<tr style="border-bottom:1px solid #EAEEF2;"><td class="nm" style="padding:3px 4px;font-size:11.5px;color:${INK};${tint ? `background:${tint};` : ''}">${this.esc(n)}${badges ? `<div>${badges}</div>` : ''}</td>${cells(e.UI, 'UI', n, tint)}${cells(e.RBAC, 'RBAC', n, tint)}</tr>`;
       })
       .join('');
+    if (byName.size === 0) return '';
     return `<div id="all-modules" style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:6px 0 4px;">All ${byName.size} ${byName.size === 1 ? 'module' : 'modules'}, UI and RBAC side by side</div>
  <table class="am" role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
     <tr><th rowspan="2" style="padding:2px 4px;text-align:left;font-size:10px;color:${SLATE};font-weight:600;">Module</th><th colspan="7" style="padding:2px 4px;text-align:center;font-size:10px;color:${ACCENT};font-weight:700;border-bottom:2px solid ${ACCENT};">UI</th><th colspan="7" style="padding:2px 4px;text-align:center;font-size:10px;color:${SUCCESS};font-weight:700;border-bottom:2px solid ${SUCCESS};">RBAC</th></tr>
@@ -1816,13 +1817,13 @@ ${body}
         ? ''
         : !hasAnyRecovery
           ? `
-    <div style="font-size:11px;color:${SLATE};margin-top:12px;"><strong style="color:${INK};">Load signals:</strong> no 429 pages, HTTP 429 API answers, error-boundary screens or globalSetup retries were recorded in any of the ${recoveryRows.length} test jobs.</div>`
+    <div style="font-size:11px;color:${SLATE};margin-top:12px;"><strong style="color:${INK};">Load signals:</strong> no 429 pages, HTTP 429 API answers, error-boundary screens or login (setup) retries were recorded in any of the ${recoveryRows.length} test jobs.</div>`
           : `
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin:14px 0 2px;">Load Signals by Job</div>
     <div style="font-size:11px;color:${SLATE};margin-bottom:8px;">${
       hasAnyRecovery
         ? 'Times the app showed its 429 page / "Something is broken" error screen, answered a Kylas API call with HTTP 429 (real throttling; third-party 429s, such as Sentry telemetry sent by the app, are counted apart as noise, not rate limiting of our tests), and globalSetup transient retries, per test job — lined up against how many test jobs were running at once (times in IST). "Failed" = the retried action threw again after recovery.'
-        : 'No 429 pages, HTTP 429 API answers, error-boundary screens or globalSetup retries were recorded in any shard this run (counted: the 429 and error pages a wait ran into, every API response with status 429, and globalSetup retries).'
+        : 'No 429 pages, HTTP 429 API answers, error-boundary screens or login (setup) retries were recorded in any shard this run (counted: the 429 and error pages a wait ran into, every API response with status 429, and login (setup) retries).'
     }</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr style="border-bottom:1px solid ${BORDER};">
@@ -2439,7 +2440,7 @@ ${body}
 
   // ===================== Action required =====================
 
-  private buildActionRequiredSection(ctx: EmailContext, health: HealthScore, clusters: EnrichedCluster[]): string {
+  private buildActionRequiredSection(ctx: EmailContext, health: HealthScore, clusters: EnrichedCluster[], verdict: VerdictResult): string {
     const items: Array<{ text: string; priority: 'high' | 'medium' | 'low'; anchor?: string }> = [];
 
     if (ctx.suiteDrift?.occurred) {
@@ -2487,6 +2488,15 @@ ${body}
       items.push({ text: `Review ${regressions.length} ${nounFor(regressions.length, 'test')} with a performance regression — see Slowest Tests section.`, priority: 'low' });
     }
 
+    // a blocked or empty run is never "clean" (scenario matrix, 2026-11-26: the verdict said BLOCKED and this box said "this run is clean")
+    if (items.length === 0 && verdict.verdict !== 'clear') {
+      return `
+<tr><td id="section-action-required" style="padding:8px 28px;">
+  <div style="border:1px solid ${verdict.bannerTone === 'warning' ? WARN_BORDER : FAIL_BORDER};background:${verdict.bannerTone === 'warning' ? WARN_BG : FAIL_BG};border-radius:6px;padding:14px 16px;">
+    <div style="font-size:12.5px;font-weight:700;color:${verdict.bannerTone === 'warning' ? WARN : FAIL};">Action required — ${this.esc(verdict.headline)}</div>
+  </div>
+</td></tr>`;
+    }
     if (items.length === 0) {
       return `
 <tr><td id="section-action-required" style="padding:8px 28px;">

@@ -53,6 +53,7 @@
     "check:email-size": "ts-node scripts/check-email-size.ts",
     "check:app-time": "ts-node scripts/check-app-time.ts",
     "check:scenarios": "ts-node scripts/check-scenarios.ts",
+    "check:email-units": "ts-node scripts/check-email-units.ts",
     "check:rerun": "ts-node scripts/check-rerun.ts && ts-node scripts/check-rerun-scenarios.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
     "reset:field-config": "ts-node scripts/reset-field-config.ts",

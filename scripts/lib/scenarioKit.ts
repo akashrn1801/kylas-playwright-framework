@@ -23,7 +23,7 @@ import { buildCurrentRecord } from '../../src/notifications/scripts/syncHistory'
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
-export type Kind = 'passed' | 'flaky' | 'failed' | 'timedOut' | 'did-not-run' | 'cut-off' | 'skip-reason' | 'skip-no-reason' | 'known-bug';
+export type Kind = 'passed' | 'flaky' | 'failed' | 'timedOut' | 'did-not-run' | 'cut-off' | 'skip-reason' | 'skip-no-reason' | 'known-bug' | 'known-bug-passes' | 'plan-limit';
 export interface Def {
   file: string;
   title: string;
@@ -51,6 +51,10 @@ function mkTest(d: Def): JsonTest {
     case 'passed': return { ...b, status: 'expected', results: [pass()] };
     // test.fail(): Playwright reports `expected` although the attempt failed (the Leads RBAC known-bug tests)
     case 'known-bug': return { ...b, status: 'expected', expectedStatus: 'failed', annotations: [{ type: 'fail' }], results: [fail(d.title)] };
+    // test.fail() that PASSES (the product bug was fixed): Playwright reports `unexpected`, every attempt `failed` with this message
+    case 'known-bug-passes': return { ...b, status: 'unexpected', expectedStatus: 'failed', annotations: [{ type: 'fail' }], results: [1, 2].map(() => ({ status: 'failed', duration: 3000, error: { message: 'Error: Expected to fail, but passed.' }, errors: [{ message: 'Error: Expected to fail, but passed.' }] })) as JsonResult[] };
+    // the plan-limit modal: the failure text names the modal (BasePage.overlayError)
+    case 'plan-limit': return { ...b, status: 'unexpected', results: [1, 2].map(() => { const m = `Error: Add ${d.title} form: Kylas showed 'Upgrade your plan' (account plan limit reached) instead of the expected UI — the account hit a plan limit (records, custom fields, …); nothing in the test can fix that. Original: locator.waitFor: Timeout 60000ms exceeded.`; return { status: 'failed', duration: 6000, error: { message: m }, errors: [{ message: m }] }; }) as JsonResult[] };
     case 'flaky': return { ...b, status: 'flaky', results: [fail(d.title), pass()] };
     case 'failed': return { ...b, status: 'unexpected', results: [fail(d.title), fail(d.title)] };
     case 'timedOut': return { ...b, status: 'unexpected', results: [fail(d.title, 'timedOut'), fail(d.title, 'timedOut')] };

@@ -37,7 +37,7 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '01-all-pass-first-time', title: 'All tests pass first time', expect: 'green PASSED, nothing else to say', first: base(30), rerun: true },
   { name: '02-flaky-only-rerun-passes', title: 'Only flaky tests; the rerun passes them', expect: 'no failure; flaky stay visible; see the green-or-amber question in the report', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: true },
   { name: '03-flaky-only-rerun-fails-one', title: 'Only flaky tests; one fails on the rerun', expect: 'still no failure (it passed on its in-job retry); amber', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: true, rerunResult: dec(['flaky 02']) },
-  { name: '04-flaky-only-no-rerun', title: 'Only flaky tests; no rerun (kill switch / other branch)', expect: 'amber, flaky visible', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: false },
+  { name: '04-flaky-only-no-rerun', title: 'Only flaky tests; no rerun (kill switch / other branch)', expect: 'green (3 flaky is within the budget of 3), flaky visible in the subject, tiles and Flaky Tests', first: [...base(25), ...many(3, 'flaky', 'flaky')], rerun: false },
   { name: '05-failures-pass-on-rerun', title: 'Two failures; both pass on the rerun', expect: 'no failure left, but amber (they failed every first attempt)', first: [...base(25), ...many(2, 'failed', 'broken')], rerun: true },
   { name: '06-failures-fail-again', title: 'Two failures; both fail on the rerun', expect: 'red FAILED, 2 failed', first: [...base(25), ...many(2, 'failed', 'broken')], rerun: true, rerunResult: () => 'failed' },
   { name: '07-failures-mixed', title: 'Three failures; one passes on the rerun, two fail', expect: 'red, 2 failed, 1 passed on rerun', first: [...base(25), ...many(3, 'failed', 'broken')], rerun: true, rerunResult: dec(['broken 02', 'broken 03']) },
@@ -79,6 +79,10 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '58-capacity-unreadable-stopped', title: 'Account capacity: the usage call failed and the run was stopped', expect: 'BLOCKED — ACCOUNT CAPACITY UNREADABLE; "unavailable" in the section with the reason', first: base(30), rerun: false, capacity: { error: { message: 'GET /v1/tenants/usage failed: HTTP 403 {"code":"001019"}', readOnlyRun: false } } },
   { name: '59-capacity-custom-fields-low', title: 'Account capacity: 5 custom fields left', expect: 'Custom Fields bar yellow, a yellow warning, never blocked', first: base(30), rerun: false, capacity: { pre: { customFieldsUsed: 120 }, post: { customFieldsUsed: 120 } } },
   { name: '60-every-module-incl-billing', title: 'Every kind of module in one run: Billing, Dashboard, Reports and formFields, UI and RBAC', expect: 'one row per module in Module Analytics, each on its own UI or RBAC side with its own test count (Billing UI 6 + RBAC 2, Dashboard UI 3 + RBAC 2, Reports UI 2 + RBAC 2, "Leads — Field Limits" UI 2 + RBAC 2)', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(3, 'passed', 'dashboard ui', 'ui/dashboard/dashboard.spec.ts', 300), ...many(2, 'passed', 'dashboard rbac', 'rbac/dashboard.rbac.spec.ts', 400), ...many(2, 'passed', 'reports ui', 'ui/reports/reports.spec.ts', 500), ...many(2, 'passed', 'reports rbac', 'rbac/reports.rbac.spec.ts', 600), ...many(2, 'passed', 'leads field limits ui', 'ui/formFields/leadFieldLimits.spec.ts', 700), ...many(2, 'passed', 'leads field limits rbac', 'rbac/formFields/leadFieldLimits.rbac.spec.ts', 800)], rerun: false, expectModules: [{ name: 'Billing', type: 'UI', total: 6 }, { name: 'Billing', type: 'RBAC', total: 2 }, { name: 'Dashboard', type: 'UI', total: 3 }, { name: 'Dashboard', type: 'RBAC', total: 2 }, { name: 'Reports', type: 'UI', total: 2 }, { name: 'Reports', type: 'RBAC', total: 2 }, { name: 'Leads — Field Limits', type: 'UI', total: 2 }, { name: 'Leads — Field Limits', type: 'RBAC', total: 2 }] },
+  { name: '66-billing-only-run', title: 'A Billing-only run: all 6 UI and 2 RBAC billing tests, read-only (@prodSafe), capacity read', expect: 'green; Billing UI 6 and RBAC 2 with no "not selected" badge; capacity shown; the run is not blocked', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 }, capacity: { readOnlyRun: true, pre: {}, post: {} } },
+  { name: '67-known-bug-blr2-fails-as-expected', title: 'Known-bug test BLR2 (test.fail()) fails as expected, the rest pass', expect: 'green; BLR2 counts as Passed first time, never "failed first"; Billing RBAC has no problem highlight', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(1, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(1, 'known-bug', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210)], rerun: false },
+  { name: '68-known-bug-blr2-unexpectedly-passes', title: 'Known-bug test BLR2 passes although it is expected to fail (the product bug looks fixed)', expect: 'red: one failed test, and the failure text says "Expected to fail, but passed" so the reader knows to remove test.fail()', first: [...many(6, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(1, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200), ...many(1, 'known-bug-passes', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210)], rerun: false },
+  { name: '69-plan-limit-modal', title: 'The plan-limit modal ("Upgrade your plan") blocks 12 tests in 3 modules', expect: 'red; the cause banner says the plan limit was reached, not a list of locator failures', first: [...base(18), ...many(4, 'plan-limit', 'leads', 'ui/leads/leads.spec.ts', 300), ...many(4, 'plan-limit', 'deals', 'ui/deals/deals.spec.ts', 400), ...many(4, 'plan-limit', 'contacts', 'ui/contacts/contacts.spec.ts', 500)], rerun: false },
   { name: '65-smoke-only-not-selected', title: 'A run that selects by tag (@regression): Billing UI ran 4 of its 6 tests, because BL1 and BL5 are tagged only @smoke (build #242)', expect: 'Billing UI shows 4 tests and the badge "UI 2 of 6 not selected"; the footnote says CI selects by tag; the verdict is unaffected', first: [...many(4, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 } },
   { name: '61-capacity-created-pushes-over-the-limit', title: 'Account capacity: billing still shows 200 left (it counts creates only at the nightly refresh), the run created 503 records', expect: 'records bar yellow (200 left); a red ESTIMATE "none left (over by 303)" near the top; the run is NOT blocked (the gate stops on the billing figures only)', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 299800 }, post: {} } },
   { name: '62-capacity-refresh-time-known', title: 'Account capacity: Kylas sends a real refresh time (5 hours before the email)', expect: 'the billing figures are labelled "as of the last refresh: <time> IST"', first: base(30), rerun: false, capacity: { pre: { refreshedMinutesAgo: 300 }, post: { refreshedMinutesAgo: 300 } } },
@@ -90,7 +94,7 @@ export const SCENARIOS: ScenarioSpec[] = [
 const BRANCHES: Array<{ branch: string; env: 'staging' | 'qa' | 'prod' }> = [
   { branch: 'sandbox', env: 'staging' }, { branch: 'dev', env: 'qa' }, { branch: 'qa', env: 'qa' },
   { branch: 'stage', env: 'staging' }, { branch: 'prod', env: 'prod' }, { branch: 'main', env: 'prod' },
-  { branch: 'feature/ui-polish', env: 'staging' },
+  { branch: 'feature/ui-polish', env: 'staging' }, { branch: 'release/9', env: 'staging' },
 ];
 // one scenario per environment, with every colour in play (failures, retries, a rerun, a skip), and an environment the palette does not know (neutral slate)
 const mixed = (): Def[] => [...base(20), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky'), ...many(1, 'skip-reason', 'skipped with reason', 'ui/skips/skips.spec.ts', 10)];
@@ -332,6 +336,74 @@ export function row(s: ScenarioResult): Row {
     rerun: rerunNotes(s.html) || '-',
     sizeKiB: kib,
   };
+}
+
+// ── the reader's matrix: condition -> what the email shows -> good or not (piece 3, 2026-11-26) ─────────────────────
+export interface MatrixRow { name: string; condition: string; subject: string; verdict: string; boxes: string; rerun: string; capacity: string; warnings: string; modules: string; attention: string; judgement: string }
+const BOX_LABELS = ['Total', 'Passed', 'Failed', 'Skipped', 'Did not run', 'Flaky', 'Retries'];
+export function matrixRow(s: ScenarioResult, vs: Violation[], known: (v: Violation) => boolean): MatrixRow {
+  const pipe = (x: string): string => x.replace(/\|/g, '/');
+  const t = text(s.html);
+  const hasReport = !!s.report && !!s.ctx;
+  const tl = hasReport ? tiles(s.html) : {};
+  const rt = hasReport ? rerunTiles(s.html) : null;
+  const view = s.ctx ? buildCapacityView(s.ctx.capacity, s.ctx.runTimes?.runEnd ?? Date.parse(s.report?.testsEnd ?? '') + 4 * 60_000) : null;
+  const block = s.ctx ? capacityBlock(s.ctx.capacity) : null;
+  const capacity = !s.ctx ? '-' : block ? `BLOCKED (${block.kind})` : !view || !view.available ? 'unavailable' : `${view.plan?.name ?? '?'} ${view.plan?.colour ?? ''}${view.plan?.note ? ` (${view.plan.note})` : ''}; ${view.rows.map((r) => `${r.label} ${r.remaining === null ? 'unlimited' : r.remaining.toLocaleString('en-US')} left ${r.colour}`).join(', ')}${view.created.total !== null ? `; created ${view.created.total}` : ''}`;
+  const warnings = [
+    ...(view?.warnings ?? []).map((w) => `${w.colour}: ${w.text}`),
+    incomplete(s) ? `incomplete run: ${s.spec.completeness!.reported} of ${s.spec.completeness!.expected} shards` : '',
+    /PARTIAL \(scoped run\)/.test(s.subject) ? 'scoped run' : '',
+    /STALE REPORT/.test(s.subject) ? 'stale report' : '',
+  ].filter(Boolean);
+  const mods = (allModulesTable(s.html) ?? []).filter((m) => m.badges);
+  const action = /Action<\/strong>([\s\S]*?)<\/div>/.exec(s.html);
+  const mine = vs.filter((v) => v.scenario === s.spec.name);
+  const hard = mine.filter((v) => !known(v));
+  const judgement = hard.length > 0 ? `NOT GOOD: ${hard.map((v) => `${v.id} (${v.message})`).join('; ')}` : mine.length > 0 ? `NOT GOOD (known finding): ${mine.map((v) => v.id).join(', ')}` : `GOOD: ${s.spec.expect}`;
+  return {
+    name: s.spec.name,
+    condition: s.spec.title,
+    subject: s.subject,
+    verdict: hasReport ? `${toneWord(s.ctx!.verdict?.bannerTone ?? '')} "${s.ctx!.verdict?.bannerLabel}"` : t.includes('REPORT UNAVAILABLE') || !hasReport ? 'red alert, no report' : '-',
+    boxes: hasReport ? BOX_LABELS.filter((l) => tl[l]).map((l) => `${l} ${tl[l].value}`).join(' · ') || '-' : '-',
+    rerun: rt ? Object.entries(rt).map(([k, v]) => `${k} ${v.value}`).join(' · ') : 'none',
+    capacity,
+    warnings: warnings.join('; ') || 'none',
+    modules: mods.length === 0 ? 'none' : mods.slice(0, 3).map((m) => `${m.name}: ${m.badges}`).join('; ') + (mods.length > 3 ? ` (+${mods.length - 3} more)` : ''),
+    attention: action ? text(action[1]).slice(0, 140) : hasReport ? '-' : 'the alert itself',
+    judgement: pipe(judgement),
+  };
+}
+export function matrixMarkdown(rows: MatrixRow[]): string {
+  const c = (x: string): string => x.replace(/\|/g, '/');
+  return ['| scenario | CONDITION | subject | verdict | outcome boxes | Rerun Summary | Account capacity | warnings | Module Analytics highlights | Needs attention | GOOD / NOT GOOD |', '|---|---|---|---|---|---|---|---|---|---|---|', ...rows.map((r) => `| ${r.name} | ${c(r.condition)} | ${c(r.subject)} | ${c(r.verdict)} | ${c(r.boxes)} | ${c(r.rerun)} | ${c(r.capacity)} | ${c(r.warnings)} | ${c(r.modules)} | ${c(r.attention)} | ${r.judgement} |`)].join('\n');
+}
+
+// ── reader-text invariants (piece 3): what a reader must never meet, each with a red sample below ───────────────────
+/** The text a reader reads: styles, code blocks and the copy-paste rerun command left out (those are for machines). */
+export function readerText(html: string): string {
+  return text(html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<pre[\s\S]*?<\/pre>/g, '')).replace(/ENV=\w+ npx playwright test[^ ]*( --[\w=@.-]+)*/g, '');
+}
+const JARGON: Array<[string, RegExp]> = [['in-job', /\bin-job\b/i], ['rerun shard', /\brerun shard\b/i], ['globalSetup', /\bglobal(Setup|Teardown)\b/], ['swept', /\bswept\b/i], ['code leak', /\bundefined\b|\bNaN\b|\[object Object\]/]];
+const RAW_ENV = /\b(RERUN_[A-Z_]+|RUN_STARTED_AT_MS|SHARDED_TEST|TEST_GREP|FF_ENTITIES|BILLING_[A-Z_]+|GITHUB_[A-Z_]+|[A-Z]+_(APP_URL|API_BASE_URL|ADMIN_[A-Z]+|RESTRICTED_[A-Z]+))\b/;
+export function readerTextViolations(html: string): string[] {
+  const t = readerText(html);
+  const out: string[] = [];
+  for (const [name, re] of JARGON) { const m = re.exec(t); if (m) out.push(`jargon "${m[0]}" (${name}) in reader text: ...${t.slice(Math.max(0, m.index - 30), m.index + 40)}...`); }
+  const env = RAW_ENV.exec(t); if (env) out.push(`raw environment variable name "${env[0]}" in reader text`);
+  const one = new RegExp(`\\b1 (tests|failures|retries|modules|shards|errors|attempts|records|runs|days)\\b`).exec(t); if (one) out.push(`singular count with a plural noun: "${one[0]}"`);
+  const many = new RegExp(`\\b([02-9]|[1-9]\\d+) (test|failure|retry|module|shard|error|attempt|record|day)(?![a-z/(-]| reports?\\b| jobs?\\b| files?\\b)`).exec(t); if (many) out.push(`plural count with a singular noun: "${many[0]}"`);
+  const verb = /\b1 (are|were|have)\b|\b([02-9]|[1-9]\d+) (is|was|has)\b/.exec(t); if (verb) out.push(`count and verb disagree: "${verb[0]}"`);
+  return out;
+}
+/** Exactly one status banner, and a run that is not clear is never called clean anywhere. */
+export function verdictViolations(html: string, clear: boolean): string[] {
+  const out: string[] = [];
+  const banners = (html.match(/font-size:16px;font-weight:700;letter-spacing:0\.08em;text-transform:uppercase;color:#ffffff;/g) ?? []).length;
+  if (banners !== 1) out.push(`${banners} status banners (exactly one verdict is allowed)`);
+  if (!clear && /this run is clean/.test(text(html))) out.push('the run is not clear but a box says "this run is clean"');
+  return out;
 }
 
 // ── invariants ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -632,6 +704,12 @@ export function invariants(s: ScenarioResult): Violation[] {
   // E7: moving the repeated styles into classes loses nothing: the sent email, with its classes expanded, is the readable one
   if (s.kind === 'email' && normalizeTags(EmailTemplate.expandStyles(s.sent)) !== normalizeTags(s.html)) bad('styles-roundtrip', 'the sent email (classes expanded) differs from the readable one: the style compaction lost or changed something');
 
+  // the scenario's own expectation, when it opens with a colour, agrees with the verdict (a stale sentence would make the matrix's GOOD reason a lie)
+  { const lead = /^(green|amber|red)\b/i.exec(s.spec.expect)?.[1]?.toLowerCase(); const tone = s.ctx?.verdict ? toneWord(s.ctx.verdict.bannerTone) : null; if (lead && tone && lead !== tone) bad('expect-matches-verdict', `the scenario says "${lead}" but the email is ${tone} (${s.ctx?.verdict?.bannerLabel})`); }
+  if (s.kind === 'email' && s.ctx) {
+    for (const msg of readerTextViolations(s.html)) bad('reader-text', msg);
+    for (const msg of verdictViolations(s.html, s.ctx.verdict?.verdict === 'clear')) bad('one-verdict', msg);
+  }
   // 5-6: verdict, colour and icon
   if (r.failed > 0 && (verdict.verdict === 'clear' || verdict.bannerTone === 'success' || subjectIcon === 'green')) bad('failure-never-green', `a run with ${r.failed} failed tests is shown green (${verdict.bannerLabel})`);
   if (subjectIcon === 'green' && verdict.verdict !== 'clear') bad('icon-matches-verdict', `the subject is green but the verdict is ${verdict.verdict}`);
@@ -795,6 +873,30 @@ function main(): void {
       if ((found.length > 0) !== shouldFail) violations.push({ scenario: 'module-coverage-red-samples', id: 'invariant-self-test', message: `${what}: expected ${shouldFail ? 'a violation' : 'none'}, got ${JSON.stringify(found)}` });
     }
   }
+  // Red samples for the reader-text and verdict invariants: each doctored email must be reported, the real one must not
+  {
+    const clean = results.find((x) => x.spec.name === '01-all-pass-first-time')!.html;
+    const inject = (extra: string): string => clean.replace('</body>', `<p>${extra}</p></body>`);
+    const banner = '<span style="font-size:16px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">';
+    const samples2: Array<[string, string[], boolean]> = [
+      ['a real clean email: reader text', readerTextViolations(clean), false],
+      ['a real clean email: one verdict', verdictViolations(clean, true), false],
+      ['jargon: "in-job retry"', readerTextViolations(inject('2 tests passed after an in-job retry')), true],
+      ['jargon: "rerun shard"', readerTextViolations(inject('the rerun shard passed')), true],
+      ['a leaked "undefined"', readerTextViolations(inject('Passed: undefined of 30')), true],
+      ['a raw environment variable name', readerTextViolations(inject('set RERUN_INCLUDE_FLAKY to true')), true],
+      ['"1 tests" (singular count, plural noun)', readerTextViolations(inject('1 tests failed')), true],
+      ['"2 failure" (plural count, singular noun)', readerTextViolations(inject('2 failure in Leads')), true],
+      ['"1 are" (count and verb disagree)', readerTextViolations(inject('1 are rerun attempts')), true],
+      ['"0 test/code" is a label, not a plural error', readerTextViolations(inject('0 test/code, 2 unclassified')), false],
+      ['two verdict banners', verdictViolations(clean.replace(banner, `${banner}PASSED</span><br>${banner}`), true), true],
+      ['no verdict banner', verdictViolations(clean.split(banner).join('<span>'), true), true],
+      ['"this run is clean" on a run that is not clear', verdictViolations(clean, false), true],
+    ];
+    for (const [what, found, shouldFail] of samples2) {
+      if ((found.length > 0) !== shouldFail) violations.push({ scenario: 'reader-text-red-samples', id: 'invariant-self-test', message: `${what}: expected ${shouldFail ? 'a violation' : 'none'}, got ${JSON.stringify(found)}` });
+    }
+  }
   // Red samples for the run-times invariant (2026-11-26): each of these orderings must be reported, and the good one must not
   const T = { s: '2026-11-25T14:08:52.000Z', e: '2026-11-25T16:32:18.000Z' };
   const good = { runStart: { iso: '2026-11-25T14:05:00.000Z', source: 'github-run' as const }, runEnd: '2026-11-25T16:36:00.000Z' };
@@ -822,7 +924,7 @@ function main(): void {
       return png ? r.sent.split(`cid:${DONUT_CID}`).join(`data:image/png;base64,${png.content.toString('base64')}`) : r.sent;
     };
     for (const s of results) fs.writeFileSync(path.join(outDir, `${s.spec.name}.html`), review(s));
-    fs.writeFileSync(path.join(outDir, 'matrix.md'), `${md}\n\n## Findings (known, not failing)\n${known.map((k) => `- ${k.scenario}: [${k.id}] ${k.message}`).join('\n')}\n`);
+    fs.writeFileSync(path.join(outDir, 'matrix.md'), `# What each condition looks like in the email\n\n${matrixMarkdown(results.map((r) => matrixRow(r, violations, isKnown)))}\n\n# The counts, per scenario\n\n${md}\n\n## Findings (known, not failing)\n${known.map((k) => `- ${k.scenario}: [${k.id}] ${k.message}`).join('\n')}\n`);
     const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const items = results
       .map((s, i) => {

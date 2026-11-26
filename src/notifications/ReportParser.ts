@@ -729,7 +729,10 @@ export class ReportParser {
             // that calls test.fail() (the known-bug tests L77/L79/L80) is expected to fail; Playwright reports it as `expected` although every
             // attempt's own status is `failed`. Reading the raw attempt status counted those 3 as failed in the first run, so the history
             // record said 937 passed / 4 failed while the run's own rerun summary said 940 / 1, and "Passed first time" and its trend were wrong.
-            const wasAsExpected = (r: { status?: string }): boolean => r.status === 'passed' || (test.expectedStatus === 'failed' && r.status === 'failed');
+            // A test.fail() test that PASSES (the product bug was fixed) has every attempt reported `failed` with "Expected to fail, but passed.": that attempt
+            // is NOT as expected (build matrix scenario 68: it was counted passed first time while the final result said failed).
+            const wasAsExpected = (r: { status?: string; error?: { message?: string } }): boolean =>
+              r.status === 'passed' || (test.expectedStatus === 'failed' && r.status === 'failed' && !/Expected to fail, but passed/.test(r.error?.message ?? ''));
             const ranFirst = allResults.filter((r) => r.rerun !== true && r.status !== 'skipped' && r.status !== 'interrupted');
             const firstRunStatus: NonNullable<TestResult['firstRunStatus']> =
               ranFirst.length === 0 ? 'skipped' : ranFirst.some(wasAsExpected) ? (ranFirst.some((r) => !wasAsExpected(r)) ? 'flaky' : 'passed') : 'failed';
