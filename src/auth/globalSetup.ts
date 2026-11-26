@@ -20,7 +20,7 @@ import {
 } from './sessionLifetime';
 import { recordSessionInfo } from './sessionInfo';
 import { BillingApi } from '../modules/billing/BillingApi';
-import { runCapacityGate } from '../modules/billing/capacity';
+import { runCapacityGate, selectionIsReadOnly } from '../modules/billing/capacity';
 import { redactTokens } from '../utils/apiClient';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
@@ -153,6 +153,8 @@ async function runCapacityGateStep(): Promise<void> {
       },
       dir: CAPACITY_DIR,
       now: new Date(),
+      // a run that only reads cannot hit the limit: warn instead of stopping (decided from the command line)
+      readOnlyRun: selectionIsReadOnly(process.argv.slice(2)),
       log: (line) => console.log(line),
       warn: (line) => console.warn(line),
     });

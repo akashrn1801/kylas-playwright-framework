@@ -8,6 +8,7 @@ import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { loadFieldConfigReset } from './FieldConfigReset';
 import { loadShardCompleteness, isIncompleteRun, ShardCompleteness } from './ShardCompleteness';
+import { RunStart } from './RunTimes';
 import { RenewalFailure, describeRenewalFailure, loadRenewalFailure } from '../auth/renewalFailure';
 import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
@@ -86,6 +87,8 @@ export interface NotificationInput {
   // loadJobStats() already degrades to null in every failure case, matching
   // allureUrl's own graceful-omission precedent directly above.
   jobStats?: JobStats;
+  // The run's own start (RunTimes.ts), resolved by notify.ts; absent on a local run or when no source answered.
+  runStartedAt?: RunStart;
 }
 
 // WHY: Confirmed live (2026-07-07 reporting audit) — MiscErrorReporter.ts writes
@@ -342,6 +345,7 @@ export class NotificationService {
       runSource: input.runSource,
       allureUrl: input.allureUrl,
       jobStats: input.jobStats,
+      runTimes: { runStart: input.runStartedAt ?? null, runEnd: new Date(now).toISOString() },
       fieldConfigReset: loadFieldConfigReset(input.env),
       shardCompleteness,
       rerun: loadRerunSummary(input.env),

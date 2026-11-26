@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { runTimesViolations } from '../src/notifications/RunTimes';
 import { RenewalFailure } from '../src/auth/renewalFailure';
 import { DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
@@ -58,6 +59,11 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '26-big-failure-cluster', title: 'Twenty failures with the same error message (one cluster)', expect: 'red; one full card for the cluster, the others one line each ("same cause")', first: [...base(30), ...many(20, 'failed', 'same cause', 'ui/same/same.spec.ts', 10)], rerun: true, rerunResult: () => 'failed' },
   { name: '21-very-bad-run', title: 'A very bad run: many failures, flaky tests and background errors (size)', expect: 'red; nothing is capped, so the size is only reported (it may pass Gmail\'s clip)', first: [...base(400), ...many(120, 'failed', 'broken', 'ui/bad/bad.spec.ts', 10), ...many(80, 'flaky', 'flaky', 'ui/flk/flk.spec.ts', 10)], rerun: true, maxTests: 60, unexpectedErrors: 790 },
   { name: '42-known-bug-tests', title: 'Three known-bug tests (test.fail()) fail as expected, one flaky test', expect: 'green or amber by the flaky budget; the 3 expected failures are Passed first time, never "failed first"', first: [...base(25), ...many(3, 'known-bug', 'known bug', 'rbac/known.rbac.spec.ts', 50), ...many(1, 'flaky', 'flaky')], rerun: true },
+  { name: '43-run-and-test-times', title: 'Run and Tests lines: the attempts have their own start times, the workflow started 6 minutes before the first test', expect: 'Run: workflow start to the moment the email was generated; Tests: first attempt start to last attempt end (45 s after the shard process start); run start <= tests start <= tests end <= run end', first: [...base(30), ...many(2, 'flaky', 'flaky')], rerun: false, attemptTimes: true },
+  { name: '44-run-start-first-job-fallback', title: 'The run endpoint could not be read: the run start falls back to the first job of the run', expect: 'the Run line says the start is the first job\'s and why', first: base(30), rerun: false, attemptTimes: true, runStart: { minutesBeforeTests: 5, source: 'github-first-job' } },
+  { name: '45-run-start-unavailable-in-ci', title: 'CI run where no start time could be read', expect: 'the Run line says "start unavailable" instead of showing the tests window as the run; the Tests line is unchanged', first: base(30), rerun: false, attemptTimes: true, runStart: 'none' },
+  { name: '46-jenkins-build-start', title: 'A Jenkins run: the build\'s own start', expect: 'Run starts at the Jenkins build start (RUN_STARTED_AT_MS), 12 minutes before the first test', first: base(30), rerun: false, attemptTimes: true, runSource: 'jenkins', branch: 'qa', env: 'qa', runStart: { minutesBeforeTests: 12 } },
+  { name: '47-local-run-no-run-line', title: 'A local run has no workflow', expect: 'no Run line at all (nothing to show), only Tests', first: base(30), rerun: false, attemptTimes: true, runSource: 'local' },
 ];
 
 // every branch with its environment (the deployment/PR advice differs by branch)
@@ -271,6 +277,33 @@ export function invariants(s: ScenarioResult): Violation[] {
   const table = rerunTable(s.html);
   const subjectIcon = s.subject.includes('✅') ? 'green' : s.subject.includes('❌') ? 'red' : 'amber';
   const blockedLike = noTestRan(s) || incomplete(s) || r.status === 'no-tests-executed';
+
+  // The two clocks (2026-11-26, build #240): run start <= tests start <= tests end <= run end, and both lines are shown, labelled, and say what they measure
+  // A report without per-attempt times (the replays of builds #235 and #240 and the synthetic ones) falls back to the stats window, which with a rerun
+  // ADDS the rerun's duration on top (build #235: start + 2h 40m 24s = 08:55:16, three minutes after the email was generated at 08:52:10). That window
+  // cannot be compared with the email's generation time, so "tests end <= run end" is asserted only when the attempts' own times were read.
+  for (const violation of runTimesViolations(ctx.runTimes, r.testsStart, r.testsEnd)) {
+    if (r.testsWindowSource === 'stats' && /is after run end/.test(violation)) continue;
+    bad('run-times-order', violation);
+  }
+  const rowText = (label: string): string | null => {
+    const m = new RegExp(`<td[^>]*>${label}</td>\\s*<td[^>]*>([^<]*)</td>`).exec(s.html);
+    return m ? m[1] : null;
+  };
+  const testsRow = rowText('Tests');
+  const runRow = rowText('Run');
+  const parseDur = (text: string): number | null => {
+    const m = /\((?:(\d+)h )?(?:(\d+)m )?(\d+)s[;)]/.exec(text);
+    return m ? (((+(m[1] ?? 0) * 60 + +(m[2] ?? 0)) * 60) + +m[3]) * 1000 : null;
+  };
+  if (!testsRow || !/ IST to .* IST \(/.test(testsRow)) bad('tests-line', `the Tests line is missing or not "<start> IST to <end> IST (<duration>)": ${testsRow}`);
+  else if (Math.abs((parseDur(testsRow) ?? -1e9) - (Date.parse(r.testsEnd) - Date.parse(r.testsStart))) > 1000) bad('tests-line-duration', `the Tests duration does not match its own start and end: ${testsRow}`);
+  if (ctx.runTimes?.runStart) {
+    if (!runRow || !/ IST to .* IST \(/.test(runRow) || !/the end is when this email was generated/.test(runRow)) bad('run-line', `the Run line is missing, not "<start> IST to <end> IST (<total>)" or does not say its end is the email's generation time: ${runRow}`);
+    else if (Math.abs((parseDur(runRow) ?? -1e9) - (Date.parse(ctx.runTimes.runEnd) - Date.parse(ctx.runTimes.runStart.iso))) > 1000) bad('run-line-duration', `the Run total does not match its own start and end: ${runRow}`);
+    else if (Date.parse(ctx.runTimes.runStart.iso) < Date.parse(r.testsStart) && parseDur(runRow)! < parseDur(testsRow ?? '')!) bad('run-longer-than-tests', 'the Run total is shorter than the Tests duration although it starts earlier');
+  } else if (ctx.runSource && ctx.runSource !== 'local' && !(runRow ?? '').includes('start unavailable')) bad('run-line-unavailable', `no run start was read but the Run line does not say so: ${runRow}`);
+  else if (ctx.runSource === 'local' && runRow) bad('run-line-local', `a local run has no workflow but shows a Run line: ${runRow}`);
 
   // 1-3: the numbers add up and only move in the allowed directions
   if (r.finalPassed + r.failed + r.skipped !== r.total) bad('outcomes-add-up', `Final passed ${r.finalPassed} + failed ${r.failed} + skipped/did-not-run ${r.skipped} = ${r.finalPassed + r.failed + r.skipped}, total ${r.total}`);
@@ -578,6 +611,19 @@ function main(): void {
 
   const rows = results.map(row);
   const violations = results.flatMap(invariants);
+  // Red samples for the run-times invariant (2026-11-26): each of these orderings must be reported, and the good one must not
+  const T = { s: '2026-11-25T14:08:52.000Z', e: '2026-11-25T16:32:18.000Z' };
+  const good = { runStart: { iso: '2026-11-25T14:05:00.000Z', source: 'github-run' as const }, runEnd: '2026-11-25T16:36:00.000Z' };
+  const redSamples: Array<[string, ReturnType<typeof runTimesViolations>, boolean]> = [
+    ['run start before tests start before tests end before run end: holds', runTimesViolations(good, T.s, T.e), false],
+    ['run start unknown: only the tests are compared', runTimesViolations({ runStart: null, runEnd: good.runEnd }, T.s, T.e), false],
+    ['run start after tests start (the old "Started" was the shards\' start)', runTimesViolations({ ...good, runStart: { iso: '2026-11-25T14:20:00.000Z', source: 'github-run' } }, T.s, T.e), true],
+    ['tests end after run end (an "Ended" later than the email)', runTimesViolations({ ...good, runEnd: '2026-11-25T16:00:00.000Z' }, T.s, T.e), true],
+    ['tests end before tests start', runTimesViolations(good, T.e, T.s), true],
+  ];
+  for (const [what, found, shouldFail] of redSamples) {
+    if ((found.length > 0) !== shouldFail) violations.push({ scenario: 'run-times-red-samples', id: 'invariant-self-test', message: `${what}: expected ${shouldFail ? 'a violation' : 'none'}, got ${JSON.stringify(found)}` });
+  }
   const failing = violations.filter((x) => !isKnown(x));
   const known = violations.filter((x) => isKnown(x));
 

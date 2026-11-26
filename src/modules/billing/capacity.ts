@@ -12,6 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Quota, Usage } from './BillingApi';
+import { extractFileFilters } from '../../auth/productFixtureNeed';
 
 export type CapacityLevel = 'ok' | 'warn' | 'stop';
 
@@ -50,6 +51,8 @@ export interface CapacitySnapshot {
   level: CapacityLevel;
   /** Human-readable warnings, in the order they were found (the email shows them). */
   warnings: string[];
+  /** True when the run only reads (selection decided): "stop" was then downgraded to a warning and the run went on. */
+  readOnlyRun?: boolean;
 }
 
 export interface CapacityVerdict {
@@ -130,6 +133,47 @@ export function evaluateCapacity(usage: Usage, env: string, thresholds: Capacity
 }
 
 export const PRE_RUN_SNAPSHOT_FILE = 'capacity-pre-run.json';
+/** Written when the usage call failed, so the email can say "capacity unknown" instead of saying nothing. */
+export const GATE_ERROR_FILE = 'capacity-gate-error.json';
+
+export interface ReadOnlyRun {
+  readOnly: boolean;
+  reason: string;
+}
+
+const READ_ONLY_PATH = /(^|[\\/])billing([\\/]|$)/;
+
+/**
+ * Does this Playwright invocation create no records? Decided from the command line (process.argv, the only place the
+ * selection is visible to globalSetup — see productFixtureNeed.ts). Read-only only when it can be PROVEN:
+ *  - `--grep @prodSafe` exactly (prod.yml, Jenkinsfile.prod): every selected test is tagged @prodSafe, which means read-only
+ *    (check:conventions enforces the tag's meaning); or
+ *  - every file filter is a billing spec (tests/ui/billing, tests/rbac/billing), which only read.
+ * Anything else, including an ambiguous command line, is NOT read-only: the safe direction is the stop.
+ */
+export function selectionIsReadOnly(cliArgs: string[]): ReadOnlyRun {
+  const greps: string[] = [];
+  for (let i = 0; i < cliArgs.length; i++) {
+    const a = cliArgs[i];
+    if ((a === '--grep' || a === '-g') && i + 1 < cliArgs.length) greps.push(cliArgs[++i]);
+    else if (a.startsWith('--grep=')) greps.push(a.slice('--grep='.length));
+  }
+  if (greps.length > 0 && greps.every((g) => g.trim() === '@prodSafe')) {
+    return { readOnly: true, reason: '--grep @prodSafe selects only read-only tests' };
+  }
+  const { filters, ambiguous } = extractFileFilters(cliArgs);
+  if (!ambiguous && filters.length > 0 && filters.every((f) => READ_ONLY_PATH.test(f))) {
+    return { readOnly: true, reason: `only billing specs are selected (${filters.join(', ')}), which only read` };
+  }
+  return { readOnly: false, reason: 'the selection may create records' };
+}
+
+export function writeGateError(dir: string, entry: { env: string; capturedAt: string; message: string; readOnlyRun: boolean }): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, GATE_ERROR_FILE);
+  fs.writeFileSync(file, `${JSON.stringify({ version: 1, ...entry }, null, 2)}\n`);
+  return file;
+}
 
 export function writeSnapshot(dir: string, snapshot: CapacitySnapshot): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -158,28 +202,45 @@ export interface CapacityGateDeps {
   now: Date;
   log: (line: string) => void;
   warn: (line: string) => void;
+  /** From selectionIsReadOnly(process.argv): a run that only reads warns instead of stopping. Absent = stops. */
+  readOnlyRun?: ReadOnlyRun;
 }
 
 /**
  * The pre-run gate. Reads usage once, saves the snapshot, warns loudly for each warning, and THROWS when no records are
- * left or the reading failed (an unknown capacity is not "fine"). Returns the verdict otherwise.
+ * left or the reading failed (an unknown capacity is not "fine"), unless the run only reads: then both become loud
+ * warnings and the run goes on (nothing it does can hit the limit). Returns the verdict, or null when the reading failed
+ * on a read-only run.
  */
-export async function runCapacityGate(deps: CapacityGateDeps): Promise<CapacityVerdict> {
+export async function runCapacityGate(deps: CapacityGateDeps): Promise<CapacityVerdict | null> {
+  const readOnly = deps.readOnlyRun?.readOnly === true;
+  const why = deps.readOnlyRun?.reason ?? '';
   let usage: Usage;
   try {
     usage = await deps.fetchUsage();
   } catch (error) {
-    throw new Error(
-      `[globalSetup] CAPACITY GATE: could not read GET /v1/tenants/usage on ${deps.env}, so the account's capacity is unknown and the run is stopped. ${String(error)}`
-    );
+    const message = `could not read GET /v1/tenants/usage on ${deps.env}, so the account's capacity is unknown. ${String(error)}`;
+    writeGateError(deps.dir, { env: deps.env, capturedAt: deps.now.toISOString(), message, readOnlyRun: readOnly });
+    if (readOnly) {
+      deps.warn(`[globalSetup] !!! CAPACITY WARNING — ${message} The run only reads (${why}), so it continues.`);
+      return null;
+    }
+    throw new Error(`[globalSetup] CAPACITY GATE: ${message} The run is stopped.`);
   }
   const verdict = evaluateCapacity(usage, deps.env, deps.thresholds, deps.now);
+  if (readOnly) {
+    verdict.snapshot.readOnlyRun = true;
+    if (verdict.level === 'stop') {
+      verdict.warnings.unshift(`RECORDS: none left, but the run only reads (${why}), so it continues`);
+      verdict.snapshot.warnings = verdict.warnings;
+    }
+  }
   const file = writeSnapshot(deps.dir, verdict.snapshot);
   for (const warning of verdict.warnings) deps.warn(`[globalSetup] !!! CAPACITY WARNING — ${warning}`);
-  if (verdict.level === 'stop') throw new Error(`[globalSetup] CAPACITY GATE: ${verdict.stopMessage}`);
+  if (verdict.level === 'stop' && !readOnly) throw new Error(`[globalSetup] CAPACITY GATE: ${verdict.stopMessage}`);
   const s = verdict.snapshot;
   deps.log(
-    `[globalSetup] Capacity gate: ${verdict.level} — plan ${s.planName}, records ${s.records.used} used / ${s.records.total ?? 'unlimited'} (${s.records.remaining ?? 'unlimited'} left), snapshot ${file}`
+    `[globalSetup] Capacity gate: ${verdict.level}${readOnly ? ' (read-only run, never stops)' : ''} — plan ${s.planName}, records ${s.records.used} used / ${s.records.total ?? 'unlimited'} (${s.records.remaining ?? 'unlimited'} left), snapshot ${file}`
   );
   return verdict;
 }

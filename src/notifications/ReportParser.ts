@@ -306,6 +306,14 @@ export interface ParsedReport {
   duration: number;
   startTime: string;
   endTime: string;
+  // The tests window (2026-11-26): first attempt start to last attempt end across every result of the merged report, so
+  // it excludes the jobs before the shards (detect, renew-session, install) and the merge after them. `startTime`/
+  // `endTime` above stay the report's own (merged stats.startTime + stats.duration) for history and freshness.
+  // `testsWindowSource` says where it came from: 'results' (the attempts' own times) or 'stats' (an old or synthetic
+  // report without per-attempt times: the stats window).
+  testsStart: string;
+  testsEnd: string;
+  testsWindowSource: 'results' | 'stats';
   status: 'passed' | 'failed' | 'unstable' | 'no-tests-executed';
   failedTests: TestResult[];
   flakyTests: TestResult[];
@@ -412,6 +420,8 @@ interface PlaywrightJsonAttachment {
 interface PlaywrightJsonTestResult {
   status?: 'passed' | 'failed' | 'timedOut' | 'skipped' | 'interrupted';
   duration?: number;
+  // ISO time the attempt started (every real Playwright JSON result has it); read only for the tests window
+  startTime?: string;
   error?: PlaywrightJsonError;
   // WHY added 2026-08-24: see TestResult.allErrors's WHY comment — this is a
   // real, separate array sibling to the singular `error` field above,
@@ -458,7 +468,31 @@ interface PlaywrightJsonReport {
   suites?: PlaywrightJsonSuite[];
 }
 
+/** First attempt start and last attempt end over every result in the report, or null when no attempt carries a start time. */
+function testsWindowOf(node: unknown): { start: number; end: number } | null {
+  let start = Infinity;
+  let end = -Infinity;
+  const visit = (n: unknown): void => {
+    if (!n || typeof n !== 'object') return;
+    const o = n as { results?: PlaywrightJsonTestResult[]; suites?: unknown[]; specs?: unknown[]; tests?: unknown[] };
+    for (const r of o.results ?? []) {
+      const t = r.startTime ? Date.parse(r.startTime) : NaN;
+      if (!Number.isFinite(t)) continue;
+      start = Math.min(start, t);
+      end = Math.max(end, t + (r.duration ?? 0));
+    }
+    for (const child of [...(o.suites ?? []), ...(o.specs ?? []), ...(o.tests ?? [])]) visit(child);
+  };
+  visit(node);
+  return Number.isFinite(start) && Number.isFinite(end) ? { start, end } : null;
+}
+
 export class ReportParser {
+  private testsWindow(raw: PlaywrightJsonReport): { start: string; end: string } | null {
+    const w = testsWindowOf(raw);
+    return w ? { start: new Date(w.start).toISOString(), end: new Date(w.end).toISOString() } : null;
+  }
+
   parse(jsonReportPath: string): ParsedReport {
     if (!fs.existsSync(jsonReportPath)) {
       throw new Error(`Report not found: ${jsonReportPath}`);
@@ -529,6 +563,7 @@ export class ReportParser {
     // and "end" was that mislabeled time plus the inflated summed duration).
     const startTime = raw.stats?.startTime || raw.startTime || new Date().toISOString();
     const endTime = new Date(new Date(startTime).getTime() + duration).toISOString();
+    const window = this.testsWindow(raw);
     const moduleMap = new Map<string, ModuleStats>();
     // WHY a separate map, not pushed straight onto ModuleStats (2026-09-29):
     // keeps the raw per-test refs out of ModuleStats until the final sort —
@@ -623,6 +658,9 @@ export class ReportParser {
       duration,
       startTime,
       endTime,
+      testsStart: window?.start ?? startTime,
+      testsEnd: window?.end ?? endTime,
+      testsWindowSource: window ? 'results' : 'stats',
       status,
       failedTests,
       flakyTests,

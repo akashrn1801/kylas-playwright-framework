@@ -13,11 +13,13 @@ import * as path from 'path';
 import { parseUsage, RawUsage, Usage } from '../src/modules/billing/BillingApi';
 import {
   CapacityThresholds,
+  GATE_ERROR_FILE,
   PRE_RUN_SNAPSHOT_FILE,
   capacityColour,
   evaluateCapacity,
   readSnapshot,
   runCapacityGate,
+  selectionIsReadOnly,
 } from '../src/modules/billing/capacity';
 
 let failures = 0;
@@ -103,7 +105,7 @@ async function main(): Promise<void> {
   const deps = (fetchUsage: () => Promise<Usage>) => ({ fetchUsage, env: 'qa', thresholds: TH, dir, now: NOW, log: (l: string) => logs.push(l), warn: (l: string) => warns.push(l) });
 
   const ok = await runCapacityGate(deps(async () => usage()));
-  check(ok.level === 'ok' && logs.some((l) => /Capacity gate: ok — plan Elevate, records 78311 used \/ 300000 \(221689 left\)/.test(l)) && warns.length === 0, 'gate: plenty left logs one line and does not warn');
+  check(ok?.level === 'ok' && logs.some((l) => /Capacity gate: ok — plan Elevate, records 78311 used \/ 300000 \(221689 left\)/.test(l)) && warns.length === 0, 'gate: plenty left logs one line and does not warn');
   const snap = readSnapshot(dir);
   check(!!snap && snap.records.used === 78311 && snap.entityCounts.DEAL === 62929 && snap.capturedAt === NOW.toISOString() && snap.level === 'ok', 'snapshot round trip: records, per-entity counts, time, level');
   const text = fs.readFileSync(path.join(dir, PRE_RUN_SNAPSHOT_FILE), 'utf8');
@@ -111,7 +113,7 @@ async function main(): Promise<void> {
 
   warns.length = 0;
   const low = await runCapacityGate(deps(async () => usage({ records: [295000, 300000] })));
-  check(low.level === 'warn' && warns.length === 1 && /!!! CAPACITY WARNING — RECORDS/.test(warns[0]) && readSnapshot(dir)?.level === 'warn', 'gate: under the threshold warns loudly, run continues, snapshot says warn');
+  check(low?.level === 'warn' && warns.length === 1 && /!!! CAPACITY WARNING — RECORDS/.test(warns[0]) && readSnapshot(dir)?.level === 'warn', 'gate: under the threshold warns loudly, run continues, snapshot says warn');
 
   warns.length = 0;
   let stopped = '';
@@ -130,11 +132,54 @@ async function main(): Promise<void> {
   } catch (error) {
     errored = String(error);
   }
-  check(/CAPACITY GATE: could not read GET \/v1\/tenants\/usage on qa, so the account's capacity is unknown and the run is stopped\..*HTTP 403/.test(errored), 'gate: a failing call stops the run loudly and keeps the reason', errored);
+  check(/CAPACITY GATE: could not read GET \/v1\/tenants\/usage on qa, so the account's capacity is unknown\..*HTTP 403.*The run is stopped\./.test(errored), 'gate: a failing call stops the run loudly and keeps the reason', errored);
 
   warns.length = 0;
   await runCapacityGate(deps(async () => usage({ planName: 'Embark', records: [100, 1000] })));
   check(warns.some((w) => /CAPACITY WARNING — PLAN: expected "Elevate", found "Embark" \(record limit 1,000\)/.test(w)), 'gate: Embark warns loudly and does not stop');
+
+  // read-only runs (decided from the command line) warn instead of stopping
+  const ro = (...args: string[]): boolean => selectionIsReadOnly(['test', ...args]).readOnly;
+  check(ro('--project=chromium', '--grep', '@prodSafe', '--workers=2', '--timeout=90000'), 'selection: prod.yml\'s `--grep @prodSafe` is read-only');
+  check(ro('--grep=@prodSafe') && ro('-g', '@prodSafe'), 'selection: `--grep=@prodSafe` and `-g @prodSafe` are read-only');
+  check(ro('tests/ui/billing', 'tests/rbac/billing', '--project=chromium'), 'selection: only billing specs are read-only');
+  check(ro('tests/ui/billing/billing.spec.ts', '--grep', '@regression'), 'selection: a billing spec file is read-only whatever the grep');
+  check(!ro('--project=chromium'), 'selection: the whole suite is NOT read-only');
+  check(!ro('--grep', '@smoke') && !ro('--grep', '@prodSafe|@smoke') && !ro('--grep', '@prodSafe', '--grep', '@smoke'), 'selection: any grep that is not exactly @prodSafe is NOT read-only');
+  check(!ro('tests/ui/billing', 'tests/ui/leads') && !ro('tests/ui/leads/leads.spec.ts'), 'selection: billing plus any other spec is NOT read-only');
+  check(selectionIsReadOnly(['--grep', '@prodSafe']).readOnly && !selectionIsReadOnly([]).readOnly, 'selection: a bare `--grep @prodSafe` is read-only; an empty command line is not');
+
+  const roDeps = (fetchUsage: () => Promise<Usage>) => ({ ...deps(fetchUsage), readOnlyRun: selectionIsReadOnly(['test', '--grep', '@prodSafe']) });
+  warns.length = 0;
+  const roZero = await runCapacityGate(roDeps(async () => usage({ records: [300000, 300000] })));
+  const roSnap = readSnapshot(dir);
+  check(!!roZero && roZero.level === 'stop' && warns.some((w) => /RECORDS: none left, but the run only reads/.test(w)) && roSnap?.readOnlyRun === true, 'read-only run at 0 left: warns loudly and CONTINUES (no throw), snapshot says readOnlyRun', JSON.stringify(warns));
+
+  fs.rmSync(path.join(dir, GATE_ERROR_FILE), { force: true });
+  warns.length = 0;
+  const roFail = await runCapacityGate(roDeps(async () => {
+    throw new Error('GET /v1/tenants/usage failed: HTTP 500 {}');
+  }));
+  const errFile = JSON.parse(fs.readFileSync(path.join(dir, GATE_ERROR_FILE), 'utf8')) as { readOnlyRun: boolean; message: string };
+  check(roFail === null && warns.some((w) => /capacity is unknown.*The run only reads.*so it continues/.test(w)) && errFile.readOnlyRun === true, 'read-only run, usage call fails: warns loudly and continues, error marker written (readOnlyRun true)', JSON.stringify(warns));
+
+  // a creating run keeps both stops
+  fs.rmSync(path.join(dir, GATE_ERROR_FILE), { force: true });
+  let creatingFail = '';
+  try {
+    await runCapacityGate({ ...deps(async () => { throw new Error('HTTP 500'); }), readOnlyRun: selectionIsReadOnly(['test', '--project=chromium']) });
+  } catch (error) {
+    creatingFail = String(error);
+  }
+  const creatingErr = JSON.parse(fs.readFileSync(path.join(dir, GATE_ERROR_FILE), 'utf8')) as { readOnlyRun: boolean };
+  check(/CAPACITY GATE: could not read.*The run is stopped\./.test(creatingFail) && creatingErr.readOnlyRun === false, 'a run that creates records still stops when the usage call fails (error marker readOnlyRun false)', creatingFail);
+  let creatingZero = '';
+  try {
+    await runCapacityGate({ ...deps(async () => usage({ records: [300000, 300000] })), readOnlyRun: selectionIsReadOnly(['test', '--grep', '@smoke']) });
+  } catch (error) {
+    creatingZero = String(error);
+  }
+  check(/No records left on qa/.test(creatingZero), 'a run that creates records still stops at 0 records left');
 
   fs.rmSync(dir, { recursive: true, force: true });
   out(failures === 0 ? '\ncheck:capacity-gate — all checks passed' : `\ncheck:capacity-gate — ${failures} check(s) FAILED`);

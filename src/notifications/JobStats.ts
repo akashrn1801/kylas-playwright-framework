@@ -49,6 +49,9 @@ export interface JobStats {
   // rendered email instead of an unexplained gap between "N jobs ran" and
   // `jobs.length`.
   incompleteJobCount: number;
+  // Earliest started_at over EVERY job of the run, in-progress ones included (the fallback for the run start when the run endpoint
+  // cannot be read; see RunTimes.ts).
+  firstJobStartedAt?: string;
 }
 
 import { isThirdPartyUrl } from '../error-collector/errorFilters';
@@ -105,6 +108,20 @@ export async function fetchGitHubJobs(
   return jobs;
 }
 
+/** `run_started_at` of the workflow run (GitHub's own start of the run, after queueing), or null when it cannot be read. */
+export async function fetchGitHubRunStartedAt(repo: string, runId: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { run_started_at?: string | null };
+    return body.run_started_at && Number.isFinite(Date.parse(body.run_started_at)) ? new Date(body.run_started_at).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
 // WHY pure and separate from fetchGitHubJobs() above (this pipeline's own
 // established enrichment-layer convention — see docs/known-issues/reporting-and-notifications.md's
 // enrichment-convention entry, matching FailureDetailBuilder.ts's
@@ -113,6 +130,8 @@ export async function fetchGitHubJobs(
 export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {
   const jobs: JobTiming[] = [];
   let incompleteJobCount = 0;
+  const starts = rawJobs.map((j) => (j.startedAt ? Date.parse(j.startedAt) : NaN)).filter((t) => Number.isFinite(t));
+  const firstJobStartedAt = starts.length > 0 ? new Date(Math.min(...starts)).toISOString() : undefined;
   for (const j of rawJobs) {
     if (!j.startedAt || !j.completedAt) {
       incompleteJobCount += 1;
@@ -126,7 +145,7 @@ export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {
     jobs.push({ name: j.name, startedAt: j.startedAt, completedAt: j.completedAt, durationMs });
   }
   const totalJobMinutes = Math.round(jobs.reduce((sum, j) => sum + j.durationMs, 0) / 60000);
-  return { jobs, totalJobMinutes, incompleteJobCount };
+  return { jobs, totalJobMinutes, incompleteJobCount, ...(firstJobStartedAt ? { firstJobStartedAt } : {}) };
 }
 
 // ===================== Cross-shard overlap detection (Phase 3 item #2, v1) =====================

@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { MiscErrorReport } from '../../src/error-collector/ErrorCollector';
 import { RenewalFailure } from '../../src/auth/renewalFailure';
+import { RunStartSource } from '../../src/notifications/RunTimes';
 import { EmailContext, EmailTemplate } from '../../src/notifications/EmailTemplate';
 import { NotificationInput, NotificationService } from '../../src/notifications/NotificationService';
 import { ParsedReport, ReportParser } from '../../src/notifications/ReportParser';
@@ -93,6 +94,17 @@ export interface ScenarioSpec {
   /** No results.json at all (a job crashed, the browser install failed): the "report unavailable" message. */
   noResults?: boolean;
   unavailableReason?: string;
+  /** Where the email is sent from (default github-actions). */
+  runSource?: 'github-actions' | 'jenkins' | 'local';
+  /**
+   * The run's own start (RunTimes.ts), minutes before the first test: default 6 (github-run); `source` picks GitHub's run start, the
+   * first-job fallback or Jenkins; `none` = no source answered.
+   */
+  runStart?: 'none' | { minutesBeforeTests: number; source?: RunStartSource };
+  /** Minutes between the last test and the moment the email is generated (merge, reports, history): default 4. */
+  generatedMinutesAfterTests?: number;
+  /** Give every attempt its own start time, so the tests window comes from the attempts and differs from the stats window. */
+  attemptTimes?: boolean;
 }
 
 export interface ScenarioResult {
@@ -163,10 +175,32 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       summary = res.summary;
       fs.writeFileSync(path.join(reportsEnv, 'rerun-summary.json'), JSON.stringify(summary));
     }
+    if (spec.attemptTimes) {
+      // the first attempt starts 45 s after the shard process (globalSetup, login) and the last one ends 30 s before it exits
+      const attempts: Array<{ startTime?: string; duration?: number }> = [];
+      const walk = (n: unknown): void => {
+        if (!n || typeof n !== 'object') return;
+        const o = n as { results?: Array<{ startTime?: string; duration?: number }>; suites?: unknown[]; specs?: unknown[]; tests?: unknown[] };
+        attempts.push(...(o.results ?? []));
+        for (const c of [...(o.suites ?? []), ...(o.specs ?? []), ...(o.tests ?? [])]) walk(c);
+      };
+      walk(combined);
+      const t0 = Date.parse(combined.stats?.startTime ?? '') + 45_000;
+      const span = (combined.stats?.duration ?? 600_000) - 75_000;
+      attempts.forEach((a, i) => {
+        a.startTime = new Date(t0 + Math.floor((i * span) / Math.max(1, attempts.length))).toISOString();
+        a.duration = Math.min(a.duration ?? 0, 5_000);
+      });
+    }
     fs.writeFileSync(jsonPath, JSON.stringify(combined));
     const report = new ReportParser().parse(jsonPath);
+    input.runSource = spec.runSource ?? 'github-actions';
+    if (spec.runStart !== 'none' && input.runSource !== 'local') {
+      const before = (spec.runStart?.minutesBeforeTests ?? 6) * 60_000;
+      input.runStartedAt = { iso: new Date(Date.parse(report.testsStart) - before).toISOString(), source: spec.runStart?.source ?? (input.runSource === 'jenkins' ? 'jenkins-build' : 'github-run') };
+    }
     const record = buildCurrentRecord(env, branch, '100', 'github-actions', jsonPath, 'abc1234', false, undefined, undefined);
-    const ctx = svc.buildContext(input, report, Date.parse(report.endTime));
+    const ctx = svc.buildContext(input, report, Date.parse(report.testsEnd) + (spec.generatedMinutesAfterTests ?? 4) * 60_000);
     const tpl = new EmailTemplate();
     // one render, so the footer's "Generated" time is the same in both (the sent email IS the readable one with its styles compacted)
     const readable = tpl.htmlReadable(ctx);

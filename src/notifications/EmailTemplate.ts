@@ -1,3 +1,4 @@
+import { RunTimes } from './RunTimes';
 import { ModuleStats, ParsedReport, TestResult, deriveModuleFromFile } from './ReportParser';
 import { SessionInfoEntry } from '../auth/sessionInfo';
 import {
@@ -89,6 +90,8 @@ export interface EmailContext {
   // alongside it, not as a separate section, since both come from the same
   // single API call and answer closely related questions.
   jobStats?: JobStats;
+  // The run's own clock (RunTimes.ts): the workflow or build start and the time this email was generated. Absent = only the tests line shows.
+  runTimes?: RunTimes;
   // WHY optional, same graceful-absence pattern as miscErrors/jobStats (ADR 0009):
   // the post-run dedicated form-field reset's outcome, read from
   // reports/<env>/field-config-reset.json. Informational only — it never feeds
@@ -908,8 +911,18 @@ ${body}
     // Node/ICU builds render instead for this option) — re-confirm if the
     // CI runner's Node/ICU build ever differs materially from local.
     const dtOpts: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata', timeZoneName: 'short' };
-    const startTime = new Date(report.startTime).toLocaleString('en-IN', dtOpts);
-    const endTime = new Date(report.endTime).toLocaleString('en-IN', dtOpts);
+    const at = (iso: string): string => new Date(iso).toLocaleString('en-IN', dtOpts);
+    // Two clocks, both labelled (2026-11-26, build #240): "Run" is the workflow (or Jenkins build) from its own start to the moment this
+    // email was generated (the merge job that builds it is still running); "Tests" is the first attempt start to the last attempt end.
+    const testsLine = `${at(report.testsStart)} to ${at(report.testsEnd)} (${this.formatDuration(Date.parse(report.testsEnd) - Date.parse(report.testsStart))})`;
+    const rt = ctx.runTimes;
+    let runLine: string | null = null;
+    if (rt?.runStart) {
+      const how = rt.runStart.source === 'github-first-job' ? "; the start is the first job's, the run's own start was unavailable" : '';
+      runLine = `${at(rt.runStart.iso)} to ${at(rt.runEnd)} (${this.formatDuration(Date.parse(rt.runEnd) - Date.parse(rt.runStart.iso))}; the end is when this email was generated, the merge job is still running${how})`;
+    } else if (ctx.runSource && ctx.runSource !== 'local') {
+      runLine = `start unavailable (the ${ctx.runSource === 'jenkins' ? "Jenkins build's" : "GitHub run's"} own start time could not be read); email generated ${at(rt?.runEnd ?? new Date().toISOString())}`;
+    }
     const shortCommit = ctx.gitCommit.substring(0, 8);
     const row = (label: string, value: string): string => `
       <tr>
@@ -921,8 +934,8 @@ ${body}
   <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;">
     <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Run Details</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      ${row('Started', this.esc(startTime))}
-      ${row('Ended', this.esc(endTime))}
+      ${runLine ? row('Run', this.esc(runLine)) : ''}
+      ${row('Tests', this.esc(testsLine))}
       ${row('Triggered by', this.esc(ctx.triggeredBy))}
       ${row('Commit', this.commitHtml(ctx, shortCommit))}
       ${this.sessionRows(ctx, row)}
