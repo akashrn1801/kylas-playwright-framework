@@ -3,7 +3,7 @@
 > **Purpose:** One-line map of every document in this folder and when to open it.
 > **Read when:** You do not know which doc answers your question.
 > **Size budget:** 6k chars (hard cap 60k)
-> **Last verified:** 2026-11-26 @ bfc345c
+> **Last verified:** 2026-11-26 @ 3c48a02
 
 | Doc | Purpose | Read when |
 |---|---|---|
@@ -13,6 +13,7 @@
 | [RUNBOOK.md](./RUNBOOK.md) | Symptom → cause → first check for CI failures | A run failed |
 | [CI_PIPELINES.md](./CI_PIPELINES.md) | Workflows, shard planner, formFields sequencing, secrets, timeouts | Touching CI, or judging what "green" covers |
 | [REPORTING.md](./REPORTING.md) | Email, history ledger, error reports | Touching `src/notifications/` or debugging an email |
+| [REPORTING_HISTORY.md](./REPORTING_HISTORY.md) | Reporting sections 4-5: run history ledger, suite drift and scope (moved out of REPORTING.md, unchanged) | Touching RunHistory.ts / syncHistory.ts or a drift banner |
 | [KNOWN_ISSUES_ACTIVE.md](./KNOWN_ISSUES_ACTIVE.md) | Open issues only | Before investigating a flake or failure |
 | [known-issues/README.md](./known-issues/README.md) | Resolved history by topic | Looking for how a past bug was fixed |
 | [known-issues/watch-items.md](./known-issues/watch-items.md) | Open watch items moved out of the active list (unchanged text, IDs stable) | A KI id in the active list's pointer table |

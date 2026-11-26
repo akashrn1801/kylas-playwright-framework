@@ -20,7 +20,7 @@ import {
 } from './sessionLifetime';
 import { recordSessionInfo } from './sessionInfo';
 import { BillingApi } from '../modules/billing/BillingApi';
-import { runCapacityGate, selectionIsReadOnly } from '../modules/billing/capacity';
+import { capacityDir, runCapacityGate, selectionIsReadOnly } from '../modules/billing/capacity';
 import { redactTokens } from '../utils/apiClient';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
@@ -47,7 +47,7 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
 
 // Pre-run capacity snapshot (src/modules/billing/capacity.ts): same output-dir convention as the traces above, so the
 // email step finds it next to the run's other artifacts.
-const CAPACITY_DIR = path.join(process.env.CI ? 'test-results' : `test-results/${config.env}`, 'capacity');
+const CAPACITY_DIR = capacityDir(config.env);
 
 // ADR 0017: session life a run needs. config.auth.minRemainingForRunMs (4 h) is the full window; a local run of a
 // selection of tests is scaled to that selection (src/auth/runWindow.ts). Set once per run in globalSetup().
@@ -153,6 +153,11 @@ async function runCapacityGateStep(): Promise<void> {
       },
       dir: CAPACITY_DIR,
       now: new Date(),
+      // billing period and currency for the email's plan header (the price is not in the API and the gate opens no browser)
+      fetchBilling: async () => {
+        const details = await withTransientRetry('capacity gate: GET /v1/tenants/subscription-details', () => api.getSubscriptionDetails());
+        return { period: details.period ?? null, currency: details.currency ?? null };
+      },
       // a run that only reads cannot hit the limit: warn instead of stopping (decided from the command line)
       readOnlyRun: selectionIsReadOnly(process.argv.slice(2)),
       log: (line) => console.log(line),

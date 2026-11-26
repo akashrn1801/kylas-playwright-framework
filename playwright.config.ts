@@ -20,6 +20,8 @@ export default defineConfig({
   },
 
   globalSetup: './src/auth/globalSetup.ts',
+  // one post-run read of the account's capacity per shard (src/auth/globalTeardown.ts); never fails a run
+  globalTeardown: './src/auth/globalTeardown.ts',
 
   reporter: [
     ['list'],

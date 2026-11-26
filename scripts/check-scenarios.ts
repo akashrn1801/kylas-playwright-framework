@@ -14,6 +14,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runTimesViolations } from '../src/notifications/RunTimes';
+import { buildCapacityView, capacityBlock } from '../src/notifications/AccountCapacity';
+import { capacityColour } from '../src/modules/billing/capacity';
 import { RenewalFailure } from '../src/auth/renewalFailure';
 import { DONUT_CID, EmailTemplate } from '../src/notifications/EmailTemplate';
 import { FLAKY_BUDGET } from '../src/notifications/AutomationHealth';
@@ -64,6 +66,18 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '45-run-start-unavailable-in-ci', title: 'CI run where no start time could be read', expect: 'the Run line says "start unavailable" instead of showing the tests window as the run; the Tests line is unchanged', first: base(30), rerun: false, attemptTimes: true, runStart: 'none' },
   { name: '46-jenkins-build-start', title: 'A Jenkins run: the build\'s own start', expect: 'Run starts at the Jenkins build start (RUN_STARTED_AT_MS), 12 minutes before the first test', first: base(30), rerun: false, attemptTimes: true, runSource: 'jenkins', branch: 'qa', env: 'qa', runStart: { minutesBeforeTests: 12 } },
   { name: '47-local-run-no-run-line', title: 'A local run has no workflow', expect: 'no Run line at all (nothing to show), only Tests', first: base(30), rerun: false, attemptTimes: true, runSource: 'local' },
+  { name: '48-capacity-plenty', title: 'Account capacity: plenty left, three shards (the earliest pre-run snapshot and the latest post-run reading are used)', expect: 'green bars; records 78,311 of 300,000; +1,240 this run, labelled as possibly including other activity; Elevate green; no warning banner', first: base(30), rerun: false, capacity: { shards: 3, pre: {}, post: { recordsUsed: 79551, entityCounts: { LEAD: 16000, DEAL: 12496, CONTACT: 11365, COMPANY: 10026, TASK: 7811, CALL: 7590, QUOTATION: 7498, MEETING: 5582, NOTE: 561 } } } },
+  { name: '49-capacity-under-threshold', title: 'Account capacity: under the threshold (3,800 records left of 300,000)', expect: 'records bar yellow "low", a yellow warning near the top; the run is not blocked', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 295000 }, post: { recordsUsed: 296200 } } },
+  { name: '50-capacity-at-zero-with-report', title: 'Account capacity: 0 records left, the gate stopped the run, a report still exists', expect: 'BLOCKED — NO RECORDS LEFT banner and subject; records bar red; no health score', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 300000 } } },
+  { name: '51-capacity-at-zero-no-report', title: 'Account capacity: 0 records left, no report at all (every shard stopped in globalSetup)', expect: 'the report-unavailable alert says BLOCKED — NO RECORDS LEFT and why', first: base(30), noResults: true, capacity: { pre: { recordsUsed: 300000 } } },
+  { name: '52-capacity-read-only-at-zero', title: 'Account capacity: 0 records left but the run only reads (--grep @prodSafe)', expect: 'NOT blocked; a red warning "none left, but the run only reads"; records bar red', first: base(30), rerun: false, env: 'prod', branch: 'prod', capacity: { readOnlyRun: true, pre: { recordsUsed: 300000 }, post: { recordsUsed: 300000 } } },
+  { name: '53-capacity-embark-found', title: 'Account capacity: the account is on Embark (1,000 records) instead of Elevate', expect: 'plan header red "expected plan Elevate, found Embark"; a red warning; no renewal ("none")', first: base(30), rerun: false, capacity: { pre: { plan: 'Embark', recordsTotal: 1000, recordsUsed: 400, customFieldsTotal: 5, customFieldsUsed: 1, renewalInDays: null, period: null } } },
+  { name: '54-capacity-renewal-in-9-days', title: 'Account capacity: renewal within 14 days (9 days left)', expect: 'plan header yellow "renews in 9 days", a yellow RENEWAL warning', first: base(30), rerun: false, capacity: { pre: { renewalInDays: 9 }, post: {} } },
+  { name: '55-capacity-renewal-passed', title: 'Account capacity: the renewal date has passed (3 days ago)', expect: 'plan header red "renewal date passed 3 days ago", a red RENEWAL warning', first: base(30), rerun: false, capacity: { pre: { renewalInDays: -3 }, post: {} } },
+  { name: '56-capacity-unavailable', title: 'Account capacity: no snapshot reached the report', expect: 'one short line "Account capacity: data unavailable"; nothing else changes', first: base(30), rerun: false },
+  { name: '57-capacity-no-post-run-reading', title: 'Account capacity: a pre-run snapshot but no post-run reading', expect: 'the bars show the account at the start; the change cells say n/a and the note says why', first: base(30), rerun: false, capacity: { pre: {} } },
+  { name: '58-capacity-unreadable-stopped', title: 'Account capacity: the usage call failed and the run was stopped', expect: 'BLOCKED — ACCOUNT CAPACITY UNREADABLE; "unavailable" in the section with the reason', first: base(30), rerun: false, capacity: { error: { message: 'GET /v1/tenants/usage failed: HTTP 403 {"code":"001019"}', readOnlyRun: false } } },
+  { name: '59-capacity-custom-fields-low', title: 'Account capacity: 5 custom fields left', expect: 'Custom Fields bar yellow, a yellow warning, never blocked', first: base(30), rerun: false, capacity: { pre: { customFieldsUsed: 120 }, post: { customFieldsUsed: 120 } } },
 ];
 
 // every branch with its environment (the deployment/PR advice differs by branch)
@@ -256,7 +270,7 @@ export function row(s: ScenarioResult): Row {
 // ── invariants ──────────────────────────────────────────────────────────────────────────────────────────────────
 export interface Violation { scenario: string; id: string; message: string }
 const noTestRan = (s: ScenarioResult): boolean =>
-  s.kind === 'unavailable' || !!s.spec.noResults || (s.spec.completeness !== undefined && s.spec.completeness.reported === 0) || (s.report?.total ?? 0) === 0;
+  s.kind === 'unavailable' || !!s.spec.noResults || (s.spec.completeness !== undefined && s.spec.completeness.reported === 0) || (s.report?.total ?? 0) === 0 || capacityBlock(s.ctx?.capacity) !== null;
 const incomplete = (s: ScenarioResult): boolean => !!s.spec.completeness && s.spec.completeness.reported < s.spec.completeness.expected;
 
 export function invariants(s: ScenarioResult): Violation[] {
@@ -266,6 +280,7 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (sizeBytes > 100 * 1024 && s.spec.name !== '21-very-bad-run') bad('size', `the email is ${(sizeBytes / 1024).toFixed(1)} KiB, over Gmail's 100 KiB clipping limit`);
   if (s.kind === 'unavailable') {
     if (/passed|✅/i.test(s.subject)) bad('no-pass-claim', `a run with no report claims a pass: ${s.subject}`);
+    if (s.spec.capacity?.pre && (s.spec.capacity.pre.recordsUsed ?? 0) >= (s.spec.capacity.pre.recordsTotal ?? 300000) && !s.spec.capacity.readOnlyRun && !/BLOCKED — NO RECORDS LEFT/.test(s.subject)) bad('capacity-blocked', `the gate stopped the run but the alert does not say so: ${s.subject}`);
     if (!/REPORT NOT AVAILABLE/.test(s.subject)) bad('says-what-it-is', `the subject does not say the report is unavailable: ${s.subject}`);
     if (!/^[^\w]*\S* ?STAGING sandbox #\d+: /.test(s.subject) && !new RegExp(`${s.env.toUpperCase()} ${s.branch} #\\d+: `).test(s.subject)) bad('alert-subject-format', `the report-unavailable subject uses another format than every other email: ${s.subject}`);
     return v;
@@ -304,6 +319,50 @@ export function invariants(s: ScenarioResult): Violation[] {
     else if (Date.parse(ctx.runTimes.runStart.iso) < Date.parse(r.testsStart) && parseDur(runRow)! < parseDur(testsRow ?? '')!) bad('run-longer-than-tests', 'the Run total is shorter than the Tests duration although it starts earlier');
   } else if (ctx.runSource && ctx.runSource !== 'local' && !(runRow ?? '').includes('start unavailable')) bad('run-line-unavailable', `no run start was read but the Run line does not say so: ${runRow}`);
   else if (ctx.runSource === 'local' && runRow) bad('run-line-local', `a local run has no workflow but shows a Run line: ${runRow}`);
+
+  // Account capacity (2026-11-26, ADR 0019): the section, the warnings, the colours and a gate stop all follow from the data
+  {
+    const view = buildCapacityView(ctx.capacity, ctx.runTimes?.runEnd ?? Date.now());
+    const block = capacityBlock(ctx.capacity);
+    const hasSection = s.html.includes('id="section-account-capacity"');
+    if (!hasSection) bad('capacity-section', 'the Account capacity section (or its "data unavailable" line) is missing');
+    if (s.spec.capacity?.pre && !view.available) bad('capacity-read', 'the scenario wrote capacity snapshots but the report reads none of them');
+    if (!view.available && !/Account capacity: data unavailable/.test(s.html)) bad('capacity-unavailable', 'no capacity data but the section does not say "data unavailable"');
+    if (view.available && /Account capacity: data unavailable/.test(s.html)) bad('capacity-unavailable', 'capacity data exists but the section says "data unavailable"');
+    if ((view.warnings.length > 0) !== s.html.includes('id="section-capacity-warnings"')) bad('capacity-warnings', `${view.warnings.length} warning(s) in the data but the warnings banner is ${s.html.includes('id="section-capacity-warnings"') ? 'shown' : 'missing'}`);
+    if (!!block !== (verdict.verdict === 'blocked' && /BLOCKED — (NO RECORDS LEFT|ACCOUNT CAPACITY UNREADABLE)/.test(s.subject))) bad('capacity-blocked', `a gate stop (${!!block}) and the BLOCKED subject disagree: ${s.subject}`);
+    if (block && !(ctx.health?.notApplicable ?? '').includes('capacity gate')) bad('capacity-no-score', 'a gate-stopped run shows a health score');
+    if (view.available) {
+      const redOrder = { records: 'records', customFields: 'customFields', storage: 'storage' };
+      void redOrder;
+      const bars = [...s.html.matchAll(/<td style="width:(\d+)%;background:(#[0-9A-Fa-f]{6});height:10px/g)].filter((m) => m[2].toUpperCase() !== '#EAEEF2').map((m) => m[2].toUpperCase());
+      const expected = view.rows.filter((r) => r.usedPct > 0).map((r) => ({ green: '#1A7F37', yellow: RETRY.bg.toUpperCase(), red: '#CF222E' })[r.colour]);
+      if (JSON.stringify(bars) !== JSON.stringify(expected)) bad('capacity-bar-colours', `bar colours ${bars.join(',')} vs the rule ${expected.join(',')}`);
+      for (const r of view.rows) {
+        if (r.total !== null && r.remaining !== null && Math.abs(r.used + r.remaining - r.total) > 0.0005) bad('capacity-adds-up', `${r.label}: used ${r.used} + left ${r.remaining} != total ${r.total}`);
+        if (r.remaining !== null && r.key === 'records' && r.colour !== capacityColour(r.remaining, ctx.capacity!.pre!.thresholds.recordsWarnBelow)) bad('capacity-colour-rule', `records: ${r.remaining} left is ${r.colour}`);
+        if (r.remaining !== null && r.remaining <= 0 && r.colour !== 'red') bad('capacity-red-at-zero', `${r.label}: 0 left but ${r.colour}`);
+      }
+      const sum = view.entities.reduce((n, e) => n + e.used, 0);
+      const pool = view.rows[0];
+      if (sum !== pool.used) bad('capacity-entities-sum', `per-entity used ${sum} != the pool's used ${pool.used}`);
+      for (const e of view.entities) {
+        const pre = ctx.capacity!.pre!.entityCounts[e.entity] ?? 0;
+        const post = ctx.capacity!.post?.entityCounts[e.entity];
+        if (post !== undefined && e.change !== post - pre) bad('capacity-change', `${e.entity}: change ${e.change} != post ${post} - pre ${pre}`);
+        if (post === undefined && e.change !== null) bad('capacity-change', `${e.entity}: a change without a post-run reading`);
+      }
+      if (view.postMissing !== !ctx.capacity!.post) bad('capacity-post-missing', 'postMissing does not match the data');
+      if (ctx.capacity!.pre!.capturedAt !== [...(ctx.capacity!.pre ? [ctx.capacity!.pre.capturedAt] : [])][0]) bad('capacity-earliest', 'internal');
+      if (view.preCount !== (s.spec.capacity?.shards ?? 1)) bad('capacity-shard-count', `${view.preCount} pre-run snapshots read, ${s.spec.capacity?.shards ?? 1} written`);
+      // the plan header: red for a passed renewal or an unexpected plan, yellow within 14 days, green otherwise
+      const plan = view.plan!;
+      const want = !plan.planIsExpected || (plan.daysLeft !== null && plan.daysLeft < 0) ? 'red' : plan.daysLeft !== null && plan.daysLeft <= 14 ? 'yellow' : 'green';
+      if (plan.colour !== want) bad('capacity-plan-colour', `plan header is ${plan.colour}, the rule says ${want} (days left ${plan.daysLeft}, expected plan ${plan.expectedPlan}, found ${plan.name})`);
+      if (!/Billing period/.test(s.html) || /INR\s?\d/.test(s.html.slice(s.html.indexOf('id="section-account-capacity"'), s.html.indexOf('id="section-account-capacity"') + 4000))) bad('capacity-no-price', 'the plan header must show the billing period and never a price');
+      if (!/can include records created by other activity/.test(s.html) && !view.postMissing) bad('capacity-label', 'the change is not labelled as possibly including other activity');
+    }
+  }
 
   // 1-3: the numbers add up and only move in the allowed directions
   if (r.finalPassed + r.failed + r.skipped !== r.total) bad('outcomes-add-up', `Final passed ${r.finalPassed} + failed ${r.failed} + skipped/did-not-run ${r.skipped} = ${r.finalPassed + r.failed + r.skipped}, total ${r.total}`);

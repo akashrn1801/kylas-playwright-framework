@@ -53,6 +53,8 @@ export interface CapacitySnapshot {
   warnings: string[];
   /** True when the run only reads (selection decided): "stop" was then downgraded to a warning and the run went on. */
   readOnlyRun?: boolean;
+  /** Billing period and currency from GET /v1/tenants/subscription-details (no price: it is not in the API). null = could not be read. */
+  billing?: { period: string | null; currency: string | null };
 }
 
 export interface CapacityVerdict {
@@ -133,6 +135,13 @@ export function evaluateCapacity(usage: Usage, env: string, thresholds: Capacity
 }
 
 export const PRE_RUN_SNAPSHOT_FILE = 'capacity-pre-run.json';
+/** The reading each shard takes after its last test (src/auth/globalTeardown.ts). */
+export const POST_RUN_SNAPSHOT_FILE = 'capacity-post-run.json';
+
+/** Where a shard writes its capacity files: next to its other artifacts, same convention as the global-setup traces. */
+export function capacityDir(env: string): string {
+  return path.join(process.env.CI ? 'test-results' : `test-results/${env}`, 'capacity');
+}
 /** Written when the usage call failed, so the email can say "capacity unknown" instead of saying nothing. */
 export const GATE_ERROR_FILE = 'capacity-gate-error.json';
 
@@ -175,21 +184,85 @@ export function writeGateError(dir: string, entry: { env: string; capturedAt: st
   return file;
 }
 
-export function writeSnapshot(dir: string, snapshot: CapacitySnapshot): string {
+export function writeSnapshot(dir: string, snapshot: CapacitySnapshot, fileName: string = PRE_RUN_SNAPSHOT_FILE): string {
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, PRE_RUN_SNAPSHOT_FILE);
+  const file = path.join(dir, fileName);
   fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`);
   return file;
 }
 
 /** null when there is no snapshot or it is not this version/shape (the email then simply has no "added by this run"). */
-export function readSnapshot(dir: string): CapacitySnapshot | null {
+export function readSnapshot(dir: string, fileName: string = PRE_RUN_SNAPSHOT_FILE): CapacitySnapshot | null {
+  return parseSnapshot(path.join(dir, fileName));
+}
+
+function parseSnapshot(file: string): CapacitySnapshot | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, PRE_RUN_SNAPSHOT_FILE), 'utf8')) as Partial<CapacitySnapshot>;
-    return parsed.version === 1 && parsed.records && parsed.entityCounts ? (parsed as CapacitySnapshot) : null;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<CapacitySnapshot>;
+    return parsed.version === 1 && parsed.records && parsed.entityCounts && typeof parsed.capturedAt === 'string' ? (parsed as CapacitySnapshot) : null;
   } catch {
     return null;
   }
+}
+
+export interface GateError {
+  env: string;
+  capturedAt: string;
+  message: string;
+  readOnlyRun: boolean;
+}
+
+/** Everything the email needs, from every shard that reported: the EARLIEST pre-run snapshot and the LATEST post-run reading. */
+export interface CapacityData {
+  pre: CapacitySnapshot | null;
+  post: CapacitySnapshot | null;
+  /** How many shard snapshots were found (for the "from N shards" note). */
+  preCount: number;
+  postCount: number;
+  errors: GateError[];
+}
+
+function filesNamed(dir: string, name: string, out: string[] = []): string[] {
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) filesNamed(full, name, out);
+    else if (e.name === name) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * Reads the capacity files wherever the shards left them: `reports/<env>/capacity/<artifact>/` (the merge job downloads one artifact
+ * per shard there) and, for a single-job run (dev, prod, local), the run's own `test-results/capacity/`. The earliest pre-run
+ * snapshot is the account as the run found it; the latest post-run reading is the account as the last shard left it. A file that
+ * is missing or unreadable is simply absent: the email says "capacity data unavailable", never a made-up number.
+ */
+export function loadCapacityData(env: string, cwd: string = process.cwd()): CapacityData {
+  const roots = [path.join(cwd, 'reports', env, 'capacity'), path.join(cwd, 'test-results', 'capacity'), path.join(cwd, 'test-results', env, 'capacity')];
+  const collect = (name: string): CapacitySnapshot[] =>
+    roots
+      .flatMap((r) => filesNamed(r, name))
+      .map(parseSnapshot)
+      .filter((x): x is CapacitySnapshot => x !== null && x.env === env);
+  const pres = collect(PRE_RUN_SNAPSHOT_FILE).sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+  const posts = collect(POST_RUN_SNAPSHOT_FILE).sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
+  const errors = roots
+    .flatMap((r) => filesNamed(r, GATE_ERROR_FILE))
+    .flatMap((f) => {
+      try {
+        const e = JSON.parse(fs.readFileSync(f, 'utf8')) as Partial<GateError>;
+        return typeof e.message === 'string' && e.env === env ? [{ env: e.env, capturedAt: String(e.capturedAt ?? ''), message: e.message, readOnlyRun: e.readOnlyRun === true }] : [];
+      } catch {
+        return [];
+      }
+    });
+  return { pre: pres[0] ?? null, post: posts[0] ?? null, preCount: pres.length, postCount: posts.length, errors };
 }
 
 export interface CapacityGateDeps {
@@ -204,6 +277,8 @@ export interface CapacityGateDeps {
   warn: (line: string) => void;
   /** From selectionIsReadOnly(process.argv): a run that only reads warns instead of stopping. Absent = stops. */
   readOnlyRun?: ReadOnlyRun;
+  /** Billing period and currency (one more read-only GET); never fatal: a failure leaves them null. */
+  fetchBilling?: () => Promise<{ period: string | null; currency: string | null }>;
 }
 
 /**
@@ -228,6 +303,11 @@ export async function runCapacityGate(deps: CapacityGateDeps): Promise<CapacityV
     throw new Error(`[globalSetup] CAPACITY GATE: ${message} The run is stopped.`);
   }
   const verdict = evaluateCapacity(usage, deps.env, deps.thresholds, deps.now);
+  try {
+    verdict.snapshot.billing = deps.fetchBilling ? await deps.fetchBilling() : { period: null, currency: null };
+  } catch {
+    verdict.snapshot.billing = { period: null, currency: null };
+  }
   if (readOnly) {
     verdict.snapshot.readOnlyRun = true;
     if (verdict.level === 'stop') {

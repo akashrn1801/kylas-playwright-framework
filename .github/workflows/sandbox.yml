@@ -579,6 +579,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-sandbox-${{ matrix.shard.shardId }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
+
   # WHY this job (2026-11-03, ADR 0015): after the core shards, run every failed or flaky core test ONCE more in a
   # single job, so a transient failure shows up as "recovered on rerun" instead of a red test, and report both
   # results in the one email. Order: detect -> core shards -> THIS -> formFields -> reset -> merge. It `needs`
@@ -939,6 +949,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # WHY (2026-11-26, ADR 0019): this shard's capacity files (pre-run snapshot, post-run reading, gate error marker; a few KB) as their
+      # own tiny artifact, so merge-and-report can read them without app credentials and without downloading the large test-results/ above.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: capacity-sandbox-formfields-${{ matrix.entity }}
+          path: test-results/capacity/
+          if-no-files-found: ignore
+          retention-days: 3
+
   # WHY this job exists and how it is isolated from the verdict (ADR 0009): the
   # formFields tests clean up after themselves, but a killed/cancelled run or a
   # failed afterAll can leave Min/Max/Regex limits on the 18 dedicated fields
@@ -1233,6 +1253,16 @@ jobs:
         with:
           name: field-config-reset-staging
           path: reports/staging
+
+      # WHY (2026-11-26, ADR 0019): the shards' capacity files for the email's "Account capacity" section (the earliest pre-run snapshot, the
+      # latest post-run reading). continue-on-error: a missing artifact only makes the email say "capacity data unavailable".
+      - name: Download per-shard capacity snapshots
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          pattern: capacity-sandbox-*
+          path: reports/staging/capacity
 
       - name: Send notification email
         if: always()

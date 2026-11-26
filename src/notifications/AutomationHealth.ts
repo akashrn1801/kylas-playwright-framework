@@ -8,6 +8,7 @@
  * SLOW_TEST_REGRESSION_THRESHOLD in RunHistory.ts. Nothing here is a build
  * gate; it's a single at-a-glance signal for the email.
  */
+import type { CapacityBlock } from './AccountCapacity';
 import { FLAKY_BUDGET, ParsedReport } from './ReportParser';
 import { RunDelta, SuiteDrift, RecurringIssue } from './RunHistory';
 import { ShardCompleteness, isIncompleteRun } from './ShardCompleteness';
@@ -267,8 +268,10 @@ export function computeHealthScore(
 export function healthNotApplicableReason(
   report: ParsedReport,
   shardCompleteness?: ShardCompleteness | null,
-  renewalFailure?: RenewalFailure | null
+  renewalFailure?: RenewalFailure | null,
+  capacityStop?: CapacityBlock | null
 ): string | null {
+  if (capacityStop) return `no test ran (${capacityStop.kind === 'no-records' ? 'the capacity gate stopped the run: no records left' : "the capacity gate could not read the account's usage and stopped the run"})`;
   if (renewalFailure || (isIncompleteRun(shardCompleteness) && shardCompleteness.cause?.startsWith('renew-session'))) return 'no test ran (the admin session was not renewed)';
   if (isIncompleteRun(shardCompleteness)) return `only ${shardCompleteness.reported} of ${shardCompleteness.expected} shards reported`;
   if (report.total === 0) return 'no tests were selected';
@@ -314,9 +317,20 @@ export function computeOverallVerdict(
   suiteDrift: SuiteDrift | null,
   shardCompleteness?: ShardCompleteness | null,
   renewalFailure?: RenewalFailure | null,
-  branch?: string
+  branch?: string,
+  capacityStop?: CapacityBlock | null
 ): VerdictResult {
   const advice = branchAdvice(branch);
+  // WHY first (2026-11-26, ADR 0019): the pre-run capacity gate stopped the run before any test (no records left, or the account's usage
+  // could not be read). The cause is known, and "No Tests Selected" or "Incomplete run" would hide it.
+  if (capacityStop) {
+    return {
+      verdict: 'blocked',
+      bannerLabel: capacityStop.kind === 'no-records' ? '🚫 BLOCKED — no records left' : '🚫 BLOCKED — account capacity unreadable',
+      bannerTone: 'danger',
+      headline: `No test ran — ${capacityStop.message}`,
+    };
+  }
   // WHY first of all (2026-11-24, sandbox run 45420781016): when the renew-session job fails every test job is skipped, no shard
   // reports, and the run used to read "Incomplete run — 0 of N shards", which says a job crashed. No test ran, and the cause is
   // known (renew-session-failed.json, or the job result recorded in shard-completeness.json): the verdict names it.

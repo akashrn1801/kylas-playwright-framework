@@ -11,6 +11,7 @@ import * as path from 'path';
 import { MiscErrorReport } from '../../src/error-collector/ErrorCollector';
 import { RenewalFailure } from '../../src/auth/renewalFailure';
 import { RunStartSource } from '../../src/notifications/RunTimes';
+import { CapacitySnapshot, GATE_ERROR_FILE, POST_RUN_SNAPSHOT_FILE, PRE_RUN_SNAPSHOT_FILE } from '../../src/modules/billing/capacity';
 import { EmailContext, EmailTemplate } from '../../src/notifications/EmailTemplate';
 import { NotificationInput, NotificationService } from '../../src/notifications/NotificationService';
 import { ParsedReport, ReportParser } from '../../src/notifications/ReportParser';
@@ -74,6 +75,28 @@ export function mkReport(defs: Def[], durationMs = 600_000): JsonReport {
   } as JsonReport;
 }
 
+/** The account as one capacity reading sees it (defaults: QA after the 2026-11-26 upgrade, Elevate, annual). */
+export interface CapacityScenarioAccount {
+  plan: string;
+  expectedPlan: string;
+  recordsUsed: number;
+  recordsTotal: number | null;
+  customFieldsUsed: number;
+  customFieldsTotal: number;
+  storageUsedGb: number;
+  storageTotalGb: number;
+  /** Days from the email's generation time to the renewal (negative = passed). */
+  renewalInDays: number | null;
+  period: string | null;
+  entityCounts: Record<string, number>;
+  recordsWarnBelow: number;
+}
+export const DEFAULT_ACCOUNT: CapacityScenarioAccount = {
+  plan: 'Elevate', expectedPlan: 'Elevate', recordsUsed: 78311, recordsTotal: 300000, customFieldsUsed: 96, customFieldsTotal: 125, storageUsedGb: 0.01, storageTotalGb: 1,
+  renewalInDays: 176, period: 'ANNUAL', recordsWarnBelow: 10000,
+  entityCounts: { LEAD: 15382, DEAL: 12496, CONTACT: 11365, COMPANY: 10026, TASK: 7811, CALL: 7590, QUOTATION: 7498, MEETING: 5582, NOTE: 561 },
+};
+
 export interface ScenarioSpec {
   name: string;
   title: string;
@@ -103,6 +126,18 @@ export interface ScenarioSpec {
   runStart?: 'none' | { minutesBeforeTests: number; source?: RunStartSource };
   /** Minutes between the last test and the moment the email is generated (merge, reports, history): default 4. */
   generatedMinutesAfterTests?: number;
+  /**
+   * Capacity files the shards left (src/modules/billing/capacity.ts), written under reports/<env>/capacity/<shard>/ like the merge job's
+   * download. `pre`/`post` are the account at the start and the end of the run; omit `post` for "no post-run reading"; `shards` writes
+   * that many pre-run copies (the earliest wins). `error` is a gate error marker instead of a snapshot.
+   */
+  capacity?: {
+    pre?: Partial<CapacityScenarioAccount>;
+    post?: Partial<CapacityScenarioAccount> | null;
+    shards?: number;
+    error?: { message: string; readOnlyRun: boolean };
+    readOnlyRun?: boolean;
+  };
   /** Give every attempt its own start time, so the tests window comes from the attempts and differs from the stats window. */
   attemptTimes?: boolean;
 }
@@ -123,6 +158,56 @@ export interface ScenarioResult {
   list: RerunList | null;
   record: RunHistoryRecord | null;
   kind: 'email' | 'unavailable';
+}
+
+function snapshotFor(env: string, a: CapacityScenarioAccount, capturedAt: string, nowMs: number, readOnly: boolean): CapacitySnapshot {
+  const quota = (used: number, total: number | null): { used: number; total: number | null; remaining: number | null } => ({ used, total, remaining: total === null ? null : Math.max(0, total - used) });
+  // the per-entity counts always add up to the pool's used count (as the real API's do): scale the defaults, the remainder goes to the first entity
+  const entries = Object.entries(a.entityCounts);
+  const baseSum = entries.reduce((n, [, v]) => n + v, 0);
+  const scaled = entries.map(([k, v]) => [k, baseSum === a.recordsUsed ? v : Math.floor((v * a.recordsUsed) / baseSum)] as const);
+  if (baseSum !== a.recordsUsed) scaled[0] = [scaled[0][0], scaled[0][1] + (a.recordsUsed - scaled.reduce((n, [, v]) => n + v, 0))];
+  const entityCounts = Object.fromEntries(scaled);
+  const records = quota(a.recordsUsed, a.recordsTotal);
+  const customFields = quota(a.customFieldsUsed, a.customFieldsTotal);
+  const left = records.remaining;
+  const warnings: string[] = [];
+  if (a.expectedPlan && a.plan !== a.expectedPlan) warnings.push(`PLAN: expected "${a.expectedPlan}", found "${a.plan}" (record limit ${a.recordsTotal?.toLocaleString('en-US')}) on ${env}: the account is not on its expected plan, so limits differ from what the suite was sized for`);
+  if (left !== null && left > 0 && left < a.recordsWarnBelow) warnings.push(`RECORDS: only ${left.toLocaleString('en-US')} left of ${a.recordsTotal?.toLocaleString('en-US')} (warn under ${a.recordsWarnBelow.toLocaleString('en-US')}) on ${env}; ${a.recordsUsed.toLocaleString('en-US')} used`);
+  if (left === 0 && readOnly) warnings.unshift('RECORDS: none left, but the run only reads (--grep @prodSafe selects only read-only tests), so it continues');
+  if (customFields.remaining !== null && customFields.remaining < 10) warnings.push(`CUSTOM FIELDS: only ${customFields.remaining} left of ${a.customFieldsTotal} (warn under 10) on ${env}; this never stops a run`);
+  const stop = left === 0;
+  return {
+    version: 1, env, capturedAt, planName: a.plan, planId: `${a.plan.toLowerCase()}-annual`,
+    renewalAt: a.renewalInDays === null ? null : new Date(nowMs + a.renewalInDays * 86_400_000).toISOString(),
+    records, customFields, storage: quota(a.storageUsedGb, a.storageTotalGb), entityCounts,
+    thresholds: { recordsWarnBelow: a.recordsWarnBelow, customFieldsWarnBelow: 10, expectedPlan: a.expectedPlan },
+    level: stop ? 'stop' : warnings.length ? 'warn' : 'ok', warnings,
+    ...(readOnly ? { readOnlyRun: true } : {}), billing: { period: a.period, currency: a.period ? 'INR' : null },
+  };
+}
+
+function writeCapacityFiles(reportsEnv: string, env: string, c: NonNullable<ScenarioSpec['capacity']>, startMs: number): void {
+  const dir = path.join(reportsEnv, 'capacity');
+  // the email is generated 4 minutes after the last test; the renewal dates are relative to that moment (the tests end ~10 minutes after the start)
+  const generatedMs = startMs + 10 * 60_000 + 4 * 60_000;
+  if (c.error) {
+    fs.mkdirSync(path.join(dir, 'capacity-shard-1'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capacity-shard-1', GATE_ERROR_FILE), JSON.stringify({ version: 1, env, capturedAt: new Date(startMs).toISOString(), message: c.error.message, readOnlyRun: c.error.readOnlyRun }));
+  }
+  if (!c.pre) return;
+  const pre = { ...DEFAULT_ACCOUNT, ...c.pre };
+  const shards = c.shards ?? 1;
+  for (let i = 0; i < shards; i++) {
+    const shardDir = path.join(dir, `capacity-${env}-shard-${i + 1}`);
+    fs.mkdirSync(shardDir, { recursive: true });
+    // shard i starts i minutes after the first one: the EARLIEST (shard 1) must be the one the email uses
+    fs.writeFileSync(path.join(shardDir, PRE_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === 0 ? pre : { ...pre, recordsUsed: pre.recordsUsed + 1000 * i }, new Date(startMs + i * 60_000).toISOString(), generatedMs, c.readOnlyRun === true)));
+    if (c.post) {
+      const post = { ...pre, ...c.post };
+      fs.writeFileSync(path.join(shardDir, POST_RUN_SNAPSHOT_FILE), JSON.stringify(snapshotFor(env, i === shards - 1 ? post : { ...post, recordsUsed: post.recordsUsed - 500 }, new Date(startMs + 12 * 60_000 + i * 60_000).toISOString(), generatedMs, false)));
+    }
+  }
 }
 
 const SERIAL = (f: string): boolean => f === 'ui/quotations/quotations.spec.ts';
@@ -154,6 +239,7 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       fs.writeFileSync(path.join(reportsEnv, 'misc-errors.json'), JSON.stringify(misc));
     }
     const svc = new NotificationService();
+    if (spec.capacity) writeCapacityFiles(reportsEnv, env, spec.capacity, Date.parse('2026-11-24T06:00:00.000Z'));
     if (spec.noResults) {
       const msg = svc.buildReportUnavailableMessage(input, new Error(spec.unavailableReason ?? `Report not found: ${jsonPath}`));
       return { spec, env, branch, html: msg.html, sent: msg.html, subject: msg.subject, report: null, ctx: null, summary: null, list: null, record: null, kind: 'unavailable' };

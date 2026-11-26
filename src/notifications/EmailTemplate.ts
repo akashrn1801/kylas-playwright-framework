@@ -1,3 +1,5 @@
+import { CapacityRow, CapacityView, buildCapacityView } from './AccountCapacity';
+import type { CapacityData } from '../modules/billing/capacity';
 import { RunTimes } from './RunTimes';
 import { ModuleStats, ParsedReport, TestResult, deriveModuleFromFile } from './ReportParser';
 import { SessionInfoEntry } from '../auth/sessionInfo';
@@ -90,6 +92,8 @@ export interface EmailContext {
   // alongside it, not as a separate section, since both come from the same
   // single API call and answer closely related questions.
   jobStats?: JobStats;
+  // What the shards left about the account's capacity (loadCapacityData): the earliest pre-run snapshot and the latest post-run reading. Absent/empty = "capacity data unavailable".
+  capacity?: CapacityData | null;
   // The run's own clock (RunTimes.ts): the workflow or build start and the time this email was generated. Absent = only the tests line shows.
   runTimes?: RunTimes;
   // WHY optional, same graceful-absence pattern as miscErrors/jobStats (ADR 0009):
@@ -426,6 +430,8 @@ export class EmailTemplate {
     const flakyCards = Math.min(ctx.report.flakyTests.length, unstableCards);
     const rerunCards = Math.max(0, Math.min(ctx.report.passedOnRerunTests.length, unstableCards - flakyCards));
 
+    // Account capacity (2026-11-26, ADR 0019): computed once; the warnings go near the top, the full section after Module Analytics
+    const capacityView = buildCapacityView(ctx.capacity, ctx.runTimes?.runEnd ?? Date.now());
     const body = [
       this.buildIncompleteRunBanner(ctx.shardCompleteness),
       this.buildScopedRunBanner(ctx.shardCompleteness),
@@ -434,6 +440,7 @@ export class EmailTemplate {
       this.buildStatusBanner(verdict),
       this.buildTopSummary(ctx, verdict),
       this.buildCauseBanner(ctx.causeSummary),
+      this.buildCapacityWarnings(capacityView),
       this.buildStatusBadgeRow(ctx),
       this.buildExecutiveSummary(ctx, health, clusters, verdict),
       this.buildCauseSummaryLine(ctx.causeSummary),
@@ -445,6 +452,7 @@ export class EmailTemplate {
       // the tiles, How the run ended, what needs attention (Action Required) and Module Analytics. Cards and the long lists come after.
       this.buildActionRequiredSection(ctx, health, clusters),
       this.buildModuleAnalytics(ctx),
+      this.buildAccountCapacitySection(capacityView),
       this.buildRerunSummarySection(ctx.rerun),
       this.buildTrendSection(ctx, testAnchors),
       this.buildFlakiestTestsSection(ctx, testAnchors),
@@ -531,7 +539,7 @@ ${body}
   private polish(page: string): string {
     const ICONS: Array<[RegExp, string]> = [
       [/^Executive Summary/, '📝'], [/^How the run ended/, '🏁'], [/^Run Details/, '🗂️'], [/^Rerun Summary/, '🔁'], [/^Run Summary/, '📊'], [/^Rerun of/, '🔁'], [/^Trend/, '📈'], [/^Flakiest/, '🔥'],
-      [/^Module Analytics/, '🧩'], [/^Slowest/, '🐢'], [/^CI Job Stats/, '⚙️'], [/^Load Signals/, '📡'], [/^Flaky Tests/, '🧪'], [/^Passed on rerun/, '✅'],
+      [/^Module Analytics/, '🧩'], [/^Account capacity/, '🏦'], [/^Slowest/, '🐢'], [/^CI Job Stats/, '⚙️'], [/^Load Signals/, '📡'], [/^Flaky Tests/, '🧪'], [/^Passed on rerun/, '✅'],
       [/^Skipped/, '⏭️'], [/^Action Required/, '🎯'], [/^Environment/, '🖥️'], [/^CI\/CD/, '🚀'], [/^Background/, '⚠️'], [/^Failed/, '❌'],
     ];
     const heading = /<div style="(font-size:10\.5px;font-weight:700;letter-spacing:0\.08em;text-transform:uppercase;color:#[0-9A-Fa-f]{6};margin(?:-bottom)?:[^;"]+;)">([^<]+)<\/div>/g;
@@ -957,6 +965,91 @@ ${body}
         return row(`${entry.role} session`, this.esc(`ends ${end}, ${entry.minutesLeft} min left at start${note}`));
       })
       .join('');
+  }
+
+
+  // ===================== Account capacity =====================
+
+  private static readonly ENTITY_LABELS: Record<string, string> = { LEAD: 'Leads', DEAL: 'Deals', CONTACT: 'Contacts', COMPANY: 'Companies', TASK: 'Tasks', CALL: 'Call logs', QUOTATION: 'Quotations', MEETING: 'Meetings', NOTE: 'Notes' };
+
+  /** The warnings of the account's capacity, near the top: yellow rows for a warning, red for none left or an unexpected plan or a passed renewal. Nothing when there is none. */
+  private buildCapacityWarnings(view: CapacityView): string {
+    if (view.warnings.length === 0) return '';
+    const red = view.warnings.some((w) => w.colour === 'red');
+    const lines = view.warnings
+      .map((w) => `<div style="font-size:12px;color:${w.colour === 'red' ? FAIL : WARN};margin-top:2px;">${w.colour === 'red' ? '🚫' : '⚠️'} ${this.esc(w.text)}</div>`)
+      .join('');
+    return `
+<tr><td id="section-capacity-warnings" style="background:${red ? FAIL_BG : WARN_BG};padding:10px 28px;border-bottom:1px solid ${red ? FAIL_BORDER : WARN_BORDER};">
+  <div style="font-size:13px;font-weight:700;color:${red ? FAIL : WARN};">Account capacity ${red ? 'needs action' : 'warning'}</div>
+  ${lines}
+</td></tr>`;
+  }
+
+  private capacityColours(c: 'green' | 'yellow' | 'red'): { bar: string; text: string; bg: string } {
+    return c === 'red' ? { bar: FAIL, text: FAIL, bg: FAIL_BG } : c === 'yellow' ? { bar: RETRY.bg, text: WARN, bg: WARN_BG } : { bar: SUCCESS, text: SUCCESS, bg: SUCCESS_BG };
+  }
+
+  private capacityBar(row: CapacityRow): string {
+    const c = this.capacityColours(row.colour);
+    const filled = row.usedPct;
+    const cell = (width: number, bg: string): string => (width > 0 ? `<td style="width:${width}%;background:${bg};height:10px;font-size:1px;line-height:1px;">&nbsp;</td>` : '');
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>${cell(filled, c.bar)}${cell(100 - filled, '#EAEEF2')}</tr></table>`;
+  }
+
+  private buildAccountCapacitySection(view: CapacityView): string {
+    if (!view.available) {
+      return `
+<tr><td id="section-account-capacity" style="padding:8px 28px;">
+  <div style="font-size:12px;color:${SLATE};">Account capacity: data unavailable — ${this.esc(view.unavailableReason)}.</div>
+</td></tr>`;
+    }
+    const plan = view.plan!;
+    const ist: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' };
+    const pc = this.capacityColours(plan.colour);
+    const days =
+      plan.daysLeft === null ? '' : plan.daysLeft < 0 ? ` (passed ${-plan.daysLeft} ${-plan.daysLeft === 1 ? 'day' : 'days'} ago)` : plan.daysLeft === 0 ? ' (today)' : ` (${plan.daysLeft} ${plan.daysLeft === 1 ? 'day' : 'days'} left)`;
+    const period = [plan.period ? plan.period.charAt(0) + plan.period.slice(1).toLowerCase() : null, plan.currency].filter(Boolean).join(', ');
+    const meta = (label: string, value: string): string => `<tr><td style="padding:3px 0;font-size:11px;color:${SLATE};width:110px;vertical-align:top;">${label}</td><td style="padding:3px 0;font-size:12px;color:${INK};">${value}</td></tr>`;
+    const header = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      ${meta('Plan', `<span style="background:${pc.bg};color:${pc.text};padding:1px 8px;border-radius:10px;font-weight:700;">${this.esc(plan.name)}</span>${plan.note ? ` <span style="color:${pc.text};">${this.esc(plan.note)}</span>` : ''}`)}
+      ${meta('Billing period', this.esc(period || 'not available'))}
+      ${meta('Renewal', plan.renewalAt ? `${this.esc(new Date(plan.renewalAt).toLocaleDateString('en-IN', ist))}${this.esc(days)}` : 'none (no renewal on this plan)')}
+    </table>`;
+    const num = (n: number | null, unit: string): string => (n === null ? 'unlimited' : `${n.toLocaleString('en-US')}${unit}`);
+    const change = (r: { change: number | null; unit?: string }): string =>
+      r.change === null ? 'n/a' : `${r.change > 0 ? '+' : ''}${r.change.toLocaleString('en-US')}${r.unit ?? ''}`;
+    const bars = view.rows
+      .map((r) => {
+        const c = this.capacityColours(r.colour);
+        return `<tr>
+        <td style="padding:6px 8px 2px 0;font-size:12px;color:${INK};width:150px;vertical-align:top;">${this.esc(r.label)}</td>
+        <td style="padding:6px 0 2px 0;vertical-align:middle;">${this.capacityBar(r)}</td>
+        <td style="padding:6px 0 2px 8px;font-size:12px;color:${c.text};width:240px;vertical-align:top;"><strong>${this.esc(num(r.remaining, r.unit))} left</strong> (${this.esc(r.state)})</td>
+        <td style="padding:6px 0 2px 8px;font-size:11px;color:${SLATE};width:170px;vertical-align:top;">${this.esc(num(r.used, r.unit))} used of ${this.esc(num(r.total, r.unit))}${r.change === null ? '' : ` · ${this.esc(change(r))} this run`}</td>
+      </tr>`;
+      })
+      .join('');
+    const entities = view.entities
+      .map(
+        (e) =>
+          `<tr><td style="padding:2px 12px 2px 0;font-size:12px;color:${INK};">${this.esc(EmailTemplate.ENTITY_LABELS[e.entity] ?? e.entity)}</td><td style="padding:2px 12px;font-size:12px;color:${INK};text-align:right;">${e.used.toLocaleString('en-US')}</td><td style="padding:2px 0 2px 12px;font-size:12px;color:${SLATE};text-align:right;">${this.esc(change(e))}</td></tr>`
+      )
+      .join('');
+    const foot = view.postMissing
+      ? 'No post-run reading reached this report, so the change during the run is not shown.'
+      : `Change during this run = the latest post-run reading (of ${view.postCount} ${view.postCount === 1 ? 'shard' : 'shards'}) minus the earliest pre-run snapshot (of ${view.preCount}). The account is shared, so it can include records created by other activity, not only this run.`;
+    return `
+<tr><td id="section-account-capacity" style="padding:8px 28px;">
+  <div style="border:1px solid ${BORDER};border-radius:6px;padding:14px 16px;">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};margin-bottom:8px;">Account capacity</div>
+    ${header}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${bars}</table>
+    <div style="font-size:11px;font-weight:700;color:${SLATE};margin-top:10px;">Used records by entity</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:4px;"><tr><td style="font-size:11px;color:${SLATE};padding:2px 12px 2px 0;">Entity</td><td style="font-size:11px;color:${SLATE};padding:2px 12px;text-align:right;">Used</td><td style="font-size:11px;color:${SLATE};padding:2px 0 2px 12px;text-align:right;">Change this run</td></tr>${entities}</table>
+    <div style="font-size:11px;color:${SLATE};margin-top:8px;">${this.esc(foot)}</div>
+  </div>
+</td></tr>`;
   }
 
   // ===================== KPI dashboard =====================

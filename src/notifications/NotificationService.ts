@@ -9,6 +9,8 @@ import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { loadFieldConfigReset } from './FieldConfigReset';
 import { loadShardCompleteness, isIncompleteRun, ShardCompleteness } from './ShardCompleteness';
 import { RunStart } from './RunTimes';
+import { capacityBlock } from './AccountCapacity';
+import { loadCapacityData } from '../modules/billing/capacity';
 import { RenewalFailure, describeRenewalFailure, loadRenewalFailure } from '../auth/renewalFailure';
 import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
@@ -279,9 +281,12 @@ export class NotificationService {
       freshness.isStale
     );
     // A run that verified nothing (blocked, incomplete, nothing selected) has no health score: "n/a" and why (2026-11-25).
-    const notApplicable = healthNotApplicableReason(report, shardCompleteness, renewalFailure);
+    // WHY (2026-11-26, ADR 0019): the capacity files the shards left behind; a gate stop is a BLOCKED run, anything missing is just "unavailable"
+    const capacity = loadCapacityData(input.env);
+    const capacityStop = capacityBlock(capacity);
+    const notApplicable = healthNotApplicableReason(report, shardCompleteness, renewalFailure, capacityStop);
     const health = notApplicable ? { ...computedHealth, notApplicable } : computedHealth;
-    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure, input.branch);
+    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure, input.branch, capacityStop);
 
     const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
     const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
@@ -345,6 +350,7 @@ export class NotificationService {
       runSource: input.runSource,
       allureUrl: input.allureUrl,
       jobStats: input.jobStats,
+      capacity,
       runTimes: { runStart: input.runStartedAt ?? null, runEnd: new Date(now).toISOString() },
       fieldConfigReset: loadFieldConfigReset(input.env),
       shardCompleteness,
@@ -478,7 +484,15 @@ export class NotificationService {
           completeness.cause?.startsWith('renew-session') ? ` <strong>No test job started:</strong> ${this.escapeHtml(completeness.cause.replace(/^renew-session:\s*/, 'the renew-session job did not succeed: '))}` : ''
         }</p>`
       : '';
-    const subject = `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: REPORT NOT AVAILABLE`;
+    // WHY (2026-11-26, ADR 0019): when the capacity gate stopped the run the cause is known; the subject and the body say it
+    // (the subject still says the report is unavailable: no pass or fail can be claimed either way)
+    const capacityStop = capacityBlock(loadCapacityData(input.env));
+    const capacityNote = capacityStop
+      ? `<p><strong>Blocked by the capacity gate:</strong> ${this.escapeHtml(capacityStop.message)}. No test ran; free up records or move the account to a plan with room, then run again (docs/adr/0019-capacity-gate-before-any-test.md).</p>`
+      : '';
+    const subject = capacityStop
+      ? `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: ${capacityStop.kind === 'no-records' ? 'BLOCKED — NO RECORDS LEFT' : 'BLOCKED — ACCOUNT CAPACITY UNREADABLE'} (REPORT NOT AVAILABLE)`
+      : `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: REPORT NOT AVAILABLE`;
     // a complete document (charset, viewport, light colour scheme) like the run email: without a charset the emoji and dashes can garble in a client
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="color-scheme" content="light"></head><body style="margin:0;">
 <div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
@@ -488,6 +502,7 @@ export class NotificationService {
   <div style="padding:20px 24px;color:#1A1A1A;font-size:14px;line-height:1.6;">
     <p>This run's own report file could not be found or parsed, so <strong>no pass/fail status can be reported</strong> — this is not a "passed" run and must not be treated as one.</p>
     <p><strong>Reason:</strong> ${this.escapeHtml(reason)}</p>
+    ${capacityNote}
     ${shardNote}
     <p>
       <strong>Environment:</strong> ${this.escapeHtml(input.env)}<br/>

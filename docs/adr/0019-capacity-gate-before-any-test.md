@@ -3,7 +3,7 @@
 > **Purpose:** Records why the run reads `GET /v1/tenants/usage` in `globalSetup`, what stops a run and what only warns, and why the plan and the records pool are judged as they are.
 > **Read when:** Changing `src/modules/billing/capacity.ts`, the gate's call in `src/auth/globalSetup.ts`, or the "Account capacity" figures in the run email.
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-11-26 @ 360fd14
+> **Last verified:** 2026-11-26 @ 3c48a02
 
 ## Status
 Accepted — 2026-11-26 (owner decision). In the code; proven on QA (live gate "ok", snapshot written) and offline (`npm run check:capacity-gate`, 35 checks). Stop and warn paths are proven offline only.
@@ -19,5 +19,11 @@ Before any test, `globalSetup` makes ONE read-only `GET /v1/tenants/usage` as ad
 - The gate runs **before the product fixtures**, which create records, so a full account stops before anything is created.
 - The rules are pure (`evaluateCapacity`, `capacityColour`) so the email reuses the same green, yellow and red rule.
 
+## The email (amendment 2026-11-26, piece 3)
+- Each shard writes its pre-run snapshot (gate), a post-run reading (`src/auth/globalTeardown.ts`, never fails a run) and, if the call failed, an error marker, to `test-results/capacity/`, uploaded as the small artifact `capacity-<env>-<shard>` (3 days). `merge-and-report` downloads them into `reports/<env>/capacity/`; no admin credentials reach that job. dev and prod are single-job runs and read `test-results/capacity/` directly.
+- The email takes the EARLIEST pre-run snapshot and the LATEST post-run reading: plan name, billing period and renewal with days left (yellow within 14 days, red when past or when the plan is not the expected one), the records pool, Custom Fields and Storage as coloured bars (Storage yellow under 10% left), used records per entity, and the change during the run, labelled as possibly including other activity. The warnings sit near the top.
+- A gate stop makes the email BLOCKED (verdict, subject, no health score), also when no report exists; a missing snapshot renders one "capacity data unavailable" line.
+- The plan **price is left out**: it is not in the API and the gate opens no browser. Period and currency come from `GET /v1/tenants/subscription-details` (one more read-only call per shard, never fatal).
+
 ## Consequences
-A run that creates records on a full or unreadable account stops at globalSetup; the read-only prod selection only warns. Each CI shard runs the gate once, so a sharded run makes one extra GET per shard and writes one snapshot per shard; the email step takes the earliest.
+A run that creates records on a full or unreadable account stops at globalSetup; the read-only prod selection only warns. Each CI shard runs the gate and the teardown once: two or three extra read-only GETs per shard and a few KB of artifact.

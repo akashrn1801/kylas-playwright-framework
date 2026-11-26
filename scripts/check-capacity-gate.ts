@@ -138,6 +138,12 @@ async function main(): Promise<void> {
   await runCapacityGate(deps(async () => usage({ planName: 'Embark', records: [100, 1000] })));
   check(warns.some((w) => /CAPACITY WARNING — PLAN: expected "Elevate", found "Embark" \(record limit 1,000\)/.test(w)), 'gate: Embark warns loudly and does not stop');
 
+  // billing period and currency (one more GET, never fatal)
+  await runCapacityGate({ ...deps(async () => usage()), fetchBilling: async () => ({ period: 'ANNUAL', currency: 'INR' }) });
+  check(readSnapshot(dir)?.billing?.period === 'ANNUAL' && readSnapshot(dir)?.billing?.currency === 'INR', 'gate: the snapshot carries the billing period and currency');
+  const noBilling = await runCapacityGate({ ...deps(async () => usage()), fetchBilling: async () => { throw new Error('HTTP 500'); } });
+  check(noBilling?.level === 'ok' && readSnapshot(dir)?.billing?.period === null, 'gate: a failing billing read never fails the gate (period stays null)');
+
   // read-only runs (decided from the command line) warn instead of stopping
   const ro = (...args: string[]): boolean => selectionIsReadOnly(['test', ...args]).readOnly;
   check(ro('--project=chromium', '--grep', '@prodSafe', '--workers=2', '--timeout=90000'), 'selection: prod.yml\'s `--grep @prodSafe` is read-only');
