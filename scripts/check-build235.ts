@@ -13,7 +13,7 @@ import { buildJobRecoveryRows } from '../src/notifications/JobStats';
 import { RunHistoryRecord, buildPassRateSeries } from '../src/notifications/RunHistory';
 import { BUILD_235, SKIP_REASON_AFTER, loadFixture, replayBuild235 } from './lib/build235Fixture';
 import { RenewalFailure } from '../src/auth/renewalFailure';
-import { allModulesTable, moduleCoverageViolations } from './check-scenarios';
+import { allModulesTable, moduleCoverageViolations, moduleTableLayoutViolations } from './check-scenarios';
 
 let failed = 0;
 let total = 0;
@@ -76,14 +76,17 @@ function main(): void {
   check(JSON.stringify(buildPassRateSeries(mixed, cur).map((p) => p.buildNumber)) === JSON.stringify(['231', '100', '235']), 'item 3: sorted by run time, not by file position or build number across workflows; other branches left out');
 
   // ── item 4: module analytics ──
-  // one table of every module (2026-11-26): the old detail table is gone; its facts are cell highlights and badges under the module name
+  // ONE flat table, one row per module, UI and RBAC combined (the build #225 layout, 2026-11-26)
   const mtab = allModulesTable(html) ?? [];
   const meetings = mtab.find((x) => x.name === 'Meetings');
-  check(JSON.stringify(meetings?.RBAC) === '[12,9,2,1,0,0]' && /RBAC 2 retries/.test(meetings?.badges ?? '') && /RBAC 1 on rerun/.test(meetings?.badges ?? ''), 'item 4: Meetings RBAC (3 of 12 unstable this run) says so in its row: 12 tests, 9 first time, 2 retries, 1 on rerun, and the badges "RBAC 2 retries", "RBAC 1 on rerun"', JSON.stringify([meetings?.RBAC, meetings?.badges]));
-  check(!/– stable/.test(t) && !/stable \(\d+% unstable/.test(t), 'item 4: no bare "– stable (N% unstable / last N)" badge is left');
-  check(html.includes('>Unstable, last runs</th>') && /\d+% (worse|better)/.test(t), 'item 4: the rolling window has its own column ("Unstable, last runs") with the rate and "worse" / "better" in words');
-  check(/All 17 modules, UI and RBAC side by side/.test(t) && /Call-logs UI 2 retries/.test(t) && !/passed every test first time/.test(t) && !html.includes('>Pass (final)</th>'), 'item 4 / E6: every module is in the ONE all-modules table (34 rows, UI and RBAC side by side, problem rows tinted with badges); no second table, no "N modules passed every test first time" line');
-  check(mtab.every((x) => x.hiddenCells === 0), 'item 4: Tests and Skip are never hidden on phones (a side must add up on a phone too)');
+  const mm = r.report.modules.filter((m) => m.name === 'Meetings');
+  const unstableMeetings = mm.reduce((n, m) => n + m.firstRun.failed + m.firstRun.flaky, 0);
+  const totalMeetings = mm.reduce((n, m) => n + m.total, 0);
+  check(meetings?.total === totalMeetings && meetings?.flaky === mm.reduce((n, m) => n + m.firstRun.flaky, 0) && meetings?.rerun === 1 && meetings?.fail === 1 && meetings?.trend.includes(`unstable this run: ${unstableMeetings} of ${totalMeetings}`) && /1 on rerun/.test(meetings?.trend ?? ''), `item 4: Meetings (UI + RBAC) says so in its row: ${totalMeetings} tests, "unstable this run: ${unstableMeetings} of ${totalMeetings}", "1 on rerun"`, JSON.stringify(meetings));
+  check(!/– stable/.test(t) && !/stable \(\d+% unstable/.test(t) && !html.includes('>Unstable, last runs</th>'), 'item 4: no "– stable (N% unstable / last N)" badge and no second stability column');
+  check(mtab.length === 17 && new RegExp(`${r.report.total} tests, 17 modules`).test(t) && /\b17 Modules\b/.test(t) && !/passed every test first time/.test(t) && !html.includes('>Pass (final)</th>') && !html.includes('>Type</th>') && /worse than last run/.test(t), 'item 4 / E6: ONE table, 17 module rows (UI and RBAC combined), the totals line "943 tests, 17 modules" and the Modules tile 17, trend words, no Type column');
+  check(moduleTableLayoutViolations(html).length === 0, 'item 4: the table equals the reference layout', moduleTableLayoutViolations(html).join('; '));
+  check(mtab.find((x) => x.name === 'Call-logs')?.skipped === 1 && /1 skipped/.test(mtab.find((x) => x.name === 'Call-logs')?.trend ?? ''), 'item 4: Call-logs shows "1 skipped" in its Trend');
   // ── Final result rule (second amendment of ADR 0015, 2026-11-24): tiles, executive summary, modules, subject ──
   const tileText = (label: string): string => (t.match(new RegExp(`(\\d+) ${label}.{0,90}`)) ?? [])[0] ?? '';
   check(r.report.finalPassed === 940 && /^940 Passed 6 after a retry, 2 after the rerun/.test(tileText('Passed')), 'tiles: Passed 940 "6 after a retry, 2 after the rerun"', tileText('Passed'));
@@ -92,7 +95,7 @@ function main(): void {
   check(940 + 2 + 1 === 943 && r.report.finalPassed + r.report.failed + (r.report.skipped - r.report.didNotRun) + r.report.didNotRun === r.report.total, 'tiles: Passed + Failed + Skipped (+ Did not run) add up to the total');
   check(/\b6 Flaky passed on a retry \(inside Passed\); \+2 passed only on the rerun/.test(t), 'tiles: a "Flaky 6" signal stays, marked as inside Passed, with the 2 that passed only on the rerun');
   check(/940 of 943 tests passed in the end: 6 passed on their retry and 2 only on the rerun/.test(t) && /2 tests failed\./.test(t), 'executive summary: "2 tests failed" and "940 of 943 tests passed in the end: 6 after an in-job retry (flaky) and 2 after the rerun"');
-  check(!html.includes('>Flaky</th>') && !html.includes('>Pass (final)</th>'), 'modules: no separate Flaky column and no second detail table (Retry and Rerun are columns of the one table)');
+  check(!html.includes('>Pass (final)</th>') && (html.match(/<table id="all-modules"/g) ?? []).length === 1, 'modules: no second detail table and no "Pass (final)" column');
   check(r.report.passRate === 98.8 && /98\.8%/.test(t) && /Passed first time/.test(t), 'signals kept: "Passed first time" 98.8%, and the Flaky Tests section still lists each flaky test with its error');
 
   // ── item 5: background errors reconcile ──

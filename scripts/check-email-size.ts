@@ -40,12 +40,18 @@ const CLIP = 102 * 1024;
 for (const [name, r] of [['build #235', real], ['worst case', worst]] as const) {
   const sent = r.sent;
   const at = (needle: string): number => Buffer.byteLength(sent.slice(0, Math.max(0, sent.indexOf(needle))));
-  const essentialsEnd = at('Slowest Tests');
-  check(sent.includes('Slowest Tests') && essentialsEnd < CLIP, `size: ${name}: verdict, tiles, How the run ended, Action Required and Module Analytics all end before the clip (${kib(essentialsEnd)})`, `${kib(essentialsEnd)}`);
-  const order = ['>Result<', 'How the run ended', 'Action Required (Automation Health', 'Module Analytics</div>'].map((n) => sent.indexOf(n));
-  check(order.every((o, k) => o >= 0 && (k === 0 || o > order[k - 1])), `size: ${name}: the essentials come in order (Result, How the run ended, Action Required, Module Analytics)`, order.join(','));
+  // three tiers (2026-11-26): 1 verdict, tiles, How the run ended, Action Required; 2 Module Analytics, Account capacity, (Rerun, Trend, cards); 3 ONE "Technical details" block at the bottom
+  const essentialsEnd = at('Account capacity</div>') > 0 ? at('Account capacity</div>') : at('Module Analytics</div>');
+  check(sent.includes('Technical details') && essentialsEnd < CLIP, `size: ${name}: verdict, tiles, How the run ended, Action Required, Module Analytics and Account capacity all end before the clip (${kib(essentialsEnd)})`, `${kib(essentialsEnd)}`);
+  const order = ['>Result<', 'How the run ended', 'Action Required (Automation Health', 'Module Analytics</div>', 'Technical details</div>'].map((n) => sent.indexOf(n));
+  check(order.every((o, k) => o >= 0 && (k === 0 || o > order[k - 1])), `size: ${name}: the tiers come in order (Result, How the run ended, Action Required, Module Analytics, Technical details)`, order.join(','));
+  const cap = sent.indexOf('id="section-account-capacity"');
+  check(cap < 0 || (cap > order[3] && cap < order[4]), `size: ${name}: Account capacity is in tier 2 (after Module Analytics, before Technical details)`, `${cap}`);
+  const tech = sent.slice(order[4]);
+  const inTech = ['CI Job Stats', 'Load Signals', 'Slowest Tests (Top 5)', 'Slowest Tests by Module', 'Background Errors', 'Skipped Tests', 'Environment', 'CI/CD'].filter((h) => sent.includes(h) && !tech.includes(h));
+  check(inTech.length === 0, `size: ${name}: CI job stats, Load signals, Slowest tests, Background errors, Skipped tests, Environment and CI/CD links are all inside Technical details`, inTech.join(', '));
   const firstCard = sent.indexOf('id="section-failed-tests"') >= 0 ? sent.indexOf('id="section-failed-tests"') : sent.indexOf('id="section-flaky-tests"');
-  check(firstCard < 0 || firstCard > order[3], `size: ${name}: the cards come after the essentials`, `${firstCard} vs ${order[3]}`);
+  check(firstCard < 0 || (firstCard > order[3] && firstCard < order[4]), `size: ${name}: the cards come after Module Analytics and before Technical details`, `${firstCard} vs ${order[3]}..${order[4]}`);
 }
 for (const [name, r] of [['build #235', real], ['worst case', worst]] as const) {
   const ids = (r.html.match(/id="(?:section-failed-tests|section-flaky-tests|section-passed-on-rerun)"/g) ?? []).length;

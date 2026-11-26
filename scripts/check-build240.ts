@@ -15,8 +15,8 @@ import { replayBuild240, loadFixture240 } from './lib/build240Fixture';
 import { replayBuild235, buildWorstCaseFixture } from './lib/build235Fixture';
 import { replayBuild239 } from './lib/build239Fixture';
 import { EmailTemplate } from '../src/notifications/EmailTemplate';
-import { RETRY } from '../src/notifications/EmailPalette';
-import { allModulesTable, moduleCoverageViolations, normalizeTags } from './check-scenarios';
+
+import { allModulesTable, moduleCoverageViolations, moduleTableLayoutViolations, normalizeTags } from './check-scenarios';
 
 let failed = 0;
 let total = 0;
@@ -101,19 +101,23 @@ function main(): void {
   check(/429 Kylas API/.test(r.html.replace(/<[^>]*>/g, ' ')) && /429 third-party/.test(r.html.replace(/<[^>]*>/g, ' ')) && /real throttling; third-party 429s, such as Sentry telemetry sent by the app, are counted apart as noise, not rate limiting of our tests/.test(t), 'E5: Load Signals has "429 Kylas API" and "429 third-party" columns and says what the second one is');
   check(!/429 API/.test(t), 'E5: the old "429 API" column heading is gone');
 
-  // ── E6: every module, UI and RBAC side by side ──
+  // ── E6: one row per module (the layout of the build #225 reference, UI and RBAC combined) ──
   const mt = allModulesTable(r.html) ?? [];
   const cov240 = moduleCoverageViolations(r.html, fx.modules.map((m) => ({ name: m.name, type: m.type, total: m.total })));
-  check(cov240.length === 0, `every module in the results has its row, on its own side, with its own test count (${fx.modules.length} sides: ${[...new Set(fx.modules.map((m) => m.name))].join(', ')})`, cov240.join('; '));
+  const names240 = [...new Set(fx.modules.map((m) => m.name))];
+  check(cov240.length === 0, `every module in the results has ONE row whose count is its UI + RBAC tests (${names240.length} modules: ${names240.join(', ')})`, cov240.join('; '));
   const byName = new Map(mt.map((x) => [x.name, x]));
-  check(mt.length === new Set(fx.modules.map((m) => m.name)).size && /All 17 modules, UI and RBAC side by side/.test(t) && !/passed every test first time/.test(t), 'E6: one row per entity (every module of the 34 is shown), the "27 modules passed every test first time" one-liner is gone', `${mt.length} rows`);
+  check(mt.length === names240.length && /Module Analytics/.test(t) && new RegExp(`${r.report.total} tests, ${names240.length} modules`).test(t) && !/passed every test first time/.test(t), 'E6: one row per module, the totals line says "943 tests, 17 modules", the "27 modules passed every test first time" one-liner is gone', `${mt.length} rows`);
+  const sum = (name: string, f: (m: (typeof fx.modules)[number]) => number): number => fx.modules.filter((m) => m.name === name).reduce((n, m) => n + f(m), 0);
   const dash = byName.get('Dashboard');
   const leads = byName.get('Leads');
-  check(JSON.stringify(dash?.UI) === '[33,33,0,0,0,0]' && JSON.stringify(dash?.RBAC) === '[28,26,2,0,0,0]' && JSON.stringify(leads?.UI) === '[40,39,1,0,0,0]' && JSON.stringify(leads?.RBAC) === '[40,39,1,0,0,0]', 'E6: Dashboard (UI 33 | 33 | 0 | 0 | 0 | 0, RBAC 28 | 26 | 2 | 0 | 0 | 0) and Leads (1 retry on each side): tests, first time, retry, rerun, failed, skipped', JSON.stringify([dash, leads]));
-  check(JSON.stringify(byName.get('Call-logs')?.UI) === '[29,27,1,0,0,1]' && mt.slice(0, 6).every((x) => [x.UI, x.RBAC].some((sd) => sd && sd[2] + sd[3] + sd[4] > 0)) && mt.slice(6).every((x) => [x.UI, x.RBAC].every((sd) => !sd || sd[2] + sd[3] + sd[4] === 0)), 'E6: the 6 entities with a retry (7 modules) come first, the other rows are clean; Call-logs UI 29 | 27 | 1 | 0 | 0 | 1', mt.slice(0, 9).map((x) => x.name).join(', '));
-  check((byName.get('Dashboard')?.bgs ?? []).includes(RETRY.bg.toUpperCase()), 'E6: a cell with a retry is highlighted in the retry yellow');
-  const moduleTables = (r.html.match(/<table class="am"/g) ?? []).length;
-  check(moduleTables === 1 && mt.length === 17 && !/more modules? with failures or flaky tests/.test(t) && !r.html.includes('>Pass (final)</th>'), 'E7: ONE Module Analytics table with all 17 entities (34 sides), not capped, no separate problem-modules table', String(moduleTables));
+  check(dash?.total === 61 && dash?.pass === 59 && dash?.flaky === 2 && leads?.total === 80 && leads?.pass === 78 && leads?.flaky === 2, 'E6: Dashboard 61 tests (59 pass, 2 flaky = UI 33 + RBAC 28) and Leads 80 (78 pass, 2 flaky)', JSON.stringify([dash, leads]));
+  void sum;
+  check(byName.get('Call-logs')?.total === 56 && byName.get('Call-logs')?.skipped === 1 && /1 skipped/.test(byName.get('Call-logs')?.trend ?? '') && mt.filter((x) => x.bg !== '').length === 6, 'E6: Call-logs 56 tests with "1 skipped" in its Trend; the 6 modules with a retry are the tinted rows', mt.filter((x) => x.bg !== '').map((x) => x.name).join(', '));
+  check(['#FFFCE8', '#FFF5F4'].includes(byName.get('Dashboard')?.bg ?? ''), 'E6: a module with a retry has a tinted row (light amber)', byName.get('Dashboard')?.bg);
+  check(moduleTableLayoutViolations(r.html).length === 0, 'E6: the table equals the reference layout (columns, header, cell structure, alphabetical order)', moduleTableLayoutViolations(r.html).join('; '));
+  const moduleTables = (r.html.match(/<table id="all-modules"/g) ?? []).length;
+  check(moduleTables === 1 && !/more modules? with failures or flaky tests/.test(t) && !r.html.includes('>Pass (final)</th>') && !r.html.includes('>Type</th>'), 'E7: ONE Module Analytics table, not capped, no second table, no Type column', String(moduleTables));
 
   // ── E7: sizes, content kept, nothing lost by the compaction ──
   const kib = (h: string): number => Buffer.byteLength(h) / 1024;

@@ -85,7 +85,7 @@ export const SCENARIOS: ScenarioSpec[] = [
   { name: '69-plan-limit-modal', title: 'The plan-limit modal ("Upgrade your plan") blocks 12 tests in 3 modules', expect: 'red; the cause banner says the plan limit was reached, not a list of locator failures', first: [...base(18), ...many(4, 'plan-limit', 'leads', 'ui/leads/leads.spec.ts', 300), ...many(4, 'plan-limit', 'deals', 'ui/deals/deals.spec.ts', 400), ...many(4, 'plan-limit', 'contacts', 'ui/contacts/contacts.spec.ts', 500)], rerun: false },
   { name: '70-failures-with-account-warning', title: 'A red run (2 failed) while the account has few records left (3,800 of 300,000)', expect: 'red; the capacity warning is shown WITHOUT the "does not change the test result" label (the label is only for a green run)', first: [...base(26), ...many(2, 'failed', 'broken'), ...many(2, 'flaky', 'flaky')], rerun: false, capacity: { pre: { recordsUsed: 295000 }, post: { recordsUsed: 296200 } } },
   { name: '71-known-bug-fixed-with-a-real-failure', title: 'Two known-bug tests (BLR2 and another) pass although marked test.fail(), next to one ordinary failure', expect: 'red; the two known-bug tests say "known bug fixed: remove test.fail()", the ordinary failure is not given that label; the summary counts 2 known bug fixed', first: [...base(20), ...many(1, 'known-bug-passes', 'BLR2 known bug', 'rbac/billing/billing.rbac.spec.ts', 210), ...many(1, 'known-bug-passes', 'L77 known bug', 'rbac/leads.rbac.spec.ts', 220), ...many(1, 'failed', 'ordinary failure', 'ui/many/many.spec.ts', 230)], rerun: false },
-  { name: '65-smoke-only-not-selected', title: 'A run that selects by tag (@regression): Billing UI ran 4 of its 6 tests, because BL1 and BL5 are tagged only @smoke (build #242)', expect: 'Billing UI shows 4 tests and the badge "UI 2 of 6 not selected"; the footnote says CI selects by tag; the verdict is unaffected', first: [...many(4, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 } },
+  { name: '65-smoke-only-not-selected', title: 'A run that selects by tag (@regression): Billing UI ran 4 of its 6 tests, because BL1 and BL5 are tagged only @smoke (build #242)', expect: 'one Billing row of 6 tests whose Trend says "2 of 8 not selected"; the verdict is unaffected', first: [...many(4, 'passed', 'billing ui', 'ui/billing/billing.spec.ts'), ...many(2, 'passed', 'billing rbac', 'rbac/billing/billing.rbac.spec.ts', 200)], rerun: false, suiteBaseline: { 'UI:Billing': 6, 'RBAC:Billing': 2 } },
   { name: '61-capacity-created-pushes-over-the-limit', title: 'Account capacity: billing still shows 200 left (it counts creates only at the nightly refresh), the run created 503 records', expect: 'records bar yellow (200 left); a red ESTIMATE "none left (over by 303)" near the top; the run is NOT blocked (the gate stops on the billing figures only)', first: base(30), rerun: false, capacity: { pre: { recordsUsed: 299800 }, post: {} } },
   { name: '62-capacity-refresh-time-known', title: 'Account capacity: Kylas sends a real refresh time (5 hours before the email)', expect: 'the billing figures are labelled "as of the last refresh: <time> IST"', first: base(30), rerun: false, capacity: { pre: { refreshedMinutesAgo: 300 }, post: { refreshedMinutesAgo: 300 } } },
   { name: '63-capacity-live-counts-incomplete', title: 'Account capacity: a throttled search stopped the live per-entity reading after the first three entities', expect: 'created is shown only for the entities read, the total says how many could not be read, n/a for the rest, and the estimate says "at most"', first: base(30), rerun: false, capacity: { pre: {}, post: {}, liveReadOnlyFirst: 3 } },
@@ -205,30 +205,55 @@ export function normalizeTags(html: string): string {
   });
 }
 
-/** The all-modules table: per entity, the UI and RBAC cells as numbers (null for a missing side), and each cell's background. */
-export interface ModuleRow { name: string; UI: number[] | null; RBAC: number[] | null; bgs: string[]; badges: string; hiddenCells: number }
-export function allModulesTable(html: string): ModuleRow[] | null {
+/** The module table (the layout of the build #225 reference, one row per module): the module's numbers and its row tint. */
+export interface ModuleRow { name: string; total: number; pass: number; flaky: number; rerun: number; fail: number; skipped: number; retries: number; bg: string; trend: string }
+export interface FlatModuleRow { name: string; rowStyle: string; cells: Array<{ style: string; inner: string }> }
+/** Every row of the table in the order shown, with its seven cells. */
+export function moduleTableRows(html: string): FlatModuleRow[] | null {
   const i = html.indexOf('id="all-modules"');
   if (i < 0) return null;
-  const end = html.indexOf('</table>', html.indexOf('<table', i));
-  const rows: ModuleRow[] = [];
-  for (const tr of html.slice(i, end).split('<tr style="border-bottom').slice(1)) {
-    const cells = [...tr.matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/g)].map((c) => ({ attrs: c[1], t: text(c[2].replace(/<div>[\s\S]*<\/div>/, '')), raw: c[2] }));
-    const name = cells[0].t;
-    const badges = text(/<div>([\s\S]*)<\/div>/.exec(cells[0].raw)?.[1] ?? '');
-    const rest = cells.slice(1);
-    const side = (): number[] | null => {
-      if (rest[0] && /colspan="7"/.test(rest[0].attrs)) { rest.shift(); return null; }
-      const seven = rest.splice(0, 7); // tests, first, retry, rerun, failed, skipped, then the stability text
-      return seven.slice(0, 6).map((c) => parseInt(c.t, 10));
-    };
-    const bgs: string[] = [];
-    for (const c of cells.slice(1)) bgs.push(/background:(#[0-9A-Fa-f]{6})/.exec(c.attrs)?.[1]?.toUpperCase() ?? '');
-    // a Tests or Skip cell hidden on phones makes a side's numbers not add up for a phone reader (build #242, Billing: 6 tests, 2 skipped, "4" shown)
-    const hiddenCells = cells.slice(1).filter((c) => /class="mh"/.test(c.attrs) && /^\d+$/.test(c.t)).length;
-    rows.push({ name, UI: side(), RBAC: side(), bgs, badges, hiddenCells });
+  const end = html.indexOf('</table>', i);
+  return html.slice(i, end).split('<tr style="border-bottom').slice(1).map((tr) => {
+    const cells = [...tr.matchAll(/<td\b[^>]*?style="([^"]*)"[^>]*>([\s\S]*?)<\/td>/g)].map((c) => ({ style: c[1], inner: c[2] }));
+    return { name: text(cells[0]?.inner ?? ''), rowStyle: tr.slice(0, tr.indexOf('>')), cells };
+  });
+}
+export function allModulesTable(html: string): ModuleRow[] | null {
+  const flat = moduleTableRows(html);
+  if (!flat) return null;
+  return flat.map((r) => {
+    const num = (k: number): number => parseInt(text(r.cells[k]?.inner ?? ''), 10) || 0;
+    const trend = text(r.cells[6]?.inner ?? '');
+    const rerun = parseInt(/(\d+) on rerun/.exec(trend)?.[1] ?? '0', 10);
+    const skipped = parseInt(/(\d+) skipped/.exec(trend)?.[1] ?? '0', 10);
+    return { name: r.name, total: num(1) + num(2) + num(3) + rerun + skipped, pass: num(1), flaky: num(2), rerun, fail: num(3), skipped, retries: num(5), bg: /background:(#[0-9A-Fa-f]{6})/.exec(r.rowStyle)?.[1]?.toUpperCase() ?? '', trend };
+  });
+}
+const REF_225 = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'module-analytics-ref225.json'), 'utf-8')) as { headerRowStyle: string; headers: Array<{ label: string; style: string }>; cellStructure: string[] };
+const KEEP_STRUCT = new Set(['padding', 'font-size', 'text-align', 'width']);
+const structOf = (style: string): string => style.split(';').map((p) => p.trim()).filter((p) => p && KEEP_STRUCT.has(p.split(':')[0])).join(';');
+/** The table's columns, header styling, cell structure and row order equal the reference email of build #225 without its Type column (one row per module, alphabetical). */
+export function moduleTableLayoutViolations(html: string): string[] {
+  const i = html.indexOf('id="all-modules"');
+  if (i < 0) return ['the module table is missing'];
+  const end = html.indexOf('</table>', i);
+  const t = html.slice(i, end);
+  const out: string[] = [];
+  const hdr = /<tr style="([^"]*)">\s*<th/.exec(t)?.[1];
+  if (hdr !== REF_225.headerRowStyle) out.push(`header row style "${hdr}" != reference "${REF_225.headerRowStyle}"`);
+  const ths = [...t.matchAll(/<th\b[^>]*?style="([^"]*)"[^>]*>([\s\S]*?)<\/th>/g)].map((m) => ({ label: text(m[2]), style: m[1] }));
+  if (JSON.stringify(ths.map((x) => x.label)) !== JSON.stringify(REF_225.headers.map((x) => x.label))) out.push(`columns ${ths.map((x) => x.label).join(' | ')} != reference ${REF_225.headers.map((x) => x.label).join(' | ')}`);
+  else ths.forEach((x, k) => { if (x.style !== REF_225.headers[k].style) out.push(`header "${x.label}" style differs from the reference: ${x.style}`); });
+  const rows = moduleTableRows(html) ?? [];
+  for (const r of rows) {
+    if (r.cells.length !== REF_225.cellStructure.length) { out.push(`${r.name}: ${r.cells.length} cells, the reference has ${REF_225.cellStructure.length}`); continue; }
+    r.cells.forEach((c, k) => { if (structOf(c.style) !== REF_225.cellStructure[k]) out.push(`${r.name}: cell ${k + 1} structure "${structOf(c.style)}" != reference "${REF_225.cellStructure[k]}"`); });
   }
-  return rows;
+  const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  if (rows.map((r) => r.name).join('|') !== sorted.map((r) => r.name).join('|')) out.push('row order is not alphabetical by module name');
+  if (new Set(rows.map((r) => r.name)).size !== rows.length) out.push('a module has more than one row (one row per module, UI and RBAC combined)');
+  if (/>(UI|RBAC)<\/span>/.test(t)) out.push('a UI or RBAC badge is shown (there is no Type column)');
+  return out;
 }
 export interface ExpectedModule { name: string; type: 'UI' | 'RBAC'; total: number }
 /**
@@ -252,39 +277,37 @@ export function expectedModulesFromDefs(defs: Def[]): ExpectedModule[] {
   return [...out.values()];
 }
 /**
- * Every module present in a run's results is a row of the Module Analytics "all modules" table, on the right side (UI or RBAC), with the run's own
- * test count for that side, and no row appears that the run does not have (unless `allowExtra`). Returns what is wrong; [] when it holds.
+ * Every module present in a run's results is ONE row of the Module Analytics table, and the row's count (Pass + Flaky + Fail + on rerun + skipped) equals
+ * the module's UI + RBAC tests from the run's spec files (Billing = 8, Leads = 80, ...). No row appears that the run does not have (unless `allowExtra`).
+ * `expected` lists the sides (name, type, total); they are summed per module here. Returns what is wrong; [] when it holds.
  */
 export function moduleCoverageViolations(html: string, expected: ExpectedModule[], opts: { allowExtra?: boolean } = {}): string[] {
   const rows = allModulesTable(html);
-  if (!rows) return ['the all-modules table is missing'];
+  if (!rows) return ['the module table is missing'];
   const out: string[] = [];
   const lower = (n: string): string => n.toLowerCase();
-  for (const e of expected) {
-    const row = rows.find((x) => lower(x.name) === lower(e.name));
-    if (!row) { out.push(`${e.type} ${e.name} is in the results but has no row`); continue; }
-    const side = row[e.type];
-    if (!side) out.push(`${e.name}: the ${e.type} side is missing from its row`);
-    else if (side[0] !== e.total) out.push(`${e.name} ${e.type}: the row says ${side[0]} tests, the results have ${e.total}`);
+  const want = new Map<string, { name: string; total: number }>();
+  for (const e of expected) { const w = want.get(lower(e.name)) ?? { name: e.name, total: 0 }; w.total += e.total; want.set(lower(e.name), w); }
+  for (const w of want.values()) {
+    const matching = rows.filter((x) => lower(x.name) === lower(w.name));
+    if (matching.length === 0) out.push(`${w.name} is in the results but has no row`);
+    else if (matching.length > 1) out.push(`${w.name} has ${matching.length} rows`);
+    else if (matching[0].total !== w.total) out.push(`${w.name}: the row says ${matching[0].total} tests (UI + RBAC), the results have ${w.total}`);
   }
-  if (!opts.allowExtra) for (const row of rows) if (!expected.some((e) => lower(e.name) === lower(row.name))) out.push(`the row "${row.name}" is not in the results`);
+  if (!opts.allowExtra) for (const row of rows) if (!want.has(lower(row.name))) out.push(`the row "${row.name}" is not in the results`);
   return out;
-}
-/** Rows whose Tests or Skip cell is hidden on phones: such a side shows "First 4" for 6 tests of which 2 were skipped (build #242, Billing). */
-export function hiddenCountViolations(html: string): string[] {
-  return (allModulesTable(html) ?? []).filter((r) => r.hiddenCells > 0).map((r) => `${r.name}: ${r.hiddenCells} count cell(s) are hidden on phones, so the visible numbers do not add up to the module's tests`);
 }
 /** A module that ran fewer tests than the suite has says so in its row, and one that ran them all does not (build #242: Billing UI 4 of 6 looked like missing tests). */
 export function notSelectedViolations(html: string, baseline: Record<string, number>): string[] {
   const modRows = allModulesTable(html) ?? [];
+  const full = new Map<string, number>();
+  for (const [key, n] of Object.entries(baseline)) { const name = key.slice(key.indexOf(':') + 1); full.set(name, (full.get(name) ?? 0) + n); }
   const out: string[] = [];
-  for (const [key, full] of Object.entries(baseline)) {
-    const [type, name] = key.split(':');
+  for (const [name, all] of full) {
     const row = modRows.find((x) => x.name === name);
-    const ran = (type === 'UI' ? row?.UI : row?.RBAC)?.[0];
-    if (ran === undefined) continue;
-    if (ran < full && !new RegExp(`${type} ${full - ran} of ${full} not selected`).test(row?.badges ?? '')) out.push(`${name} ${type} ran ${ran} of ${full} tests but its row does not say ${full - ran} were not selected`);
-    if (ran >= full && new RegExp(row?.UI && row?.RBAC ? `${type} \\d+ of \\d+ not selected` : 'not selected').test(row?.badges ?? '')) out.push(`${name} ${type} ran all ${full} tests but its row says some were not selected`);
+    if (!row) continue;
+    if (row.total < all && !new RegExp(`${all - row.total} of ${all} not selected`).test(row.trend)) out.push(`${name} ran ${row.total} of ${all} tests but its Trend does not say ${all - row.total} were not selected`);
+    if (row.total >= all && /not selected/.test(row.trend)) out.push(`${name} ran all ${all} tests but its Trend says some were not selected`);
   }
   return out;
 }
@@ -416,6 +439,42 @@ export function knownBugFixedViolations(html: string, expected: number): string[
   const out: string[] = [];
   if (n < expected) out.push(`${expected} known-bug test(s) passed but "known bug fixed: remove test.fail()" appears ${n} time(s)`);
   if (!inSummary || Number(inSummary[1]) !== expected) out.push(`the cause summary does not count ${expected} known bug fixed (${inSummary?.[0] ?? 'absent'})`);
+  return out;
+}
+/** The three tiers in order: verdict, tiles and Action Required; then Module Analytics, Account capacity, Rerun and Trend; then ONE Technical details block holding the technical sections. */
+export function tierViolations(html: string): string[] {
+  const at = (needle: string): number => html.indexOf(needle);
+  const marks: Array<[string, string]> = [['the verdict (Result)', '>Result<'], ['Action Required', 'id="section-action-required"'], ['Module Analytics', 'id="section-module-analytics"'], ['Account capacity', 'id="section-account-capacity"'], ['Technical details', 'id="section-technical-details"']];
+  const out: string[] = [];
+  let last = -1;
+  let lastName = '';
+  for (const [name, needle] of marks) {
+    const i = at(needle);
+    if (i < 0) continue;
+    if (i < last) out.push(`${name} comes before ${lastName}`);
+    last = i; lastName = name;
+  }
+  const tech = at('id="section-technical-details"');
+  if (tech >= 0) {
+    for (const [name, needle] of [['Slowest Tests', 'Slowest Tests (Top 5)'], ['Background Errors', 'id="section-background-errors"'], ['Skipped Tests', 'id="section-skipped-tests"'], ['CI Job Stats', 'CI Job Stats']] as const) {
+      const i = at(needle);
+      if (i >= 0 && i < tech) out.push(`${name} is above the Technical details block`);
+    }
+    if ((html.match(/id="section-technical-details"/g) ?? []).length !== 1) out.push('more than one Technical details block');
+  }
+  for (const [name, needle] of [['Failed Tests', 'id="section-failed-tests"'], ['Flaky Tests', 'id="section-flaky-tests"']] as const) {
+    const i = at(needle);
+    if (i >= 0 && tech >= 0 && i > tech) out.push(`${name} is inside or below the Technical details block`);
+  }
+  return out;
+}
+/** The totals line and the Modules tile both count module names, so they equal the rows of the Module Analytics table. */
+export function modulesCountViolations(html: string, total: number): string[] {
+  const rows = (allModulesTable(html) ?? []).length;
+  const out: string[] = [];
+  if (!new RegExp(`${total} tests?, ${rows} modules?\\b`).test(text(html))) out.push(`the totals line does not say "${total} tests, ${rows} modules" (the table has ${rows} rows)`);
+  const tile = tiles(html)['Modules']?.value;
+  if (tile !== undefined && tile !== String(rows)) out.push(`the Modules tile says ${tile}, the table has ${rows} rows`);
   return out;
 }
 /** Exactly one status banner, and a run that is not clear is never called clean anywhere. */
@@ -700,26 +759,21 @@ export function invariants(s: ScenarioResult): Violation[] {
     if (!modRows) bad('all-modules-present', 'the all-modules table is missing');
     else {
       if (modRows.length !== names.length || !names.every((n) => modRows.some((x) => x.name === n))) bad('all-modules-complete', `the table has ${modRows.length} rows, the run has ${names.length} modules: every module must be shown`);
-      let totalTests = 0;
-      for (const row of modRows) {
-        for (const side of [row.UI, row.RBAC]) {
-          if (!side) continue;
-          totalTests += side[0];
-          if (side[1] + side[2] + side[3] + side[4] + side[5] !== side[0]) bad('all-modules-adds-up', `${row.name}: first ${side[1]} + retry ${side[2]} + rerun ${side[3]} + failed ${side[4]} + skipped ${side[5]} != tests ${side[0]}`);
-        }
-      }
-      if (t['Modules'] && t['Modules'].value !== String(modRows.length)) bad('modules-tile-matches-table', `the Modules tile says ${t['Modules'].value}, the table has ${modRows.length} rows: a reader counts the rows`);
-      { const head = /All (\d+) (module|modules), UI and RBAC/.exec(text(s.html)); if (!head || head[2] !== (head[1] === '1' ? 'module' : 'modules') || Number(head[1]) !== modRows.length) bad('modules-heading-plural', `the table heading "${head?.[0]}" does not agree with ${modRows.length} row(s)`); }
-      for (const msg of hiddenCountViolations(s.html)) bad('all-modules-counts-visible', msg);
+      const totalTests = modRows.reduce((n, x) => n + x.total, 0);
+      if (!new RegExp(`${r.total} tests?, ${names.length} modules?\\b`).test(text(s.html))) bad('modules-totals-line', `the totals line should say "${r.total} tests, ${names.length} modules" (module names, singular when 1)`);
+      if (t['Modules'] && t['Modules'].value !== String(modRows.length)) bad('modules-tile-matches-table', `the Modules tile says ${t['Modules'].value}, the table has ${modRows.length} rows: both count module names`);
+      for (const msg of modulesCountViolations(s.html, r.total)) bad('modules-count', msg);
+      for (const msg of moduleTableLayoutViolations(s.html)) bad('module-table-layout', msg);
       for (const msg of notSelectedViolations(s.html, s.spec.suiteBaseline ?? {})) bad('not-selected-explained', msg);
       if (totalTests !== r.total) bad('all-modules-total', `the table's tests add up to ${totalTests}, the run has ${r.total}`);
-      const fails = modRows.reduce((n, x) => n + (x.UI?.[4] ?? 0) + (x.RBAC?.[4] ?? 0), 0);
-      const retries = modRows.reduce((n, x) => n + (x.UI?.[2] ?? 0) + (x.RBAC?.[2] ?? 0), 0);
-      if (fails !== r.failed || retries !== r.firstRun.flaky) bad('all-modules-match-run', `table failed ${fails} / retry ${retries} vs the run ${r.failed} / ${r.firstRun.flaky}`);
-      const firstProblem = modRows.findIndex((x) => [x.UI, x.RBAC].every((sd) => !sd || (sd[2] + sd[3] + sd[4] === 0)));
-      const lastProblem = modRows.map((x) => [x.UI, x.RBAC].some((sd) => sd && sd[2] + sd[3] + sd[4] > 0)).lastIndexOf(true);
-      if (firstProblem >= 0 && lastProblem > firstProblem) bad('all-modules-problems-first', 'a module with a problem comes after one without');
-      for (const row of modRows) if ((row.UI?.[4] ?? 0) + (row.RBAC?.[4] ?? 0) > 0 && !row.bgs.includes('#FFEBE9')) bad('all-modules-highlight', `${row.name} has failed tests but no red cell`);
+      const fails = modRows.reduce((n, x) => n + x.fail, 0);
+      const retries = modRows.reduce((n, x) => n + x.flaky, 0);
+      if (fails !== r.failed || retries !== r.firstRun.flaky) bad('all-modules-match-run', `table failed ${fails} / flaky ${retries} vs the run ${r.failed} / ${r.firstRun.flaky}`);
+      for (const row of modRows) {
+        if (row.flaky + row.fail > 0 && !/unstable this run/.test(row.trend)) bad('all-modules-trend-unstable', `${row.name} has flaky or failed tests but its Trend does not say "unstable this run"`);
+        if (row.flaky + row.fail + row.retries > 0 && row.bg !== '#FFF5F4' && row.bg !== '#FFFCE8') bad('all-modules-tint', `${row.name} has flaky, failed or retried tests but its row is not tinted`);
+        if (row.fail > 0 && row.bg !== '#FFF5F4') bad('all-modules-highlight', `${row.name} has failed tests but its row is not tinted red`);
+      }
     }
   }
   // E7: moving the repeated styles into classes loses nothing: the sent email, with its classes expanded, is the readable one
@@ -730,6 +784,7 @@ export function invariants(s: ScenarioResult): Violation[] {
   if (s.kind === 'email' && s.ctx) {
     for (const msg of readerTextViolations(s.html)) bad('reader-text', msg);
     for (const msg of verdictViolations(s.html, s.ctx.verdict?.verdict === 'clear')) bad('one-verdict', msg);
+    for (const msg of tierViolations(s.html)) bad('tier-order', msg);
     for (const msg of capacityLabelViolations(s.html, s.ctx.verdict?.verdict === 'clear')) bad('capacity-label', msg);
     for (const msg of knownBugFixedViolations(s.html, (s.spec.first ?? []).filter((d) => d.kind === 'known-bug-passes').length)) bad('known-bug-fixed', msg);
   }
@@ -885,12 +940,17 @@ function main(): void {
       ['the Billing row dropped', moduleCoverageViolations(dropRow(every.html, 'Billing'), exp), true],
       ['the Dashboard row dropped', moduleCoverageViolations(dropRow(every.html, 'Dashboard'), exp), true],
       ['a module the run does not have (extra row)', moduleCoverageViolations(every.html, exp.filter((e) => e.name !== 'Reports')), true],
-      ['the full email: no count cell is hidden on phones', hiddenCountViolations(every.html), false],
-      ['Tests and Skip cells hidden on phones (the #242 Billing "4")', hiddenCountViolations(((h: string, at: number) => h.slice(0, at) + h.slice(at).replace(/(<td style="[^"]*)(">\d+<\/td>)/, '$1" class="mh$2'))(every.html, every.html.indexOf('id="all-modules"'))), true],
-      ['the #242 run (Billing UI 4 of 6): the row explains the 2 not selected', notSelectedViolations(sel.html, sel.spec.suiteBaseline!), false],
-      ['the same email without the badge: reported', notSelectedViolations(sel.html.replace(/UI 2 of 6 not selected/, ''), sel.spec.suiteBaseline!), true],
+      ['the full email: the table equals the reference layout', moduleTableLayoutViolations(every.html), false],
+      ['two columns swapped in the header', moduleTableLayoutViolations(every.html.replace('>Flaky</th>', '>TMP</th>').replace('>Fail</th>', '>Flaky</th>').replace('>TMP</th>', '>Fail</th>')), true],
+      ['a column dropped (no Progress)', moduleTableLayoutViolations(every.html.replace(/<th class="mp"[^>]*>Progress<\/th>/, '')), true],
+      ['a different cell padding', moduleTableLayoutViolations(every.html.replace('<td style="padding:8px;text-align:center;font-size:12px;color', '<td style="padding:4px;text-align:center;font-size:12px;color')), true],
+      ['rows not in alphabetical order', moduleTableLayoutViolations(((h: string) => { const rows = h.split('<tr style="border-bottom'); const at = h.indexOf('id="all-modules"'); void at; const head = rows[0]; return [head, ...rows.slice(1).reverse()].join('<tr style="border-bottom'); })(every.html)), true],
+      ['the #242 run (Billing UI 4 of 6): the row explains the 2 not selected (of its 8 tests)', notSelectedViolations(sel.html, sel.spec.suiteBaseline!), false],
+      ['the same email without the badge: reported', notSelectedViolations(sel.html.replace(/2 of 8 not selected/, ''), sel.spec.suiteBaseline!), true],
       ['a module that ran all its tests must not claim some were not selected', notSelectedViolations(sel.html, { 'UI:Billing': 4, 'RBAC:Billing': 2 }), true],
-      ['a miscounted side (Billing UI expected 7, the row says 6)', moduleCoverageViolations(every.html, exp.map((e) => (e.name === 'Billing' && e.type === 'UI' ? { ...e, total: 7 } : e))), true],
+      ['a miscounted module (Billing expected 9 = UI 7 + RBAC 2, the row says 8)', moduleCoverageViolations(every.html, exp.map((e) => (e.name === 'Billing' && e.type === 'UI' ? { ...e, total: 7 } : e))), true],
+      ['a UI/RBAC split (a Type badge in a row)', moduleTableLayoutViolations(every.html.replace(/(id="all-modules"[\s\S]*?<td style="padding:8px;font-size:12px;color:#1B1F24;font-weight:500;">[^<]*)<\/td>/, '$1<span>RBAC</span></td>')), true],
+      ['a module with two rows (UI and RBAC split)', moduleTableLayoutViolations(every.html.replace(/(<tr style="border-bottom[^>]*>)([\s\S]*?<\/tr>)/, (_m, a, b) => `${a}${b}${a}${b}`)), true],
     ];
     for (const [what, found, shouldFail] of samples) {
       if ((found.length > 0) !== shouldFail) violations.push({ scenario: 'module-coverage-red-samples', id: 'invariant-self-test', message: `${what}: expected ${shouldFail ? 'a violation' : 'none'}, got ${JSON.stringify(found)}` });
@@ -899,6 +959,7 @@ function main(): void {
   // Red samples for the reader-text and verdict invariants: each doctored email must be reported, the real one must not
   {
     const clean = results.find((x) => x.spec.name === '01-all-pass-first-time')!.html;
+    const ev = results.find((x) => x.spec.name === '60-every-module-incl-billing')!;
     const kb = results.find((x) => x.spec.name === '68-known-bug-blr2-unexpectedly-passes')!;
     const gw = results.find((x) => x.spec.name === '49-capacity-under-threshold')!;
     const inject = (extra: string): string => clean.replace('</body>', `<p>${extra}</p></body>`);
@@ -921,6 +982,12 @@ function main(): void {
       ['the same email without the sentence: reported', knownBugFixedViolations(kb.html.split('known bug fixed: remove test.fail()').join('unclassified'), 1), true],
       ['a run with no such test must not say it', knownBugFixedViolations(clean, 0), false],
       ['the sentence on a run where no test.fail() test passed: reported', knownBugFixedViolations(kb.html, 0), true],
+      ['totals line and tile count the table rows', modulesCountViolations(ev.html, ev.report!.total), false],
+      ['a totals line that counts module and type (8 for 4 rows)', modulesCountViolations(ev.html.replace(/(\d+ tests?, )\d+( modules?)/, '$18$2'), ev.report!.total), true],
+      ['a Modules tile that disagrees with the rows', modulesCountViolations(ev.html.replace(/>4<\/div>(\s*<div class="tl"[^>]*>Modules)/, '>8</div>$1'), ev.report!.total), true],
+      ['the tiers of a real email are in order', tierViolations(clean), false],
+      ['Technical details above Module Analytics', tierViolations(clean.replace('id="section-module-analytics"', 'id="section-technical-details" id="section-module-analytics"')), true],
+      ['Module Analytics above the Action Required section', tierViolations(clean.replace('id="section-action-required"', 'id="section-account-capacity" id="section-action-required"')), true],
       ['two verdict banners', verdictViolations(clean.replace(banner, `${banner}PASSED</span><br>${banner}`), true), true],
       ['no verdict banner', verdictViolations(clean.split(banner).join('<span>'), true), true],
       ['"this run is clean" on a run that is not clear', verdictViolations(clean, false), true],

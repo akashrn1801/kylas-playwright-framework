@@ -1,0 +1,45 @@
+{
+  "source": "email of build #225 (/tmp/ref225/email-225.eml), Module Analytics table, without the Type column (one row per module, UI and RBAC combined)",
+  "headerRowStyle": "background:#F6F8FA;",
+  "headers": [
+    {
+      "label": "Module",
+      "style": "padding:6px 8px;text-align:left;font-size:11px;color:#57606A;font-weight:600;"
+    },
+    {
+      "label": "Pass",
+      "style": "padding:6px 8px;text-align:center;font-size:11px;color:#1A7F37;font-weight:600;"
+    },
+    {
+      "label": "Flaky",
+      "style": "padding:6px 8px;text-align:center;font-size:11px;color:#9A6700;font-weight:600;"
+    },
+    {
+      "label": "Fail",
+      "style": "padding:6px 8px;text-align:center;font-size:11px;color:#CF222E;font-weight:600;"
+    },
+    {
+      "label": "Progress",
+      "style": "padding:6px 8px;text-align:left;font-size:11px;color:#57606A;font-weight:600;"
+    },
+    {
+      "label": "Retries",
+      "style": "padding:6px 8px;text-align:center;font-size:11px;color:#57606A;font-weight:600;"
+    },
+    {
+      "label": "Trend",
+      "style": "padding:6px 8px;text-align:center;font-size:11px;color:#57606A;font-weight:600;"
+    }
+  ],
+  "cellStructure": [
+    "padding:8px;font-size:12px",
+    "padding:8px;text-align:center;font-size:12px",
+    "padding:8px;text-align:center;font-size:12px",
+    "padding:8px;text-align:center;font-size:12px",
+    "padding:8px;width:70px",
+    "padding:8px;text-align:center;font-size:12px",
+    "padding:8px;text-align:center"
+  ],
+  "rowCount": 32,
+  "note": "cellStructure keeps padding, font-size, text-align and width of each cell; colours and weights vary with the data"
+}
