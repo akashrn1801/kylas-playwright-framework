@@ -3,7 +3,7 @@
 > **Purpose:** One-line map of every document in this folder and when to open it.
 > **Read when:** You do not know which doc answers your question.
 > **Size budget:** 6k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ c12c85c
+> **Last verified:** 2026-11-26 @ bfc345c
 
 | Doc | Purpose | Read when |
 |---|---|---|
@@ -18,6 +18,7 @@
 | [known-issues/watch-items.md](./known-issues/watch-items.md) | Open watch items moved out of the active list (unchanged text, IDs stable) | A KI id in the active list's pointer table |
 | [CHANGELOG_ARCHIVE.md](./CHANGELOG_ARCHIVE.md) | Older changelog entries, verbatim | You need the full wording of a change listed by theme in the changelog |
 | [CHANGELOG_ARCHIVE_2.md](./CHANGELOG_ARCHIVE_2.md) | Changelog entries 2026-11-19 to 2026-11-20, verbatim | You need the full wording of a change from those days |
+| [CHANGELOG_ARCHIVE_3.md](./CHANGELOG_ARCHIVE_3.md) | Changelog entries 2026-11-23 to 2026-11-25, verbatim | You need the full wording of a change from those days |
 | [adr/README.md](./adr/README.md) | Architecture decision records | Asking why something is built this way |
 | [BRANCH_STATUS.md](./BRANCH_STATUS.md) | Dated snapshot of the current branch: PR, CI result, follow-ups | Starting a session on a feature branch |
 | [GLOSSARY.md](./GLOSSARY.md) | Terms and abbreviations | A term is unfamiliar |

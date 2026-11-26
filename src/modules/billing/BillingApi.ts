@@ -34,7 +34,8 @@ export interface RawEntityCount {
 export interface RawUsage {
   planName: string;
   plan: { id: string; name: string };
-  renewalAt: string;
+  /** null on a plan without a renewal (the free plan). */
+  renewalAt: string | null;
   updatedAt: string;
   records: RawQuota;
   storage: RawQuota;
@@ -56,8 +57,8 @@ export interface Quota {
 export interface Usage {
   planName: string;
   planId: string;
-  /** Renewal instant as sent (ISO string). */
-  renewalAt: string;
+  /** Renewal instant as sent (ISO string); null on a plan without one. */
+  renewalAt: string | null;
   records: Quota;
   storage: Quota;
   customFields: Quota;

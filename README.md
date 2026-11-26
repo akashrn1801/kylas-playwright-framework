@@ -3,7 +3,7 @@
 > **Purpose:** Human onboarding for the Kylas Sales CRM end-to-end test framework: what it is, how to set it up, run it and where everything else is documented.
 > **Read when:** You are new to the repo, setting up a machine, or looking for the right deeper document.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-11-26 @ bfc345c
 
 End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (strict). Tests are split into functional UI specs and RBAC specs (role-based access: a full-access admin user and a limited "restricted" user exercise the same feature). CI runs on GitHub Actions and Jenkins across a branch ladder, with a custom email summary and run-history ledger.
 

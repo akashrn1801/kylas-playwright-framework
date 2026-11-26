@@ -19,6 +19,9 @@ import {
   storedSessionNeedsRefresh,
 } from './sessionLifetime';
 import { recordSessionInfo } from './sessionInfo';
+import { BillingApi } from '../modules/billing/BillingApi';
+import { runCapacityGate } from '../modules/billing/capacity';
+import { redactTokens } from '../utils/apiClient';
 import { missingKeysInStateFile, saveGuardedStorageStateOrThrow } from './stateGuard';
 import { readAccessTokenFromStateFile, tokenAcceptedByApi } from './sessionCheck';
 import {
@@ -41,6 +44,10 @@ const GLOBAL_SETUP_TRACE_DIR = path.join(
   process.env.CI ? 'test-results' : `test-results/${config.env}`,
   'global-setup-traces'
 );
+
+// Pre-run capacity snapshot (src/modules/billing/capacity.ts): same output-dir convention as the traces above, so the
+// email step finds it next to the run's other artifacts.
+const CAPACITY_DIR = path.join(process.env.CI ? 'test-results' : `test-results/${config.env}`, 'capacity');
 
 // ADR 0017: session life a run needs. config.auth.minRemainingForRunMs (4 h) is the full window; a local run of a
 // selection of tests is scaled to that selection (src/auth/runWindow.ts). Set once per run in globalSetup().
@@ -84,6 +91,8 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
   try {
     await setupRole('admin', browser);
     await setupRole('restricted', browser);
+    // WHY before the product fixtures: they create records, and a run on a full account must stop before it creates anything.
+    await runCapacityGateStep();
     // WHY here, not inside setupRole() or a separate script: both roles are
     // now guaranteed authenticated (their storageState files exist and are
     // fresh — see getAccessTokenForRole() below, which reads them directly),
@@ -116,6 +125,39 @@ async function globalSetup(_playwrightConfig: FullConfig): Promise<void> {
     }
   } finally {
     await browser.close();
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Capacity gate (2026-11-26)
+// ──────────────────────────────────────────────────────────────────────────
+// WHY (see src/modules/billing/capacity.ts): at its record limit Kylas answers every create with the "Upgrade your plan"
+// modal, which once made 57 tests fail far from the cause. ONE read-only GET /v1/tenants/usage as admin, before any test:
+// 0 records left stops the run, under the threshold or an unexpected plan only warns, and a snapshot is saved for the
+// email's "added by this run". WHY a failing call stops the run too (no "continue and hope"): without the reading the
+// run cannot know whether it is about to hit the limit. 429/5xx are retried first (withTransientRetry); a real 4xx is not.
+async function runCapacityGateStep(): Promise<void> {
+  const api = await BillingApi.forToken(await getAccessTokenForRole('admin'));
+  try {
+    await runCapacityGate({
+      // redactTokens: a transport error from the request layer can carry the Authorization header (rule 22)
+      fetchUsage: () =>
+        withTransientRetry('capacity gate: GET /v1/tenants/usage', () => api.getUsage()).catch((error) => {
+          throw new Error(redactTokens(String(error)));
+        }),
+      env: config.env,
+      thresholds: {
+        recordsWarnBelow: config.billing.recordsWarnBelow[config.env],
+        customFieldsWarnBelow: config.billing.customFieldsWarnBelow,
+        expectedPlan: config.billing.expectedPlan[config.env],
+      },
+      dir: CAPACITY_DIR,
+      now: new Date(),
+      log: (line) => console.log(line),
+      warn: (line) => console.warn(line),
+    });
+  } finally {
+    await api.dispose();
   }
 }
 

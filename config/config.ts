@@ -62,8 +62,8 @@ export const config = {
   // Billing (Account capacity): per-environment thresholds and the plan each environment is expected to be on.
   // WHY the thresholds are per environment: QA and staging run on a shared, uncleaned data set, so "records left" is the
   // early warning; prod gets its own knob (BILLING_RECORDS_WARN_BELOW) once its real headroom is known. Custom Fields
-  // warn under 10 left and never stop a run. `expectedPlan` is the plan NAME as /v1/tenants/usage reports it; prod is set
-  // with PROD_EXPECTED_PLAN (unset = the plan check is skipped there with a log line, never guessed).
+  // warn under 10 left and never stop a run. `expectedPlan` is the plan NAME as /v1/tenants/usage reports it: Elevate on
+  // every environment (prod's was confirmed by the team, 2026-11-26); PROD_EXPECTED_PLAN overrides it if prod moves plan.
   billing: {
     recordsWarnBelow: {
       qa: 10000,
@@ -74,7 +74,7 @@ export const config = {
     expectedPlan: {
       qa: 'Elevate',
       staging: 'Elevate',
-      prod: process.env.PROD_EXPECTED_PLAN || '',
+      prod: process.env.PROD_EXPECTED_PLAN || 'Elevate',
     },
   },
   browser: {

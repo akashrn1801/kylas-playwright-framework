@@ -1,0 +1,185 @@
+/**
+ * Account capacity: the pure rules behind the pre-run gate (globalSetup) and, in the next piece, the run email's
+ * "Account capacity" section. No network, no clock of its own and no fs except the two snapshot helpers at the end.
+ *
+ * WHY (2026-11-26): when an account reaches its record limit Kylas answers the next create with its "Upgrade your plan"
+ * modal and every test that creates data fails far from the cause (57 tests on one run). The gate reads
+ * GET /v1/tenants/usage once before any test, stops the run at 0 records left and warns before that.
+ *
+ * Records are ONE shared pool (records.used = sum of entityCounts, one total). Custom Fields have their own count and
+ * only ever warn.
+ */
+import * as fs from 'fs';
+import * as path from 'path';
+import { Quota, Usage } from './BillingApi';
+
+export type CapacityLevel = 'ok' | 'warn' | 'stop';
+
+/** Colour the email bar uses; the same rule everywhere: red at 0, yellow under the threshold, green otherwise. */
+export type CapacityColour = 'green' | 'yellow' | 'red';
+
+export interface CapacityThresholds {
+  /** Records left under which the gate warns (the run still goes ahead). */
+  recordsWarnBelow: number;
+  /** Custom fields left under which the gate warns; it never stops a run. */
+  customFieldsWarnBelow: number;
+  /** Plan name this environment is expected to be on; empty = no plan check. */
+  expectedPlan: string;
+}
+
+export interface QuotaSnapshot {
+  used: number;
+  /** null = unlimited (JSON cannot hold Infinity). */
+  total: number | null;
+  remaining: number | null;
+}
+
+export interface CapacitySnapshot {
+  version: 1;
+  env: string;
+  capturedAt: string;
+  planName: string;
+  planId: string;
+  renewalAt: string | null;
+  records: QuotaSnapshot;
+  customFields: QuotaSnapshot;
+  storage: QuotaSnapshot;
+  /** Used records per entity at capture time, e.g. { LEAD: 15382 }. */
+  entityCounts: Record<string, number>;
+  thresholds: CapacityThresholds;
+  level: CapacityLevel;
+  /** Human-readable warnings, in the order they were found (the email shows them). */
+  warnings: string[];
+}
+
+export interface CapacityVerdict {
+  level: CapacityLevel;
+  warnings: string[];
+  /** Set when level is "stop": the message the run fails with. */
+  stopMessage?: string;
+  snapshot: CapacitySnapshot;
+}
+
+/** 0 left (or fewer) is red; under the threshold is yellow; unlimited is always green. */
+export function capacityColour(remaining: number, warnBelow: number): CapacityColour {
+  if (remaining <= 0) return 'red';
+  return remaining < warnBelow ? 'yellow' : 'green';
+}
+
+function snapshotOf(q: Quota): QuotaSnapshot {
+  return {
+    used: q.used,
+    total: q.unlimited ? null : q.total,
+    remaining: q.unlimited ? null : q.remaining,
+  };
+}
+
+const fmt = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * Judges one usage reading. `stop` only for the records pool at 0 left; everything else is a warning.
+ * `now` is passed in (the check script pins it); the plan check is skipped when no expected plan is configured.
+ */
+export function evaluateCapacity(usage: Usage, env: string, thresholds: CapacityThresholds, now: Date): CapacityVerdict {
+  const warnings: string[] = [];
+  const recordsLeft = usage.records.remaining;
+  const recordsTotal = usage.records.unlimited ? 'unlimited' : fmt(usage.records.total);
+
+  if (thresholds.expectedPlan && usage.planName !== thresholds.expectedPlan) {
+    warnings.push(
+      `PLAN: expected "${thresholds.expectedPlan}", found "${usage.planName}" (record limit ${recordsTotal}) on ${env}: the account is not on its expected plan, so limits differ from what the suite was sized for`
+    );
+  }
+  if (recordsLeft > 0 && recordsLeft < thresholds.recordsWarnBelow) {
+    warnings.push(
+      `RECORDS: only ${fmt(recordsLeft)} left of ${recordsTotal} (warn under ${fmt(thresholds.recordsWarnBelow)}) on ${env}; ${fmt(usage.records.used)} used`
+    );
+  }
+  const cfLeft = usage.customFields.remaining;
+  if (cfLeft < thresholds.customFieldsWarnBelow) {
+    warnings.push(
+      `CUSTOM FIELDS: only ${fmt(cfLeft)} left of ${usage.customFields.unlimited ? 'unlimited' : fmt(usage.customFields.total)} (warn under ${thresholds.customFieldsWarnBelow}) on ${env}; this never stops a run`
+    );
+  }
+
+  const stop = recordsLeft <= 0;
+  const stopMessage = stop
+    ? `No records left on ${env}: ${fmt(usage.records.used)} used of ${recordsTotal} (plan ${usage.planName}). Kylas answers a create at the limit with its "Upgrade your plan" modal, so every test that creates data would fail. The run is stopped before any test.`
+    : undefined;
+  const level: CapacityLevel = stop ? 'stop' : warnings.length ? 'warn' : 'ok';
+  return {
+    level,
+    warnings,
+    ...(stopMessage ? { stopMessage } : {}),
+    snapshot: {
+      version: 1,
+      env,
+      capturedAt: now.toISOString(),
+      planName: usage.planName,
+      planId: usage.planId,
+      renewalAt: usage.renewalAt,
+      records: snapshotOf(usage.records),
+      customFields: snapshotOf(usage.customFields),
+      storage: snapshotOf(usage.storage),
+      entityCounts: usage.entityCounts,
+      thresholds,
+      level,
+      warnings,
+    },
+  };
+}
+
+export const PRE_RUN_SNAPSHOT_FILE = 'capacity-pre-run.json';
+
+export function writeSnapshot(dir: string, snapshot: CapacitySnapshot): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, PRE_RUN_SNAPSHOT_FILE);
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+  return file;
+}
+
+/** null when there is no snapshot or it is not this version/shape (the email then simply has no "added by this run"). */
+export function readSnapshot(dir: string): CapacitySnapshot | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, PRE_RUN_SNAPSHOT_FILE), 'utf8')) as Partial<CapacitySnapshot>;
+    return parsed.version === 1 && parsed.records && parsed.entityCounts ? (parsed as CapacitySnapshot) : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface CapacityGateDeps {
+  /** One reading of GET /v1/tenants/usage (globalSetup wraps it in its transient retry). */
+  fetchUsage: () => Promise<Usage>;
+  env: string;
+  thresholds: CapacityThresholds;
+  /** Where the pre-run snapshot is written. */
+  dir: string;
+  now: Date;
+  log: (line: string) => void;
+  warn: (line: string) => void;
+}
+
+/**
+ * The pre-run gate. Reads usage once, saves the snapshot, warns loudly for each warning, and THROWS when no records are
+ * left or the reading failed (an unknown capacity is not "fine"). Returns the verdict otherwise.
+ */
+export async function runCapacityGate(deps: CapacityGateDeps): Promise<CapacityVerdict> {
+  let usage: Usage;
+  try {
+    usage = await deps.fetchUsage();
+  } catch (error) {
+    throw new Error(
+      `[globalSetup] CAPACITY GATE: could not read GET /v1/tenants/usage on ${deps.env}, so the account's capacity is unknown and the run is stopped. ${String(error)}`
+    );
+  }
+  const verdict = evaluateCapacity(usage, deps.env, deps.thresholds, deps.now);
+  const file = writeSnapshot(deps.dir, verdict.snapshot);
+  for (const warning of verdict.warnings) deps.warn(`[globalSetup] !!! CAPACITY WARNING — ${warning}`);
+  if (verdict.level === 'stop') throw new Error(`[globalSetup] CAPACITY GATE: ${verdict.stopMessage}`);
+  const s = verdict.snapshot;
+  deps.log(
+    `[globalSetup] Capacity gate: ${verdict.level} — plan ${s.planName}, records ${s.records.used} used / ${s.records.total ?? 'unlimited'} (${s.records.remaining ?? 'unlimited'} left), snapshot ${file}`
+  );
+  return verdict;
+}

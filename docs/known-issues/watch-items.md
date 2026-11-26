@@ -3,7 +3,7 @@
 > **Purpose:** Open or unverified items whose evidence is a one-time observation or a never-run CI/Jenkins path, moved verbatim from `docs/KNOWN_ISSUES_ACTIVE.md` on 2026-11-04 to keep that file under 80% of its budget. IDs are unchanged; each is still tracked and listed in the pointer table of the active file.
 > **Read when:** you touch the code, workflow or Jenkinsfile an entry names, or a CI/report failure looks like one of them.
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-11-25 @ c12c85c
+> **Last verified:** 2026-11-26 @ bfc345c
 
 Entries are unchanged except relative links (rewritten for this folder). Closing one: move a ≤15-line summary to its resolved topic file and delete it here and from the pointer table. Unlike the other files in this folder, these are NOT resolved.
 
@@ -114,3 +114,51 @@ Entries are unchanged except relative links (rewritten for this folder). Closing
 - **Status:** open (staging environment problem, live probe 2026-10-15; no test-code fix possible; run 40279659288 passed: recovery, not proof) · **Since:** 2026-10-14
 - **What:** just-created deals/contacts/leads/companies never appeared in search lookups (empty react-select, `retryFind*` false, meeting 422 `01503001`, call-log 403); a created deal stayed absent from `GET /v1/search/deal/lookup` for 188 s. Possible recurrence 2026-10-29 (run 40821683680).
 - **Ask / next check:** is the staging indexer or event consumer backlogged (HYPOTHESIS)? Probe or ask the Kylas team before closing. Full signatures, traces, probe: [rbac-and-test-isolation.md](./rbac-and-test-isolation.md) ("OPEN (KI-43)").
+
+## Moved from KNOWN_ISSUES_ACTIVE.md on 2026-11-26 (verbatim, to keep that file inside 30k)
+
+### KI-53 / KI-54 / KI-55 — Lead coverage watch items (2026-10-30): old shares (hygiene), session-expired runs, meeting-ID capture; detail in [rbac-and-test-isolation.md](./rbac-and-test-isolation.md)
+
+### KI-50 — QA front end drops custom-field values typed in the first ~0.5 s of the product form
+- **Status:** test-side fix `9e60850`, unverified by a full QA run; app-side drop to be reported to Kylas · **Since:** 2026-10-28 (about 14:10 UTC)
+- **What:** on QA's new front end a custom-field value typed within about 0.5 s of the P&S form opening is posted at the top level (HTTP 200) and dropped; `waitForFormFieldDefinitions()` now waits for the definitions. Interim: 47 passed, 0 failed, all saves NESTED, one unexplained FFRPS24 timeout. Detail: [products-and-services.md](./products-and-services.md).
+- **Next check:** the promotion `qa.yml` run: no FLAT saves or "definitions not seen" warnings.
+
+### KI-11 — The formFields shard matrix does not scale with test growth
+- **Status:** open · **Since:** 2026-09-29
+- **What:** `run-formfields-tests` is a fixed one-job-per-entity matrix (deliberate, [ADR 0002](../adr/0002-formfields-carve-out-from-sharding.md)), so growth can only lengthen an entity's own job. The slowest entity (Lead) measured about 110 min against a 180-minute `timeout-minutes` (~1.6× margin) when the matrix still ran alongside the core shards.
+- **Next check:** re-measure that entity's real shard duration before merging any large formFields addition; if near the ceiling, split that entity's UI and RBAC files into two sequenced jobs (the proven constraint is "never split a pair across *concurrent* machines").
+
+### KI-16 — JWT lifetime is not a stable constant; `ensureFreshSession()` margin is unsized
+- **Status:** open · **Since:** 2026-08-10 (re-opened 2026-08-11)
+- **What:** measured token lifetimes differ between investigations (~10.4 h, ~20 min once, ~101 min later). Since 2026-11-05 (ADR 0016) the refresh margin is sized from the token's own `expiresIn` (app refresh trigger 10 min + longest test 8 min + 2 min, capped at half the lifetime), because the app signs the user out ~10 min before expiry when `GET /v1/tokens/refresh/` answers 400 (sandbox run 41825279669). Why the lifetime varies is unexplained.
+- **Next check:** investigate why it varies. History: [session-expiry-and-auth.md](./session-expiry-and-auth.md).
+
+### KI-21 — Unbounded random-option clicks remain in Leads and Quotations
+- **Status:** unverified (carried over; not re-read this session) · **Since:** 2026-07
+- **What:** `LeadsPage.ts` close-reason radio and convert-to-deal product selection, and several `QuotationsPage.ts` random-option pickers use a raw unbounded `.click()`. `QuotationsPage.fillOwner()` was fixed. Pattern to apply: `BasePage.selectRandomOptionWithRetry()` ([PATTERNS.md](../PATTERNS.md)).
+
+### KI-23 — `assertQuotationInList()` can false-positive on the never-cleaned QA dataset
+- **Status:** open (verified: delegates to `retryFindInList()` and checks the search term appears in a row) · **Since:** 2026-08-17
+- **What:** `/v1/quotations/search` is fuzzy OR-word matching capped at 10 results and the target need not be among them. Affects every test using this assertion.
+
+### KI-24 — Four private `selectDateInPicker()` copies; the month-jump control is unused
+- **Status:** open (verified: `QuotationsPage`, `CallLogsPage`, `DealsPage`, `ReportsPage`) · **Since:** 2026-08-10
+- **What:** native date pickers are independently maintained, unlike the shared custom-field version; a `.custom-month-year-dropdown` direct-jump control (~41% faster for distant months) is not used in the repo.
+
+### KI-25 — Stale "always runs `--workers=1`" comments in Reports specs
+- **Status:** open, doc-only (verified at `tests/ui/reports/reports.spec.ts` ~L127/L152 and `tests/rbac/reports.rbac.spec.ts` ~L114) · **Since:** 2026-09-09
+- **What:** the comments justify plain `test.describe()` (not `.serial`) by single-worker, declaration-order execution; sharding makes both false. The blocks are still safe because the assertion is `toBeGreaterThanOrEqual`. Correct the comment when either file is next edited.
+
+### KI-26 — Repo hygiene
+- **Status:** open · **What:** no committed `.env.example` (gitignored); legacy `.eslintrc.json` never read by `npm run lint`; prettier drift in `LeadsPage.ts` and `BasePage.ts` (`QuotationsPage.ts` is clean as of 2026-10-27); inert `agent_delegation` / `investigation_log` block in `.claude/settings.json`. Detail: [ci-pipelines.md](./ci-pipelines.md). <!-- ref-ok -->
+
+### KI-35 — React-select menu left open blocks the next click (QA only): fixed locally, not yet seen in CI
+- **Status:** open for CI confirmation · **Since:** 2026-10-07
+- **What:** `BasePage.ensureReactSelectMenuClosed()` ([ADR 0011](../adr/0011-react-select-menu-closed-contract.md)) is used by BasePage helpers and 9 modules (not `LeadsPage.ts`); passed locally on QA 2026-10-08. Evidence: [locators-and-timing.md](./locators-and-timing.md). Not verified: why QA differs from stage.
+- **Part 2 (open):** `saveEditedProduct()` has no `blur()` + `networkidle` before Save (`b0c6b38` claim); see [products-and-services.md](./products-and-services.md).
+
+### KI-44 — `CompaniesPage.captureCompanyIdFromResponse()` matches a bare `includes('companies')` (rule 15)
+- **Status:** latent, NOT reproduced · **Since:** 2026-07-16 (recorded 2026-10-27)
+- **What:** no `/v1/companies/` requirement (`src/modules/companies/CompaniesPage.ts:424-445`; the other modules have it). Deliberate at the time: the clone POST path was unconfirmed. Only caller `cloneCompany()`; a null id fails loudly, a wrong id is the risk.
+- **Next check:** confirm the clone POST path from a trace, then reuse the regex; re-run clone 3-5x. Analysis: [locators-and-timing.md](./locators-and-timing.md) ("KI-44 detail").

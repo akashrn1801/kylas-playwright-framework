@@ -32,7 +32,7 @@ test.describe('Billing (admin, read-only)', () => {
       expect(typeof body.planName).toBe('string');
       expect(typeof body.plan?.id).toBe('string');
       expect(typeof body.plan?.name).toBe('string');
-      expect(Number.isNaN(Date.parse(body.renewalAt)), 'renewalAt must be a date').toBe(false);
+      if (body.renewalAt !== null) expect(Number.isNaN(Date.parse(body.renewalAt)), 'renewalAt must be a date').toBe(false);
       const usage = await api.getUsage(); // parseUsage() throws by name on a missing or mistyped {used,total} block
       for (const [name, q] of Object.entries({ records: usage.records, storage: usage.storage, customFields: usage.customFields, ...usage.quotas })) {
         expect(q.used, `${name}.used`).toBeGreaterThanOrEqual(0);
@@ -90,7 +90,8 @@ test.describe('Billing (admin, read-only)', () => {
   });
 
   // ── BL4 ───────────────────────────────────────────────────
-  // WHAT: plan, price card and renewal date are consistent across both pages and both endpoints.
+  // WHAT: plan, price card and renewal date are consistent across both pages and both endpoints. The current plan is the one
+  //   with active:true in GET /v1/tenants/subscription-details; the page must show THAT plan as current (usage header, plan card).
   // WHY: one plan name and one renewal date must appear everywhere; exactly one plan in subscription-details is active.
   // HOW: the UI date is compared to the API date within one day (the page formats in the account timezone, the API sends UTC).
   test('@regression @prodSafe admin: subscription details are consistent with the usage data', async ({ adminPage }) => {
@@ -103,23 +104,34 @@ test.describe('Billing (admin, read-only)', () => {
       expect(active.length, `exactly one active plan; found ${JSON.stringify(active.map((p) => p.id))}`).toBe(1);
       expect(active[0].name, 'active plan name (subscription-details) vs planName (usage)').toBe(usage.planName);
       expect(active[0].id, 'active plan id vs usage plan id').toBe(usage.planId);
-      expect(active[0].renewalAt, 'active plan renewalAt vs usage renewalAt').not.toBeNull();
-      expect(Date.parse(active[0].renewalAt as string), 'renewal instants').toBe(Date.parse(usage.renewalAt));
+      // a free plan (Embark) has no renewal: the API decides whether one must exist and agree
+      const hasRenewal = active[0].renewalAt !== null;
+      if (hasRenewal) {
+        expect(Date.parse(active[0].renewalAt as string), 'renewal instants (subscription-details vs usage)').toBe(Date.parse(usage.renewalAt as string));
+      } else {
+        expect(usage.renewalAt, 'no renewal on the active plan, so none in usage either').toBeNull();
+      }
 
       await billing.goToSubscriptionDetails();
       const cards = await billing.readPlanCards();
-      const uiActive = cards.filter((c) => c.active);
-      expect(uiActive.map((c) => c.name), 'the page marks the API-active plan as the current one').toEqual([usage.planName]);
-      expect(uiActive[0].price, 'active plan card shows a price').toMatch(/\d/);
+      const activeCards = cards.filter((c) => c.name === active[0].name);
+      expect(activeCards.length, `the page lists the API-active plan "${active[0].name}" (cards: ${cards.map((c) => c.name).join(', ')})`).toBe(1);
+      expect(activeCards[0].price, 'the active plan card shows a price').not.toBe('');
+      // WHY the renewal line is conditional: a free plan (Embark) has no renewal, so the API's renewalAt decides whether the page must show one
+      expect(activeCards[0].showsRenewal, `renewal line on the active plan card (API renewalAt ${active[0].renewalAt})`).toBe(hasRenewal);
 
       await billing.goToUsageStatistics();
       const header = await billing.readUsageHeader();
       expect(header.planName, 'usage page header plan name').toBe(usage.planName);
-      const shown = Date.parse(`${header.renewalText} 12:00:00 UTC`);
-      const apiDay = Date.parse(usage.renewalAt);
-      expect(Math.abs(shown - apiDay), `renewal "${header.renewalText}" vs API ${usage.renewalAt} (within one day)`).toBeLessThanOrEqual(
-        24 * 60 * 60 * 1000
-      );
+      if (hasRenewal) {
+        const shown = Date.parse(`${header.renewalText} 12:00:00 UTC`);
+        const apiDay = Date.parse(usage.renewalAt as string);
+        expect(Math.abs(shown - apiDay), `renewal "${header.renewalText}" vs API ${usage.renewalAt} (within one day)`).toBeLessThanOrEqual(
+          24 * 60 * 60 * 1000
+        );
+      } else {
+        expect(header.renewalText, 'no renewal date on the usage page header').toBe('');
+      }
       logger.success('BL4 passed');
     } finally {
       await api.dispose();

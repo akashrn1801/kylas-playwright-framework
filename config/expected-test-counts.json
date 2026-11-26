@@ -1,6 +1,6 @@
 {
   "_comment": "Generated from a real \"npx playwright test --project=chromium --list --reporter=json\" run — never hand-edited. Regenerate via: npx ts-node scripts/generate-expected-test-counts.ts",
-  "generatedAt": "2026-11-26T06:22:31.885Z",
+  "generatedAt": "2026-11-26T06:33:44.789Z",
   "total": 965,
   "fileCount": 37,
   "perFile": {

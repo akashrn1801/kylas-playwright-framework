@@ -24,7 +24,8 @@ export interface PlanCard {
   price: string;
   /** e.g. "/month" */
   duration: string;
-  active: boolean;
+  /** This card shows the "Next renewal on …" line (a paid plan's current card; the free plan has none). */
+  showsRenewal: boolean;
 }
 
 export class BillingPage extends BasePage {
@@ -54,8 +55,9 @@ export class BillingPage extends BasePage {
   private readonly headerRenewal = (): Locator =>
     this.page.locator('.billing-header .updates .update').filter({ hasText: 'Next renewal date' }).locator('strong');
 
-  // `.subscription-plan` wraps one plan card (name, price) and, on the CURRENT plan only, the renewal line and the
-  // Manage button (confirmed live on QA 2026-11-26: Elevate current, Embark not). The check icon is on EVERY card.
+  // `.subscription-plan` wraps one plan card (name, price) and, on a paid CURRENT plan, the renewal line and the Manage
+  // button (confirmed live on QA 2026-11-26: Elevate current, Embark not). The check icon is on EVERY card, so neither
+  // marks the current plan; which plan is current comes from the API (`active: true`), and the usage page header shows it.
   private readonly planCards = (): Locator => this.page.locator('.subscription-plan');
 
   // ──────────────────────────────────────────────────────────
@@ -128,7 +130,8 @@ export class BillingPage extends BasePage {
   async readUsageHeader(): Promise<{ planName: string; renewalText: string }> {
     return {
       planName: (await this.headerPlanName().innerText()).trim(),
-      renewalText: (await this.headerRenewal().innerText()).trim(),
+      // absent on a plan without a renewal: read it only when present (a bare innerText() waits 30 s)
+      renewalText: await optionalText(this.headerRenewal()),
     };
   }
 
@@ -147,9 +150,7 @@ export class BillingPage extends BasePage {
         price: await optionalText(card.locator('.plan-description__price')),
         // the free plan card has no duration: read optional parts only when present (a bare innerText() waits 30 s)
         duration: await optionalText(card.locator('.plan-description__duration')),
-        // the current plan's card is the one that shows "Next renewal on …" (seen only for a paid plan so far: unverified
-        // for the free plan, where this may find no active card and BL4 then fails by name)
-        active: /Next renewal on/.test(await card.innerText()),
+        showsRenewal: /Next renewal on/.test(await card.innerText()),
       });
     }
     return result;
