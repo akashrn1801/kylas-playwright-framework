@@ -12,6 +12,7 @@
 import * as http from 'http';
 import { chromium, Locator } from '@playwright/test';
 import { BasePage } from '../src/core/BasePage';
+import { dismissCtrlKAnnouncement } from '../src/utils/announcementPopup';
 
 class Probe extends BasePage {
   rendered(locator: Locator, description: string, timeout?: number): Promise<void> {
@@ -32,7 +33,14 @@ const check = (ok: boolean, what: string, detail = ''): void => {
 };
 
 const page = (body: string, script = ''): string => `<html><body>${body}<script>${script}</script></body></html>`;
+const ctrlK = (title: string, delayMs = 0): string => {
+  const html = `<div class="shortcuts-intro-layer" style="position:fixed;left:0;top:0;right:0;bottom:0;background:#fff"><div class="shortcuts-intro" role="dialog" aria-modal="true" aria-labelledby="shortcuts-intro-title"><h2 id="shortcuts-intro-title">${title}</h2><button class="shortcuts-intro__primary" onclick="window.tried=true">Try it now</button><button class="shortcuts-intro__later" onclick="document.querySelector('.shortcuts-intro-layer').remove()">Maybe later</button></div></div>`;
+  return page('<button id="b" onclick="window.pressed=true">Type</button><div id="host"></div>', `setTimeout(function(){document.getElementById('host').innerHTML=${JSON.stringify(html)}},${delayMs})`);
+};
 const ROUTES: Record<string, string> = {
+  '/ctrlk': ctrlK('Do almost anything in Kylas with Ctrl K'),
+  '/ctrlk-late': ctrlK('Do almost anything in Kylas with Ctrl K', 1500),
+  '/ctrlk-other': ctrlK('Something else entirely'),
   '/ok': page('<input name="x">'),
   '/slow': page('<div id="m"></div>', "setTimeout(function(){document.getElementById('m').innerHTML='<input name=x>'},7000)"),
   '/broken': page('<div class="app-error something-is-broken">Something is broken here</div>'),
@@ -100,6 +108,42 @@ async function main(): Promise<void> {
 
   r = await timed('/plan', () => probe.clicked(pg.locator('#absent'), 'Add button behind the plan modal'));
   check(!!r.error && /account plan limit reached/.test(r.error.message), 'a click that fails behind the plan-upgrade modal names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  // Ctrl K announcement (2026-11-27): only that exact pop-up is dismissed, once, by "Maybe later"; nothing else is touched.
+  const popupGone = (): Promise<boolean> => pg.locator('.shortcuts-intro').count().then((n) => n === 0);
+  await pg.goto(base + '/ctrlk');
+  let t0 = Date.now();
+  let dismissed = await dismissCtrlKAnnouncement(pg);
+  check(dismissed && (await popupGone()) && !(await pg.evaluate(() => (window as unknown as { tried?: boolean }).tried)), 'the Ctrl K pop-up is dismissed with "Maybe later" (never "Try it now")', `${Date.now() - t0} ms`);
+
+  t0 = Date.now();
+  await probe.navigateTo(base + '/ctrlk');
+  check(await popupGone(), 'navigateTo() dismisses the Ctrl K pop-up that is already there', `${Date.now() - t0} ms`);
+
+  r = await timed('/ctrlk-late', async () => {
+    await pg.locator('.shortcuts-intro').waitFor({ state: 'visible', timeout: 5000 });
+    await probe.clicked(pg.locator('#b'), 'Type button covered by the Ctrl K pop-up');
+  });
+  check(!r.error && (await popupGone()) && (await pg.evaluate(() => (window as unknown as { pressed?: boolean }).pressed === true)) && r.ms < 8000, 'a click covered by the Ctrl K pop-up dismisses it first (no 15 s click timeout) and then clicks the target', `${r.ms} ms ${r.error?.message ?? ''}`);
+
+  await pg.goto(base + '/ok');
+  t0 = Date.now();
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && Date.now() - t0 < 500, 'the page-ready guard on a page without the pop-up returns at once (no waiting)', `${Date.now() - t0} ms`);
+
+  await pg.goto(base + '/ctrlk-other');
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && !(await popupGone()), 'red sample: a pop-up with the same container but another title is NOT dismissed');
+  r = await timed('/ctrlk-other', () => probe.rendered(input, 'form behind a different announcement', 6000));
+  check(!!r.error && /a modal or overlay is open over the page \('Something else entirely'\)/.test(r.error.message) && (await pg.locator('.shortcuts-intro').count()) === 1, 'red sample: a different overlay still fails by name and stays open', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  await pg.goto(base + '/plan');
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && (await pg.locator('#plan-upgrade-modal').count()) === 1, 'red sample: the plan-upgrade modal is not touched by the guard');
+
+  const closed = await browser.newPage();
+  await closed.close();
+  check((await dismissCtrlKAnnouncement(closed)) === false, 'the guard never throws (closed page)');
 
   await browser.close();
   server.close();
