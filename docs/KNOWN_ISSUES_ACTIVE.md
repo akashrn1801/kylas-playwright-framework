@@ -156,6 +156,11 @@
 
 ## B. Infrastructure and CI
 
+### KI-79 — Sandbox selective targets assumed one shard (run 45942780971, 2026-11-27)
+- **Status:** open (fix applied, one real sandbox run still to confirm) · **Since:** 2026-11-27
+- **What:** detect-tests.sh picked 16 specs (~450 tests, tag edits, no core file) and `sandbox.yml` ran them as ONE shard (`--shard=1/1`, only the literal `--grep @regression` goes through `plan-shards.ts`); the job hit the 3 h limit and the rerun, formFields and merge jobs were lost. Now a selective target above `SELECTIVE_ESCALATION_THRESHOLD` (150, `.github/scripts/escalate-selective-target.sh`) escalates to `--grep @regression` with every formFields entity; `check:selective-escalation` covers 450/151 (escalate) and 150/30/smoke/regression (unchanged).
+- **Next check:** the first real sandbox run with a >150-test selection (expect the log line "selective target of N tests exceeds 150: escalated ..."). Known side effects: the count includes formFields tests, and the escalated run is `@regression` only, so it can be fewer tests than selected and also covers untouched modules. Selective targets of 150 or fewer still run as one shard.
+
 ### KI-40 / KI-41 / KI-42 and the Call Logs re-open note: watch items in [reports-module.md](./known-issues/reports-module.md), [products-and-services.md](./known-issues/products-and-services.md) and [locators-and-timing.md](./known-issues/locators-and-timing.md).
 
 ---
