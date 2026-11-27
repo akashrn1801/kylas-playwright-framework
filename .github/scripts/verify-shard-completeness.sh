@@ -33,10 +33,25 @@ EXPECTED=$((CORE + FORMFIELDS))
 ACTUAL=$(find "$BLOB_DIR" -maxdepth 1 -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')
 echo "Expected shard reports: $EXPECTED ($CORE rest-of-suite + $FORMFIELDS formFields) | Actually downloaded: $ACTUAL"
 
-mkdir -p "reports/$ENV_NAME"
-printf '{"expected":%s,"reported":%s}\n' "$EXPECTED" "$ACTUAL" > "reports/$ENV_NAME/shard-completeness.json"
+# WHY (2026-11-24, sandbox 45420781016): when the renew-session job fails every test job is SKIPPED, so no blob arrives and the
+# email used to say only "Incomplete run". The workflow passes that job's result; a result other than success on an incomplete
+# run is written as the cause, so the notification names it even if the renew-session-failed.json artifact is missing.
+RENEW="${RENEW_SESSION_RESULT:-}"
+CAUSE=""
+if [ "$ACTUAL" -lt "$EXPECTED" ] && [ -n "$RENEW" ] && [ "$RENEW" != "success" ]; then
+  CAUSE="renew-session:$RENEW"
+fi
 
-if [ "$ACTUAL" -lt "$EXPECTED" ]; then
+mkdir -p "reports/$ENV_NAME"
+if [ -n "$CAUSE" ]; then
+  printf '{"expected":%s,"reported":%s,"cause":"%s"}\n' "$EXPECTED" "$ACTUAL" "$CAUSE" > "reports/$ENV_NAME/shard-completeness.json"
+else
+  printf '{"expected":%s,"reported":%s}\n' "$EXPECTED" "$ACTUAL" > "reports/$ENV_NAME/shard-completeness.json"
+fi
+
+if [ -n "$CAUSE" ]; then
+  echo "::error title=No test job ran::The renew-session job did not succeed (result: $RENEW), so the test jobs were skipped, not crashed: $ACTUAL of $EXPECTED shard reports exist. See that job's summary; the email names the cause."
+elif [ "$ACTUAL" -lt "$EXPECTED" ]; then
   MISSING=$((EXPECTED - ACTUAL))
   echo "::error::Incomplete run — $MISSING of $EXPECTED shard(s) never uploaded a blob report (the job crashed, hung or was cancelled/timed out). Merged Total/Passed/Failed cover only $ACTUAL/$EXPECTED shards and UNDERSTATE the run. The email is marked INCOMPLETE and this run is excluded from history trends. Check the run's per-job status (Actions tab)."
 else

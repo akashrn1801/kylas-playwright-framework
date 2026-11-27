@@ -236,6 +236,19 @@ export interface RunHistoryRecord {
   // same branch and `workers`, so computeDurationEstimate() skips any record
   // that carries it. Optional: every existing record lacks it (= unsharded).
   lanes?: string;
+  // WHY (ADR 0015): set only when the rerun shard ran for this build (see `afterRerun` below for which counts `passed`/
+  // `failed`/`flaky` hold). A test that passed only on the rerun has its title in flakyTestTitles (and in
+  // recoveredOnRerunTitles when it had failed every first attempt), never in failedTestTitles. Optional: every older
+  // record lacks them (= no rerun) and every reader ignores them.
+  rerun?: { candidates: number; recovered: number; stillFailing: number; ranOnlyOnRerun?: number };
+  // The FINAL result (ADR 0015, second amendment 2026-11-24): every test that ultimately passed (clean, after an in-job retry or
+  // on the rerun) is passed, flaky is 0, the same as the email's "Final result" column. `passed`/`failed`/`flaky`/`skipped` and the
+  // per-module counts of a record are the FIRST-RUN counts; records written before 2026-11-24 stored after-rerun counts there (a
+  // recovered test counted flaky) and have no `afterRerun`; those of the first amendment day hold passed 934 style counts.
+  afterRerun?: { passed: number; failed: number; flaky: number };
+  firstRunFailed?: number;
+  firstRunFlaky?: number;
+  recoveredOnRerunTitles?: string[];
 }
 
 export interface RunDelta {
@@ -543,38 +556,54 @@ export interface SlowTestTrend {
   previousDuration: number | null;
   diffMs: number | null;
   regression: boolean;
+  /** How much slower this whole run was than the compared runs (median of the ratios of every slow test seen in both); 1 = same speed. */
+  runFactor?: number;
 }
 
-// WHY: 20% chosen as a regression threshold noticeably above ordinary CI-
-// runner run-to-run jitter, while still catching a real regression early
-// rather than waiting for it to double. This is a starting heuristic, not a
-// statistically-derived constant — revisit once real slow-test history has
-// accumulated across enough runs to measure actual jitter in this suite.
+// WHY a regression is judged against the run's own speed (2026-11-25, build #239: "13 tests with a performance regression" while every one of the
+// 20 slowest tests was 20-54% slower than its last appearance and the whole run was ~19% slower, 175 min against 147): a runner or a load change
+// (the move into a container, more workers, a busy staging) slows every test at once, and that is not 13 regressions. A test is a regression only
+// when it is slower than its last appearance by more than the run as a whole (ratio above runFactor x 1.2) AND by at least a minute (a 20% rise
+// on a 40 s test is jitter), and only against an appearance in the last SLOW_TEST_COMPARE_RUNS runs (older durations belong to another setup).
 export const SLOW_TEST_REGRESSION_THRESHOLD = 0.2;
+export const SLOW_TEST_REGRESSION_MIN_DIFF_MS = 60_000;
+export const SLOW_TEST_COMPARE_RUNS = 5;
+const SLOW_TEST_MIN_FOR_RUN_FACTOR = 5;
 
 /**
- * For each of the current run's slow tests, finds the most recent prior run
- * in which that same test also appeared in the slow-test list and compares
- * durations. A test with no prior appearance in any stored run's slow-test
- * list gets previousDuration: null — that's a "no history yet" state, not an
- * error, and must render as such rather than a false 0/0 comparison.
+ * For each of the current run's slow tests, finds the most recent prior run (within the last SLOW_TEST_COMPARE_RUNS) in which that same test also
+ * appeared in the slow-test list and compares durations. A test with no such appearance gets previousDuration: null, a "no history yet" state,
+ * not an error, and must render as such rather than a false 0/0 comparison.
  */
 export function computeSlowTestTrend(
   historyBeforeAppend: RunHistoryRecord[],
   currentSlowest: Array<{ title: string; duration: number }>
 ): SlowTestTrend[] {
-  return currentSlowest.map((t) => {
-    let previousDuration: number | null = null;
-    for (let i = historyBeforeAppend.length - 1; i >= 0 && previousDuration === null; i--) {
-      const match = historyBeforeAppend[i].slowestTests?.find((s) => s.title === t.title);
-      if (match) previousDuration = match.duration;
+  const window = historyBeforeAppend.slice(-SLOW_TEST_COMPARE_RUNS);
+  const previousOf = (title: string): number | null => {
+    for (let i = window.length - 1; i >= 0; i--) {
+      const match = window[i].slowestTests?.find((s) => s.title === title);
+      if (match) return match.duration;
     }
+    return null;
+  };
+  const ratios = currentSlowest
+    .map((t) => ({ prev: previousOf(t.title), t }))
+    .filter((x): x is { prev: number; t: { title: string; duration: number } } => x.prev !== null && x.prev > 0)
+    .map((x) => x.t.duration / x.prev)
+    .sort((a, b) => a - b);
+  const runFactor = ratios.length >= SLOW_TEST_MIN_FOR_RUN_FACTOR ? ratios[Math.floor(ratios.length / 2)] : 1;
+  return currentSlowest.map((t) => {
+    const previousDuration = previousOf(t.title);
     if (previousDuration === null) {
-      return { title: t.title, duration: t.duration, previousDuration: null, diffMs: null, regression: false };
+      return { title: t.title, duration: t.duration, previousDuration: null, diffMs: null, regression: false, runFactor };
     }
     const diffMs = t.duration - previousDuration;
-    const regression = previousDuration > 0 && diffMs > previousDuration * SLOW_TEST_REGRESSION_THRESHOLD;
-    return { title: t.title, duration: t.duration, previousDuration, diffMs, regression };
+    const regression =
+      previousDuration > 0 &&
+      diffMs >= SLOW_TEST_REGRESSION_MIN_DIFF_MS &&
+      t.duration / previousDuration > Math.max(runFactor, 1) * (1 + SLOW_TEST_REGRESSION_THRESHOLD);
+    return { title: t.title, duration: t.duration, previousDuration, diffMs, regression, runFactor };
   });
 }
 
@@ -794,6 +823,18 @@ export interface PassRatePoint {
 }
 
 /**
+ * "Passed first time" as one decimal, rounded to the nearest: a run with any test that did not pass first time (flaky,
+ * failed, skipped, not run) can never read 100% (2026-11-19, sandbox build #227: 938 of 941 = 99.68% showed "100%" with
+ * flaky tests because the figure was rounded to a whole number; it now reads 99.7%). Capped at 99.9 below 100%.
+ * Shared by the email tile, its delta and the trend series.
+ */
+export function passRatePercent(passed: number, total: number): number {
+  if (total <= 0) return 0;
+  if (passed >= total) return 100;
+  return Math.min(99.9, Math.round((passed / total) * 1000) / 10);
+}
+
+/**
  * Last-n (default 10) pass-rate points, oldest first, including the current
  * run — for the email's pass-rate sparkline. Reuses fields every
  * RunHistoryRecord already stores (passed/total); no new per-record data was
@@ -806,7 +847,7 @@ export function buildPassRateSeries(
 ): PassRatePoint[] {
   const toPoint = (r: RunHistoryRecord): PassRatePoint => ({
     buildNumber: r.buildNumber,
-    passRate: r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0,
+    passRate: passRatePercent(r.passed, r.total),
     timestamp: r.timestamp,
   });
   // WHY de-duplicated per build (2026-10-06): a re-run of a build's failed
@@ -814,9 +855,16 @@ export function buildPassRateSeries(
   // comparableHistory()'s WHY comment. Not scope-filtered: this is a
   // deliberately branch-wide pass-rate series.
   const currentKey = buildKey(current);
+  // WHY the branch and run-source filter, and the sort (2026-11-24, build #235 listed "#221 ... #227 #231 #214 #235"): the
+  // history file is keyed by environment, so it also holds another workflow's runs (#214 was a `stage` run, whose build
+  // numbers are that workflow's own counter), and the series used the file's append order. Now only this branch and run
+  // source count, oldest first by run start (build number breaks a tie). Still not scope-filtered, as before.
+  const byBuildNumber = (a: RunHistoryRecord, b: RunHistoryRecord): number => (Number(a.buildNumber) || 0) - (Number(b.buildNumber) || 0);
   const prior = dedupeByBuild(historyBeforeAppend)
+    .filter((r) => r.branch === current.branch && r.runSource === current.runSource)
     .filter((r) => !r.incomplete)
-    .filter((r) => currentKey === null || buildKey(r) !== currentKey);
+    .filter((r) => currentKey === null || buildKey(r) !== currentKey)
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || byBuildNumber(a, b));
   return [...prior.slice(-(n - 1)), current].map(toPoint);
 }
 
@@ -880,5 +928,38 @@ export function computeDurationEstimate(
     minMs: Math.min(...durations),
     maxMs: Math.max(...durations),
     sampleSize: recent.length,
+  };
+}
+
+/** Everything the email reads from reports/<env>/history-delta.json. */
+export interface HistoryDeltaOutput {
+  delta: RunDelta | null;
+  recurringFlaky: RecurringIssue[];
+  recurringFailures: RecurringIssue[];
+  moduleTrend: ModuleTrend[];
+  moduleStabilityTrend: ModuleStabilityTrend[];
+  slowTestTrend: SlowTestTrend[];
+  suiteDrift: SuiteDrift | null;
+  passRateSeries: PassRatePoint[];
+  // Tests flaky in at least 2 of the last 10 comparable runs (the "Flakiest tests" section, item 23); recurringFlaky keeps its stricter
+  // threshold because the health score reads it.
+  flakiestTests: RecurringIssue[];
+}
+
+/**
+ * The trend inputs of one run against the history before it (extracted from syncHistory.ts, 2026-11-24, no behaviour
+ * change, so the replay of a past build renders through the same calls the pipeline makes).
+ */
+export function computeHistoryDeltaOutput(historyBeforeAppend: RunHistoryRecord[], current: RunHistoryRecord): HistoryDeltaOutput {
+  return {
+    delta: computeDelta(historyBeforeAppend, current),
+    recurringFlaky: computeRecurringFlaky(historyBeforeAppend, current),
+    flakiestTests: computeRecurringFlaky(historyBeforeAppend, current, RECURRING_FLAKY_LOOKBACK, 1),
+    recurringFailures: computeRecurringFailures(historyBeforeAppend, current),
+    moduleTrend: computeModuleTrend(historyBeforeAppend, current),
+    moduleStabilityTrend: computeModuleStabilityTrend(historyBeforeAppend, current),
+    slowTestTrend: computeSlowTestTrend(historyBeforeAppend, current.slowestTests),
+    suiteDrift: computeSuiteDrift(historyBeforeAppend, current),
+    passRateSeries: buildPassRateSeries(historyBeforeAppend, current),
   };
 }

@@ -20,6 +20,8 @@ export default defineConfig({
   },
 
   globalSetup: './src/auth/globalSetup.ts',
+  // one post-run read of the account's capacity per shard (src/auth/globalTeardown.ts); never fails a run
+  globalTeardown: './src/auth/globalTeardown.ts',
 
   reporter: [
     ['list'],
@@ -54,6 +56,14 @@ export default defineConfig({
   use: {
     baseURL: config.appUrl,
     navigationTimeout: isCI ? 90000 : config.timeouts.navigation,
+    // WHY (2026-11-04): with no actionTimeout every bare click/fill/waitFor/scrollIntoViewIfNeeded waits for the whole
+    // test timeout (480 s) when its target never becomes actionable: 5 of the 14 flaky tests of the 2026-11-03 sandbox
+    // run were exactly that (an error screen covering the page, a form that never rendered, a list that never showed
+    // the row), and each hung test then starved the next test queued on the form-field lock.
+    // WHY 60 s in CI, not 90 s (2026-11-05, ADR 0016 B2): at 90 s one stuck action used three quarters of the 120 s test
+    // budget and the failure read "Test timeout" with no call log. 60 s leaves room for a slow staging under load and
+    // still fails by name, with the call log, well inside the budget. Calls with an explicit timeout are unaffected.
+    actionTimeout: isCI ? 60000 : config.timeouts.navigation,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

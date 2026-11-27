@@ -23,6 +23,8 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class CallLogsPage extends BasePage {
+  private lastSearchText = '';
+  private lastSearchRowCount: number | null = null;
 
   // ──────────────────────────────────────────────────────────
   // Retry Config
@@ -258,7 +260,45 @@ export class CallLogsPage extends BasePage {
   // WHY: This form is highly reactive — every field changes the DOM.
   // Use JS mousedown on value-container to open ANY React Select in this form.
   // Works regardless of DOM re-renders because we anchor on stable input IDs.
+  // B6 (full run 1, ui:131: Type step started 211 ms after the contact pick, passing runs 299-386 ms, and the
+  // form was still pre-selection 5 s later): a mousedown on a DISABLED control is ignored, so wait until the
+  // control is enabled before using it. Hardened, root cause of the late/reverted update not confirmed.
+  private async waitForControlEnabled(inputId: string): Promise<void> {
+    await this.page.waitForFunction(
+      (id: string) => {
+        const input = document.querySelector('#callLogModal')?.querySelector(`[id="${id}"]`);
+        let el = input?.parentElement;
+        while (el) {
+          if ((el as HTMLElement).className?.includes('is-invalid__control')) {
+            return !(el as HTMLElement).className.includes('is-invalid__control--is-disabled');
+          }
+          el = el.parentElement;
+        }
+        return false;
+      },
+      inputId,
+      { timeout: config.timeouts.expect }
+    );
+  }
+
+  // B6 (Leads B6, leads.rbac L19/L20): when Log a call is opened from an entity panel the entity type is
+  // pre-selected and the Type menu opens together with its control (traces: the first DOM snapshot that has the
+  // control already has the menu open), so fillCallType()'s mousedown would TOGGLE it shut. Wait for the
+  // control to be enabled (the form is ready), then pick from the open menu, or open it the normal way.
+  async fillCallTypeFromPanel(callType: string): Promise<void> {
+    await this.waitForControlEnabled('1_31_input_callType');
+    const menu = this.page.locator('.is-invalid__menu').first();
+    if (await menu.isVisible()) {
+      await menu.locator('.is-invalid__option').first().click({ force: true });
+      await menu.waitFor({ state: 'hidden', timeout: 5000 });
+      logger.info('Call type picked from the menu that opened with the form');
+    } else {
+      await this.fillCallType(callType);
+    }
+  }
+
   private async openDropdownById(inputId: string): Promise<void> {
+    await this.waitForControlEnabled(inputId);
     // WHY: Modal has aria-hidden="true" which blocks Playwright clicks
     // Remove aria-hidden before interaction using page.evaluate (runs in browser)
      
@@ -278,7 +318,8 @@ export class CallLogsPage extends BasePage {
       }
       /* eslint-enable */
     }, [inputId] as [string]);
-    await this.page.waitForTimeout(400);
+    // B6: the menu portal and its first option are what every caller needs next
+    await this.page.locator('.is-invalid__option').first().waitFor({ state: 'visible', timeout: 5000 });
   }
 
   private async selectFromDropdown(inputId: string, optionText: string): Promise<void> {
@@ -301,7 +342,8 @@ export class CallLogsPage extends BasePage {
     await option.waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Click option via JS to avoid aria-hidden blocking
     await option.click({ force: true, timeout: 10000 });
-    await this.page.waitForTimeout(300);
+    // B6: the selection is applied when the menu closes
+    await menu.first().waitFor({ state: 'hidden', timeout: 5000 });
     logger.success(`Selected "${optionText}" from ${inputId}`);
   }
 
@@ -321,6 +363,32 @@ export class CallLogsPage extends BasePage {
         .catch(() => null),
     ]);
     logger.debug('Call Logs list is ready');
+  }
+
+  // B6: the app shows react-loading-skeleton rows while the list/detail data loads (and the "Log a call"
+  // header button is already visible then), so the skeleton being gone is the "data has rendered" signal.
+  async waitForNoLoadingSkeleton(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.react-loading-skeleton'), 'Call Logs page should finish loading (skeleton gone)').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
+  // B6: navigate and know the page has its data: the list search answered, the list (or header button)
+  // rendered and the skeleton gone. Does not wait for a detail panel, so it also serves the negative checks
+  // that must prove the page loaded before asserting something is absent.
+  async navigateAndAwaitCallLogsData(url: string): Promise<void> {
+    const listAnswered = this.armResponseWaitWithRecovery(
+      (res) => /^\/v1\/call-logs\/search\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'navigateAndAwaitCallLogsData: call-logs list search',
+      config.timeouts.navigation
+    );
+    listAnswered.catch(() => undefined);
+    await this.navigateTo(url);
+    await this.waitForListReady();
+    await listAnswered;
+    await this.waitForNoLoadingSkeleton();
   }
 
   // WHY: ID capture from toaster — POST response does not return call log ID
@@ -353,7 +421,6 @@ export class CallLogsPage extends BasePage {
     // WHY: aria-hidden blocks normal click — use force click on control
     await controlLocator.waitFor({ state: 'visible', timeout: 10000 });
     await controlLocator.click({ force: true });
-    await this.page.waitForTimeout(500);
     const options = this.page.locator('.is-invalid__option');
     await options.first().waitFor({ state: 'visible', timeout: 5000 });
     // WHY: shared bounded+re-roll selector (2026-07-17), force click as before —
@@ -372,21 +439,29 @@ export class CallLogsPage extends BasePage {
     // WHY: aria-hidden blocks Playwright clicks on options
     // Use JS evaluate to get all option texts, then click each by text via JS
     await this.openDropdownById('2_22_input_customerEmotion');
-    await this.page.waitForTimeout(400);
-    // Get all option texts from the open menu
-    const optionTexts = await this.page.evaluate(() => {
-      const opts = document.querySelectorAll('.is-invalid__option');
-      return Array.from(opts).map(o => o.textContent?.trim() ?? '');
-    });
-    if (optionTexts.length === 0) throw new Error('No Customer Emotion options found');
-    // Pick random indices
+    // Read every option with its checked state from the open menu. The options are checkboxes: picking one
+    // that is already selected (the edit form keeps the saved values) toggles it OFF, so only unselected
+    // options are candidates.
+    const readOptions = (): Promise<Array<{ text: string; checked: boolean }>> =>
+      this.page.evaluate(() =>
+        Array.from(document.querySelectorAll('.is-invalid__option')).map((o) => ({
+          text: o.textContent?.trim() ?? '',
+          checked: (o.querySelector('input[type="checkbox"]') as HTMLInputElement | null)?.checked ?? false,
+        }))
+      );
+    const initialOptions = await readOptions();
+    if (initialOptions.length === 0) throw new Error('No Customer Emotion options found');
+    const initiallyChecked = initialOptions.filter((o) => o.checked).length;
+    const candidates = initialOptions.filter((o) => !o.checked).map((o) => o.text);
+    const toPick = Math.min(count, candidates.length);
+    // Pick random distinct candidates
     const indices = new Set<number>();
-    while (indices.size < Math.min(count, optionTexts.length)) {
-      indices.add(Math.floor(Math.random() * optionTexts.length));
+    while (indices.size < toPick) {
+      indices.add(Math.floor(Math.random() * candidates.length));
     }
     const selected: string[] = [];
     for (const idx of [...indices]) {
-      const text = optionTexts[idx];
+      const text = candidates[idx];
       // Click option via JS evaluate
       await this.page.evaluate((optText: string) => {
         const opts = document.querySelectorAll('.is-invalid__option');
@@ -398,19 +473,36 @@ export class CallLogsPage extends BasePage {
         }
       }, text);
       selected.push(text);
-      await this.page.waitForTimeout(300);
-      // Re-open for next selection if needed
+      // B6: the chosen option shows as a value in the control once it is applied
+      await this.withSessionExpiryRecovery(() =>
+        expect(controlLocator, `Customer Emotion: "${text}" should show as selected`).toContainText(text, {
+          timeout: config.timeouts.expect,
+        })
+      );
+      // The menu stays open after a pick in this multi-select (run 2: still visible after 5 s), so there is
+      // no re-open: a mousedown on the control would TOGGLE the open menu closed (run 1). The next pick
+      // needs the remaining options, so wait for one to be there.
       if (selected.length < indices.size) {
-        await this.openDropdownById('2_22_input_customerEmotion');
-        await this.page.waitForTimeout(300);
+        await this.page.locator('.is-invalid__option').first().waitFor({ state: 'visible', timeout: 5000 });
       }
     }
+    // The selection must be exactly what was intended: previously selected + the picks (the test must not
+    // pass with fewer options selected than it set out to pick)
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(async () => (await readOptions()).filter((o) => o.checked).length, {
+          message: `Customer Emotion: expected ${initiallyChecked + selected.length} selected options (${initiallyChecked} before + ${selected.length} picked)`,
+          timeout: config.timeouts.expect,
+        })
+        .toBe(initiallyChecked + selected.length)
+    );
     // WHY the shared primitive, not a synthetic click on #callLogModal (KI-35,
     // ADR 0011): react-select closes on blur/Escape, never on a click event
     // dispatched at the modal, so on QA the menu stayed open and its fixed
     // overlay intercepted the Save click (screenshot: Customer Emotion menu open
     // over the footer; run 37733648349 shard 2/5, 4 of 4 attempts).
     await this.ensureReactSelectMenuClosed(description, controlLocator);
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     logger.success(`Selected random "${description}": ${selected.join(', ')}`);
     return selected;
   }
@@ -425,6 +517,16 @@ export class CallLogsPage extends BasePage {
     // focus+keydown works in DevTools but not in Playwright context due to form re-render timing
     const inputId = await inputLocator.getAttribute('id').catch(() => null);
     const resolvedId = inputId ?? '1_12_input_relatedEntityIdName';
+    // Diagnostics only (sandbox 44464192762, call-logs.rbac:472: "Options loaded: 0", then "No Lead options found"):
+    // the lookups this dropdown sends, so a miss says "sent, no answer" (staging hold) or "never sent" (our side).
+    const lookupWatch = this.watchRequests(
+      (r) => r.method() === 'GET' && /^\/v1\/.*lookup/.test(new URL(r.url()).pathname),
+      (r) => {
+        const u = new URL(r.url());
+        const q = u.searchParams.get('name') ?? u.searchParams.get('q') ?? '';
+        return `GET ${u.pathname}${q ? ` q="${q.slice(0, 40)}"` : ''}`;
+      }
+    );
     // WHY: Use page.mouse.click on exact input coordinates to open dropdown
     // Retries up to 3 times if menu doesn't open
     const resolvedInputId = resolvedId;
@@ -442,50 +544,63 @@ export class CallLogsPage extends BasePage {
       } else {
         await inputLocator.click({ force: true });
       }
-      await this.page.waitForTimeout(600);
-      menuOpen = await this.page.locator('.is-invalid__menu').isVisible().catch(() => false);
+      // B6: wait for the menu itself, for at most the 600 ms the fixed pause used to take
+      menuOpen = await this.page
+        .locator('.is-invalid__menu')
+        .first()
+        .waitFor({ state: 'visible', timeout: 600 })
+        .then(() => true)
+        .catch(() => false);
       logger.debug(`Associated entity dropdown open: ${menuOpen} (attempt ${attempt + 1}, inputId: ${resolvedInputId})`);
       if (menuOpen) break;
-      await this.page.waitForTimeout(500);
     }
     // WHY: Wait for options to load in portal — admin has more leads, takes ~2s
     // Poll until options appear in DOM
-    let optCount = 0;
-    for (let i = 0; i < 10; i++) {
-      optCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
-      if (optCount > 0) break;
-      await this.page.waitForTimeout(500);
-    }
+    // B6: same 5 s budget as the old 10 x 500 ms poll, ends as soon as an option is there; no option
+    // still falls through to the "No options found" error below
+    await this.page
+      .locator('.is-invalid__option')
+      .first()
+      .waitFor({ state: 'visible', timeout: 5000 })
+      .catch(() => undefined);
+    const optCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
     logger.debug(`Options loaded: ${optCount}`);
     if (searchTerm) {
       // WHY: Use last word of name for search — full name may not filter correctly
       // e.g. "ADM1781854620513 Nienow" → search "Nienow"
       const searchQuery = searchTerm.trim().split(' ').pop() ?? searchTerm;
-      const { retries, wait } = this.retryConfig;
-      let filteredCount = 0;
-      for (let attempt = 1; attempt <= retries && filteredCount === 0; attempt++) {
-        logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}"), attempt ${attempt}/${retries}`);
-        await this.page.keyboard.type(searchQuery, { delay: 50 });
-        // WHY: Poll for filtered options after typing
-        for (let i = 0; i < 10; i++) {
-          filteredCount = await this.page.evaluate(() => document.querySelectorAll('.is-invalid__option').length);
-          if (filteredCount > 0) break;
-          await this.page.waitForTimeout(500);
-        }
-        if (filteredCount === 0 && attempt < retries) {
-          // WHY: Confirmed live — a just-created entity can take a moment to hit
-          // the search index. Without this retry, zero filtered matches falls
-          // straight through to the blind "click first option" fallback below,
-          // which can land on an unrelated (possibly inaccessible) entity and
-          // surface as a false-positive "necessary permission" error later.
-          logger.warn(
-            `No filtered options for "${searchQuery}" — entity may not be search-indexed yet, retrying in ${wait}ms`
-          );
-          await this.page.keyboard.press('Control+A');
-          await this.page.keyboard.press('Backspace');
-          await this.page.waitForTimeout(wait);
-        }
+      const { retries } = this.retryConfig;
+      // B6: a just-created entity can take a moment to hit the search index (confirmed live). Without a
+      // retry, zero matches falls straight through to the blind "click first option" fallback below, which
+      // can land on an unrelated (possibly inaccessible) entity. The real condition is an option matching
+      // the typed query, so re-type the query, count-bounded (retryAttempts), each attempt ending in its own
+      // 5 s wait. No match still falls through to the fallback.
+      const matching = this.page.locator('.is-invalid__option').filter({ hasText: searchQuery });
+      try {
+        await this.withSessionExpiryRecovery(() =>
+          this.retryAttempts(retries, `Associated ${description} lookup`, async () => {
+            logger.debug(`Typing search query: "${searchQuery}" (from: "${searchTerm}")`);
+            // Backspace only when the box holds text: on an EMPTY single-select input react-select calls
+            // onChange(null), and the app then sends POST /v1/search/contact?sort=stakeholder with the rule
+            // {equal, associatedDeals} and no value -> HTTP 400 003020 "Value field can not be missing for equal
+            // operator" plus a pageerror (trace 2026-11-23, sandbox 45122485029: 6 Deal call-log tests).
+            const boxHasText = await this.page.evaluate(
+              () => ((document.activeElement as HTMLInputElement | null)?.value ?? '') !== ''
+            );
+            if (boxHasText) {
+              await this.page.keyboard.press('Control+A');
+              await this.page.keyboard.press('Backspace');
+            }
+            await this.page.keyboard.type(searchQuery, { delay: 50 });
+            await matching.first().waitFor({ state: 'visible', timeout: 5000 });
+          })
+        );
+      } catch {
+        logger.warn(
+          `No filtered options for "${searchQuery}" — entity may not be search-indexed (continuing to the fallback); lookups: ${lookupWatch.describe()}`
+        );
       }
+      const filteredCount = await matching.count();
       logger.debug(`Filtered options after typing: ${filteredCount}`);
     }
     // WHY: Click option via JS evaluate — bypasses Playwright visibility check
@@ -520,8 +635,14 @@ export class CallLogsPage extends BasePage {
       (pool[idx] as HTMLElement).click();
       return pool[idx].textContent?.trim() ?? '';
     }, searchTerm ?? null);
-    if (!selectedText) throw new Error(`No ${description} options found in dropdown`);
-    await this.page.waitForTimeout(300);
+    if (!selectedText) {
+      const lookups = lookupWatch.describe();
+      lookupWatch.stop();
+      throw new Error(`No ${description} options found in dropdown (lookups: ${lookups})`);
+    }
+    lookupWatch.stop();
+    // B6: the selection is applied when the menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     logger.success(`Selected ${description}: ${selectedText.trim()}`);
     return selectedText.trim();
   }
@@ -708,25 +829,19 @@ export class CallLogsPage extends BasePage {
 
   // WHY: Retry find call log in list by navigating to ?id= URL
   private async retryFindCallLog(callLogId: number): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      logger.info(`Looking for call log ID ${callLogId} — attempt ${attempt}/${retries}`);
-      await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
-      await this.waitForListReady();
-      // WHY: Wait for list item to render after navigation
-      await this.page.waitForTimeout(2000);
-      const found = await this.callLogListItemById(callLogId)
-        .waitFor({ state: 'visible', timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-      if (found) {
-        logger.success(`Call log ID ${callLogId} found`);
-        return true;
-      }
-      if (attempt < retries) await this.page.waitForTimeout(wait);
-    }
-    logger.warn(`Call log ID ${callLogId} not found after ${retries} attempts`);
-    return false;
+    const { retries } = this.retryConfig;
+    // B6: the real condition is the call log's list item after a fresh navigation (the list API returns it);
+    // retryAttempts re-navigates with its own backoff inside the budget the fixed retries x (7 s + pause) took
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Call log ID ${callLogId} search`, async () => {
+        logger.info(`Looking for call log ID ${callLogId}`);
+        await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
+        await this.waitForListReady();
+        await this.callLogListItemById(callLogId).waitFor({ state: 'visible', timeout: 7000 });
+      })
+    );
+    logger.success(`Call log ID ${callLogId} found`);
+    return true;
   }
 
   // WHY: Search by text — phone number or entity name
@@ -735,17 +850,24 @@ export class CallLogsPage extends BasePage {
     const input = this.searchInput();
     await input.waitFor({ state: 'visible', timeout: 10000 });
     await input.fill(searchText);
-    await input.press('Enter');
-    await this.armResponseWaitWithRecovery(
-      (res: Response) =>
-        res.url().includes('/v1/call-logs') &&
-        res.request().method() === 'GET' &&
-        res.status() === 200,
-      'performSearch: call-logs GET',
-      15000
-    )
+    // B6: the list search is `POST /v1/call-logs/search` (as navigateAndAwaitCallLogsData). The old wait matched a
+    // GET on /v1/call-logs, armed after Enter, and swallowed its miss. Armed before Enter and strict.
+    const searchResponse = await this.saveAndAwait(() => input.press('Enter'), {
+      method: 'POST',
+      urlRe: /^\/v1\/call-logs\/search\/?$/,
+      description: 'performSearch: POST /v1/call-logs/search',
+      timeout: 15000,
+    });
+    // kept so assertSearchResultContains() can search again and say how many rows the last search answered with
+    this.lastSearchText = searchText;
+    this.lastSearchRowCount = await searchResponse
+      .json()
+      .then((body: { totalElements?: unknown; content?: unknown[] }) =>
+        typeof body.totalElements === 'number' ? body.totalElements : Array.isArray(body.content) ? body.content.length : null
+      )
       .catch(() => null);
-    await this.page.waitForTimeout(500);
+    // B6: the list has re-rendered the results once its loading skeleton is gone
+    await this.waitForNoLoadingSkeleton();
     logger.success(`Search triggered for: "${searchText}"`);
   }
 
@@ -753,7 +875,6 @@ export class CallLogsPage extends BasePage {
   private async scrollToNotesSection(): Promise<void> {
     try {
       await this.notesTextarea().scrollIntoViewIfNeeded();
-      await this.page.waitForTimeout(300);
     } catch {
       logger.debug('Could not scroll to notes section — continuing');
     }
@@ -765,11 +886,28 @@ export class CallLogsPage extends BasePage {
 
   async goToCallLogsList(): Promise<void> {
     logger.info('Navigating to Call Logs list');
-    await this.navigateTo(`${config.appUrl}/sales/calls/list`);
-    await this.waitForListReady();
-    // WHY: Small wait for permissions to fully load — prevents intermittent
-    // permission errors on CI when restricted user creates call log immediately
-    await this.page.waitForTimeout(1000);
+    // B6: the permissions come with GET /v1/users/me on every page load; the old 1 s pause existed so a
+    // restricted user does not act before they have loaded
+    const permissionsLoaded = this.armResponseWaitWithRecovery(
+      (res) => /^\/v1\/users\/me\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'GET',
+      'goToCallLogsList: user profile (permissions)',
+      config.timeouts.navigation
+    );
+    permissionsLoaded.catch(() => undefined);
+    // Diagnostics only (sandbox 44464192762, call-logs.rbac:472 retry: this wait ran the full 120 s): was users/me
+    // sent at all, and did it get an answer?
+    const meWatch = this.watchRequests((r) => r.method() === 'GET' && /^\/v1\/users\/me\/?$/.test(new URL(r.url()).pathname));
+    try {
+      await this.navigateTo(`${config.appUrl}/sales/calls/list`);
+      await this.waitForListReady();
+      await permissionsLoaded;
+    } catch (error) {
+      throw new Error(
+        `${String(error)} — GET /v1/users/me: ${meWatch.sentCount() === 0 ? 'NEVER SENT' : meWatch.unansweredCount() > 0 ? 'SENT but NO ANSWER' : 'answered'} (${meWatch.describe()}); ${await this.describePageStall()}`
+      );
+    } finally {
+      meWatch.stop();
+    }
     logger.success('On Call Logs list page');
   }
 
@@ -801,13 +939,31 @@ export class CallLogsPage extends BasePage {
   // Form Actions
   // ──────────────────────────────────────────────────────────
 
-  async openLogACallForm(): Promise<void> {
-    logger.info('Opening Log a Call form');
-    // WHY: Reload page before clicking to ensure full page load and clean state
+  // B6 (replaces the 2 s pauses after reload). The always-present "Log a call" header button renders
+  // while the page is still a loading skeleton (run 1 screenshot: skeleton rows, "0 call logs"), and a
+  // click then is swallowed: the modal never opens. The page is loaded when the list fetch has been
+  // answered and, on a ?id= URL, the detail panel for that call log has rendered.
+  private async reloadAndAwaitCallLogsData(): Promise<void> {
+    const listAnswered = this.armResponseWaitWithRecovery(
+      (res) => /^\/v1\/call-logs\/search\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'reloadAndAwaitCallLogsData: call-logs list search',
+      config.timeouts.navigation
+    );
+    listAnswered.catch(() => undefined);
     await this.reloadPage();
     // WHY: networkidle can timeout on prod due to background requests — use domcontentloaded
     await this.page.waitForLoadState('domcontentloaded');
-    await this.page.waitForTimeout(2000);
+    await this.waitForListReady();
+    await listAnswered;
+    if (new URL(this.page.url()).searchParams.has('id')) {
+      await this.detailEntityHeading().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    }
+  }
+
+  async openLogACallForm(): Promise<void> {
+    logger.info('Opening Log a Call form');
+    // WHY: Reload page before clicking to ensure full page load and clean state
+    await this.reloadAndAwaitCallLogsData();
     await this.click(this.logACallButton(), 'Log a call button');
     const modal = this.page.locator('#callLogModal');
     const entityInput = this.page.locator('[id="1_11_input_entityType"]');
@@ -842,11 +998,7 @@ export class CallLogsPage extends BasePage {
           `Log a Call form did not open on attempt ${i + 1} (current URL: ${this.page.url()}) — ` +
             `${String(error)} — reloading page and retrying`
         );
-        await this.reloadPage();
-        // WHY: networkidle unreliable on prod due to background requests — use domcontentloaded
-        await this.page.waitForLoadState('domcontentloaded');
-        await this.page.waitForTimeout(2000);
-        await this.waitForListReady();
+        await this.reloadAndAwaitCallLogsData();
         await this.click(this.logACallButton(), 'Log a call button retry');
       }
     }
@@ -955,16 +1107,19 @@ export class CallLogsPage extends BasePage {
     // WHY: Click the input directly — React Select opens menu on input focus/click
     // Clicking the control div sometimes toggles closed; clicking input is more stable
     await entityInput.click({ force: true });
-    await this.page.waitForTimeout(600);
     // WHY: Menu renders in a portal OUTSIDE the modal (parent: div.css-gtl2mm)
     const menu = this.page.locator('.is-invalid__menu');
-    const menuVisible = await menu.isVisible().catch(() => false);
+    // B6: wait for the menu for at most the 600 ms the fixed pause used to take
+    const menuVisible = await menu
+      .first()
+      .waitFor({ state: 'visible', timeout: 600 })
+      .then(() => true)
+      .catch(() => false);
     if (!menuVisible) {
       // Fallback: click the value container
       const valueContainer = modal.locator('[id="1_11_input_entityType"]')
         .locator('xpath=ancestor::div[contains(@class,"is-invalid__value-container")]');
       await valueContainer.click({ force: true });
-      await this.page.waitForTimeout(600);
     }
     await menu.waitFor({ state: 'visible', timeout: 8000 });
     // WHY bounded (2026-08-09, same sibling bug class as selectFromDropdown(),
@@ -974,7 +1129,8 @@ export class CallLogsPage extends BasePage {
     const entityOption = menu.locator('.is-invalid__option', { hasText: entityType }).first();
     await entityOption.waitFor({ state: 'visible', timeout: 10000 });
     await entityOption.click({ timeout: 10000 });
-    await this.page.waitForTimeout(500);
+    // B6: the selection is applied when the menu closes
+    await menu.first().waitFor({ state: 'hidden', timeout: 5000 });
     logger.success(`Entity type selected: ${entityType}`);
   }
 
@@ -997,7 +1153,6 @@ export class CallLogsPage extends BasePage {
   async fillOutcome(outcome: string): Promise<void> {
     logger.info(`Selecting outcome: ${outcome}`);
     await this.selectFromDropdown('1_32_input_outcome', outcome);
-    await this.page.waitForTimeout(300);
   }
 
   async fillPhoneNumber(): Promise<void> {
@@ -1017,7 +1172,7 @@ export class CallLogsPage extends BasePage {
       // WHY: Use force: true to bypass aria-hidden blocking from React Select
       const phoneText = await option.textContent({ timeout: 15000 });
       await option.click({ force: true, timeout: 15000 });
-      await this.page.waitForTimeout(300);
+      await menu.first().waitFor({ state: 'hidden', timeout: 5000 });
       logger.success(`Phone number selected: ${phoneText?.trim()}`);
     } else {
       // WHY: Deal flow — phone auto-populated as disabled text input
@@ -1038,7 +1193,12 @@ export class CallLogsPage extends BasePage {
     logger.info(`Uploading recording: ${filePath}`);
     // WHY: setInputFiles works directly on file input even with aria-hidden
     await this.recordingFileInput().setInputFiles(filePath);
-    await this.page.waitForTimeout(500);
+    // B6: the app shows the chosen file name in the display input once it has processed the file
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.recordingFileDisplay(), 'Recording file name should appear in the display field').not.toHaveValue('', {
+        timeout: config.timeouts.expect,
+      })
+    );
     const displayValue = await this.recordingFileDisplay().inputValue().catch(() => '');
     logger.success(`Recording uploaded: "${displayValue}"`);
   }
@@ -1049,20 +1209,20 @@ export class CallLogsPage extends BasePage {
     const notesTab = this.page.locator('#callLogModal .nav-link').filter({ hasText: 'Notes' });
     await notesTab.waitFor({ state: 'visible', timeout: 10000 });
     await notesTab.click({ force: true });
-    await this.page.waitForTimeout(500);
     // WHY: Click textarea.notes-textarea first to initialize CKEditor
     // Observer confirmed: clicking textarea triggers CKEditor componentDidMount
     const notesTextarea = this.page.locator('#callLogModal [id="3"] textarea.notes-textarea');
     await notesTextarea.waitFor({ state: 'attached', timeout: 10000 });
     await notesTextarea.click({ force: true });
-    await this.page.waitForTimeout(1000);
     // WHY: Type into .ck-editor__editable — CKEditor contenteditable div fires input events
     const ckEditable = this.page.locator('#callLogModal [id="3"] .ck-editor__editable');
     await ckEditable.waitFor({ state: 'visible', timeout: 10000 });
     await ckEditable.click({ force: true });
-    await this.page.waitForTimeout(300);
+    // B6: typing goes to the focused element, so focus is the signal (not a pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(ckEditable, 'Note editor should be focused before typing').toBeFocused({ timeout: config.timeouts.expect })
+    );
     await this.page.keyboard.type(noteText, { delay: 30 });
-    await this.page.waitForTimeout(500);
     // WHY: Wait for Add button to become enabled after typing
     // Scope to modal [id="3"] section to avoid hitting wrong Add button
     await this.page.waitForFunction(() => {
@@ -1072,8 +1232,28 @@ export class CallLogsPage extends BasePage {
     }, { timeout: 5000 }).catch(() => logger.warn('Add button still disabled — clicking anyway'));
     const addBtn = this.page.locator('#callLogModal [id="3"] button.btn.mr2.btn-primary.d-block.my-2');
     await addBtn.scrollIntoViewIfNeeded();
+    // B6: Add sends no request here; the form's local list gains one note row (div.note-text-container,
+    // text inside an iframe) once the note is added
+    const noteRows = this.page.locator('#callLogModal [id="3"] .note-text-container');
+    const notesBefore = await noteRows.count();
     await addBtn.click({ force: true });
-    await this.page.waitForTimeout(1000);
+    await this.withSessionExpiryRecovery(() =>
+      expect(noteRows, 'The note should appear in the form list after Add').toHaveCount(notesBefore + 1, {
+        timeout: config.timeouts.expect,
+      })
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(
+          () =>
+            noteRows
+              .nth(notesBefore)
+              .locator('iframe')
+              .evaluate((el: HTMLIFrameElement) => el.contentDocument?.body?.textContent?.trim() ?? ''),
+          { message: 'The added note row should show its text', timeout: config.timeouts.expect }
+        )
+        .toContain(noteText)
+    );
     logger.success(`Note added during create: "${noteText}"`);
   }
 
@@ -1307,7 +1487,12 @@ export class CallLogsPage extends BasePage {
       ).toBeVisible({ timeout: config.timeouts.navigation })
     );
     await this.click(tab, 'Other Details tab');
-    await this.page.waitForTimeout(500);
+    // B6: the custom-field containers exist once this tab is the active one
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, '"Other Details" tab should be active after the click').toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
+    );
 
     await this.assertCustomFieldOnDetail(
       CALL_LOG_CUSTOM_FIELD_NAMES.textField,
@@ -1356,45 +1541,44 @@ export class CallLogsPage extends BasePage {
 
   async saveCallLog(): Promise<number | null> {
     logger.info('Saving call log');
-    // WHY: Even with a correctly-owned secondary entity (see createCallLog),
-    // there can be a server-side permission-propagation delay after an entity
-    // was just created — the save can transiently 403 with a "necessary
-    // permission" style error that clears up moments later. Retry a few times
-    // instead of failing outright, but only for permission-shaped errors —
-    // a genuine validation error (e.g. required field) won't be fixed by retrying.
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // WHY: Register toast capture BEFORE clicking save — toast appears immediately after save
-      const idPromise = this.captureIdFromToast();
-      await this.saveButton().scrollIntoViewIfNeeded();
-      await this.click(this.saveButton(), 'Save button');
-      try {
-        await this.assertNoFormErrors('call log create form');
-        const callLogId = await idPromise;
-        logger.success(`Call log saved (ID: ${callLogId})`);
-        return callLogId;
-      } catch (error) {
-        const message = String(error);
-        const isPermissionError =
-          /necessary permission|don.t have enough permissions|not authorised to perform this operation/i.test(
-            message
-          );
-        if (!isPermissionError || attempt === maxAttempts) {
-          throw error;
+    // B6 (ADR 0014, ADR 0017 amended): ONE attempt. This used to retry up to 3 times on a message that looked
+    // like a permission refusal ("necessary permission"). That is a definitive answer, not a transport error,
+    // 429 or 5xx, so it fails at once with the app's own message. A flow that changed access right before this
+    // save (a share, a reassign) must wait for it to apply BEFORE opening the form:
+    // waitForRecordAction() in src/utils/recordActionsApi.ts polls the record's own rights as the acting user.
+    // WHY: Register toast capture BEFORE clicking save — toast appears immediately after save
+    const idPromise = this.captureIdFromToast();
+    // ADR 0016 (B3, plan section 11 #9): also arm the create request itself before the click, so a
+    // missing toast is explained by the request's own answer (status/body, or no answer) and the
+    // response body can supply the id when the toast is late.
+    const armedAt = Date.now();
+    const createSettled = this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        /^\/v1\/call-logs\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
+      'saveCallLog (call log create POST)',
+      config.timeouts.navigation
+    ).then(
+      (response) => ({ response, error: null as unknown }),
+      (error: unknown) => ({ response: null, error })
+    );
+    await this.saveButton().scrollIntoViewIfNeeded();
+    await this.click(this.saveButton(), 'Save button');
+    await this.assertNoFormErrors('call log create form');
+    let callLogId = await idPromise;
+    if (!callLogId) {
+      const created = await createSettled;
+      if (created.response) {
+        const body = (await created.response.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+        callLogId = created.response.ok() ? (body?.id ?? body?.data?.id ?? null) : null;
+        if (!callLogId) {
+          logger.warn(`Call log id not captured: ${await this.describeMatchedResponse(created.response)}`);
         }
-        logger.warn(`Permission error on save attempt ${attempt}/${maxAttempts} — waiting 3s before retry`);
-        await this.page.waitForTimeout(3000);
-        // WHY: Make sure the error toast has cleared before retrying — avoids
-        // the retry click landing on a stale toast overlay
-        await this.page
-          .locator('.rrt-middle-container')
-          .filter({ hasText: /uh.?oh/i })
-          .waitFor({ state: 'hidden', timeout: 5000 })
-          .catch(() => null);
+      } else {
+        logger.warn(`Call log id not captured: ${this.describeMissedResponse(created.error, Date.now() - armedAt)}`);
       }
     }
-    // Unreachable — the loop above always returns or throws
-    return null;
+    logger.success(`Call log saved (ID: ${callLogId})`);
+    return callLogId;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1420,7 +1604,8 @@ export class CallLogsPage extends BasePage {
     const visible = await item.isVisible().catch(() => false);
     if (visible) {
       await item.click();
-      await this.page.waitForTimeout(800);
+      // B6: the detail panel heading is what shows the call log opened
+      await this.detailEntityHeading().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
       logger.success(`Call log ${callLogId} opened from list`);
     } else {
       logger.warn(`Call log ${callLogId} not visible — navigating directly`);
@@ -1523,7 +1708,15 @@ export class CallLogsPage extends BasePage {
         .filter({ hasText: 'Other Details' });
       if ((await otherDetailsTab.count()) > 0) {
         await this.click(otherDetailsTab.first(), 'Other Details tab (edit form)', true);
-        await this.page.waitForTimeout(500);
+        // B6: not the tab's `active` class: the edit modal renders every section inline and this list is a
+        // scroll-spy (rbac:703 screenshot: Other Details visible, no link active). The next step needs the
+        // custom-field inputs; the fill helper skips a field that is not there yet, so wait for them. A tenant
+        // without custom fields falls through after the bound, as the helper's own presence check allows.
+        await this.page
+          .locator('#callLogModal [id*="_input_cf"]')
+          .first()
+          .waitFor({ state: 'attached', timeout: 5000 })
+          .catch(() => logger.warn('No custom-field inputs found after the Other Details click'));
       }
       await this.fillCallLogCustomFields(data.customFields);
     }
@@ -1555,7 +1748,7 @@ export class CallLogsPage extends BasePage {
         `Backend rejected the save: PUT /v1/call-logs/{id}/ -> ${response.status()} ${String(body?.code ?? 'no-code')}`
       );
     }
-    await this.assertNoFormErrors('call log edit form');
+    await this.assertNoFormErrors('call log edit form', response);
     await this.detailEntityHeading().waitFor({ state: 'visible', timeout: 15000 });
     logger.success('Call log updated');
   }
@@ -1573,14 +1766,15 @@ export class CallLogsPage extends BasePage {
     await textarea.scrollIntoViewIfNeeded();
     // WHY: Click textarea first to initialize CKEditor — same pattern as create form
     await textarea.click({ force: true });
-    await this.page.waitForTimeout(1000);
     // WHY: Type into .ck-editor__editable — CKEditor contenteditable div
     const ckEditable = this.page.locator('.call-details .ck-editor__editable').first();
     await ckEditable.waitFor({ state: 'visible', timeout: 10000 });
     await ckEditable.click({ force: true });
-    await this.page.waitForTimeout(300);
+    // B6: typing goes to the focused element, so focus is the signal (not a pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(ckEditable, 'Note editor should be focused before typing').toBeFocused({ timeout: config.timeouts.expect })
+    );
     await this.page.keyboard.type(noteText, { delay: 30 });
-    await this.page.waitForTimeout(500);
     // WHY: Wait for Add button to become enabled
     await this.page.waitForFunction(() => {
       const btn = document.querySelector('.call-details button.btn.mr2.btn-primary.d-block.my-2');
@@ -1588,8 +1782,12 @@ export class CallLogsPage extends BasePage {
     }, { timeout: 5000 }).catch(() => logger.warn('Detail Add button still disabled'));
     const addBtn = this.page.locator('.call-details button.btn.mr2.btn-primary.d-block.my-2').first();
     await addBtn.scrollIntoViewIfNeeded();
-    await addBtn.click({ force: true });
-    await this.page.waitForTimeout(1000);
+    // B6: the app's own answer to Add is POST /v1/call-logs/{id}/notes (201 in the traced run)
+    await this.saveAndAwait(() => addBtn.click({ force: true }), {
+      method: 'POST',
+      urlRe: /^\/v1\/call-logs\/\d+\/notes\/?$/,
+      description: 'Call log note add (POST /v1/call-logs/{id}/notes)',
+    });
     logger.success(`Note added from detail panel: "${noteText}"`);
   }
 
@@ -1607,12 +1805,18 @@ export class CallLogsPage extends BasePage {
 
   async assertNoteVisible(expectedText: string): Promise<void> {
     logger.info(`Asserting note visible: "${expectedText}"`);
-    // WHY: Wait for detail panel to fully load before looking for notes section
-    await this.page.waitForTimeout(2000);
+    // B6: the "View Call Notes" row is what shows the detail panel has loaded its notes section
+    const notesCta = this.page.locator('.view-call-notes-cta');
+    await notesCta.first().waitFor({ state: 'visible', timeout: config.timeouts.navigation });
+    const notesListUrl = (res: Response): boolean =>
+      /^\/v1\/call-logs\/\d+\/notes\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'GET';
     // WHY: Expand View Call Notes only if not already expanded
     // If .note-list-scroll-container already visible, notes are already expanded
     const noteListVisible = await this.page.locator('.note-list-scroll-container').isVisible().catch(() => false);
     if (!noteListVisible) {
+      // the expand loads the notes (GET /v1/call-logs/{id}/notes); armed before the click
+      const expanded = this.armResponseWaitWithRecovery(notesListUrl, 'assertNoteVisible: notes GET after expand', 15000);
+      expanded.catch(() => undefined);
       await this.page.evaluate(() => {
         const cta = document.querySelector('.view-call-notes-cta .cursor-pointer') as HTMLElement;
         if (cta) {
@@ -1620,21 +1824,28 @@ export class CallLogsPage extends BasePage {
           cta.click();
         }
       });
-      await this.page.waitForTimeout(1500);
+      await expanded;
     }
-    // WHY: Click refresh to load latest notes
+    // WHY: Click refresh to load latest notes; each refresh answers with the same notes GET
+    const refreshed = this.armResponseWaitWithRecovery(notesListUrl, 'assertNoteVisible: notes GET after refresh', 15000);
+    refreshed.catch(() => undefined);
     await this.page.evaluate(() => {
       const refresh = document.querySelector('.view-call-notes-cta .fa-sync-alt') as HTMLElement;
       if (refresh) refresh.click();
     });
-    await this.page.waitForTimeout(3000);
-    await this.page.waitForTimeout(1500);
+    await refreshed;
     // WHY: Click refresh to load latest notes
     const refreshBtn = this.page.locator('.view-call-notes-cta .fa-sync-alt');
     const refreshVisible = await refreshBtn.isVisible().catch(() => false);
     if (refreshVisible) {
+      const refreshedAgain = this.armResponseWaitWithRecovery(
+        notesListUrl,
+        'assertNoteVisible: notes GET after second refresh',
+        15000
+      );
+      refreshedAgain.catch(() => undefined);
       await refreshBtn.click();
-      await this.page.waitForTimeout(1500);
+      await refreshedAgain;
     }
     // WHY: div.note-content is a real wrapper (confirmed live), but the actual
     // note body renders inside a CKEditor srcdoc <iframe> nested within it —
@@ -1645,7 +1856,19 @@ export class CallLogsPage extends BasePage {
     // read the iframe content directly instead.
     const noteIframes = this.page.locator('.note-text-container iframe');
     await noteIframes.first().waitFor({ state: 'visible', timeout: 15000 });
-    await this.page.waitForTimeout(500);
+    // B6: the note text is in the iframe document once that document has loaded
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(
+          () =>
+            noteIframes
+              .first()
+              .evaluate((el: HTMLIFrameElement) => el.contentDocument?.body?.textContent?.trim() ?? '')
+              .then((text) => text.length),
+          { message: 'Note iframe should have loaded its text', timeout: config.timeouts.expect }
+        )
+        .toBeGreaterThan(0)
+    );
     const iframeCount = await noteIframes.count();
     let found = false;
     for (let i = 0; i < iframeCount; i++) {
@@ -1690,8 +1913,9 @@ export class CallLogsPage extends BasePage {
 
   async assertCallLogNotInList(callLogId: number): Promise<void> {
     logger.info(`Asserting call log ID ${callLogId} NOT accessible`);
-    await this.navigateTo(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
-    await this.waitForListReady();
+    // B6: positive control first: the page has its data (list search answered, skeleton gone) before the
+    // absence of the detail panel means anything
+    await this.navigateAndAwaitCallLogsData(`${config.appUrl}/sales/calls/list?id=${callLogId}`);
     const detailVisible = await this.detailEntityHeading().isVisible().catch(() => false);
     if (detailVisible) {
       throw new Error(`Call log ID ${callLogId} should NOT be visible but detail panel is shown`);
@@ -1795,11 +2019,10 @@ export class CallLogsPage extends BasePage {
     logger.success('Phone field confirmed disabled for Deal flow');
   }
 
-  async assertDurationEnabled(): Promise<void> {
-    logger.info('Asserting Duration field is enabled (Connected outcome)');
-    await this.page.waitForTimeout(500);
-    // WHY: Use page.evaluate — aria-hidden blocks container.evaluate()
-    const hasDisabledClass = await this.page.evaluate(() => {
+  // B6: the Duration control's disabled class follows the outcome selection; read it (aria-hidden blocks
+  // container.evaluate(), so page.evaluate) and poll until it is the expected state.
+  private async isDurationControlDisabled(whenMissing: boolean): Promise<boolean> {
+    return this.page.evaluate((missing: boolean) => {
       const modal = document.querySelector('#callLogModal');
       const input = modal?.querySelector('[id="1_42_input_duration"]');
       let el = input?.parentElement;
@@ -1809,37 +2032,53 @@ export class CallLogsPage extends BasePage {
         }
         el = el.parentElement;
       }
-      return false;
-    });
-    if (hasDisabledClass) throw new Error('Duration should be ENABLED for Connected outcome');
+      return missing;
+    }, whenMissing);
+  }
+
+  async assertDurationEnabled(): Promise<void> {
+    logger.info('Asserting Duration field is enabled (Connected outcome)');
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(() => this.isDurationControlDisabled(false), {
+          message: 'Duration should be ENABLED for Connected outcome',
+          timeout: config.timeouts.expect,
+        })
+        .toBe(false)
+    );
     logger.success('Duration field confirmed enabled');
   }
 
   async assertDurationDisabled(): Promise<void> {
     logger.info('Asserting Duration field is disabled (non-Connected outcome)');
-    await this.page.waitForTimeout(500);
-    // WHY: Use page.evaluate — aria-hidden blocks container.evaluate()
-    const hasDisabledClass = await this.page.evaluate(() => {
-      const modal = document.querySelector('#callLogModal');
-      const input = modal?.querySelector('[id="1_42_input_duration"]');
-      let el = input?.parentElement;
-      while (el) {
-        if ((el as HTMLElement).className?.includes('is-invalid__control')) {
-          return (el as HTMLElement).className.includes('is-invalid__control--is-disabled');
-        }
-        el = el.parentElement;
-      }
-      return true;
-    });
-    if (!hasDisabledClass) throw new Error('Duration should be DISABLED for non-Connected outcome');
+    await this.withSessionExpiryRecovery(() =>
+      expect
+        .poll(() => this.isDurationControlDisabled(true), {
+          message: 'Duration should be DISABLED for non-Connected outcome',
+          timeout: config.timeouts.expect,
+        })
+        .toBe(true)
+    );
     logger.success('Duration field confirmed disabled');
   }
 
+  // sandbox 44464192762, call-logs.rbac:247: the search POST was answered but the list stayed empty for 15 s (a new
+  // call log can trail the search index), and the single 15 s check had no second search. Same shape as
+  // Leads/Companies retryFind*: search again, count-bounded, each attempt ending in its own 15 s wait.
   async assertSearchResultContains(phoneOrName: string): Promise<void> {
     logger.info(`Asserting search result contains: "${phoneOrName}"`);
-    await this.withSessionExpiryRecovery(() =>
-      expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 })
-    );
+    const searchText = this.lastSearchText;
+    const { retries } = this.retryConfig;
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        this.retryAttempts(searchText ? retries : 1, `Call log search "${phoneOrName}"`, async (attempt) => {
+          if (attempt > 1 && searchText) await this.performSearch(searchText);
+          await expect(this.callLogListItem().first()).toBeVisible({ timeout: 15000 });
+        })
+      );
+    } catch (error) {
+      throw new Error(`${String(error)} (the last search POST /v1/call-logs/search answered with ${this.lastSearchRowCount ?? 'an unreadable number of'} row(s))`);
+    }
     const count = await this.callLogListItem().count();
     logger.success(`Search returned ${count} results for: "${phoneOrName}"`);
   }
@@ -1925,10 +2164,13 @@ export class CallLogsPage extends BasePage {
   // WHY: Creates a fresh lead owned by the current user and returns its full name.
   // Used when entity dropdown only shows SHR/ADM leads (shared/admin-owned)
   // which may not have call log permission, causing HTTP 403.
-  private async ensureOwnedLeadExists(): Promise<string> {
+  // Public since 2026-11-25 so the manual form-fill tests (CL8, CL9, CL10, CL11) can pre-create their lead instead of letting
+  // fillCreateForm() pick a random existing one (two random leads had no phone: "No options" at Phone Number, KI-73). The lead
+  // has a phone (generateLeadData) and a run-stamped last name, which the associated-entity search types, so it finds this lead only.
+  async ensureOwnedLeadExists(): Promise<string> {
     logger.info('Creating owned lead for call log entity selection');
     const leadsPage = new LeadsPage(this.page);
-    const leadData = generateLeadData();
+    const leadData = generateLeadData({ lastName: `CLG${Date.now()}` });
     await leadsPage.goToLeadsList();
     await leadsPage.createLead(leadData);
     const fullName = `${leadData.firstName} ${leadData.lastName}`;
@@ -1945,7 +2187,9 @@ export class CallLogsPage extends BasePage {
   async ensureOwnedContactExists(): Promise<string> {
     logger.info('Creating owned contact for call log entity selection');
     const contactsPage = new ContactsPage(this.page);
-    const contactData = generateContactData();
+    // run-stamped first word: the Deal flow's Associated search and the deal's Associated Contact search type it
+    // (sandbox 44683950030), so they find this record only, quickly
+    const contactData = generateContactData({ firstName: `CLG${Date.now()}`, lastName: 'Contact' });
     await contactsPage.goToContactsList();
     await contactsPage.createContact(contactData);
     const fullName = `${contactData.firstName} ${contactData.lastName}`;

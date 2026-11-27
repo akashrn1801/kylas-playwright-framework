@@ -3,28 +3,29 @@
 > **Purpose:** How the framework is built — layers, fixtures, auth, recovery combinators, locking, sharding and CI flow. The single place to learn the shape of the system before changing it.
 > **Read when:** Touching `src/core`, `src/fixtures`, `src/auth`, the error collector, a lock, or a CI workflow; or onboarding to a module you have not worked in.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-28 @ 566df8c
+> **Last verified:** 2026-11-26 @ bfc345c
 
 Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident history in [known-issues/](./known-issues/session-expiry-and-auth.md); CI detail in [CI_PIPELINES.md](./CI_PIPELINES.md). Terms: [GLOSSARY.md](./GLOSSARY.md).
 
 ## 1. Suite at a glance
 
 <!-- GEN:suite-totals:START -->
-**932 tests** in **35 spec files** (UI 509 · RBAC 423)
+**965 tests** in **37 spec files** (UI 531 · RBAC 434)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
+| Billing | 6 | 2 | 8 |
 | Call-logs | 30 | 28 | 58 |
 | Companies | 23 | 26 | 49 |
 | Companies — Field Limits | 39 | 31 | 70 |
 | Contacts | 23 | 23 | 46 |
 | Contacts — Field Limits | 42 | 28 | 70 |
 | Dashboard | 34 | 29 | 63 |
-| Deals | 26 | 30 | 56 |
+| Deals | 27 | 30 | 57 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 25 | 31 | 56 |
+| Leads | 40 | 40 | 80 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,7 +34,7 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **509** | **423** | **932** |
+| **Total** | **531** | **434** | **965** |
 <!-- GEN:module-table:END -->
 
 ## 2. Repository layout
@@ -43,13 +44,13 @@ Rules and do/don't mechanics live in [PATTERNS.md](./PATTERNS.md); incident hist
 | `config/config.ts` | Single source of truth for env vars, timeouts, `searchRetry`/`meetingRetry`, and `buildApiUrl()`. Also `expected-test-counts.json` (suite baseline) and `sharedConfigSuites.json` (shared-config suites the planner excludes). |
 | `src/core/BasePage.ts` | Base class of every page object: bounded click/fill, recovery combinators, entity list/detail readiness, custom-field helpers, react-select helpers. |
 | `src/modules/<module>/<Module>Page.ts` | One page object per module (call-logs, companies, contacts, dashboard, deals, formFields, leads, meetings, productsAndServices, quotations, reports, tasks). `dashboard/` also holds `LoginPage.ts`. |
-| `src/fixtures/index.ts` | `adminPage`, `restrictedPage`, `adminContext`, `restrictedContext`. Always import `test`/`expect` from here (sole exception: `tests/ui/dashboard/login.spec.ts`). |
+| `src/fixtures/index.ts` | `adminPage`, `restrictedPage`, `adminContext`, `restrictedContext`, and the opt-in `leadCleanup` / `shareRuleCleanup` ([ADR 0013](./adr/0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md)). Always import `test`/`expect` from here (sole exception: `tests/ui/dashboard/login.spec.ts`). |
 | `src/auth/` | `globalSetup.ts` (logins + product fixtures), `authManager.ts`, `productFixtureNeed.ts`, `storageStates/<env>/<role>.json`. |
-| `src/data/factories/<module>Factory.ts` | Data generators + per-module custom-field constants. `src/data/productFixtureAccessor.ts` reads the per-run Products & Services fixture file. |
+| `src/data/factories/<module>Factory.ts` | Data generators + per-module custom-field constants; every e-mail/phone comes from `uniqueValues.ts` ([ADR 0013](./adr/0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md)). `src/data/productFixtureAccessor.ts` reads the per-run Products & Services fixture file. |
 | `src/error-collector/` | `ErrorCollector.ts` (per-worker singleton) and `errorFilters.ts` (classification). |
 | `src/reporters/MiscErrorReporter.ts` | Merges per-worker error files into `reports/<env>/misc-errors.json`. |
 | `src/notifications/` | Report parsing, run history, failure analysis, email — see [REPORTING.md](./REPORTING.md). |
-| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`, `failedWriteTracker.ts`, `productWriteShape.ts`. |
+| `src/utils/` | `logger.ts` (never `console.*`), `navigation.ts` (`safeWaitForURL`), `dateHelpers.ts`, `sensitiveFieldPattern.ts`, `failedWriteTracker.ts`, `productWriteShape.ts`, and the API helpers `apiClient.ts` (base), `leadApi.ts`, `shareRuleApi.ts` (entity-generic). `src/core/sharePermissions.ts` holds the share vocabulary shared by every entity; `src/modules/shareRules/` is the entity-agnostic Share Data page. |
 | `tests/ui/<module>/`, `tests/rbac/<module>.rbac.spec.ts`, `tests/rbac/formFields/` | UI specs (admin) and RBAC specs (admin + restricted). `tests/ui/formFields/` also holds the lock modules. |
 | `scripts/` | Guards and tooling (`check-test-conventions`, `check-test-counts`, `check-failure-labels`, `check-formfields-matrix-sync`, `plan-shards`, `merge-misc-errors`, `reset-field-config`, `new-module`, `check-docs`, `update-doc-numbers`), the Jenkins sharding helpers (`jenkins-collision-guard.sh`, `jenkins-resolve-selection.sh`, `jenkins-shard-plan.ts`, `jenkins-collect-shard.sh`; [ADR-0012](./adr/0012-jenkins-sharded-runs-locks-and-guard.md)) and `scripts/hooks/` (git + Claude Code hooks). |
 | `.github/workflows/`, `Jenkinsfile*`, `.github/scripts/*` (`detect-tests.sh`, `install-playwright-browsers.sh`, `split-formfields-target.sh`, `verify-shard-completeness.sh`) | CI. |
@@ -213,8 +214,8 @@ With `fullyParallel: true`, same-file tests are **not** guaranteed to share a sh
 <!-- GEN:shard-plan:START -->
 | Scope | Core shards (file-atomic) | Tests per core shard | formFields shards (fixed, one per entity) |
 |---|---:|---|---:|
-| `--grep @regression` (qa, escalated sandbox) | 5 | 125 / 124 / 124 / 119 / 7 | 6 |
-| full suite (stage, main) | 5 | 125 / 124 / 125 / 125 / 16 | 6 |
+| `--grep @regression` (qa, escalated sandbox) | 5 | 124 / 125 / 124 / 123 / 36 | 6 |
+| full suite (stage, main) | 5 | 125 / 125 / 125 / 124 / 49 | 6 |
 <!-- GEN:shard-plan:END -->
 
 ```mermaid
@@ -238,6 +239,7 @@ Per-pipeline triggers, scopes and worker counts (generated, never hand-typed):
 | `main.yml` | manual | full suite / selective | 2 | yes |
 | `prod.yml` | manual | @prodSafe | 2 | no |
 | `qa.yml` | push → qa | @regression | 2 | yes |
+| `rerun-failed.yml` | manual | full suite / selective | 2 | no |
 | `runner-image-canary.yml` | manual + schedule | no tests | — | no |
 | `sandbox.yml` | push → sandbox | full suite / selective | 2, dynamic | yes |
 | `stage.yml` | push → stage + manual | full suite / selective | 2 | yes |

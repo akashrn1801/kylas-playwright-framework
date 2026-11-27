@@ -7,15 +7,22 @@
 import { ReportParser, ParsedReport } from './ReportParser';
 import { EmailTemplate, EmailContext, ReportFreshness } from './EmailTemplate';
 import { loadFieldConfigReset } from './FieldConfigReset';
-import { loadShardCompleteness, isIncompleteRun } from './ShardCompleteness';
+import { loadShardCompleteness, isIncompleteRun, ShardCompleteness } from './ShardCompleteness';
+import { RunStart } from './RunTimes';
+import { capacityBlock } from './AccountCapacity';
+import { loadCapacityData } from '../modules/billing/capacity';
+import { RenewalFailure, describeRenewalFailure, loadRenewalFailure } from '../auth/renewalFailure';
+import { loadRerunSummary } from './RerunSummary';
 import { EmailAdapter } from './adapters/EmailAdapter';
 import { notificationConfig, getRecipients } from './config/notificationConfig';
-import { computeHealthScore, computeOverallVerdict } from './AutomationHealth';
+import { writeBackgroundErrorsPage } from './BackgroundErrors';
+import { computeHealthScore, computeOverallVerdict, healthNotApplicableReason } from './AutomationHealth';
 import { clusterFailures } from './FailureAnalyzer';
 import { RunDelta, RecurringIssue, ModuleTrend, ModuleStabilityTrend, SlowTestTrend, SuiteDrift, PassRatePoint } from './RunHistory';
 import { JobStats } from './JobStats';
 import { MiscErrorReport } from '../error-collector/ErrorCollector';
-import { loadKnownIssuesIndex } from './KnownIssuesIndex';
+import { loadSessionInfo } from '../auth/sessionInfo';
+import { loadKnownIssuesIndex, locateKnownIssues } from './KnownIssuesIndex';
 import { enrichClusters, buildFlakyFailureDetails, EnrichmentContext } from './FailureDetailBuilder';
 import { assessCauses, summarizeCauses, CauseSummary } from './FailureClassifier';
 import { loadSignatureRegistry } from './FailureSignatureLoader';
@@ -23,9 +30,11 @@ import { normalizeTestTitle } from './FailureAnalyzer';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { nounFor } from './wording';
+import { GitRunner, resolveCommit } from './CommitInfo';
 
 // WHY: added 2026-07-14 — confirmed live via two real sends that this
 // pipeline had zero freshness checking anywhere: it unconditionally trusted
@@ -51,6 +60,12 @@ export function checkReportFreshness(reportEndTime: string, now: number = Date.n
   };
 }
 
+/** The incomplete-run banner reads the cause from the completeness record; renew-session-failed.json says it in words. */
+export function withRenewalCause(c: ShardCompleteness | null, failure: RenewalFailure | null): ShardCompleteness | null {
+  if (!c || !failure || !isIncompleteRun(c)) return c;
+  return { ...c, cause: `renew-session: ${describeRenewalFailure(failure)}` };
+}
+
 export interface NotificationInput {
   jsonReportPath: string;
   env: string;
@@ -74,6 +89,8 @@ export interface NotificationInput {
   // loadJobStats() already degrades to null in every failure case, matching
   // allureUrl's own graceful-omission precedent directly above.
   jobStats?: JobStats;
+  // The run's own start (RunTimes.ts), resolved by notify.ts; absent on a local run or when no source answered.
+  runStartedAt?: RunStart;
 }
 
 // WHY: Confirmed live (2026-07-07 reporting audit) — MiscErrorReporter.ts writes
@@ -104,6 +121,7 @@ function getHistoryDeltaPath(env: string): string {
 interface HistoryDeltaFile {
   delta: RunDelta | null;
   recurringFlaky: RecurringIssue[];
+  flakiestTests: RecurringIssue[];
   recurringFailures: RecurringIssue[];
   moduleTrend: ModuleTrend[];
   moduleStabilityTrend: ModuleStabilityTrend[];
@@ -115,6 +133,7 @@ interface HistoryDeltaFile {
 const EMPTY_HISTORY_DELTA: HistoryDeltaFile = {
   delta: null,
   recurringFlaky: [],
+  flakiestTests: [],
   recurringFailures: [],
   moduleTrend: [],
   moduleStabilityTrend: [],
@@ -159,7 +178,7 @@ export function getNotifiedMarkerDir(env: string): string {
 // produce the identical key — which is exactly the idempotency property
 // needed, nothing broader.
 export function computeNotificationDedupKey(input: NotificationInput, report: ParsedReport): string {
-  const raw = [input.env, input.branch, input.buildNumber, report.startTime, report.total, report.passed, report.failed].join('|');
+  const raw = [input.env, input.branch, input.buildNumber, report.startTime, report.total, report.passed, report.failed, report.flaky].join('|');
   return crypto.createHash('sha1').update(raw).digest('hex');
 }
 
@@ -186,6 +205,184 @@ export class NotificationService {
   private parser = new ReportParser();
   private template = new EmailTemplate();
   private email = new EmailAdapter();
+
+  /**
+   * Everything the email needs besides the parsed report: misc errors, history delta, causes, rerun, verdict.
+   * Extracted from notify() (2026-11-24, no behaviour change) so scripts/render-build235.ts and the check scripts
+   * render through the same code the pipeline uses. Reads reports/<env>/ and docs/ under the current directory;
+   * `now` is only the clock for the report-freshness check (a replay of an old run passes the run's own time).
+   */
+  buildContext(input: NotificationInput, report: ParsedReport, now: number = Date.now()): EmailContext {
+    // WHY: Read misc-errors.json — if not found or empty, gracefully skip
+    const miscErrorsPath = getMiscErrorsPath(input.env);
+    let miscErrors: MiscErrorReport | null = null;
+    try {
+      if (fs.existsSync(miscErrorsPath)) {
+        miscErrors = JSON.parse(fs.readFileSync(miscErrorsPath, 'utf-8'));
+        if (miscErrors && miscErrors.totalErrors > 0) {
+          logger.info(
+            `[Notification] Background errors found: ${miscErrors.totalErrors} — will include in email`
+          );
+        } else {
+          logger.info('[Notification] No background errors captured');
+        }
+      }
+    } catch {
+      logger.warn('[Notification] Could not read misc-errors.json — skipping misc errors section');
+    }
+
+    // WHY: Read the extended run-history delta/trend output — if not found
+    // (sync step never ran) or malformed, gracefully render without any of
+    // it, same degrade-gracefully pattern as miscErrors above.
+    const historyDeltaPath = getHistoryDeltaPath(input.env);
+    let historyDeltaFile: HistoryDeltaFile = EMPTY_HISTORY_DELTA;
+    try {
+      if (fs.existsSync(historyDeltaPath)) {
+        const parsed = JSON.parse(fs.readFileSync(historyDeltaPath, 'utf-8'));
+        historyDeltaFile = {
+          delta: parsed.delta ?? null,
+          recurringFlaky: parsed.recurringFlaky ?? [],
+          flakiestTests: parsed.flakiestTests ?? [],
+          recurringFailures: parsed.recurringFailures ?? [],
+          moduleTrend: parsed.moduleTrend ?? [],
+          moduleStabilityTrend: parsed.moduleStabilityTrend ?? [],
+          slowTestTrend: parsed.slowTestTrend ?? [],
+          suiteDrift: parsed.suiteDrift ?? null,
+          passRateSeries: parsed.passRateSeries ?? [],
+        };
+        if (historyDeltaFile.delta) {
+          logger.info(
+            `[Notification] Run history delta found — vs previous run: ${historyDeltaFile.delta.passedDelta >= 0 ? '+' : ''}${historyDeltaFile.delta.passedDelta} passed`
+          );
+        }
+      }
+    } catch {
+      logger.warn('[Notification] Could not read history-delta.json — skipping trend section');
+    }
+
+    const clusters = clusterFailures(report.failedTests, miscErrors?.errors ?? null);
+    const freshness = checkReportFreshness(report.endTime, now);
+    if (freshness.isStale) {
+      logger.warn(
+        `[Notification] STALE REPORT — this report's data is ${Math.round(freshness.ageMs / 3_600_000)}h old (threshold: ${freshness.thresholdHours}h). This may not reflect a fresh run.`
+      );
+    }
+    // WHY (2026-11-24, sandbox 45420781016): a failed renew-session job skips every test job; the verdict and the incomplete-run
+    // banner name that cause instead of "Incomplete run".
+    const renewalFailure = loadRenewalFailure(input.env);
+    const shardCompleteness = withRenewalCause(loadShardCompleteness(input.env), renewalFailure);
+    const computedHealth = computeHealthScore(
+      report,
+      historyDeltaFile.delta,
+      miscErrors,
+      historyDeltaFile.suiteDrift,
+      historyDeltaFile.recurringFailures,
+      historyDeltaFile.recurringFlaky,
+      freshness.isStale
+    );
+    // A run that verified nothing (blocked, incomplete, nothing selected) has no health score: "n/a" and why (2026-11-25).
+    // WHY (2026-11-26, ADR 0019): the capacity files the shards left behind; a gate stop is a BLOCKED run, anything missing is just "unavailable"
+    const capacity = loadCapacityData(input.env);
+    const capacityStop = capacityBlock(capacity);
+    const notApplicable = healthNotApplicableReason(report, shardCompleteness, renewalFailure, capacityStop);
+    const health = notApplicable ? { ...computedHealth, notApplicable } : computedHealth;
+    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness, renewalFailure, input.branch, capacityStop);
+
+    const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
+    const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
+    const knownIssuesUrl = this.resolveKnownIssuesUrl(input.gitCommit);
+
+    // WHY previousRunFailedTitles is null (not []) whenever there is no prior
+    // run: distinguishes "compared against real history, found nothing" from
+    // "no history exists to compare against yet" — see FailureDetailBuilder's
+    // RegressionStatus.unclassified for how this degrades honestly rather
+    // than fabricating a "new regression"/"chronic" verdict with no basis.
+    const enrichmentCtx: EnrichmentContext = {
+      miscErrors: miscErrors?.errors ?? null,
+      previousRunFailedTitles: historyDeltaFile.delta?.previousRun?.failedTestTitles ?? null,
+      recurringFailures: historyDeltaFile.recurringFailures,
+      knownIssuesIndex: loadKnownIssuesIndex(process.cwd()),
+      runSource: input.runSource ?? 'local',
+      buildUrl: input.buildUrl,
+    };
+    const usedAnchorIds = new Set<string>();
+    const enrichedClusters = enrichClusters(clusters, enrichmentCtx, usedAnchorIds);
+    const flakyFailureDetails = buildFlakyFailureDetails(report.flakyTests, enrichmentCtx, usedAnchorIds);
+    // Tests that passed on the rerun shard are Passed now, but their first-run failure is still evidence (ADR 0015 amendment).
+    const rerunPassedDetails = buildFlakyFailureDetails(report.passedOnRerunTests, enrichmentCtx, usedAnchorIds);
+
+    // WHY a try/catch that only logs: suspected-cause labels are a reader hint (FailureClassifier.ts) and must never
+    // be able to stop or alter the email — no label, summary or banner is rendered if this fails.
+    let causeSummary: CauseSummary | undefined;
+    try {
+      const { registry, error } = loadSignatureRegistry();
+      if (error) logger.warn(`[Notification] Failure signature registry unusable (${error}) — causes stay unclassified`);
+      const allDetails = [...enrichedClusters.flatMap((c) => c.details), ...flakyFailureDetails, ...rerunPassedDetails];
+      const miscList = miscErrors?.errors ?? [];
+      const assessed = assessCauses(
+        allDetails.map((d) => ({
+          test: d.test,
+          related: miscList.filter((e) => e.testTitle !== undefined && normalizeTestTitle(e.testTitle) === normalizeTestTitle(d.test.title)),
+          knownIssue: d.knownIssue,
+        })),
+        registry,
+        {
+          previousRunFailedTitles: enrichmentCtx.previousRunFailedTitles,
+          recurringFailures: enrichmentCtx.recurringFailures,
+          shardCompleteness,
+        }
+      );
+      for (const d of allDetails) d.cause = assessed.get(d.test);
+      causeSummary = summarizeCauses(assessed.values(), registry, shardCompleteness);
+    } catch (err) {
+      logger.warn(`[Notification] Could not compute suspected causes — omitting them: ${String(err)}`);
+    }
+
+    const ctx: EmailContext = {
+      report,
+      env: input.env,
+      branch: input.branch,
+      buildNumber: input.buildNumber,
+      buildUrl: input.buildUrl,
+      gitCommit: input.gitCommit,
+      triggeredBy: input.triggeredBy,
+      sessionInfo: loadSessionInfo(input.env),
+      runSource: input.runSource,
+      allureUrl: input.allureUrl,
+      jobStats: input.jobStats,
+      capacity,
+      runTimes: { runStart: input.runStartedAt ?? null, runEnd: new Date(now).toISOString() },
+      fieldConfigReset: loadFieldConfigReset(input.env),
+      shardCompleteness,
+      rerun: loadRerunSummary(input.env),
+      miscErrors,
+      historyDelta: historyDeltaFile.delta,
+      recurringFlaky: historyDeltaFile.recurringFlaky,
+      flakiestTests: historyDeltaFile.flakiestTests,
+      recurringFailures: historyDeltaFile.recurringFailures,
+      moduleTrend: historyDeltaFile.moduleTrend,
+      moduleStabilityTrend: historyDeltaFile.moduleStabilityTrend,
+      slowTestTrend: historyDeltaFile.slowTestTrend,
+      suiteDrift: historyDeltaFile.suiteDrift,
+      passRateSeries: historyDeltaFile.passRateSeries,
+      health,
+      verdict,
+      clusters: enrichedClusters,
+      flakyFailureDetails,
+      rerunPassedDetails,
+      causeSummary,
+      hasHistoryEverExisted: historyDeltaFile.delta?.previousRun != null,
+      knownIssuesUrl,
+      commit: this.resolveCommitInfo(input.gitCommit),
+      kiLocations: locateKnownIssues(process.cwd()),
+      reportFreshness: freshness,
+      nodeVersion: process.version,
+      osInfo: `${os.platform()} ${os.release()}`,
+      reportsDir,
+      historyBranchUrl,
+    };
+    return ctx;
+  }
 
   async notify(input: NotificationInput): Promise<void> {
     if (!notificationConfig.enabled) {
@@ -243,162 +440,19 @@ export class NotificationService {
       return;
     }
 
-    // WHY: Read misc-errors.json — if not found or empty, gracefully skip
-    const miscErrorsPath = getMiscErrorsPath(input.env);
-    let miscErrors: MiscErrorReport | null = null;
-    try {
-      if (fs.existsSync(miscErrorsPath)) {
-        miscErrors = JSON.parse(fs.readFileSync(miscErrorsPath, 'utf-8'));
-        if (miscErrors && miscErrors.totalErrors > 0) {
-          logger.info(
-            `[Notification] Background errors found: ${miscErrors.totalErrors} — will include in email`
-          );
-        } else {
-          logger.info('[Notification] No background errors captured');
-        }
-      }
-    } catch {
-      logger.warn('[Notification] Could not read misc-errors.json — skipping misc errors section');
-    }
-
-    // WHY: Read the extended run-history delta/trend output — if not found
-    // (sync step never ran) or malformed, gracefully render without any of
-    // it, same degrade-gracefully pattern as miscErrors above.
-    const historyDeltaPath = getHistoryDeltaPath(input.env);
-    let historyDeltaFile: HistoryDeltaFile = EMPTY_HISTORY_DELTA;
-    try {
-      if (fs.existsSync(historyDeltaPath)) {
-        const parsed = JSON.parse(fs.readFileSync(historyDeltaPath, 'utf-8'));
-        historyDeltaFile = {
-          delta: parsed.delta ?? null,
-          recurringFlaky: parsed.recurringFlaky ?? [],
-          recurringFailures: parsed.recurringFailures ?? [],
-          moduleTrend: parsed.moduleTrend ?? [],
-          moduleStabilityTrend: parsed.moduleStabilityTrend ?? [],
-          slowTestTrend: parsed.slowTestTrend ?? [],
-          suiteDrift: parsed.suiteDrift ?? null,
-          passRateSeries: parsed.passRateSeries ?? [],
-        };
-        if (historyDeltaFile.delta) {
-          logger.info(
-            `[Notification] Run history delta found — vs previous run: ${historyDeltaFile.delta.passedDelta >= 0 ? '+' : ''}${historyDeltaFile.delta.passedDelta} passed`
-          );
-        }
-      }
-    } catch {
-      logger.warn('[Notification] Could not read history-delta.json — skipping trend section');
-    }
-
-    const clusters = clusterFailures(report.failedTests, miscErrors?.errors ?? null);
-    const freshness = checkReportFreshness(report.endTime);
-    if (freshness.isStale) {
-      logger.warn(
-        `[Notification] STALE REPORT — this report's data is ${Math.round(freshness.ageMs / 3_600_000)}h old (threshold: ${freshness.thresholdHours}h). This may not reflect a fresh run.`
-      );
-    }
-    const health = computeHealthScore(
-      report,
-      historyDeltaFile.delta,
-      miscErrors,
-      historyDeltaFile.suiteDrift,
-      historyDeltaFile.recurringFailures,
-      historyDeltaFile.recurringFlaky,
-      freshness.isStale
-    );
-    const shardCompleteness = loadShardCompleteness(input.env);
-    const verdict = computeOverallVerdict(report, health, historyDeltaFile.suiteDrift, shardCompleteness);
-
-    const reportsDir = path.relative(process.cwd(), path.dirname(input.jsonReportPath)).split(path.sep).join('/');
-    const historyBranchUrl = this.resolveHistoryBranchUrl(input.env);
-    const knownIssuesUrl = this.resolveKnownIssuesUrl(input.gitCommit);
-
-    // WHY previousRunFailedTitles is null (not []) whenever there is no prior
-    // run: distinguishes "compared against real history, found nothing" from
-    // "no history exists to compare against yet" — see FailureDetailBuilder's
-    // RegressionStatus.unclassified for how this degrades honestly rather
-    // than fabricating a "new regression"/"chronic" verdict with no basis.
-    const enrichmentCtx: EnrichmentContext = {
-      miscErrors: miscErrors?.errors ?? null,
-      previousRunFailedTitles: historyDeltaFile.delta?.previousRun?.failedTestTitles ?? null,
-      recurringFailures: historyDeltaFile.recurringFailures,
-      knownIssuesIndex: loadKnownIssuesIndex(process.cwd()),
-      runSource: input.runSource ?? 'local',
-      buildUrl: input.buildUrl,
-    };
-    const usedAnchorIds = new Set<string>();
-    const enrichedClusters = enrichClusters(clusters, enrichmentCtx, usedAnchorIds);
-    const flakyFailureDetails = buildFlakyFailureDetails(report.flakyTests, enrichmentCtx, usedAnchorIds);
-
-    // WHY a try/catch that only logs: suspected-cause labels are a reader hint (FailureClassifier.ts) and must never
-    // be able to stop or alter the email — no label, summary or banner is rendered if this fails.
-    let causeSummary: CauseSummary | undefined;
-    try {
-      const { registry, error } = loadSignatureRegistry();
-      if (error) logger.warn(`[Notification] Failure signature registry unusable (${error}) — causes stay unclassified`);
-      const allDetails = [...enrichedClusters.flatMap((c) => c.details), ...flakyFailureDetails];
-      const miscList = miscErrors?.errors ?? [];
-      const assessed = assessCauses(
-        allDetails.map((d) => ({
-          test: d.test,
-          related: miscList.filter((e) => e.testTitle !== undefined && normalizeTestTitle(e.testTitle) === normalizeTestTitle(d.test.title)),
-          knownIssue: d.knownIssue,
-        })),
-        registry,
-        {
-          previousRunFailedTitles: enrichmentCtx.previousRunFailedTitles,
-          recurringFailures: enrichmentCtx.recurringFailures,
-          shardCompleteness,
-        }
-      );
-      for (const d of allDetails) d.cause = assessed.get(d.test);
-      causeSummary = summarizeCauses(assessed.values(), registry, shardCompleteness);
-    } catch (err) {
-      logger.warn(`[Notification] Could not compute suspected causes — omitting them: ${String(err)}`);
-    }
-
-    const ctx: EmailContext = {
-      report,
-      env: input.env,
-      branch: input.branch,
-      buildNumber: input.buildNumber,
-      buildUrl: input.buildUrl,
-      gitCommit: input.gitCommit,
-      triggeredBy: input.triggeredBy,
-      runSource: input.runSource,
-      allureUrl: input.allureUrl,
-      jobStats: input.jobStats,
-      fieldConfigReset: loadFieldConfigReset(input.env),
-      shardCompleteness,
-      miscErrors,
-      historyDelta: historyDeltaFile.delta,
-      recurringFlaky: historyDeltaFile.recurringFlaky,
-      recurringFailures: historyDeltaFile.recurringFailures,
-      moduleTrend: historyDeltaFile.moduleTrend,
-      moduleStabilityTrend: historyDeltaFile.moduleStabilityTrend,
-      slowTestTrend: historyDeltaFile.slowTestTrend,
-      suiteDrift: historyDeltaFile.suiteDrift,
-      passRateSeries: historyDeltaFile.passRateSeries,
-      health,
-      verdict,
-      clusters: enrichedClusters,
-      flakyFailureDetails,
-      causeSummary,
-      hasHistoryEverExisted: historyDeltaFile.delta?.previousRun != null,
-      knownIssuesUrl,
-      reportFreshness: freshness,
-      nodeVersion: process.version,
-      osInfo: `${os.platform()} ${os.release()}`,
-      reportsDir,
-      historyBranchUrl,
-    };
+    const ctx = this.buildContext(input, report);
 
     const recipients = getRecipients(input.env, input.branch);
     const subject = this.template.subject(ctx);
     const html = this.template.html(ctx);
+    const text = this.template.text(ctx);
+    const chart = this.template.chartAttachment(ctx); // null when the image could not be made: the email goes out without it
+    // the full background-error list, next to the HTML report (it goes into the report artifact); the email carries only the top groups
+    writeBackgroundErrorsPage(path.dirname(input.jsonReportPath), ctx.miscErrors, { env: input.env, branch: input.branch, buildNumber: input.buildNumber });
 
     logger.info(`[Notification] Sending email — Subject: ${subject}`);
     try {
-      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
+      await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, text, ...(chart ? { attachments: [chart] } : {}), env: input.env });
       logger.success('[Notification] Email sent successfully');
       // WHY only marked "sent" here, after a confirmed-successful send: see
       // markNotified()'s own WHY comment — a failed attempt must remain
@@ -417,15 +471,30 @@ export class NotificationService {
   // #167's false "PASSED") was about. This alert is deliberately simple and
   // unambiguous instead: state plainly that no report could be parsed, why,
   // and where to look — never implying a pass or a fail either way.
-  private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
-    const recipients = getRecipients(input.env, input.branch);
+  /**
+   * The "no report available" message (subject and HTML) without sending it: extracted from sendReportUnavailableAlert()
+   * (2026-11-24, no behaviour change) so the scenario matrix can render it. Reads reports/<env>/ under the current directory.
+   */
+  buildReportUnavailableMessage(input: NotificationInput, err: unknown): { subject: string; html: string } {
     const reason = err instanceof Error ? err.message : String(err);
-    const completeness = loadShardCompleteness(input.env);
+    const renewalFailure = loadRenewalFailure(input.env);
+    const completeness = withRenewalCause(loadShardCompleteness(input.env), renewalFailure);
     const shardNote = isIncompleteRun(completeness)
-      ? `<p><strong>Shards:</strong> ${completeness.reported} of ${completeness.expected} shard reports were available to merge.</p>`
+      ? `<p><strong>Shards:</strong> ${completeness.reported} of ${completeness.expected} shard reports were available to merge.${
+          completeness.cause?.startsWith('renew-session') ? ` <strong>No test job started:</strong> ${this.escapeHtml(completeness.cause.replace(/^renew-session:\s*/, 'the renew-session job did not succeed: '))}` : ''
+        }</p>`
       : '';
-    const subject = `🚫 [${input.env.toUpperCase()}] Kylas Automation — REPORT NOT AVAILABLE | Branch: ${input.branch} | Build #${input.buildNumber}`;
-    const html = `
+    // WHY (2026-11-26, ADR 0019): when the capacity gate stopped the run the cause is known; the subject and the body say it
+    // (the subject still says the report is unavailable: no pass or fail can be claimed either way)
+    const capacityStop = capacityBlock(loadCapacityData(input.env));
+    const capacityNote = capacityStop
+      ? `<p><strong>Blocked by the capacity gate:</strong> ${this.escapeHtml(capacityStop.message)}. No test ran; free up records or move the account to a plan with room, then run again (docs/adr/0019-capacity-gate-before-any-test.md).</p>`
+      : '';
+    const subject = capacityStop
+      ? `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: ${capacityStop.kind === 'no-records' ? 'BLOCKED — NO RECORDS LEFT' : 'BLOCKED — ACCOUNT CAPACITY UNREADABLE'} (REPORT NOT AVAILABLE)`
+      : `🚫 ${input.env.toUpperCase()} ${input.branch} #${input.buildNumber}: REPORT NOT AVAILABLE`;
+    // a complete document (charset, viewport, light colour scheme) like the run email: without a charset the emoji and dashes can garble in a client
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="color-scheme" content="light"></head><body style="margin:0;">
 <div style="font-family:sans-serif;max-width:640px;margin:0 auto;">
   <div style="background:#B3261E;padding:16px 24px;">
     <span style="color:#ffffff;font-weight:700;font-size:14px;letter-spacing:0.05em;text-transform:uppercase;">No Test Report Available — Not A Pass Or Fail</span>
@@ -433,6 +502,7 @@ export class NotificationService {
   <div style="padding:20px 24px;color:#1A1A1A;font-size:14px;line-height:1.6;">
     <p>This run's own report file could not be found or parsed, so <strong>no pass/fail status can be reported</strong> — this is not a "passed" run and must not be treated as one.</p>
     <p><strong>Reason:</strong> ${this.escapeHtml(reason)}</p>
+    ${capacityNote}
     ${shardNote}
     <p>
       <strong>Environment:</strong> ${this.escapeHtml(input.env)}<br/>
@@ -447,10 +517,16 @@ export class NotificationService {
     }
     <p>Common causes: the job was cancelled or killed before finishing (e.g. a platform timeout), or a real infrastructure failure prevented tests from running at all.</p>
   </div>
-</div>`;
+</div></body></html>`;
+    return { subject, html };
+  }
+
+  private async sendReportUnavailableAlert(input: NotificationInput, err: unknown): Promise<void> {
+    const recipients = getRecipients(input.env, input.branch);
+    const { subject, html } = this.buildReportUnavailableMessage(input, err);
     try {
       await this.email.send({ to: recipients.to, cc: recipients.cc, subject, html, env: input.env });
-      logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} recipient(s)`);
+      logger.info(`[Notification] Report-unavailable alert sent to ${recipients.to.length} ${nounFor(recipients.to.length, 'recipient')}`);
     } catch (sendErr) {
       logger.error('[Notification] Failed to send even the report-unavailable alert:', sendErr);
     }
@@ -476,6 +552,23 @@ export class NotificationService {
   // — linking to the exact commit under test means the link always shows
   // precisely the content that existed for THIS build, immutable, never
   // subject to later edits. GitHub's blob view accepts a short SHA.
+  // The commit this run tested, as a link with its subject line and author (item 18, 2026-11-25). The link needs only the GitHub remote;
+  // the subject and author come from the checkout the notify step runs in (CI has it) and are null when git cannot answer (a scenario's
+  // temporary directory, a shallow clone without the commit): the email then shows the link alone, never a guess.
+  private resolveCommitInfo(gitCommit: string): EmailContext['commit'] {
+    if (!gitCommit || gitCommit === 'unknown') return undefined;
+    const ownerRepo = resolveGithubOwnerRepo();
+    const urlOf = (sha: string): string | null => (ownerRepo ? `https://github.com/${ownerRepo.owner}/${ownerRepo.repo}/commit/${sha}` : null);
+    const git: GitRunner = (args, timeoutMs = 5000) => {
+      try {
+        return execFileSync('git', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs }).trim();
+      } catch {
+        return undefined; // not a git checkout, or the commit is not in it
+      }
+    };
+    return resolveCommit(gitCommit, git, urlOf);
+  }
+
   private resolveKnownIssuesUrl(gitCommit: string): string | null {
     const ownerRepo = resolveGithubOwnerRepo();
     if (!ownerRepo || !gitCommit || gitCommit === 'unknown') return null;

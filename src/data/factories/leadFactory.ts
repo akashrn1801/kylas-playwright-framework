@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { uniqueEmail, uniquePhone, emailLocalPart } from './uniqueValues';
 import { randomFutureDateWithinOneMonth } from '../../utils/dateHelpers';
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -399,8 +400,8 @@ export function generateLeadData(overrides: Partial<LeadData> = {}): LeadData {
     firstName,
     lastName,
     salutation: '', // WHY: placeholder — selected live from the DOM at fill time, never hardcoded
-    email: faker.internet.email({ firstName, lastName }),
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail(emailLocalPart(firstName, lastName)),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -492,8 +493,8 @@ export function generateAdminLeadData(overrides: Partial<LeadData> = {}): LeadDa
     firstName,
     lastName,
     salutation: '', // WHY: placeholder — selected live from the DOM at fill time, never hardcoded
-    email: `adm${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('adm'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),
@@ -543,8 +544,8 @@ export function generateSharedLeadData(overrides: Partial<LeadData> = {}): LeadD
     firstName,
     lastName,
     salutation: '', // WHY: placeholder — selected live from the DOM at fill time, never hardcoded
-    email: `shr${timestamp}@testkylas.com`,
-    phone: faker.helpers.arrayElement(['6', '7', '8', '9']) + faker.string.numeric(9),
+    email: uniqueEmail('shr'),
+    phone: uniquePhone(),
     address: faker.location.streetAddress(),
     city: faker.location.city(),
     state: faker.location.state(),

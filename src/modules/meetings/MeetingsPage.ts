@@ -1,15 +1,33 @@
-import { Page, Response, expect } from '@playwright/test';
+import { Page, Request, Response, expect } from '@playwright/test';
 import { BasePage } from '@core/BasePage';
+import { getTaskRelationTargets } from '../tasks/TaskRelationTargets';
 import { logger } from '@utils/logger';
 import { config } from '@config/config';
+import { MeetingApi } from '@utils/meetingApi';
 import {
   MeetingData,
   MeetingTimeConfig,
   MeetingCustomFieldData,
   MEETING_CUSTOM_FIELD_NAMES,
   formatDateForCalendarLabel,
+  generateTimeConfig,
 } from '@data/factories/meetingFactory';
 
+
+// What the server holds for a meeting: the instants and the zone it saves them in.
+export interface MeetingTimes {
+  fromMs: number;
+  toMs: number;
+  timeZone: string;
+}
+
+// What rescheduleMeeting did, for assertMeetingRescheduled: the calendar date it picked, the slot it set again
+// (null = the form's own To was already after From, so the app kept the duration), and the times before.
+export interface RescheduleOutcome {
+  pickedDate: Date;
+  slot: MeetingTimeConfig | null;
+  before: MeetingTimes;
+}
 
 export type SelectedMedium = 'GOOGLE_MEET' | 'OUTLOOK' | 'OFFLINE';
 
@@ -89,6 +107,7 @@ export class MeetingsPage extends BasePage {
     this.page.locator(
       '.col-6 > #from > div:nth-child(2) > .col-5 > .rc-time-picker > .rc-time-custom-styles'
     );
+  private readonly fromTimeInput = () => this.page.locator('[id="1_31_input_from_time"]');
   private readonly toTimeInput = () => this.page.locator('[id="1_32_input_to_time"]');
   private readonly timezoneInput = () => this.page.locator('[id="1_41_input_timezone"]');
   private readonly statusInput = () => this.page.locator('[id="1_42_input_status"]');
@@ -215,8 +234,13 @@ export class MeetingsPage extends BasePage {
           // have matched a failed (4xx/5xx) response too. Not independently
           // live-reproduced for Meetings; fixed as defense-in-depth since it
           // shares the identical vulnerable shape.
-          res.url().includes('/v1/meetings') &&
-          !res.url().includes('/reports/') &&
+          // WHY the exact create URL (2026-10-30, hardening — NOT a confirmed root cause): the meeting
+          // list search is also a POST (`POST /v1/meetings/search?page=1&size=10…` answers 200 with
+          // `{content:[…]}` and no `id`), so the old substring match could in principle take a search
+          // response instead of the create response. In 3 live runs the create response (201) always
+          // arrived first, so a null id was NOT reproduced; the other candidate is the 15 s wait below
+          // being shorter than a slow create on CI. Standing rule 15: match the exact endpoint.
+          /\/v1\/meetings\/?(?:\?|$)/.test(res.url()) &&
           res.request().method() === 'POST' &&
           (res.status() === 200 || res.status() === 201),
         'captureIdFromResponse (meeting create)',
@@ -252,36 +276,10 @@ export class MeetingsPage extends BasePage {
         .catch(() => {});
       await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
       await this.waitForListReady();
-      await this.sortByLatestFirst().catch(() => logger.warn('Sort failed — continuing'));
+      await this.sortByLatestFirst();
     }
     logger.warn(`Meeting "${title}" not found after ${retries} attempts`);
     return false;
-  }
-
-  private async openFilterPanel(): Promise<void> {
-    logger.info('Opening filter panel');
-    const alreadyOpen = await this.filterModal()
-      .evaluate((el) => el.classList.contains('show'))
-      .catch(() => false);
-    if (alreadyOpen) {
-      logger.debug('Filter panel already open');
-      return;
-    }
-    // WHY: filter button click can be unreliable on CI — retry up to 3 times
-    let filterOpened = false;
-    for (let i = 0; i < 3; i++) {
-      await this.filterActionButton().click({ force: true });
-      try {
-        await this.filterModal().waitFor({ state: 'visible', timeout: 10000 });
-        filterOpened = true;
-        break;
-      } catch {
-        logger.warn(`Filter panel did not open on attempt ${i + 1}, retrying`);
-      }
-    }
-    if (!filterOpened) throw new Error('Filter panel did not open after 3 attempts');
-    await this.page.waitForTimeout(500);
-    logger.success('Filter panel opened');
   }
 
   private async fillDate(daysFromNow: number): Promise<void> {
@@ -382,19 +380,34 @@ export class MeetingsPage extends BasePage {
   // Sort
   // ──────────────────────────────────────────────────────────
 
+  // B6 (staging trace 2026-11-17: Apply answers with POST /v1/meetings/search): each step waits for the control it
+  // needs, Apply's own answer is awaited and the modal must close. Callers no longer swallow a failed sort
+  // (`.catch(() => {})`): the sort succeeds or fails by name.
   async sortByLatestFirst(): Promise<void> {
     logger.info('Sorting meetings by Latest First');
     await this.sortButton().click();
-    await this.sortModal().waitFor({ state: 'visible', timeout: 5000 });
-    await this.page.waitForTimeout(400);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortModal(), 'Sort: the sort dialog should open').toBeVisible({ timeout: config.timeouts.expect })
+    );
     // WHY: Click the singleValue text inside the sort dropdown to open it
     await this.sortDropdownSingleVal().waitFor({ state: 'visible', timeout: 5000 });
     await this.sortDropdownSingleVal().click();
-    await this.page.waitForTimeout(400);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortLatestFirstOption(), 'Sort: the "Latest First" option should appear').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
     await this.sortLatestFirstOption().click();
-    await this.page.waitForTimeout(400);
-    await this.sortApplyButton().click();
-    await this.page.waitForTimeout(1000);
+    await this.saveAndAwait(() => this.sortApplyButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/search\/?$/,
+      description: 'Meeting list sort (POST /v1/meetings/search)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.sortModal(), 'Sort: the sort dialog should close after Apply').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success('Sorted by Latest First');
   }
 
@@ -466,9 +479,9 @@ export class MeetingsPage extends BasePage {
     // Fall back to Offline
     logger.warn('No online calendar connected — falling back to Offline');
     await this.click(this.mediumInputControl(), 'medium control (Offline)');
-    await this.page.waitForTimeout(500);
     await this.click(this.page.getByText('Offline', { exact: true }).last(), 'medium option: Offline');
-    await this.page.waitForTimeout(500);
+    // B6: the menu closing is the signal that the pick was processed (replaces two 500 ms pauses)
+    await this.ensureReactSelectMenuClosed('Medium "Offline"');
     logger.success('Selected medium: Offline (fallback)');
     return 'OFFLINE';
   }
@@ -483,68 +496,121 @@ export class MeetingsPage extends BasePage {
     await this.fillAddressViaGpsOrManual(this.locationInput(), manualAddress, 'location');
   }
 
+  // WHY run-owned records, not a random pick (rule 5; sandbox 44683950030): a random existing record's owner, shares and
+  // index state are unknown and another test may delete it (tasks.rbac 007005). Each type relates this user's own
+  // record from TaskRelationTargets (created once per account and worker, kept, unique first word), found through the
+  // same polled search as createMeetingWithRelatedRecords. A type with no record FAILS by name.
   async fillRelatedTo(_isRestrictedUser = false): Promise<void> {
-    logger.info('Filling Related To - all entity types');
-    const entityTypes = ['Lead', 'Contact', 'Deal', 'Company'];
-
-    for (const entityType of entityTypes) {
-      logger.info(`Selecting entity type: ${entityType}`);
-
-      // Step 1: Click Entities dropdown and select entity type
-      await this.entitiesDropdown().click();
-      await this.page.waitForTimeout(400);
-      // WHY: Scope to dropdown options only — getByText matches invitee chips too
-      await this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first().click();
-      await this.page.waitForTimeout(500);
-
-      // Step 2: Click Search... to open entity search dropdown
-      await this.page.getByText('Search ...').last().click();
-      await this.page.waitForTimeout(400);
-
-      // Step 3: Type into relatedTo input
-      await this.relatedToInput().fill('   ');
-      await this.page.waitForTimeout(1500);
-
-      // Step 4: Wait for options to appear
-      try {
-        await this.relationOptions().first().waitFor({ state: 'visible', timeout: 5000 });
-      } catch {
-        // Options not loaded yet — try search terms
-        for (const term of ['abc', 'isa', 'rau', 'amb', 'win', 'dea', 'con', 'the', 'inc']) {
-          await this.relatedToInput().fill(term);
-          await this.page.waitForTimeout(1000);
-          const appeared = await this.relationOptions()
-            .first()
-            .isVisible()
-            .catch(() => false);
-          if (appeared) {
-            logger.info(`Found ${entityType} results with term: "${term}"`);
-            break;
-          }
-          await this.relatedToInput().clear();
-          await this.page.waitForTimeout(200);
-        }
-      }
-      const count = await this.relationOptions()
-        .count()
-        .catch(() => 0);
-      logger.info(`Options count for ${entityType}: ${count}`);
-
-      // Step 5: Pick random option
-      if (count > 0) {
-        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
-        // before — was an unbounded textContent()+click() on a random option.
-        await this.selectRandomOptionWithRetry(this.relationOptions(), `Selected ${entityType}`, {
-          maxOptions: 5,
-        });
-        await this.page.waitForTimeout(300);
-        await this.relatedToInput().press('Enter');
-      } else {
-        logger.warn(`No ${entityType} records found - skipping`);
-        await this.page.keyboard.press('Escape');
-      }
-      await this.page.waitForTimeout(600);
+    logger.info('Filling Related To - all entity types (this account\'s run-owned records)');
+    const owned = await getTaskRelationTargets(this.page);
+    const names: Array<[string, string]> = [
+      ['Lead', owned.lead],
+      ['Contact', owned.contact],
+      ['Deal', owned.deal],
+      ['Company', owned.company],
+    ];
+    for (const [entityType, name] of names) {
+      await this.selectRelatedRecord(entityType, name, 'contains');
     }
+  }
+
+  // The request behind the Related To list of each entity type (staging probe 2026-11-23, Add Meeting form, admin: the
+  // opening list and the typed search use the same request): Lead = GET /v1/search/lead/lookup/?view=meeting&q=firstName:<text>;
+  // Contact, Deal and Company = POST /v1/search/<entity>/associated-with-entity?view=meeting&q=name:<text>. The watcher and
+  // the answer wait used to know only the Lead shape, so for the other three they saw 0 requests and every typed search
+  // failed with "no matching response within 10 s" (sandbox 45122485029 shard 3) although the app had answered.
+  private static isRelatedToSearch(request: Request, entityType: string): boolean {
+    const path = new URL(request.url()).pathname;
+    const entity = entityType.toLowerCase();
+    return entityType === 'Lead'
+      ? request.method() === 'GET' && path === `/v1/search/${entity}/lookup/`
+      : request.method() === 'POST' && path === `/v1/search/${entity}/associated-with-entity`;
+  }
+
+  private static relatedToQueryHas(request: Request, text: string): boolean {
+    return decodeURIComponent(new URL(request.url()).search).includes(text);
+  }
+
+  // Bounded pick of the Related To entity type (sandbox build #240, meetings.rbac:263: the control click and the option click were unbounded, so when
+  // the click did not open the menu the option wait ran the 60 s action timeout with no hint). Same shape as TasksPage.selectRelationEntityType():
+  // the control is clicked only while no menu is open (a click on an open react-select closes it), each attempt waits for the option itself, and a
+  // menu that did not show it is closed and reopened; the click is bounded and the failure names the entity type.
+  private async selectRelatedToEntityType(entityType: string): Promise<void> {
+    const maxAttempts = 3;
+    const control = this.entitiesDropdown();
+    const openMenu = this.page.locator('.entity-lookup .is-invalid__menu').first();
+    const typeOption = this.page.locator('.is-invalid__option').filter({ hasText: entityType }).first();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!(await openMenu.isVisible().catch(() => false))) {
+        await this.click(control, `Related To entity type control (open ${attempt}/${maxAttempts})`);
+      }
+      const visible = await typeOption
+        .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+        .then(() => true)
+        .catch(() => false);
+      if (visible) {
+        await typeOption.click({ timeout: config.timeouts.expect });
+        return;
+      }
+      logger.warn(`Related To: the "${entityType}" type option is not visible (attempt ${attempt}/${maxAttempts}), closing and reopening`);
+      if (await openMenu.isVisible().catch(() => false)) await this.page.keyboard.press('Escape');
+    }
+    throw new Error(`Related To: the "${entityType}" type option never appeared after ${maxAttempts} attempts`);
+  }
+
+  // B6 (staging trace 2026-11-17; request shapes per MeetingsPage.isRelatedToSearch):
+  // open the Related To search of one entity type on the open Add form...
+  async openRelatedToSearch(entityType: string): Promise<void> {
+    await this.selectRelatedToEntityType(entityType);
+    const searchControl = this.page.getByText('Search ...').last();
+    await this.withSessionExpiryRecovery(() =>
+      expect(searchControl, `Related To: the ${entityType} search control should appear`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await searchControl.click();
+  }
+
+  // ...and search it: returns the lookup's own answer (body text) for that text, failing by name when the answer
+  // is missing or not 2xx, so an absence check on it is made on a real answer, not on a list that had not loaded.
+  async lookupRelatedTo(text: string, entityType = 'Lead'): Promise<string> {
+    await this.relatedToInput().fill('');
+    const answered = this.armResponseWaitWithRecovery(
+      (res) =>
+        MeetingsPage.isRelatedToSearch(res.request(), entityType) &&
+        MeetingsPage.relatedToQueryHas(res.request(), `q=${entityType === 'Lead' ? 'firstName' : 'name'}:${text}`),
+      `Related To ${entityType} lookup for "${text}"`,
+      config.timeouts.expect
+    );
+    answered.catch(() => undefined);
+    await this.relatedToInput().fill(text);
+    const response = await answered;
+    if (!response.ok()) {
+      throw new Error(`Related To lookup for "${text}": ${await this.describeMatchedResponse(response)}`);
+    }
+    return response.text();
+  }
+
+  // B6 (staging probe 2026-11-17): Escape does NOT close the Add Meeting form; the header close button does,
+  // with no confirmation. Closes the form without saving and requires it to be gone.
+  async closeAddForm(): Promise<void> {
+    await this.editModal().locator('button.close').first().click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The Add Meeting form should close after its close button').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
+  // B6 (owner decision 2026-11-17): the Add form opens when its title input renders. One bounded wait that fails
+  // by name, replacing the retry loop (re-click Add after a reload or a 1 s pause, every miss swallowed by a
+  // catch). The loop existed for a MeetingCreate JS crash seen on QA; if it recurs it now fails with this name.
+  private async waitForAddFormOpen(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.titleInput(), 'The Add Meeting form (title input) should open after clicking Add').toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
   }
 
   async openAddForm(): Promise<void> {
@@ -552,31 +618,7 @@ export class MeetingsPage extends BasePage {
     // to open the form without filling all fields (GPS test, RBAC entity test)
     // WHY: MeetingCreate JS crash on QA — reload page before retry to clear crashed state
     await this.click(this.addButton(), 'Add button');
-    // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-    // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-    const { retries, wait } = this.retryConfig;
-    let formOpened = false;
-    for (let i = 0; i < retries; i++) {
-      try {
-        await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-        formOpened = true;
-        break;
-      } catch {
-        logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-        // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-        // makes sense on the standalone meetings list page — reloading an
-        // embedded panel (e.g. a lead's detail page) would close the panel
-        // and lose all context, since this method doesn't know how to reopen it.
-        if (/\/sales\/meetings\/list/.test(this.page.url())) {
-          await this.reloadPage();
-          await this.waitForListReady();
-        } else {
-          await this.page.waitForTimeout(1000);
-        }
-        await this.click(this.addButton(), 'Add button retry');
-      }
-    }
-    if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+    await this.waitForAddFormOpen();
     logger.success('Meeting add form opened');
   }
 
@@ -693,6 +735,25 @@ export class MeetingsPage extends BasePage {
     logger.success('Add Meeting form opened from entity detail panel');
   }
 
+  // Save the title-only form opened from an entity's detail panel and STAY on the parent: unlike saveMeeting()
+  // it does not click the post-save popup (which navigates to the meeting's own page). Returns the created
+  // meeting's id, from the POST /v1/meetings answer; fails by name when that id is not captured. Additive:
+  // used by CompaniesPage.addMeetingFromPanel(); every existing caller keeps its own method.
+  async saveMeetingFromEntityPanel(): Promise<number> {
+    logger.info('Saving meeting from entity detail panel');
+    const idPromise = this.captureIdFromResponse();
+    await this.click(this.addMeetingSaveButton(), 'save meeting (from entity panel)');
+    await this.assertNoFormErrors('meeting create form (from entity panel)');
+    const id = await idPromise;
+    if (!id) {
+      throw new Error(
+        'Meeting ID not captured after save from the entity panel — cannot proceed (save likely failed silently)'
+      );
+    }
+    logger.success(`Meeting saved from entity panel (ID: ${id})`);
+    return id;
+  }
+
   async fillMeetingForm(
     data: MeetingData,
     createdBy = 'Admin',
@@ -725,10 +786,25 @@ export class MeetingsPage extends BasePage {
 
     // Creator is auto-added — optionally add another invitee
     if (addInvitee) {
+      // B6: pick the first option that is not already a chip, and require the pick to add one chip. Trace
+      // 2026-11-17: the creator is a chip already, and for a restricted creator the FIRST option is the creator
+      // themself, so the old "click the first option" added nobody (a vacuous step the old code never noticed).
+      const inviteeChips = this.inviteesContainer().locator('.is-invalid__multi-value');
+      const chipNames = (await inviteeChips.allTextContents()).map((t) => t.trim()).filter(Boolean);
+      const chipsBefore = chipNames.length;
       await this.inviteesControl().click();
       await this.inviteesFirstOption().waitFor({ state: 'visible', timeout: 10000 });
-      await this.page.waitForTimeout(300);
-      await this.inviteesFirstOption().click();
+      let candidates = this.page.locator('.is-invalid__menu-list .is-invalid__option');
+      for (const name of chipNames) {
+        candidates = candidates.filter({ hasNotText: name });
+      }
+      await candidates.first().click({ timeout: config.timeouts.expect });
+      await this.withSessionExpiryRecovery(() =>
+        expect(inviteeChips, 'Meeting form: an invitee chip should be added by the pick').toHaveCount(
+          chipsBefore + 1,
+          { timeout: config.timeouts.expect }
+        )
+      );
       logger.info(`Invitee added by ${createdBy}`);
       // WHY: confirmed live (2026-09-08) — Invitees is a multi-select
       // (`is-invalid__menu-list--is-multi`) whose menu/backdrop can persist
@@ -767,38 +843,35 @@ export class MeetingsPage extends BasePage {
 
   async saveMeeting(): Promise<number | null> {
     logger.info('Saving meeting');
-    const idPromise = this.captureIdFromResponse();
-    await this.addMeetingSaveButton().click();
-    await this.assertNoFormErrors('meeting create form');
-    const id = await idPromise;
-    await this.page.waitForTimeout(1500);
-
-    // WHY: After save a popup appears with span.link-primary containing meeting ID
-    // WHY: Confirmed live (2026-07-06/07) — this popup is a toast that can
-    // auto-dismiss on its own. The waitFor() above only confirms it was
-    // visible at that instant; a bare click() with no timeout has no bound
-    // of its own, so if the toast vanished in the gap between waitFor and
-    // click, the click hung until the WHOLE TEST's timeout fired instead of
-    // being caught by this try/catch's already-correct fallback design.
-    // Give both clicks an explicit bound so a vanished toast fails fast and
-    // falls through to the existing safe fallback, as originally intended.
+    // B6 (ADR 0017 save confirmation): the create's own answer (POST /v1/meetings), armed before the click, fails
+    // by name with status/code/message when it is missing or not 2xx. Before, only a toast checked once after
+    // 1.5 s (assertNoFormErrors) caught a refused create, which a fast-vanishing toast could miss (CR9 failed once
+    // under 4-worker load: no throw on the 422 / 01503001 answer). The id is read from that same response.
+    let response;
     try {
-      await this.meetingIdPopup().waitFor({ state: 'visible', timeout: 5000 });
-      await this.meetingIdPopup().click({ timeout: 5000 });
-      await this.page.waitForTimeout(1000);
-      logger.success('Clicked meeting popup');
-    } catch {
-      try {
-        await this.meetingIdPopupFallback().waitFor({ state: 'visible', timeout: 3000 });
-        await this.meetingIdPopupFallback().click({ timeout: 3000 });
-        await this.page.waitForTimeout(1000);
-        logger.success('Clicked meeting popup (fallback)');
-      } catch {
-        logger.warn('Meeting popup not found — navigating to meetings list');
-        await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
-        await this.waitForListReady();
-      }
+      response = await this.saveAndAwait(() => this.addMeetingSaveButton().click(), {
+        method: 'POST',
+        urlRe: /^\/v1\/meetings\/?$/,
+        description: 'Meeting create (POST /v1/meetings)',
+      });
+    } catch (error) {
+      // client-side validation sends no request: surface the form's own errors first
+      await this.assertNoFormErrors('meeting create form');
+      throw error;
     }
+    await this.assertNoFormErrors('meeting create form', response);
+    const body = (await response.json().catch(() => ({}))) as { id?: number };
+    const id = body?.id ?? null;
+    if (id) logger.info(`Captured meeting ID: ${id}`);
+    // B6: the form must close. The post-save toast popup is no longer clicked: its click only navigated to the
+    // meeting (or fell back to the list after 1.5 s + 1 s pauses), and no caller depends on that: every one
+    // re-navigates by the id returned here (searchMeetingById, assertMeetingInList, goTo...DetailsById) or
+    // verifies through the API. Callers go ID-first.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), 'The Add Meeting form should close after Save').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
     return id;
   }
 
@@ -847,7 +920,15 @@ export class MeetingsPage extends BasePage {
     maxAttempts = 3,
     saveAction: () => Promise<number | null> = () => this.saveMeeting()
   ): Promise<number | null> {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // B6 (owner decision 2026-11-17): a bounded poll on the real condition (the save is accepted) instead of a
+    // fixed 3 s sleep between attempts. ONLY the confirmed 422 / errorCode 01503001 answer is retried (ADR 0014);
+    // any other failure leaves the poll at once and is rethrown unretried. Refused creates are not double-submits
+    // (ADR 0017): the 422 means nothing was created.
+    let attempt = 0;
+    let id: number | null = null;
+    let fatal: unknown = null;
+    await expect(async () => {
+      attempt++;
       const lagResponsePromise = this.armResponseWaitWithRecovery(
         (res) =>
           res.url().includes('/v1/meetings') &&
@@ -861,23 +942,23 @@ export class MeetingsPage extends BasePage {
           return body?.errorCode === '01503001';
         })
         .catch(() => false);
-
       try {
-        return await saveAction();
+        id = await saveAction();
+        fatal = null;
       } catch (error) {
         const isKnownPropagationLag = await lagResponsePromise;
         if (isKnownPropagationLag && attempt < maxAttempts) {
           logger.warn(
             `Meeting save hit the confirmed entity-summary permission-propagation lag ` +
-              `(attempt ${attempt}/${maxAttempts}) — waiting and retrying the same save`
+              `(attempt ${attempt}/${maxAttempts}) — retrying the same save`
           );
-          await this.page.waitForTimeout(3000);
-          continue;
+          throw error;
         }
-        throw error;
+        fatal = error;
       }
-    }
-    return null;
+    }).toPass({ intervals: [1000, 2000, 3000], timeout: maxAttempts * 20000 });
+    if (fatal) throw fatal;
+    return id;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -886,13 +967,18 @@ export class MeetingsPage extends BasePage {
 
   async searchMeetingInList(title: string): Promise<void> {
     logger.info(`Searching for meeting by name: "${title}"`);
-    const nameVisible = await this.nameFilterInput()
-      .isVisible()
-      .catch(() => false);
-    if (nameVisible) {
-      await this.nameFilterInput().fill(title);
-      await this.page.waitForTimeout(1000);
-    }
+    // B6: the filter input must be there (a missing input used to skip the search silently) and the name
+    // filter's own answer (POST /v1/meetings/search) is awaited instead of a 1 s pause
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.nameFilterInput(), 'Meeting list: the name filter should be visible').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await this.saveAndAwait(() => this.nameFilterInput().fill(title), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/search\/?$/,
+      description: 'Meeting list name filter (POST /v1/meetings/search)',
+    });
   }
 
   async openMeetingFromList(title: string): Promise<void> {
@@ -902,7 +988,12 @@ export class MeetingsPage extends BasePage {
       timeout: config.timeouts.navigation,
     });
     await this.meetingTitleInList(title).click();
-    await this.page.waitForTimeout(800);
+    // B6: the detail panel opening is the signal (replaces an 800 ms pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.meetingDetailTitle(), 'The meeting detail panel should open').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Meeting "${title}" opened`);
   }
 
@@ -935,11 +1026,17 @@ export class MeetingsPage extends BasePage {
     logger.success('Edit form opened');
   }
 
+  // B6 (staging trace 2026-11-17: Mark as Conducted is POST /v1/meetings/{id}/conduct -> 200, Cancel is
+  // POST /v1/meetings/{id}/cancel -> 200): each action's own answer is armed before the click and awaited,
+  // replacing 1 s pauses; callers assert the resulting status on the detail.
   async markAsConducted(): Promise<void> {
     logger.info('Marking meeting as Conducted via ellipsis menu');
     await this.openEllipsisMenu();
-    await this.markConductedOption().click();
-    await this.page.waitForTimeout(1000);
+    await this.saveAndAwait(() => this.markConductedOption().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/\d+\/conduct\/?$/,
+      description: 'Meeting mark conducted (POST /v1/meetings/{id}/conduct)',
+    });
     logger.success('Meeting marked as Conducted');
   }
 
@@ -947,16 +1044,18 @@ export class MeetingsPage extends BasePage {
     logger.info('Cancelling meeting via ellipsis menu');
     await this.openEllipsisMenu();
     await this.cancelMeetingOption().click();
-    await this.page.waitForTimeout(500);
-    // WHY: Confirm cancellation popup
-    const confirmVisible = await this.confirmButton()
-      .isVisible()
-      .catch(() => false);
-    if (confirmVisible) {
-      await this.confirmButton().click();
-      logger.info('Confirmed cancellation popup');
-    }
-    await this.page.waitForTimeout(1000);
+    // WHY: Confirm cancellation popup. B6: it must appear (it used to be an instant isVisible() after a 500 ms
+    // pause, so a missing popup meant the cancel was silently never confirmed)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.confirmButton(), 'Cancel meeting: the confirmation popup should appear').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await this.saveAndAwait(() => this.confirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/meetings\/\d+\/cancel\/?$/,
+      description: 'Meeting cancel (POST /v1/meetings/{id}/cancel)',
+    });
     logger.success('Meeting cancelled');
   }
 
@@ -1001,17 +1100,122 @@ export class MeetingsPage extends BasePage {
 
   async saveEditedMeeting(): Promise<void> {
     logger.info('Saving edited meeting');
-    await this.editMeetingSaveButton().click();
-    // WHY: Wait for edit modal to close before proceeding
-    await this.editModal()
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    await this.page.waitForTimeout(1000);
+    await this.saveMeetingUpdate(() => this.editMeetingSaveButton().click(), 'Meeting update');
     logger.success('Meeting edit saved');
   }
 
-  async rescheduleMeeting(title: string): Promise<void> {
+  // B6 (ADR 0017 save confirmation; staging trace 2026-11-17: edit and reschedule are both PUT /v1/meetings/{id}
+  // -> 200): the update's own answer is armed before the click and awaited, then the modal must close. It used to
+  // be a click, a swallowed `.catch(() => {})` on the modal closing and a 1 s pause, so a refused or never-sent
+  // save passed.
+  private async saveMeetingUpdate(click: () => Promise<void>, description: string): Promise<void> {
+    await this.saveAndAwait(click, {
+      method: ['PUT', 'PATCH'],
+      urlRe: /^\/v1\/meetings\/\d+\/?$/,
+      description: `${description} (PUT /v1/meetings/{id})`,
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.editModal(), `${description}: the edit modal should close after Save`).toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
+  // The edit form has ONE date and a From and a To time, and Save sends date + each time. The times are shown in
+  // the browser's zone but saved in the meeting's zone, so when the two differ (CI is UTC, the meeting is Asia/Calcutta)
+  // an evening From can show a To on the next day; with one date that To is before the From and the API answers 422
+  // "cannot end before it starts". Reproduced on staging with TZ=UTC (PUT from 2026-11-27T18:15Z, to 2026-11-26T20:15Z,
+  // form showed 11:45 pm -> 1:45 am); the same test passes with the machine in IST. When the shown To is not after the
+  // From, both are set again like Add does, with the factory's 2 h duration that never crosses midnight.
+  private async ensureEndAfterStart(): Promise<MeetingTimeConfig | null> {
+    const fromText = await this.fromTimeInput().inputValue();
+    const toText = await this.toTimeInput().inputValue();
+    const fromMinutes = MeetingsPage.minutesOfDay(fromText);
+    const toMinutes = MeetingsPage.minutesOfDay(toText);
+    if (toMinutes > fromMinutes) return null;
+    const timeConfig = generateTimeConfig();
+    logger.info(`Reschedule form shows From ${fromText} and To ${toText} (To not after From); setting a 2 h slot`);
+    await this.fillTimePicker(timeConfig, 'from');
+    await this.fillTimePicker(timeConfig, 'to');
+    const newFrom = MeetingsPage.minutesOfDay(await this.fromTimeInput().inputValue());
+    const newTo = MeetingsPage.minutesOfDay(await this.toTimeInput().inputValue());
+    if (newTo <= newFrom) {
+      throw new Error(
+        `Reschedule: the To time is still not after the From time (From ${await this.fromTimeInput().inputValue()}, To ${await this.toTimeInput().inputValue()})`
+      );
+    }
+    return timeConfig;
+  }
+
+  private static minutesOfDay(text: string): number {
+    const m = /^\s*(\d{1,2}):(\d{2})\s*(am|pm)\s*$/i.exec(text);
+    if (!m) throw new Error(`Unexpected time text in the meeting form: "${text}"`);
+    return ((Number(m[1]) % 12) + (m[3].toLowerCase() === 'pm' ? 12 : 0)) * 60 + Number(m[2]);
+  }
+
+  // The server's own record (GET /v1/meetings/{id}) for from/to and the zone they are saved in; the form shows them in
+  // the browser's zone, so it cannot be used to compare dates. The detail panel does not re-request a meeting it
+  // already loaded, so its GET cannot be waited for twice (first try: no response in 30 s).
+  async readMeetingTimes(meetingId: number): Promise<MeetingTimes> {
+    const api = await MeetingApi.forPage(this.page);
+    try {
+      const body = await api.getMeeting(meetingId);
+      if (!body.from || !body.to || !body.timezone?.name) {
+        throw new Error(`Meeting ${meetingId} details lack from/to/timezone: ${JSON.stringify(body).slice(0, 300)}`);
+      }
+      return { fromMs: Date.parse(body.from), toMs: Date.parse(body.to), timeZone: body.timezone.name };
+    } finally {
+      await api.dispose();
+    }
+  }
+
+  private static zonedParts(ms: number, timeZone: string): { date: string; minutes: number } {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(new Date(ms))
+        .map((part) => [part.type, part.value])
+    );
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
+  }
+
+  // After a reschedule: the server holds the picked date (in the meeting's own zone), To is after From, and the
+  // duration is the old one (the app kept it) or exactly 2 h at the clock time ensureEndAfterStart set.
+  async assertMeetingRescheduled(meetingId: number | null, outcome: RescheduleOutcome): Promise<void> {
+    if (!meetingId) throw new Error('Reschedule check: no meeting id was captured, so the new date cannot be read back');
+    const after = await this.readMeetingTimes(meetingId);
+    const d = outcome.pickedDate;
+    const pickedDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const from = MeetingsPage.zonedParts(after.fromMs, after.timeZone);
+    const to = MeetingsPage.zonedParts(after.toMs, after.timeZone);
+    const context = `meeting ${meetingId}: from ${new Date(after.fromMs).toISOString()}, to ${new Date(after.toMs).toISOString()} (${after.timeZone}: ${from.date} ${from.minutes} min -> ${to.date} ${to.minutes} min)`;
+    if (from.date !== pickedDate) throw new Error(`Reschedule: expected the new date ${pickedDate}, saved ${context}`);
+    if (after.toMs <= after.fromMs) throw new Error(`Reschedule: To is not after From, saved ${context}`);
+    if (outcome.slot) {
+      const hour24 = (outcome.slot.fromHour % 12) + (outcome.slot.amPmFrom === 'pm' ? 12 : 0);
+      const expectedFrom = hour24 * 60 + outcome.slot.fromMinute;
+      if (from.minutes !== expectedFrom || after.toMs - after.fromMs !== 2 * 60 * 60 * 1000) {
+        throw new Error(`Reschedule: expected a 2 h slot starting at minute ${expectedFrom} of the day, saved ${context}`);
+      }
+    } else if (after.toMs - after.fromMs !== outcome.before.toMs - outcome.before.fromMs) {
+      throw new Error(
+        `Reschedule: the duration changed from ${(outcome.before.toMs - outcome.before.fromMs) / 60000} min, saved ${context}`
+      );
+    }
+    logger.success(`Meeting ${meetingId} rescheduled to ${pickedDate}, ${context}`);
+  }
+
+  async rescheduleMeeting(title: string, meetingId: number | null): Promise<RescheduleOutcome> {
     logger.info(`Rescheduling meeting: "${title}"`);
+    if (!meetingId) throw new Error(`Cannot reschedule "${title}": no meeting id was captured at create`);
+    const before = await this.readMeetingTimes(meetingId);
     const found = await this.retryFindMeetingInList(title);
     if (!found) throw new Error(`Cannot reschedule: meeting "${title}" not found`);
     await this.openMeetingFromList(title);
@@ -1051,13 +1255,11 @@ export class MeetingsPage extends BasePage {
     await dayCell.click();
     logger.success(`Reschedule date selected: ${d.toDateString()}`);
 
-    await this.editMeetingSaveButton().click();
-    // WHY: Wait for edit modal to close — prevents next action failing
-    await this.editModal()
-      .waitFor({ state: 'hidden', timeout: config.timeouts.navigation })
-      .catch(() => {});
-    await this.page.waitForTimeout(500);
+    const slot = await this.ensureEndAfterStart();
+
+    await this.saveMeetingUpdate(() => this.editMeetingSaveButton().click(), 'Meeting reschedule');
     logger.success(`Meeting "${title}" rescheduled`);
+    return { pickedDate: d, slot, before };
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1092,7 +1294,7 @@ export class MeetingsPage extends BasePage {
     }
     const currentUrl = this.page.url();
     if (currentUrl.includes('/sales/meetings/list')) {
-      await this.sortByLatestFirst().catch(() => {});
+      await this.sortByLatestFirst();
       const visibleAfterSort = await this.meetingTitleInList(title)
         .isVisible()
         .catch(() => false);
@@ -1103,7 +1305,7 @@ export class MeetingsPage extends BasePage {
     }
     await this.navigateTo(`${config.appUrl}/sales/meetings/list`);
     await this.waitForListReady();
-    await this.sortByLatestFirst().catch(() => {});
+    await this.sortByLatestFirst();
     const found = await this.retryFindMeetingInList(title);
     if (!found) throw new Error(`Meeting "${title}" was not found in the list after retries`);
     logger.success(`Meeting "${title}" confirmed in list`);
@@ -1165,8 +1367,9 @@ export class MeetingsPage extends BasePage {
       return;
     }
     // Fallback: name-based search when ID not available
+    // B6: searchMeetingInList() returns once the filter's answer arrived: the positive control for the absence
     await this.searchMeetingInList(title);
-    await this.page.waitForTimeout(1500);
+    await this.waitForListReady();
     const visible = await this.meetingTitleInList(title)
       .isVisible()
       .catch(() => false);
@@ -1222,7 +1425,12 @@ export class MeetingsPage extends BasePage {
       ).toBeVisible({ timeout: config.timeouts.navigation })
     );
     await this.click(tab, 'Other Details tab');
-    await this.page.waitForTimeout(500);
+    // B6: the tab being active is the signal (replaces a 500 ms pause)
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, '"Other Details" tab should be active after the click').toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
+    );
 
     await this.assertCustomFieldOnDetail(
       MEETING_CUSTOM_FIELD_NAMES.textField,
@@ -1282,31 +1490,7 @@ export class MeetingsPage extends BasePage {
     return this.withSessionExpiryRetry(async () => {
       logger.info(`Creating meeting: "${data.title}" as ${createdBy}`);
       await this.click(this.addButton(), 'Add button');
-      // WHY: Route through config.meetingRetry (more retries, longer wait) instead
-      // of a hardcoded 3 attempts — calendar/form data loads slower for meetings.
-      const { retries, wait } = this.retryConfig;
-      let formOpened = false;
-      for (let i = 0; i < retries; i++) {
-        try {
-          await this.titleInput().waitFor({ state: 'visible', timeout: wait });
-          formOpened = true;
-          break;
-        } catch {
-          logger.warn(`Meeting form did not open on attempt ${i + 1}/${retries} — retrying`);
-          // WHY: Reload-based recovery (for a known MeetingCreate JS crash) only
-          // makes sense on the standalone meetings list page — reloading an
-          // embedded panel (e.g. a lead's detail page) would close the panel
-          // and lose all context, since this method doesn't know how to reopen it.
-          if (/\/sales\/meetings\/list/.test(this.page.url())) {
-            await this.reloadPage();
-            await this.waitForListReady();
-          } else {
-            await this.page.waitForTimeout(1000);
-          }
-          await this.click(this.addButton(), 'Add button retry');
-        }
-      }
-      if (!formOpened) throw new Error(`Meeting form did not open after ${retries} attempts`);
+      await this.waitForAddFormOpen();
       await this.fillMeetingForm(data, createdBy, addInvitee, skipRelatedTo);
       // WHY: Re-verify title immediately before save — fillRelatedTo/medium/location/
       // description can all trigger React re-renders that reset the title controlled
@@ -1320,7 +1504,12 @@ export class MeetingsPage extends BasePage {
         );
         await this.titleInput().click();
         await this.titleInput().fill(data.title);
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(this.titleInput(), 'Meeting form: the title should hold the refilled value').toHaveValue(
+            data.title,
+            { timeout: config.timeouts.expect }
+          )
+        );
       }
       // WHY (2026-09-07, PROD Build #4): route through the entity-summary-
       // lag-tolerant save here too — this method previously called
@@ -1381,56 +1570,96 @@ export class MeetingsPage extends BasePage {
 
   // Same dropdown sequence as fillRelatedTo() (entity type, "Search ...", related-to
   // input), then picks the named record: the option whose text equals the full name.
-  // Where to look, in order (sandbox run 39601551444, meetings.rbac:187): (1) the list
-  // the dropdown shows on opening, which held the just-created contact; (2) a
-  // first-word search; (3) a last-word search. Typing the full two-word name returned
-  // 0 results from POST /v1/search/contact/associated-with-entity, so it is not
-  // tried. Related To is search-only (results carry id and name, there is no way to
-  // enter an id), so the option is matched by its text. No other fallback: when
-  // nothing matches it throws with every term tried and its result count.
-  private async selectRelatedRecord(entityType: string, name: string): Promise<void> {
+  // Where to look, in order: (1) the list the dropdown shows on opening (sandbox run 39601551444, meetings.rbac:187:
+  // it held the just-created contact); (2) a search for the name's FIRST word, polled on the real lookup request
+  // (sandbox 44683950030, meetings.rbac:189 retry: "Ward Gislason" gave 0 results for the list, "Ward" and
+  // "Gislason", a just-created contact the search index had not caught up with). Each poll attempt clears the
+  // box, types the word, awaits the answer of THAT lookup (`GET /v1/search/<entity>/lookup`) and then the option;
+  // count-bounded (`config.searchRetry`), no pause: the answer wait is the pacing. The Lead lookup queries
+  // `firstName:<text>` and the Contact, Deal and Company searches `name:<text>` (see isRelatedToSearch), so the first word is the one that can match, and the records this is called with are
+  // run-owned with a unique first word (a common name such as "Ron" is slow across all staging contacts). The full
+  // two-word name returns 0 results, so it is never typed. Related To is search-only (results carry id and name),
+  // so the option is matched by its text. No other fallback: a miss throws with every lookup the page sent.
+  private async selectRelatedRecord(
+    entityType: string,
+    name: string,
+    match: 'exact' | 'contains' = 'exact'
+  ): Promise<void> {
     logger.info(`Relating ${entityType} "${name}"`);
-    await this.entitiesDropdown().click();
-    await this.page
-      .locator('.is-invalid__option')
-      .filter({ hasText: entityType })
-      .first()
-      .click();
-    const searchPlaceholder = this.page.getByText('Search ...').last();
-    await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
-    await searchPlaceholder.click();
-
-    const exactName = new RegExp(`^\\s*${this.escapeRegExp(name)}\\s*$`);
-    const option = this.relationOptions().filter({ hasText: exactName }).first();
-    const words = name.trim().split(/\s+/);
-    const firstWord = words[0];
-    const lastWord = words[words.length - 1];
-    const tried: string[] = [];
-
-    const lookup = async (path: string, term: string | null): Promise<boolean> => {
-      if (term !== null) await this.relatedToInput().fill(term);
-      const found = await option.waitFor({ state: 'visible', timeout: 8000 }).then(
-        () => true,
-        () => false
-      );
-      const results = await this.relationOptions().count();
-      tried.push(`${path}${term !== null ? ` "${term}"` : ''}: ${results} result(s)`);
-      if (found) logger.info(`Related ${entityType} "${name}" found via ${path}`);
-      return found;
-    };
-
-    let found = await lookup('opening list', null);
-    if (!found) found = await lookup('first-word search', firstWord);
-    if (!found && lastWord !== firstWord) found = await lookup('last-word search', lastWord);
-    if (!found) {
-      throw new Error(
-        `Related To ${entityType}: no option with the exact text "${name}". Tried: ${tried.join('; ')}`
-      );
+    // An Add form opened from a record's panel (meetings.spec:327, a deal panel) already relates that record and the
+    // records it links, and the entity's search excludes them (trace 2026-11-23: POST .../company/associated-with-entity
+    // with `idToExclude:[<the deal's own company>]` answered 200 with no match for it). The deal there is created with
+    // this account's run-owned company, so that company is already listed and cannot be picked a second time.
+    const alreadyListed = this.editModal().getByText(
+      new RegExp(match === 'exact' ? `^\\s*${this.escapeRegExp(name)}\\s*$` : this.escapeRegExp(name))
+    );
+    if (await alreadyListed.first().isVisible()) {
+      logger.success(`Related ${entityType}: "${name}" (already on the form)`);
+      return;
     }
+    // armed before the first click so the opening list's own request is counted too
+    const isLookup = (r: Request): boolean => MeetingsPage.isRelatedToSearch(r, entityType);
+    const lookupWatch = this.watchRequests(isLookup, (r) => {
+      const u = new URL(r.url());
+      return `${r.method()} ${u.pathname} q="${(u.searchParams.get('q') ?? '').slice(0, 40)}"`;
+    });
+    // 'contains' is for run-owned records, whose unique stamp makes a substring match safe (a Lead option may carry more than its name)
+    const exactName = new RegExp(match === 'exact' ? `^\\s*${this.escapeRegExp(name)}\\s*$` : this.escapeRegExp(name));
+    const option = this.relationOptions().filter({ hasText: exactName }).first();
+    const firstWord = name.trim().split(/\s+/)[0];
+    let via = 'opening list';
+    try {
+      await this.selectRelatedToEntityType(entityType);
+      const searchPlaceholder = this.page.getByText('Search ...').last();
+      await searchPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
+      await searchPlaceholder.click();
+
+      // Verification switch: RELATED_TO_FORCE_SEARCH=1 skips the opening-list match so the typed search runs on every
+      // pick (the opening list holds a page of 10, so a run-owned record only needs the typed search once newer records
+      // exist, which a short local run never reaches). Off by default; CI never sets it.
+      const inOpeningList =
+        process.env.RELATED_TO_FORCE_SEARCH === '1'
+          ? false
+          : await option.waitFor({ state: 'visible', timeout: 8000 }).then(
+              () => true,
+              () => false
+            );
+      if (!inOpeningList) {
+        via = `search "${firstWord}"`;
+        try {
+          await this.withSessionExpiryRecovery(() =>
+            this.retryAttempts(config.searchRetry[config.env as keyof typeof config.searchRetry].retries, `Related To ${entityType} search for "${firstWord}"`, async () => {
+              await this.relatedToInput().fill('');
+              const answered = this.armResponseWaitWithRecovery(
+                (res) => isLookup(res.request()) && MeetingsPage.relatedToQueryHas(res.request(), firstWord),
+                `Related To lookup for "${firstWord}"`,
+                config.timeouts.expect
+              );
+              answered.catch(() => undefined);
+              await this.relatedToInput().fill(firstWord);
+              const response = await answered;
+              if (!response.ok()) {
+                throw new Error(`lookup answered: ${await this.describeMatchedResponse(response)}`);
+              }
+              await expect(option, `Related To ${entityType}: the search should list "${name}"`).toBeVisible({
+                timeout: config.timeouts.expect,
+              });
+            })
+          );
+        } catch (error) {
+          throw new Error(
+            `Related To ${entityType}: no option with the exact text "${name}" (opening list: ${await this.relationOptions().count()} result(s)). ${String(error)}\n  Lookups seen: ${lookupWatch.describe()}`
+          );
+        }
+      }
+    } finally {
+      lookupWatch.stop();
+    }
+    logger.info(`Related ${entityType} "${name}" found via ${via}`);
     await option.click();
     await this.relatedToInput().press('Enter');
     await this.ensureReactSelectMenuClosed(`Related To ${entityType}`);
-    logger.success(`Related ${entityType}: "${name}" (${tried[tried.length - 1]})`);
+    logger.success(`Related ${entityType}: "${name}" (${via})`);
   }
 
   async updateMeeting(

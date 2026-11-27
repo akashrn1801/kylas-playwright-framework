@@ -329,14 +329,13 @@ export class ProductsAndServicesPage extends BasePage {
   // it rather than guessing a different trigger.
   private async performSearch(value: string): Promise<void> {
     await this.fill(this.searchInput(), value, 'search input');
-    await Promise.all([
-      this.armResponseWaitWithRecovery(
-        (r) => /\/v1\/products\/search/.test(r.url()) && r.request().method() === 'POST',
-        'performSearch: search POST',
-        15000
-      ).catch(() => null),
-      this.searchIcon().click({ timeout: 15000 }),
-    ]);
+    // B6: the search's own answer is required (was swallowed: a failed or missing search looked like "no results")
+    await this.saveAndAwait(() => this.searchIcon().click({ timeout: 15000 }), {
+      method: 'POST',
+      urlRe: /^\/v1\/products\/search\/?$/,
+      description: 'performSearch: POST /v1/products/search',
+      timeout: 15000,
+    });
   }
 
   // WHY this reuses the shared, already-hardened BasePage.waitForEntityListPage()

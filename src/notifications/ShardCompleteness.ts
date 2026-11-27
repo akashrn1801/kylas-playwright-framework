@@ -25,6 +25,10 @@ export interface ShardCompleteness {
   // but is not a full-suite result. Jenkins adds this text to the file; the email and
   // history mark the run partial from it. Absent for every other run.
   scoped?: string;
+  // WHY (2026-11-24): set when the run is incomplete because a job every test job needs did not succeed ("renew-session:failure",
+  // written by verify-shard-completeness.sh from the job result) or, enriched by NotificationService from renew-session-failed.json,
+  // "renew-session: <the cause in words>". The incomplete-run banner then names it instead of "crashed, hung or cancelled".
+  cause?: string;
 }
 
 export function getShardCompletenessPath(env: string): string {
@@ -34,7 +38,7 @@ export function getShardCompletenessPath(env: string): string {
 export function parseShardCompleteness(raw: string): ShardCompleteness | null {
   try {
     const parsed = JSON.parse(raw) as Partial<ShardCompleteness>;
-    const { expected, reported, scoped } = parsed;
+    const { expected, reported, scoped, cause } = parsed;
     if (
       typeof expected !== 'number' ||
       typeof reported !== 'number' ||
@@ -45,7 +49,12 @@ export function parseShardCompleteness(raw: string): ShardCompleteness | null {
     ) {
       return null;
     }
-    return { expected, reported, ...(typeof scoped === 'string' && scoped !== '' ? { scoped } : {}) };
+    return {
+      expected,
+      reported,
+      ...(typeof scoped === 'string' && scoped !== '' ? { scoped } : {}),
+      ...(typeof cause === 'string' && cause !== '' ? { cause } : {}),
+    };
   } catch {
     return null;
   }

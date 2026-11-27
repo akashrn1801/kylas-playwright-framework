@@ -3,9 +3,9 @@
 > **Purpose:** Resolved code bugs in page objects and shared `BasePage` helpers: navigation readiness, dropdown picks, locators, ID capture, CI-found timing fixes.
 > **Read when:** writing or debugging a wait/locator/dropdown interaction, or a failure looks like "click did nothing", "element not found", "timeout".
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 4a85ad7
+> **Last verified:** 2026-11-26 @ bfc345c
 
-Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-24). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
+Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) and [watch-items.md](./watch-items.md) (KI-21, KI-23, KI-24 moved there 2026-11-26). Reusable rules: [../PATTERNS.md](../PATTERNS.md). Session/429 recovery: [session-expiry-and-auth.md](./session-expiry-and-auth.md), [rate-limits-and-error-pages.md](./rate-limits-and-error-pages.md).
 
 ### Navigation drift across 6 modules — 2026-07-27
 - **Symptom:** Generic element-not-found timeouts long after a list/detail page "loaded".
@@ -164,3 +164,14 @@ Open items: [../KNOWN_ISSUES_ACTIVE.md](../KNOWN_ISSUES_ACTIVE.md) (KI-20…KI-2
 
 ### KI-44 detail (moved from the active file) — `captureCompanyIdFromResponse()` bare match
 - the first 200/201 POST whose URL contains the substring `companies` anywhere (path or query string) outside `/reports/`, during the clone save window, is taken as the clone POST and its `id` (or `data.id`) is returned. Its only caller is `cloneCompany()` (`:1171`); a null id throws "Cloned company ID not captured after save" (fails loudly), but a wrong id would be returned as the clone's id and the next step opens that record by ID. The Deals analogue was confirmed live to match an unrelated `/v4/reports/deals` analytics POST (that one `/reports/` exclusion covers). From the code, no other matching POST is known: `GET /v1/companies/lookup`, the `has-duplicates` GETs and `/v1/search/company` (singular) do not match a POST predicate or the substring. The sibling `captureCompanyCreateOutcome()` (`:776-784`) already uses `/\/v1\/companies\/?(?:\?|$)/`.
+
+### Lead Save click race, Notes panel 400, react-select open — 2026-11-02
+- **Symptom:** `call-logs.spec:721` failed twice on sandbox staging (`locator.click` 15 s on `button.save-button`, "element is not enabled" then "detached") although the lead was created (id 173514). `leads.rbac:411` flaked: `GET /notes/relation?...&size=10` (no `targetEntityOwnerId`) answered 400 on panel open and after reload; the test polled 120 s. `leads.spec` "add a pipeline" never saw a menu option (test removed earlier).
+- **Root cause:** (1) the 4 s "create request seen" window started before the click, so a loaded runner used it up; the retry clicked the disabled, in-flight button. Reproduced on staging with 6x CPU throttling (old code: warning after 5.8 s, lead 173559 created, second click hung). (2) the Notes panel opened before the lead details loaded. Reproduced on QA and staging by delaying `GET /v1/leads/{id}` by 6 s: 400, never refetched. (3) the pipeline menu case was not reproduced; hardened only.
+- **Fix:** window starts after the click, disabled/gone Save counts as submitted; Notes click waits for the lead name in the header and throws with the request if the list still fails; `BasePage.openReactSelectAndWaitForOptions()`. Proof (local, 3 repeats at 2 workers, QA and staging): call-logs:721, page size/sort/Kanban, contact create; lead note tests re-run after the header-signal change: 12 passed on each (3 of them the expected-failure KI-52 test). With `GET /v1/leads/{id}` delayed 6 s the first notes request is now 200 with the owner id. Full spec files were left to sandbox CI.
+- **Revert:** see ADR 0014.
+
+### KI-20 / KI-22 closed — `openUserShareTypeSearch()` catch backoff, `saveEditedContact()` confirmation (2026-11-18)
+- **KI-20:** the `waitForTimeout(500)` after the `Escape` keypress in `openUserShareTypeSearch()` is gone from `CompaniesPage`, `LeadsPage`, `ContactsPage` and `DealsPage` (B6 per module; verified by grep: no `waitForTimeout` call remains in those four files).
+- **KI-22:** `ContactsPage.saveEditedContact()` awaits `PUT /v1/contacts/{id}` through `saveAndAwait` (ADR 0016, B3) and, since 2026-11-18, passes that response to `assertNoFormErrors('contact edit form', saved)`.
+- **Not verified here:** the Contacts full spec was not run after the 2026-11-18 change (planned for the sandbox run).

@@ -3,7 +3,7 @@
 > **Purpose:** Index of ADRs and the template to write a new one.
 > **Read when:** You made or reversed a design decision (Definition of Done step 4).
 > **Size budget:** 8k chars (hard cap 60k)
-> **Last verified:** 2026-10-29 @ 9e60850
+> **Last verified:** 2026-11-26 @ bfc345c
 
 One page per decision, max about 3.5k chars. Never edit an accepted ADR's decision silently: add a new ADR and mark the old one Superseded.
 
@@ -21,6 +21,13 @@ One page per decision, max about 3.5k chars. Never edit an accepted ADR's decisi
 | [0010](0010-incomplete-run-handling-and-bounded-install.md) | Incomplete runs never green; bounded browser install | Accepted (partly run) |
 | [0011](0011-react-select-menu-closed-contract.md) | A react-select pick must end with its menu verified closed | Accepted (partly run) |
 | [0012](0012-jenkins-sharded-runs-locks-and-guard.md) | Jenkins shards like its GitHub twin; account locks and a collision guard | Accepted (partly run) |
+| [0013](0013-api-set-up-opt-in-cleanup-and-generic-share-rules.md) | API set-up for Lead tests, opt-in cleanup fixtures, generic share-rule support | Accepted |
+| [0014](0014-definitive-errors-and-ready-signals.md) | Definitive errors are not retried; interact only on a real ready signal | Accepted |
+| [0015](0015-skip-passed-formfields-on-rerun-and-rerun-shard.md) | A re-run skips formFields jobs that already passed (sandbox first); rerun shard design | Proposed (step 1 in sandbox.yml, not yet run) |
+| [0016](0016-first-attempt-hardening-framework-wide.md) | First-attempt hardening: measure first, real ready signals, no hidden retries | Proposed (B0 done; batches add decisions) |
+| [0017](0017-check-before-retry-no-double-submit.md) | Check before retry, never double-submit (B4) | Accepted |
+| [0018](0018-outcome-donut-png.md) | The outcome donut is a PNG made in-process, no dependency | Accepted |
+| [0019](0019-capacity-gate-before-any-test.md) | Capacity gate: read the limits once before any test, stop at 0 records left | Accepted |
 
 ## Template
 ```

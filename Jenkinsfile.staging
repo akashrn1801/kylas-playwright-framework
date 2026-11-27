@@ -18,6 +18,9 @@ pipeline {
   }
 
   environment {
+    // The build's own start, for the email's "Run" line (src/notifications/RunTimes.ts); the email is built inside this build, so
+    // its end is the moment the email is generated.
+    RUN_STARTED_AT_MS = "${currentBuild.startTimeInMillis}"
     CI                          = 'true'
     STAGING_APP_URL             = credentials('STAGING_APP_URL')
     STAGING_API_BASE_URL        = credentials('STAGING_API_BASE_URL')
