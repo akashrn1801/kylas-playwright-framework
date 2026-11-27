@@ -3,28 +3,29 @@
 > **Purpose:** Human onboarding for the Kylas Sales CRM end-to-end test framework: what it is, how to set it up, run it and where everything else is documented.
 > **Read when:** You are new to the repo, setting up a machine, or looking for the right deeper document.
 > **Size budget:** 40k chars (hard cap 60k)
-> **Last verified:** 2026-10-27 @ a9f5372
+> **Last verified:** 2026-11-26 @ bfc345c
 
 End-to-end tests for **Kylas Sales CRM**, built on Playwright and TypeScript (strict). Tests are split into functional UI specs and RBAC specs (role-based access: a full-access admin user and a limited "restricted" user exercise the same feature). CI runs on GitHub Actions and Jenkins across a branch ladder, with a custom email summary and run-history ledger.
 
 Current suite size (generated; do not edit by hand):
 
 <!-- GEN:suite-totals:START -->
-**932 tests** in **35 spec files** (UI 509 · RBAC 423)
+**965 tests** in **37 spec files** (UI 531 · RBAC 434)
 <!-- GEN:suite-totals:END -->
 
 <!-- GEN:module-table:START -->
 | Module | UI tests | RBAC tests | Total |
 |---|---:|---:|---:|
+| Billing | 6 | 2 | 8 |
 | Call-logs | 30 | 28 | 58 |
 | Companies | 23 | 26 | 49 |
 | Companies — Field Limits | 39 | 31 | 70 |
 | Contacts | 23 | 23 | 46 |
 | Contacts — Field Limits | 42 | 28 | 70 |
 | Dashboard | 34 | 29 | 63 |
-| Deals | 26 | 30 | 56 |
+| Deals | 27 | 30 | 57 |
 | Deals — Field Limits | 39 | 31 | 70 |
-| Leads | 25 | 31 | 56 |
+| Leads | 40 | 40 | 80 |
 | Leads — Field Limits | 42 | 25 | 67 |
 | Meetings | 19 | 12 | 31 |
 | ProductsAndServices | 9 | 7 | 16 |
@@ -33,13 +34,13 @@ Current suite size (generated; do not edit by hand):
 | Reports | 38 | 27 | 65 |
 | Tasks | 18 | 16 | 34 |
 | Tasks — Field Limits | 39 | 31 | 70 |
-| **Total** | **509** | **423** | **932** |
+| **Total** | **531** | **434** | **965** |
 <!-- GEN:module-table:END -->
 
 Tag counts:
 
 <!-- GEN:tag-counts:START -->
-`@smoke` 51 · `@regression` 898 · `@prodSafe` 55
+`@smoke` 53 · `@regression` 931 · `@prodSafe` 62
 <!-- GEN:tag-counts:END -->
 
 Module names in the table come from `deriveModuleFromFile()` (the same labels the notification email uses). Login's spec lives in `tests/ui/dashboard/` and is counted under Dashboard.
@@ -93,6 +94,8 @@ ENV=qa npx playwright test --grep "admin should create a new lead" --project=chr
 ENV=staging npx playwright test --grep "@smoke" --project=chromium --workers=2
 npx playwright test --project=chromium --list           # discovery only, no app access
 ```
+
+**Test data is kept.** Tests never delete anything as set-up or tidy-up (as always; only the tests of a delete feature delete); every record a Leads test creates is logged as `CREATED <type> <id> — <url>` and shown as a `created …` annotation in the report. To delete the registered records after each test, set `CLEANUP_TEST_DATA=1` (only IDs a test registered; Leads fixtures `leadCleanup`/`shareRuleCleanup`, ADR 0013), e.g. `CLEANUP_TEST_DATA=1 ENV=qa npx playwright test tests/ui/leads/leads.spec.ts --project=chromium`.
 
 Locally four browser projects are configured; pass `--project=chromium` to pick one. CI uses chromium only. Reports: `npm run report:playwright`, `npm run report:allure`; `npm run clean` removes outputs.
 

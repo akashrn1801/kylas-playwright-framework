@@ -439,12 +439,34 @@ const BACKGROUND_WIDGET_CONNECTION_ERROR_PATTERN =
 // surfaces as unexpected.
 const DELIBERATE_VALIDATION_ERROR_SIGNATURE = /"field":"cfParagraphText"/i;
 
+// WHY (2026-11-25, build #239: 93 of the 120 "unexpected" background errors): the record page asks `GET /v1/deals/<id>/pipeline` / `GET /v1/leads/<id>/pipeline`, and a record that has no pipeline answers with
+// the app's own business error: HTTP 404 code 01001007 "There is no pipeline attached with the deal. Attach a pipeline and try again." (deals)
+// or HTTP 400 code 002056 "...with the lead..." (leads). Evidence from that run's misc-errors.json: 93 responses for 51 distinct records
+// (the app asks about each record up to 3 times), raised in 50 different tests (mostly the form-field-limit specs), every one of those tests ended Passed, and the response text states the condition
+// itself rather than an outage. Matched on BOTH the url and that exact message, so any other failure of the same endpoint (a 5xx, a timeout, a
+// different 4xx) still counts as unexpected. Revisit if a test ever asserts on a record's pipeline.
+const NO_PIPELINE_URL = /\/v1\/(?:leads|deals)\/\d+\/pipeline(?:\?|$)/i;
+const NO_PIPELINE_BODY = /There is no pipeline attached with the (?:lead|deal)/i;
+
+// WHY (2026-11-25, build #239/#240): every one of the 690 "429" events of build #239 was a POST to Sentry's ingest endpoint (the app's own browser
+// telemetry), none a Kylas API call, yet the email counted them as "429 API" and read as rate limiting of our tests. Third-party hosts the app talks to
+// are listed here so a 429 from them is counted apart (noise), and "429 API" means the Kylas API. A host that is not listed counts as the Kylas API
+// (the cautious reading: a real throttling is never hidden as noise).
+export const THIRD_PARTY_HOST_PATTERNS: RegExp[] = [/(^|\.)sentry\.io$/i, /(^|\.)viasocket\.com$/i, /(^|\.)headwayapp\.co$/i, /(^|\.)userpilot\.(io|com)$/i, /(^|\.)zohocdn\.com$/i, /(^|\.)zoho\.com$/i, /(^|\.)cloudflareinsights\.com$/i, /(^|\.)googleapis\.com$/i, /(^|\.)gstatic\.com$/i, /(^|\.)google-analytics\.com$/i, /(^|\.)googletagmanager\.com$/i, /(^|\.)intercom\.io$/i];
+
+/** true when the first URL in `text` (e.g. "POST https://o1.ingest.us.sentry.io/api/1/envelope") points at a known third-party host. */
+export function isThirdPartyUrl(text: string | undefined): boolean {
+  const host = /https?:\/\/([^/\s:?#]+)/i.exec(text ?? '')?.[1];
+  return !!host && THIRD_PARTY_HOST_PATTERNS.some((p) => p.test(host));
+}
+
 export function isExpectedBackgroundNoise(
   message: string,
   url?: string,
   responseBody?: string
 ): boolean {
   if (responseBody && DELIBERATE_VALIDATION_ERROR_SIGNATURE.test(responseBody)) return true;
+  if (url && responseBody && NO_PIPELINE_URL.test(url) && NO_PIPELINE_BODY.test(responseBody)) return true;
   if (!url) return false;
   const isCompletedHttpError = /HTTP [45]\d\d/.test(message);
   const isConnectionFailure = BACKGROUND_WIDGET_CONNECTION_ERROR_PATTERN.test(message);

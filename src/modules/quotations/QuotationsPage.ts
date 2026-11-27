@@ -1,4 +1,5 @@
 import { Page, Locator, Response, expect } from '@playwright/test';
+import { QuotationApi } from '../../utils/quotationApi';
 import { BasePage } from '../../core/BasePage';
 import {
   QuotationData,
@@ -216,8 +217,24 @@ export class QuotationsPage extends BasePage {
     this.page.locator('.rrt-middle-container').filter({ hasText: /uh.?oh/i });
 
   // ─── 3. Constructor ──────────────────────────────────────────────────────────
+  // Failed deal/product loads seen on this page, kept only as evidence for
+  // waitForProductControlEnabled()'s failure message (the product control
+  // stays disabled when the deal or product data never loads).
+  private readonly failedDealProductLoads: string[] = [];
+  private saveToastShown = false;
+  // ADR 0017 (B4): the last save request's own answer (2xx), the evidence assertSuccessToast() falls back on
+  private lastSaveAnsweredOk = false;
+
   constructor(page: Page) {
     super(page);
+    page.on('response', (res: Response) => {
+      if (res.status() < 400) return;
+      const path = new URL(res.url()).pathname;
+      if (/^\/v1\/(deals|products)\b/.test(path)) {
+        this.failedDealProductLoads.push(`${res.request().method()} ${path} -> HTTP ${res.status()}`);
+        if (this.failedDealProductLoads.length > 5) this.failedDealProductLoads.shift();
+      }
+    });
   }
 
   // ─── 4. Private helpers ──────────────────────────────────────────────────────
@@ -252,7 +269,7 @@ export class QuotationsPage extends BasePage {
   // never requested (cached) or times out resolves quietly and the render
   // wait below decides, exactly as before. A session expiry rethrows, like
   // every other armResponseWaitWithRecovery() caller.
-  private armLayoutLoadCheck(kind: 'list' | 'create'): Promise<void> {
+  private armLayoutLoadCheck(kind: 'list' | 'create' | 'edit'): Promise<void> {
     const layoutUrl = new RegExp(`/v1/quotations/layout/${kind}(?:\\?|$)`);
     const check = this.armResponseWaitWithRecovery(
       (res) => layoutUrl.test(res.url()) && res.request().method() === 'GET',
@@ -325,15 +342,8 @@ export class QuotationsPage extends BasePage {
     logger.info(`Selecting date: ${date.toDateString()}`);
     await input.click();
     await this.calendarForwardButton().waitFor({ state: 'visible', timeout: 10000 });
-    // WHY kept (2026-08-09, Task 1b date-time-picker audit): same react-dates
-    // SingleDatePicker widget as DealsPage.selectDateInPicker(), which keeps
-    // an identical wait here with a stated (though unverified-this-session)
-    // Firefox animation-settling reason — this project runs a real `firefox`
-    // project locally, not just chromium. Left in place for consistency
-    // rather than guessing it's safe to remove without live Firefox
-    // verification; only the loop-internal duplicate below (which had no
-    // such justification) was removed.
-    await this.page.waitForTimeout(400);
+    // B6: no animation pause: the day cell wait below is the real signal (it is also what Firefox needs), and
+    // click() waits for the cell to be stable.
     const dayCell = this.calendarDayByLabel(dayLabel);
     let found = false;
     let attempts = 0;
@@ -361,51 +371,30 @@ export class QuotationsPage extends BasePage {
     logger.success(`Date selected: ${date.toDateString()}`);
   }
 
-  // WHY the bounded whole-sequence retry (2026-07-22): identical bug class to
-  // CompaniesPage.clickAddCompany / DealsPage.cloneDeal /
-  // ContactsPage.selectFromContactDropdown (which this method was originally
-  // copied from, per its own prior comment) — every click here was a raw,
-  // UNBOUNDED Playwright `.click()` (no `timeout`, no global `actionTimeout`
-  // configured anywhere), so a "click registers, handler not yet attached"
-  // React race could hang until the outer test timeout. Fixed with the exact
-  // same proven shape: bound every click to config.timeouts.expect and retry
-  // the whole open->fill->select sequence (not just the click) up to 3
-  // times, since a half-opened/half-filtered menu from a failed attempt
-  // isn't a valid state to resume from. Flat across all environments —
-  // client-side rendering race, not a server/data-volume-dependent
-  // operation, same reasoning as the sibling fixes (no per-env branching).
+  // B6: ONE bounded pass (the old 3-attempt loop re-ran open/fill/pick after an Escape + 500 ms on any
+  // error). The 2026-07-22 root cause (raw unbounded clicks hanging a whole test) stays fixed: every step is
+  // bounded and fails by name. Opening goes through openReactSelectAndWaitForOptions() (ADR 0014 section 4):
+  // it re-clicks only when NO menu is open (the React "click lands, nothing happens" race) and only waits
+  // when a menu is open but empty, so an open menu is never toggled shut. The pick is applied when the menu
+  // closes.
   private async selectFromIsInvalidControl(
     control: Locator,
     input: Locator,
     value: string
   ): Promise<void> {
-    const menu = this.page.locator('.is-invalid__menu');
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await control.click({ timeout: config.timeouts.expect });
-        await input.fill(value);
-        const option = menu.locator('.is-invalid__option').filter({ hasText: value }).first();
-        await option.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await option.click({ timeout: config.timeouts.expect });
-        await this.ensureReactSelectMenuClosed(`is-invalid control "${value}"`, control);
-        logger.debug(`Selected "${value}" from is-invalid control`);
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `selectFromIsInvalidControl("${value}") attempt ${attempt}/${maxAttempts} failed: ` +
-            `${String(error)} — closing any stuck menu and retrying`
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `selectFromIsInvalidControl: failed to select "${value}" after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    const description = `is-invalid control "${value}"`;
+    await this.openReactSelectAndWaitForOptions(control, description);
+    await input.fill(value, { timeout: config.timeouts.expect });
+    const option = this.page
+      .locator('.is-invalid__menu .is-invalid__option')
+      .filter({ hasText: value })
+      .first();
+    await expect(option, `${description}: option should be listed`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await option.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed(description, control);
+    logger.debug(`Selected "${value}" from is-invalid control`);
   }
 
   // WHY the post-click Escape check was added (2026-08-11) — HARDENED BASED
@@ -592,36 +581,29 @@ export class QuotationsPage extends BasePage {
   }
 
   private async retryFindInList(searchValue: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${retries} for: ${searchValue}`);
-      await this.goToQuotationsList();
-      await this.performSearch(searchValue);
-      // WHY: The list rows show system-assigned quotation numbers (e.g. QUO-00012),
-      // not the custom RES.../ADM... prefix from the factory. The fulltext search
-      // API searches across all fields including summary — so search returns rows
-      // but hasText(searchValue) never matches the row text.
-      // Strategy: after search fires, check if ANY non-empty rows exist.
-      // If search returned results, the quotation exists. If no rows, it doesn't.
-      await this.page.waitForTimeout(1000);
-      const allRows = this.page.locator('.rt-tr-group');
-      // WHY: batched allTextContents() (2026-07-17) — confirmed live via direct
-      // timing comparison that N individual `.nth(i).innerText()` calls (one
-      // CDP round-trip each) cost ~778ms for 10 rows, vs ~23ms for a single
-      // allTextContents() call returning the same data — a 33.8x difference,
-      // identical result. Same "filter out empty filler rows" logic, just
-      // computed from one round-trip instead of N.
-      const rowTexts = await allRows.allTextContents().catch(() => []);
-      // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
-      const nonEmptyCount = rowTexts.filter((t) => t.trim().length > 0).length;
-      if (nonEmptyCount > 0) {
-        logger.success(`Search returned ${nonEmptyCount} row(s) for: ${searchValue}`);
-        return true;
-      }
-      logger.info(`No rows found on attempt ${attempt} — waiting before retry`);
-      if (attempt < retries) await this.page.waitForTimeout(wait);
-    }
-    return false;
+    const { retries } = this.retryConfig;
+    // B6: the real condition is "the search returned a non-empty row" after a fresh list + search (a new
+    // quotation can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the
+    // fixed retries x (results wait + pause) took, instead of fixed pauses (1 s before the rows, `wait`
+    // between attempts). Same shape as ContactsPage.retryFindContact().
+    // WHY: The list rows show system-assigned quotation numbers (e.g. QUO-00012),
+    // not the custom RES.../ADM... prefix from the factory. The fulltext search
+    // API searches across all fields including summary — so search returns rows
+    // but hasText(searchValue) never matches the row text.
+    // Strategy: after search fires, check if ANY non-empty rows exist.
+    // If search returned results, the quotation exists. If no rows, it doesn't.
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Quotation search "${searchValue}" search`, async () => {
+        logger.info(`Searching quotation: ${searchValue}`);
+        await this.goToQuotationsList();
+        await this.performSearch(searchValue);
+        // Filter out empty placeholder rows (Kylas renders empty .rt-tr-group rows as fillers)
+        const nonEmptyRow = this.page.locator('.rt-tr-group').filter({ hasText: /\S/ }).first();
+        await expect(nonEmptyRow, `No rows found for: ${searchValue}`).toBeVisible({ timeout: 5000 });
+      })
+    );
+    logger.success(`Search returned row(s) for: ${searchValue}`);
+    return true;
   }
 
   private async performSearch(value: string): Promise<void> {
@@ -651,24 +633,32 @@ export class QuotationsPage extends BasePage {
           if (backdrop) backdrop.remove();
           document.body.classList.remove('modal-open');
         `);
-        await this.page.waitForTimeout(300);
+        // B6: the forced close is done when the modal has lost d-block (no pause)
+        await this.page.locator('#editEntityModal.d-block').waitFor({ state: 'hidden', timeout: 5000 });
       }
     }
 
     // WHY: .portal-element tooltips float above the list and block clicks — move mouse away.
     await this.page.mouse.move(0, 0);
-    await this.page.waitForTimeout(300);
 
     await this.fill(this.searchInput(), value, 'search input');
 
-    await Promise.all([
-      this.armResponseWaitWithRecovery(
-        (r) => r.url().includes('search') && r.request().method() === 'POST' && r.status() === 200,
-        'performSearch: search POST',
-        15000
-      ).catch(() => null),
-      this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 }),
-    ]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/quotations/search?...` -> 200. The old wait
+    // matched ANY POST whose URL contains "search", which includes `POST /v1/rules/search/action-logs`
+    // (fires on every page, and first), and ended in `.catch(() => null)`. Now the exact request, armed
+    // before the click, failing by name with its status/code when it is not 2xx.
+    const searchAnswered = this.armResponseWaitWithRecovery(
+      (r) =>
+        r.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(r.url()).pathname),
+      'performSearch: POST /v1/quotations/search',
+      15000
+    );
+    searchAnswered.catch(() => undefined);
+    await this.page.locator('svg:has(#clip-Ic_Search)').first().click({ timeout: 15000 });
+    const searchResponse = await searchAnswered;
+    if (!searchResponse.ok()) {
+      throw new Error(`performSearch: ${await this.describeMatchedResponse(searchResponse)}`);
+    }
 
     try {
       await this.page
@@ -685,10 +675,44 @@ export class QuotationsPage extends BasePage {
     return parseFloat(raw.replace(/[^0-9.-]/g, '')) || 0;
   }
 
+  // ADR 0016 (B3, plan section 11 #5/#6): the deal picker's two real signals, from a QA trace:
+  // typing fires GET /v1/search/deal/lookup (the options come from it) and picking a deal fires
+  // GET /v1/deals/{id} (the product row enables only after it and the products load). Both waits are
+  // armed before the action that triggers them, checked for status, and name the request.
+  private armDealLookup(term: string): Promise<Response> {
+    return this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.request().method() === 'GET' &&
+        new URL(res.url()).pathname === '/v1/search/deal/lookup' &&
+        (new URL(res.url()).searchParams.get('q') ?? '').includes(term),
+      `Deal lookup for "${term}" (GET /v1/search/deal/lookup)`,
+      30000
+    );
+  }
+
+  private armDealDetailLoad(): Promise<Response> {
+    return this.armResponseWaitWithRecovery(
+      (res: Response) =>
+        res.request().method() === 'GET' && /^\/v1\/deals\/\d+\/?$/.test(new URL(res.url()).pathname),
+      'Selected deal details (GET /v1/deals/{id})',
+      30000
+    );
+  }
+
+  private async assertAnswered(response: Promise<Response>, description: string): Promise<void> {
+    const answered = await response;
+    if (!answered.ok()) {
+      throw new Error(`${description}: ${await this.describeMatchedResponse(answered)}`);
+    }
+  }
+
   private async selectRandomDeal(): Promise<string> {
     logger.info('Selecting random deal');
     await this.dealControl().click();
+    const lookup = this.armDealLookup('dea');
+    lookup.catch(() => undefined);
     await this.dealInput().fill('dea');
+    await this.assertAnswered(lookup, 'Deal lookup for "dea"');
     await this.page
       .locator('.is-invalid__option')
       .first()
@@ -697,7 +721,10 @@ export class QuotationsPage extends BasePage {
     const count = await options.count();
     const randomIndex = Math.floor(Math.random() * Math.min(count, 10));
     const dealName = (await options.nth(randomIndex).innerText()).trim();
+    const dealLoaded = this.armDealDetailLoad();
+    dealLoaded.catch(() => undefined);
     await options.nth(randomIndex).click();
+    await this.assertAnswered(dealLoaded, 'Selected deal details');
     await this.ensureReactSelectMenuClosed('random deal');
     logger.success(`Selected deal: ${dealName}`);
     return dealName;
@@ -706,20 +733,44 @@ export class QuotationsPage extends BasePage {
   private async selectSpecificDeal(dealName: string): Promise<string> {
     logger.info(`Selecting specific deal: ${dealName}`);
     await this.dealControl().click();
+    const lookup = this.armDealLookup(dealName);
+    lookup.catch(() => undefined);
     await this.dealInput().fill(dealName);
+    await this.assertAnswered(lookup, `Deal lookup for "${dealName}"`);
     await this.page
       .locator('.is-invalid__option')
       .filter({ hasText: dealName })
       .first()
       .waitFor({ state: 'visible', timeout: 10000 });
+    const dealLoaded = this.armDealDetailLoad();
+    dealLoaded.catch(() => undefined);
     await this.page.locator('.is-invalid__option').filter({ hasText: dealName }).first().click();
+    await this.assertAnswered(dealLoaded, `Selected deal "${dealName}" details`);
     await this.ensureReactSelectMenuClosed(`deal "${dealName}"`);
     logger.success(`Selected specific deal: ${dealName}`);
     return dealName;
   }
 
+  // B6 (staging probe 2026-11-17, 3 deals): after the deal's GET is answered the product section is empty
+  // (price "" and no "add product" button) and fills about 250-350 ms later: the price gets its value and
+  // `span.add-new-product` appears in the same instant. The button is the render signal that replaces the
+  // old 2 s pause. A deal WITHOUT products was not observed (all three had one), so if the button never
+  // appears within the budget this does not fail: it logs and falls through to the existing price check
+  // below, which adds a product manually (the old behaviour after its pause).
+  private async waitForProductSectionRendered(): Promise<void> {
+    const rendered = await this.addNewProductButton()
+      .waitFor({ state: 'visible', timeout: config.timeouts.expect })
+      .then(() => true)
+      .catch(() => false);
+    if (!rendered) {
+      logger.warn(
+        `Quotation form: no "add product" button ${config.timeouts.expect}ms after the deal was selected — continuing with the price check (deal without products?)`
+      );
+    }
+  }
+
   private async ensureProductRowExists(): Promise<void> {
-    await this.page.waitForTimeout(2000);
+    await this.waitForProductSectionRendered();
     // Check if first product row has a selected product (price > 0 means product is selected)
     const firstPrice = this.page.locator('[id="1_03_input_products.0.price"]');
     const priceValue = await firstPrice.inputValue().catch(() => '0');
@@ -755,7 +806,9 @@ export class QuotationsPage extends BasePage {
   // flows those methods serve (a deal is always selected there), so this
   // avoids any ripple risk to the 15+ existing Quotation tests using them.
   private async ensureProductRowExistsFromPanel(): Promise<void> {
-    await this.page.waitForTimeout(2000);
+    // B6: the panel modal's product section renders like the standalone form's (see
+    // waitForProductSectionRendered); bounded, then the existing "not interactable, skipping" handling below
+    await this.waitForProductSectionRendered();
     const firstPrice = this.page.locator('[id="1_03_input_products.0.price"]');
     const firstPriceValue = await firstPrice.inputValue().catch(() => '');
     if (firstPriceValue && firstPriceValue !== '0') {
@@ -790,7 +843,6 @@ export class QuotationsPage extends BasePage {
       if (!dealValue) {
         logger.info('Product row disabled with no deal linked — selecting a deal to enable it');
         await this.selectRandomDeal();
-        await this.page.waitForTimeout(1000);
         // WHY re-check price first, same as ensureProductRowExists(): the
         // selected deal may auto-populate its own product line item, same
         // behavior already confirmed for the standalone create form.
@@ -826,6 +878,28 @@ export class QuotationsPage extends BasePage {
     logger.success('Product row filled in panel-opened quotation modal');
   }
 
+  // WHY (2026-11-03, quotations.rbac "should not be able to find quotation owned by admin"): the
+  // product control is disabled until a deal is linked and its data (GET /v1/deals/{id}, products)
+  // has loaded. A click on a disabled control is never actionable, so the unbounded click retried
+  // ~700 times until the 480 s test timeout. Wait for the real enable signal and fail at once,
+  // saying whether a deal is selected and which deal/product loads failed.
+  private async waitForProductControlEnabled(control: Locator, row: number): Promise<void> {
+    try {
+      await this.withSessionExpiryRecovery(() =>
+        expect(control).not.toHaveClass(/is-invalid__control--is-disabled/, {
+          timeout: config.timeouts.expect,
+        })
+      );
+    } catch {
+      const deal = await this.selectedDealName().innerText({ timeout: 1000 }).catch(() => '');
+      throw new Error(
+        `Product row ${row} stayed disabled for ${config.timeouts.expect}ms after the deal step — ` +
+          `selected deal: ${deal ? `"${deal.trim()}"` : 'NONE (deal not linked)'}; ` +
+          `failed deal/product loads: ${this.failedDealProductLoads.join('; ') || 'none seen'}`
+      );
+    }
+  }
+
   private async addRandomProduct(row: number): Promise<void> {
     const productInput = this.productIdInput(row);
     const productVisible = await productInput.isVisible().catch(() => false);
@@ -836,7 +910,8 @@ export class QuotationsPage extends BasePage {
     const productControl = productInput.locator(
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
-    await productControl.click();
+    await this.waitForProductControlEnabled(productControl, row);
+    await productControl.click({ timeout: config.timeouts.expect });
     await productInput.fill('BHK'); // WHY: App requires min 3 chars; 'BHK' matches known QA products
 
     // WHY: When modal is open, scope options to #editEntityModal to avoid picking
@@ -869,18 +944,25 @@ export class QuotationsPage extends BasePage {
     // GET /v1/quotations/{id} may complete before waitForQuotationDetailPage registers
     // its own listener, causing it to miss the response and return null after 15s.
     // Registering here guarantees we capture the response regardless of timing.
+    // B6 (Q14 suspect): the answer used to be awaited with `.catch(() => null)` and only a 404 threw, so a
+    // missing GET, a 401 or a 5xx went on silently to the next step. Now a missing or non-2xx answer fails
+    // by name with the request's status/code/message.
     const responsePromise = this.armResponseWaitWithRecovery(
       (res) =>
         res.url().match(/\/v1\/quotations\/\d+$/) !== null && res.request().method() === 'GET',
       'goToQuotationDetail: detail GET',
       20000
-    ).catch(() => null);
+    );
+    responsePromise.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/quotations/details/${id}`);
     await this.waitForUrl(/\/quotations\/details\//, 20000);
     await this.page.waitForLoadState('domcontentloaded');
     const response = await responsePromise;
-    if (response?.status() === 404) {
+    if (response.status() === 404) {
       throw new Error('Quotation detail page returned 404 — quotation does not exist');
+    }
+    if (!response.ok()) {
+      throw new Error(`goToQuotationDetail(${id}): ${await this.describeMatchedResponse(response)}`);
     }
     logger.info(`Navigated to quotation detail: ${id}`);
   }
@@ -942,7 +1024,18 @@ export class QuotationsPage extends BasePage {
       this.productIdInput(newRowIndex),
       this.page.locator('.is-invalid__menu .is-invalid__option'),
       name,
-      expectFound
+      expectFound,
+      async (rowControl) => {
+        // WHY: never overwrite a filled row (see waitForEditFormReady()); a stale count must fail loudly
+        const filledValue = await rowControl.locator('[class*="__single-value"]').count();
+        if (filledValue > 0) {
+          const current = await rowControl.locator('[class*="__single-value"]').first().innerText();
+          throw new Error(
+            `addFreshProductByName: product row ${newRowIndex} (products.${newRowIndex}.id) already holds ` +
+              `"${current.trim()}" after Add New (counted ${existingRowCount} rows before) — refusing to overwrite it`
+          );
+        }
+      }
     );
   }
 
@@ -1292,15 +1385,19 @@ export class QuotationsPage extends BasePage {
     const discountInput = this.productDiscountInput(row);
     const taxInput = this.productTaxInput(row);
 
-    if (await discountInput.isVisible()) {
-      await discountInput.clear();
-      await discountInput.fill(String(data.discount));
-    }
-    if (await taxInput.isVisible()) {
-      await taxInput.clear();
-      await taxInput.fill(String(data.tax));
-    }
-    await this.page.waitForTimeout(500);
+    // B6: both fields must be there (they used to be skipped silently when not visible, which left the
+    // grand-total test checking a quotation whose discount/tax was never changed); no pause: the totals
+    // are re-read by assertGrandTotalMath()'s retrying poll.
+    await expect(discountInput, `Product row ${row}: discount input should be visible`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await discountInput.clear();
+    await discountInput.fill(String(data.discount));
+    await expect(taxInput, `Product row ${row}: tax input should be visible`).toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await taxInput.clear();
+    await taxInput.fill(String(data.tax));
   }
 
   // WHY this exists, and why it retries ONLY this one exact signature
@@ -1332,41 +1429,117 @@ export class QuotationsPage extends BasePage {
   // saves are structurally unaffected) and to this exact quotations-create
   // path, never a blanket "retry any failed save."
   private readonly QUOTATION_CREATE_PATH_PATTERN = /\/v1\/quotations\/?(?:\?.*)?$/;
+  private readonly QUOTATION_EDIT_PATH_PATTERN = /^\/v1\/quotations\/\d+\/?$/;
 
   private async attemptQuotationSaveOnceAndClassify(): Promise<
     'done' | 'confirmedTransientServerError'
   > {
-    const responsePromise = this.page
-      .waitForResponse(
-        (res) =>
-          res.request().method() === 'POST' &&
-          this.QUOTATION_CREATE_PATH_PATTERN.test(new URL(res.url()).pathname),
-        { timeout: config.timeouts.navigation }
-      )
-      .catch(() => null);
+    // Method-aware (sandbox 44464192762, shard 4): an edit saves with PUT/PATCH on /v1/quotations/<id>, which the old
+    // POST-only matcher never saw, so every edit waited the full navigation timeout (4 x 120.0 s) and swallowed the miss.
+    // The strict wait matches the create POST or an edit PUT/PATCH; the watcher records every write to /v1/quotations so
+    // a miss says what was (not) sent, whatever the edit's real method turns out to be.
+    const saveWatch = this.watchRequests(
+      (r) => r.method() !== 'GET' && /^\/v1\/quotations(\/|$)/.test(new URL(r.url()).pathname) && !/\/search\/?$/.test(new URL(r.url()).pathname)
+    );
+    const responsePromise = this.armResponseWaitWithRecovery(
+      (res) => {
+        const method = res.request().method();
+        const path = new URL(res.url()).pathname;
+        return (
+          (method === 'POST' && this.QUOTATION_CREATE_PATH_PATTERN.test(path)) ||
+          ((method === 'PUT' || method === 'PATCH') && this.QUOTATION_EDIT_PATH_PATTERN.test(path))
+        );
+      },
+      'quotation save: POST (create) / PUT or PATCH (edit) on /v1/quotations',
+      config.timeouts.navigation
+    );
+    responsePromise.catch(() => undefined);
     // WHY this.click(), not a raw .click() (locator-reviewer finding,
     // 2026-09-07): this refactor centralizes the Save click into a method
     // that can now fire up to twice per save (primary + fallback retry),
     // doubling exposure to the already-documented "click registers but
     // nothing visibly happens" React-timing race (rule 2) — this helper's
     // bounded wait + built-in recovery closes that gap for both attempts.
-    await this.click(this.modalSaveButton(), 'quotation save (attempt)');
-    const response = await responsePromise;
-    if (!response || response.ok()) {
-      // Either a real success, or no matching response was captured at all
-      // (e.g. a client-side validation error that never reached the
-      // network) — either way, this isn't the confirmed transient
-      // signature, so let assertNoFormErrors()/the modal-hidden check below
-      // be the real signal, unmodified.
+    // WHY (2026-11-03, quotations.rbac "edit shared quotation", HARDENING — root cause of that CI
+    // failure not confirmed): the success toast lives only ~2.8 s on QA (measured), while
+    // saveQuotation() spends >= 1.5 s in assertNoFormErrors() plus the modal-hidden wait before the
+    // caller's assertSuccessToast() looks, so a slow runner can miss a toast that did appear.
+    // Record it from the click on; assertSuccessToast() accepts "shown since this save".
+    this.saveToastShown = false;
+    this.lastSaveAnsweredOk = false;
+    void this.successToast()
+      .first()
+      .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
+      .then(
+        () => {
+          this.saveToastShown = true;
+        },
+        () => undefined
+      );
+    let response: Response;
+    try {
+      await this.click(this.modalSaveButton(), 'quotation save (attempt)');
+      response = await responsePromise;
+    } catch (error) {
+      // a client-side validation error never reaches the network: say that, not "no answer"
+      await this.assertNoFormErrors('quotation save form', undefined).catch((formError: Error) => {
+        throw new Error(`${formError.message} (no save request was answered: ${saveWatch.describe()})`);
+      });
+      throw new Error(`${String(error)} — ${saveWatch.sentCount() === 0 ? 'the save request was NEVER SENT' : 'the save request was SENT but got NO ANSWER'}: ${saveWatch.describe()}`);
+    } finally {
+      saveWatch.stop();
+    }
+    this.lastSaveAnsweredOk = response.ok();
+    if (response.ok()) {
       return 'done';
     }
-    return response.status() === 500 ? 'confirmedTransientServerError' : 'done';
+    return response.status() === 500 && response.request().method() === 'POST' ? 'confirmedTransientServerError' : 'done';
+  }
+
+  // ADR 0017 (B4): check first, then decide. An HTTP 500 on the create does not prove nothing was
+  // written, and a retry would then double-create. Ask the search API for the quotation number for a
+  // bounded time (the index trails the write): found -> fail by name, no retry. Not found, or no number
+  // to ask about -> retry once as before (a 5xx is retryable under ADR 0014 section 1).
+  private async assertQuotationNotWrittenBeforeRetry(quotationNumber: string): Promise<void> {
+    if (!quotationNumber) {
+      logger.warn('Quotation create answered 500 and the quotation number could not be read — cannot check, retrying once');
+      return;
+    }
+    let ids: number[] = [];
+    try {
+      const api = await QuotationApi.forPage(this.page);
+      try {
+        await expect
+          .poll(async () => (ids = await api.findIdsByNumber(quotationNumber)).length, {
+            timeout: 15000,
+            intervals: [1000, 2000, 3000],
+          })
+          .toBeGreaterThan(0)
+          .catch(() => undefined);
+      } finally {
+        await api.dispose();
+      }
+    } catch (error) {
+      logger.warn(`Quotation existence check unavailable: ${String(error).split('\n')[0]} — retrying once`);
+      return;
+    }
+    if (ids.length > 0) {
+      throw new Error(
+        `Quotation create answered HTTP 500 but quotation ${quotationNumber} exists (id ${ids.join(', ')}), ` +
+          'so it was written; not retrying (a retry would create a duplicate).'
+      );
+    }
+    logger.info(`Quotation ${quotationNumber} not found after the 500 (15 s) — retrying the create once`);
   }
 
   async saveQuotation(): Promise<void> {
     logger.info('Saving quotation');
+    const quotationNumber = await this.quotationNumberInput()
+      .inputValue({ timeout: 2000 })
+      .catch(() => '');
     const primaryOutcome = await this.attemptQuotationSaveOnceAndClassify();
     if (primaryOutcome === 'confirmedTransientServerError') {
+      await this.assertQuotationNotWrittenBeforeRetry(quotationNumber);
       logger.warn(
         'saveQuotation: POST /v1/quotations/ returned HTTP 500 (PROD Build #4, Cluster 2.2 — ' +
           'confirmed live via manual PROD reproduction to be a transient condition, not a ' +
@@ -1443,7 +1616,8 @@ export class QuotationsPage extends BasePage {
   // place to check, right before any field gets filled.
   async fillAndSaveQuotationFromPanel(
     customFields?: QuotationCustomFieldData,
-    checkCustomFieldsAbsent = false
+    checkCustomFieldsAbsent = false,
+    awaitCardRefresh = false
   ): Promise<string> {
     if (checkCustomFieldsAbsent) {
       await this.skipIfCustomFieldsAbsent();
@@ -1470,6 +1644,18 @@ export class QuotationsPage extends BasePage {
       })
       .catch(() => null);
 
+    // Opt-in (CO12): the app refreshes the Quotations card with POST /v1/quotations/search after the create.
+    // Armed before the fill/save steps; awaited after the modal closes so the test continues only once the
+    // card's own refresh is answered.
+    const cardRefresh = awaitCardRefresh
+      ? this.armResponseWaitWithRecovery(
+          (res) => res.request().method() === 'POST' && /^\/v1\/quotations\/search\/?$/.test(new URL(res.url()).pathname),
+          'Quotations card refresh (POST /v1/quotations/search) after the save',
+          30000
+        )
+      : null;
+    cardRefresh?.catch(() => undefined);
+
     await this.fill(this.quotationNumberInput(), quotationNumber, 'quotation number');
     await this.fill(this.summaryInput(), summary, 'summary');
     await this.ensureProductRowExistsFromPanel();
@@ -1478,6 +1664,7 @@ export class QuotationsPage extends BasePage {
     }
 
     await this.saveQuotation();
+    if (cardRefresh) await cardRefresh;
 
     let quotationId = await idPromise;
     // WHY toast-text fallback: the network capture can still miss a genuine
@@ -1578,9 +1765,24 @@ export class QuotationsPage extends BasePage {
     // to the existing classification logic unchanged.
     const maxConnectionResetRetries = 2;
     let connectionResetRetries = 0;
+    const quotationNumber = await this.quotationNumberInput()
+      .inputValue({ timeout: 2000 })
+      .catch(() => '');
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       logger.info(`Saving quotation — attempt ${attempt}/3`);
+      this.saveToastShown = false; // a toast from an earlier save must not satisfy this one
+      this.lastSaveAnsweredOk = false;
+      // the toast lives ~2.8 s, shorter than the response wait below: record it from the click on
+      void this.successToast()
+        .first()
+        .waitFor({ state: 'visible', timeout: 20000 })
+        .then(
+          () => {
+            this.saveToastShown = true;
+          },
+          () => undefined
+        );
       // WHY: Register the response wait BEFORE clicking — same convention as
       // captureQuotationIdFromResponse() elsewhere in this file. Match on
       // parsed pathname (not the raw URL string) so an edit's query string,
@@ -1589,17 +1791,44 @@ export class QuotationsPage extends BasePage {
       // that the real create endpoint is `/v1/quotations/` WITH a trailing
       // slash — the pattern below tolerates one optionally before/after the
       // id segment, otherwise this silently never matches and times out.
+      // Sandbox 44533064234, quotations.rbac:41: this wait swallowed its miss (`.catch(() => null)`) and failed with
+      // "Could not confirm save outcome", which could not say whether the save was sent. The watcher records every write
+      // to /v1/quotations so a miss below names "NEVER SENT" or "SENT but NO ANSWER" and what was sent.
+      const saveWatch = this.watchRequests(
+        (r) =>
+          r.method() !== 'GET' &&
+          /^\/v1\/quotations(\/|$)/.test(new URL(r.url()).pathname) &&
+          !/\/search\/?$/.test(new URL(r.url()).pathname)
+      );
       const responsePromise = this.armResponseWaitWithRecovery(
         (res) =>
           /^\/v1\/quotations\/?(\d+)?\/?$/.test(new URL(res.url()).pathname) &&
           ['POST', 'PATCH', 'PUT'].includes(res.request().method()),
         'saveQuotationHandlingInaccessibleEntities: save POST/PATCH/PUT',
         20000
-      ).catch(() => null);
-      await this.modalSaveButton().click();
-      const response = await responsePromise;
+      );
+      let missedAnswer: unknown = null;
+      const settledResponse = responsePromise.then(
+        (res) => res,
+        (error: unknown) => {
+          missedAnswer = error;
+          return null;
+        }
+      );
+      let response: Response | null;
+      let watchSummary: string;
+      let sentCount: number;
+      try {
+        await this.modalSaveButton().click();
+        response = await settledResponse;
+      } finally {
+        watchSummary = saveWatch.describe();
+        sentCount = saveWatch.sentCount();
+        saveWatch.stop();
+      }
 
       if (response && response.status() < 400) {
+        this.lastSaveAnsweredOk = true;
         logger.success(
           removedEntities.length
             ? `Quotation saved after removing: ${removedEntities.join(', ')}`
@@ -1614,19 +1843,21 @@ export class QuotationsPage extends BasePage {
         // bug in this method and hid a real 422 behind a false "succeeded".
         // Fall back to the same page-state signal assertSuccessToast() uses
         // elsewhere in this file before concluding anything.
-        const success = await this.successToast()
-          .isVisible()
-          .catch(() => false);
-        const url = this.page.url();
-        const onListOrDetail =
-          url.includes('/quotations/list') || url.includes('/quotations/details/');
-        if (success || onListOrDetail) {
-          logger.warn('Save response not captured, but page state confirms success');
+        // ADR 0017 (B4): no URL inference (an in-place modal save never changes the URL). The app's own
+        // success toast, recorded from the click, is the evidence when the response was not captured.
+        if (this.saveToastShown) {
+          logger.warn('Save response not captured, but the success toast was shown after the click');
           return { succeeded: true, removedEntities, lastErrorMessage };
         }
+        // a client-side validation error never reaches the network: report that, not "no answer"
+        await this.assertNoFormErrors('quotation save form', undefined).catch((formError: Error) => {
+          throw new Error(`${formError.message} (no save request was answered: ${watchSummary})`);
+        });
         throw new Error(
-          'Could not confirm save outcome — no matching API response captured and page shows ' +
-            `neither a success toast nor navigation away from the form (still on: ${url})`
+          'Could not confirm save outcome — no matching API response captured within 20 s and no ' +
+            `success toast was shown after the click (still on: ${this.page.url()}) — ` +
+            `${sentCount === 0 ? 'the save request was NEVER SENT' : 'the save request was SENT but got NO ANSWER'}: ` +
+            `${watchSummary}. Wait error: ${String(missedAnswer).split('\n')[0]}`
         );
       }
 
@@ -1639,6 +1870,11 @@ export class QuotationsPage extends BasePage {
       if (this.isTransientConnectionResetError(body)) {
         lastErrorMessage = body?.message || '';
         if (connectionResetRetries < maxConnectionResetRetries) {
+          // ADR 0017 (B4): a create (POST) is checked before it is repeated; an update (PATCH/PUT) is
+          // idempotent and its number exists already, so it is simply repeated
+          if (response.request().method() === 'POST') {
+            await this.assertQuotationNotWrittenBeforeRetry(quotationNumber);
+          }
           connectionResetRetries++;
           logger.warn(
             `Save hit a transient connection reset ("${lastErrorMessage}") — retrying save ` +
@@ -1681,9 +1917,17 @@ export class QuotationsPage extends BasePage {
       if (!isInaccessibleEntityError) {
         // WHY: A genuinely different failure — don't hide it behind this
         // fallback's retry logic, surface it immediately.
+        // WHY (2026-11-03, quotations.spec "change owner during edit"): HTTP 400 "Connection
+        // prematurely closed BEFORE response" is the gateway dropping the hop to the quotation
+        // service (KI-49); the request never reached it. It is an app/infra fault, so it fails at
+        // once and says so, not retried (the retry above covers the "has been closed" wording only).
+        const gatewayDrop = /closed BEFORE response/i.test(rawMessage);
         throw new Error(
-          `Save failed with an unrelated error (not the inaccessible-entity 029003 error): ` +
-            `HTTP ${response.status()} — "${rawMessage}"`
+          gatewayDrop
+            ? `Save not processed — the Kylas gateway dropped the connection (app/infra issue, KI-49): ` +
+                `HTTP ${response.status()} — "${rawMessage}"`
+            : `Save failed with an unrelated error (not the inaccessible-entity 029003 error): ` +
+                `HTTP ${response.status()} — "${rawMessage}"`
         );
       }
 
@@ -1715,7 +1959,8 @@ export class QuotationsPage extends BasePage {
       // actionability timeout. Escape reliably dismisses it without
       // depending on the portal's CSS-in-JS hash class name.
       await this.page.keyboard.press('Escape');
-      await this.page.waitForTimeout(500);
+      // B6: the menu being gone is the signal (no pause)
+      await this.ensureReactSelectMenuClosed('after clearing the inaccessible entity');
     }
 
     // Unreachable — the loop above always returns or throws.
@@ -1758,18 +2003,30 @@ export class QuotationsPage extends BasePage {
 
   // ─── 8. Edit actions ─────────────────────────────────────────────────────────
 
-  async clickEditButton(): Promise<void> {
-    await this.editActionBtn().waitFor({ state: 'visible', timeout: 15000 });
-    await this.editActionBtn().click();
+  // WHY the ready gate (2026-11-16, sandbox run 42064754304, PS15/P&S rbac): the edit drawer opens
+  // at once but its fields and the quotation's product rows render only after GET
+  // /v1/quotations/layout/edit and GET /v1/quotations/<id>. addFreshProductByName() counted rows 17 ms
+  // after the modal appeared, read 0, and overwrote row 0 while the new row 1 stayed empty, so the
+  // form's own "required field" validation blocked Save and no request was sent. Same shape as
+  // openCreateForm(): arm the layout check before the click, fail at once on a 4xx/5xx layout, then
+  // wait for the quotation number to hold its value (set from the loaded quotation).
+  private async waitForEditFormReady(layoutCheck: Promise<void>): Promise<void> {
     await this.modal().waitFor({ state: 'visible', timeout: 15000 });
-    logger.info('Opened edit modal via edit button');
+    await this.waitForRenderOrLayoutFailure(layoutCheck, [this.quotationNumberInput()]);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.quotationNumberInput(),
+        'Quotation edit form did not load the quotation (number input stayed empty)'
+      ).not.toHaveValue('', { timeout: config.timeouts.navigation })
+    );
   }
 
-  async clickEllipsisEdit(quotationNumber: string): Promise<void> {
-    await this.listRowEllipsis(quotationNumber).click();
-    await this.ellipsisMenuItem('Edit').click();
-    await this.modal().waitFor({ state: 'visible', timeout: 15000 });
-    logger.info(`Opened edit modal via ellipsis for: ${quotationNumber}`);
+  async clickEditButton(): Promise<void> {
+    await this.editActionBtn().waitFor({ state: 'visible', timeout: 15000 });
+    const layoutCheck = this.armLayoutLoadCheck('edit');
+    await this.editActionBtn().click();
+    await this.waitForEditFormReady(layoutCheck);
+    logger.info('Opened edit modal via edit button');
   }
 
   async fillEditForm(changes: Partial<QuotationData>): Promise<void> {
@@ -1867,8 +2124,15 @@ export class QuotationsPage extends BasePage {
     // Then check that NO row contains that exact summary text.
     // We do NOT check for zero rows — other quotations always exist in the list.
     // We check that this specific summary is absent.
+    // B6: positive control first: performSearch now throws unless POST /v1/quotations/search answered 2xx
+    // (and the loader is gone), then the absence is asserted with a retrying expect (no 2 s pause).
     await this.performSearch(searchTerm);
-    await this.page.waitForTimeout(2000);
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.page.locator('.rt-tr-group').filter({ hasText: new RegExp(this.escapeRegExp(searchTerm), 'i') }),
+        `Quotation should NOT be visible in list but was found: "${searchTerm}"`
+      ).toHaveCount(0, { timeout: 5000 })
+    );
     const allRows = this.page.locator('.rt-tr-group');
     // WHY: batched allTextContents() — same fix/evidence as retryFindInList()
     // above (33.8x measured speedup, identical result, single round-trip).
@@ -1883,18 +2147,24 @@ export class QuotationsPage extends BasePage {
   }
 
   async assertSuccessToast(): Promise<void> {
+    if (this.saveToastShown) {
+      this.saveToastShown = false;
+      logger.success('Success toast was shown after the save click');
+      return;
+    }
     try {
       await this.successToast().waitFor({ state: 'visible', timeout: 8000 });
       logger.success('Success toast visible');
     } catch {
-      // Toast may have already appeared and auto-dismissed — check if we are on list page
-      // which confirms save was successful
-      const url = this.page.url();
-      if (url.includes('/quotations/list') || url.includes('/quotations/details/')) {
-        logger.warn('Toast not caught in time but navigation confirms save succeeded');
+      // ADR 0017 (B4): the toast may have auto-dismissed; the evidence is then the save request's own 2xx
+      // answer (recorded by the save), not the URL (which an in-place modal save never changes)
+      if (this.lastSaveAnsweredOk) {
+        logger.warn('Toast not caught in time but the save request was answered 2xx');
         return;
       }
-      throw new Error('Save toast not visible and not redirected — save may have failed');
+      throw new Error(
+        `Save toast not seen and no 2xx save answer recorded — save may have failed (page: ${this.page.url()})`
+      );
     }
   }
 
@@ -1980,46 +2250,59 @@ export class QuotationsPage extends BasePage {
     // fill() resolves, but under real system load (concurrent workers/tests)
     // that recompute can lag behind. Poll until the read-back values satisfy
     // the formula instead of asserting on a single snapshot.
-    const maxAttempts = 10;
+    // B6: a retrying poll (the fixed 300 ms pause between 10 reads is gone); same budget as before
+    // (10 attempts), same formula, same error text on exhaustion.
     let last: GrandTotalComponents | null = null;
     let expected = 0;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const subTotal = await this.getNumericValue(this.subTotalInput());
-      const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
-      const additionalTax = await this.getNumericValue(this.additionalTaxInput());
-      const adjustment = await this.getNumericValue(this.adjustmentInput());
-      const grandTotal = await this.getNumericValue(this.grandTotalInput());
+    let lastError: unknown;
+    try {
+      await expect(async () => {
+        const subTotal = await this.getNumericValue(this.subTotalInput());
+        const additionalDiscount = await this.getNumericValue(this.additionalDiscountInput());
+        const additionalTax = await this.getNumericValue(this.additionalTaxInput());
+        const adjustment = await this.getNumericValue(this.adjustmentInput());
+        const grandTotal = await this.getNumericValue(this.grandTotalInput());
 
-      // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
-      const afterDiscount = subTotal * (1 - additionalDiscount / 100);
-      const afterTax = afterDiscount * (1 + additionalTax / 100);
-      expected = afterTax * (1 + adjustment / 100);
-      last = { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
-
-      if (Math.abs(expected - grandTotal) <= tolerance) {
-        logger.success(
-          `Grand total math verified: ${subTotal} × (1-${additionalDiscount}%) × (1+${additionalTax}%) × (1+${adjustment}%) = ${grandTotal}`
-        );
-        return last;
-      }
-      if (attempt < maxAttempts) await this.page.waitForTimeout(300);
+        // Formula: GrandTotal = SubTotal × (1 - disc/100) × (1 + tax/100) × (1 + adj/100)
+        const afterDiscount = subTotal * (1 - additionalDiscount / 100);
+        const afterTax = afterDiscount * (1 + additionalTax / 100);
+        expected = afterTax * (1 + adjustment / 100);
+        last = { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal };
+        if (Math.abs(expected - grandTotal) > tolerance) {
+          throw new Error(`grand total ${grandTotal} != expected ${expected.toFixed(2)}`);
+        }
+      }).toPass({ timeout: 5000, intervals: [100, 200, 300] });
+    } catch (error) {
+      lastError = error;
     }
 
-    const { subTotal, additionalDiscount, additionalTax, adjustment, grandTotal } = last!;
-    throw new Error(
-      `Grand total math failed after ${maxAttempts} attempts. Expected: ${expected.toFixed(2)}, Got: ${grandTotal}. ` +
-        `SubTotal: ${subTotal}, AdditionalDiscount: ${additionalDiscount}%, ` +
-        `AdditionalTax: ${additionalTax}%, Adjustment: ${adjustment}%`
+    if (!last) {
+      throw new Error(`Grand total components could not be read: ${String(lastError)}`);
+    }
+    const read: GrandTotalComponents = last;
+    if (lastError) {
+      throw new Error(
+        `Grand total math failed (polled 5 s). Expected: ${expected.toFixed(2)}, Got: ${read.grandTotal}. ` +
+          `SubTotal: ${read.subTotal}, AdditionalDiscount: ${read.additionalDiscount}%, ` +
+          `AdditionalTax: ${read.additionalTax}%, Adjustment: ${read.adjustment}%`
+      );
+    }
+    logger.success(
+      `Grand total math verified: ${read.subTotal} × (1-${read.additionalDiscount}%) × (1+${read.additionalTax}%) × (1+${read.adjustment}%) = ${read.grandTotal}`
     );
+    return read;
   }
 
   async assertProductRowsVisible(): Promise<number> {
-    await this.page.waitForTimeout(1500);
+    // B6: the rows are polled until at least one renders (no 1.5 s pause); none within the budget fails by name
     const rows = this.page.locator('[id*="input_products"][id*="quantity"]');
+    await expect
+      .poll(() => rows.count(), {
+        timeout: config.timeouts.expect,
+        message: 'No product rows found after deal selection',
+      })
+      .toBeGreaterThan(0);
     const count = await rows.count();
-    if (count === 0) {
-      throw new Error('No product rows found after deal selection');
-    }
     logger.success(`Product rows auto-populated: ${count} rows`);
     return count;
   }
@@ -2037,10 +2320,14 @@ export class QuotationsPage extends BasePage {
       logger.success(`Status confirmed via locator: ${expectedStatus}`);
     } catch {
       // Fallback: check body text in case badge selector doesn't match
-      const detailText = await this.page.locator('body').innerText();
-      if (!detailText.includes(expectedStatus)) {
-        throw new Error(`Expected status "${expectedStatus}" not found on detail page`);
-      }
+      // ADR 0016 (B3, plan section 11 #3): a retrying assertion, not a one-shot innerText snapshot
+      // (the CI failure read the body once, before the detail refetch had rendered the new status).
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page.locator('body'),
+          `Expected status "${expectedStatus}" not found on detail page`
+        ).toContainText(expectedStatus, { timeout: 15000 })
+      );
       logger.success(`Status confirmed via body text: ${expectedStatus}`);
     }
   }
@@ -2054,7 +2341,13 @@ export class QuotationsPage extends BasePage {
     // variable render time under load and can still race under heavier CI
     // load than this was calibrated for. Use an auto-retrying assertion
     // instead — it polls until the real DOM condition is met.
-    await expect(this.page.locator('body')).toContainText(ownerName, { timeout: 15000 });
+    // B6 (Q14 suspect): a raw expect(); wrapped like every other detail-page assertion (rule 3)
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('body'), `Owner "${ownerName}" should be shown on the detail page`).toContainText(
+        ownerName,
+        { timeout: 15000 }
+      )
+    );
     logger.success(`Owner confirmed: ${ownerName}`);
   }
 
@@ -2107,7 +2400,8 @@ export class QuotationsPage extends BasePage {
             document.body.classList.remove('modal-open');
           `);
         }
-        await this.page.waitForTimeout(500);
+        // B6: dismissed = no d-block (no pause)
+        await modal.waitFor({ state: 'hidden', timeout: 5000 });
         logger.info('Edit modal dismissed');
       }
     } catch {
@@ -2305,47 +2599,6 @@ export class QuotationsPage extends BasePage {
     const stats = fs.statSync(filePath || '');
     logger.success(`Downloaded: ${filename} (${stats.size} bytes)`);
     return { filename, size: stats.size };
-  }
-  // ─── Public helpers for T26 ─────────────────────────────────────────────────
-
-  async fillAssociatedCompanyFirstAvailable(): Promise<string> {
-    // WHY: Search with common 3-char prefixes in order until results appear.
-    // Single character returns too many results and may match companies the
-    // restricted user owns — defeating the purpose of the RBAC test.
-    const searchTerms = ['The', 'Pvt', 'Ltd', 'Tech', 'Inf', 'Sol', 'Sys', 'Con', 'Ser', 'Man'];
-
-    await this.companyControl().click();
-
-    for (const term of searchTerms) {
-      await this.companyInput().fill(term);
-      await this.page.waitForTimeout(500);
-
-      const optionCount = await this.page.locator('.is-invalid__option').count();
-      if (optionCount > 0) {
-        const firstName = await this.page.locator('.is-invalid__option').first().innerText();
-        await this.page.locator('.is-invalid__option').first().click();
-        await this.ensureReactSelectMenuClosed(`company search "${term}"`);
-        logger.info(`Linked company via search "${term}": ${firstName.trim()}`);
-        return firstName.trim();
-      }
-      logger.debug(`No company results for "${term}" — trying next`);
-    }
-
-    // Last resort — clear and try empty search (shows all)
-    await this.companyInput().fill('');
-    await this.page.waitForTimeout(800);
-    const fallbackCount = await this.page.locator('.is-invalid__option').count();
-    if (fallbackCount > 0) {
-      const firstName = await this.page.locator('.is-invalid__option').first().innerText();
-      await this.page.locator('.is-invalid__option').first().click();
-      await this.ensureReactSelectMenuClosed('company (empty search)');
-      logger.info(`Linked company via empty search: ${firstName.trim()}`);
-      return firstName.trim();
-    }
-
-    throw new Error(
-      'fillAssociatedCompanyFirstAvailable: no company options found with any search term'
-    );
   }
   async performSearchPublic(value: string): Promise<void> {
     await this.performSearch(value);

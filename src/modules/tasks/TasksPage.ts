@@ -8,6 +8,8 @@ import {
   TASK_CUSTOM_FIELD_NAMES,
   TaskCustomFieldKey,
 } from '@data/factories/taskFactory';
+import { TaskRelationTargets, getTaskRelationTargets } from './TaskRelationTargets';
+
 class InaccessibleRelationError extends Error {}
 
 // WHY: the shape of a task-save error response body — a dynamic API response,
@@ -215,13 +217,16 @@ export class TasksPage extends BasePage {
           // which masked that the primary response-based path was still
           // vulnerable to silently capturing a WRONG id from an unrelated
           // /v1/tasks-containing POST, not just falling through to null).
-          res.url().includes('/v1/tasks') &&
-          !res.url().includes('/reports/') &&
-          res.request().method() === 'POST' &&
-          (res.status() === 200 || res.status() === 201),
+          // ADR 0016 (B3): exactly the create request (POST /v1/tasks), whatever its status: a 4xx/5xx
+          // answer used to match nothing, so the wait ran its full 60 s before falling to the toast.
+          /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
         'captureIdFromResponse (task create)',
         config.timeouts.navigation
       );
+      if (!response.ok()) {
+        logger.warn(`Task create answered ${await this.describeMatchedResponse(response)}`);
+        return await this.captureIdFromToast();
+      }
       const body = await response.json();
       const id = body?.id ?? body?.data?.id ?? null;
       if (id) logger.success(`Captured task ID from POST response: ${id}`);
@@ -258,8 +263,12 @@ export class TasksPage extends BasePage {
       'xpath=ancestor::div[contains(@class,"is-invalid__control")]'
     );
     await control.waitFor({ state: 'visible', timeout: 10000 });
-    await control.click();
-    await this.page.waitForTimeout(300);
+    // WHY this.click() instead of the bare control.click() (2026-11-04, FFRTK6, 2026-11-03 sandbox run): the bare click
+    // had no timeout, so `<div class="app-error something-is-broken">` intercepting the pointer made it retry 657 times
+    // until the 480 s test timeout (and the next test of the file, queued on the form-field lock, died of the same
+    // budget). this.click() is bounded (15 s) and names the error screen.
+    await this.click(control, `${inputId} dropdown`);
+    // B6: no pause: the option wait below is the signal that the menu is open
     const menu = this.page.locator('.is-invalid__menu');
     const option = menu.locator('.is-invalid__option', { hasText: optionText }).first();
     await option.waitFor({ state: 'visible', timeout: 5000 });
@@ -293,43 +302,42 @@ export class TasksPage extends BasePage {
     logger.success(`Selected "${optionText}" for ${inputId}`);
   }
 
+  // B6 (staging trace 2026-11-17: the list search is POST /v1/tasks/search; the old wait matched a GET on any
+  // /v1/tasks path and swallowed its miss): fill the quoted name, press Enter and require the search's own answer.
+  private async searchTaskByName(name: string, description: string): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskSearchInput(), `${description}: the search input should be visible`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    // WHY: Wrap name in double quotes for exact match search —
+    // prevents partial matches and returns only the specific task.
+    // Confirmed from DOM: #fulltext-search with quoted input returns exact results.
+    await this.taskSearchInput().fill(`"${name}"`);
+    // WHY: Press Enter to trigger search — the input does not auto-search on type
+    await this.saveAndAwait(() => this.taskSearchInput().press('Enter'), {
+      method: 'POST',
+      urlRe: /^\/v1\/tasks\/search\/?$/,
+      description: `${description} (POST /v1/tasks/search)`,
+    });
+  }
+
   private async retryFindTask(name: string): Promise<boolean> {
-    const { retries, wait } = this.retryConfig;
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      logger.info(`Looking for task "${name}" — attempt ${attempt}/${retries}`);
-      await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
-      await this.waitForListReady();
-
-      // WHY: Wrap name in double quotes for exact match search —
-      // prevents partial matches and returns only the specific task.
-      // Confirmed from DOM: #fulltext-search with quoted input returns exact results.
-      const searchVisible = await this.taskSearchInput()
-        .isVisible()
-        .catch(() => false);
-      if (searchVisible) {
-        await this.taskSearchInput().fill(`"${name}"`);
-        // WHY: Press Enter to trigger search — the input does not auto-search on type
-        await this.taskSearchInput().press('Enter');
-        // WHY: Wait for the API response after search is triggered
-        await this.armResponseWaitWithRecovery(
-          (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-          'retryFindTask (search GET)',
-          10000
-        ).catch(() => null);
-        await this.page.waitForTimeout(500);
-      }
-
-      const found = await this.taskListItemByName(name)
-        .isVisible()
-        .catch(() => false);
-      if (found) {
-        logger.success(`Task "${name}" found via quoted search`);
-        return true;
-      }
-      if (attempt < retries) await this.page.waitForTimeout(wait);
-    }
-    logger.warn(`Task "${name}" not found after ${retries} attempts`);
-    return false;
+    const { retries } = this.retryConfig;
+    // B6: the real condition is the task's row after a fresh list + quoted search (a new task can lag in the
+    // search index); retryAttempts repeats that with its own backoff inside the budget the fixed retries x (list +
+    // results wait + pause) took, instead of fixed pauses. Same shape as LeadsPage.retryFindLead().
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Task "${name}" search`, async () => {
+        logger.info(`Looking for task "${name}"`);
+        await this.navigateTo(`${config.appUrl}/sales/tasks/list`);
+        await this.waitForListReady();
+        await this.searchTaskByName(name, 'retryFindTask');
+        await expect(this.taskListItemByName(name)).toBeVisible({ timeout: 5000 });
+      })
+    );
+    logger.success(`Task "${name}" found via quoted search`);
+    return true;
   }
 
   private async closeDetailedModalIfOpen(): Promise<void> {
@@ -358,36 +366,6 @@ export class TasksPage extends BasePage {
     }
   }
 
-  private async openFilterPanel(): Promise<void> {
-    logger.info('Opening filter panel');
-    const alreadyOpen = await this.page
-      .locator('#filterModal')
-      .evaluate((el) => el.classList.contains('show'))
-      .catch(() => false);
-    if (alreadyOpen) return;
-
-    // WHY: Same pattern as MeetingsPage — retry up to 3 times on CI
-    let opened = false;
-    for (let i = 0; i < 3; i++) {
-      // WHY: Use #filter-action button ID — reliable selector confirmed from DOM
-      const filterBtn = this.page.locator('#filter-action');
-      await filterBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-      await filterBtn.click({ force: true });
-
-      try {
-        await this.page.locator('#filterModal').waitFor({ state: 'visible', timeout: 10000 });
-        opened = true;
-        break;
-      } catch {
-        logger.warn(`Filter panel did not open on attempt ${i + 1}`);
-        await this.page.waitForTimeout(1000);
-      }
-    }
-    if (!opened) throw new Error('Filter panel did not open after 3 attempts');
-    await this.page.waitForTimeout(500);
-    logger.success('Filter panel opened');
-  }
-
   // ──────────────────────────────────────────────────────────
   // Navigation
   // ──────────────────────────────────────────────────────────
@@ -407,8 +385,14 @@ export class TasksPage extends BasePage {
 
   async openQuickTaskForm(): Promise<void> {
     logger.info('Opening Quick Task form via dropdown');
-    await this.click(this.addDropdownToggle(), 'add dropdown toggle');
-    await this.addQuickTaskOption().waitFor({ state: 'visible', timeout: 5000 });
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.addDropdownToggle(),
+        '.dropdown-menu.show',
+        this.addQuickTaskOption(),
+        'Add dropdown: the "Quick Task" option'
+      )
+    );
     await this.addQuickTaskOption().click();
     await this.quickTaskCard().waitFor({ state: 'visible', timeout: 10000 });
     // WHY: Wait for CKEditor to initialise before interacting with it
@@ -419,64 +403,83 @@ export class TasksPage extends BasePage {
   async fillQuickTaskForm(data: TaskData): Promise<void> {
     logger.info(`Filling Quick Task form: "${data.name}"`);
 
+    // B6 (staging probe 2026-11-17): each control shows its pick on the button itself (due-date button "Tomorrow",
+    // Assigned To "@<user>" instead of "@Assigned To", Priority "<value>" instead of "Priority") and its menu
+    // closes after the pick. Each step waits for its menu, picks once and asserts that result; a missing option
+    // fails by name instead of saving the task with a default.
     // Due date — click calendar button, select "Tomorrow" from quick options
     logger.info('Setting due date to Tomorrow');
-    await this.click(this.quickTaskDateButton(), 'calendar button');
-    await this.page.waitForTimeout(500);
     const tomorrowOption = this.page.locator('.duedate-dropdown-options .dropdown-option', {
       hasText: 'Tomorrow',
     });
-    try {
-      await tomorrowOption.waitFor({ state: 'visible', timeout: 3000 });
-      await tomorrowOption.click();
-      logger.success('Due date set to Tomorrow');
-    } catch {
-      logger.warn('Tomorrow option not found — using default');
-      await this.page.keyboard.press('Escape');
-    }
-    await this.page.waitForTimeout(300);
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.quickTaskDateButton(),
+        '.duedate-dropdown-options',
+        tomorrowOption,
+        'Quick task: the "Tomorrow" due-date option',
+        { openBy: 'hover' }
+      )
+    );
+    await tomorrowOption.click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(
+        this.page.locator('.duedate-dropdown-options'),
+        'Quick task: the due-date menu should close after the pick'
+      ).toBeHidden({ timeout: config.timeouts.expect });
+      await expect(this.quickTaskDateButton(), 'Quick task: the due date should read "Tomorrow"').toContainText(
+        'Tomorrow',
+        { timeout: config.timeouts.expect }
+      );
+    });
+    logger.success('Due date set to Tomorrow');
 
     // Assigned To — click button, wait for dropdown, pick random user
     logger.info('Setting Assigned To');
-    await this.click(this.quickTaskAssignedToButton(), 'assigned to button');
-    await this.page.waitForTimeout(1000);
     // WHY: Assigned To uses .assigned-to-menu-list with .is-invalid__option items
-    try {
-      const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
-      await assignedToOptions.first().waitFor({ state: 'visible', timeout: 5000 });
-      // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
-      // textContent()+click() on a random option, same bug class.
-      await this.selectRandomOptionWithRetry(assignedToOptions, 'Assigned To set');
-    } catch {
-      logger.warn('Assigned To options not found — skipping');
-      await this.page.keyboard.press('Escape');
-    }
-    await this.page.waitForTimeout(300);
+    const assignedToOptions = this.page.locator('.assigned-to-menu-list .is-invalid__option');
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.quickTaskAssignedToButton(),
+        '.assigned-to-menu-list',
+        assignedToOptions.first(),
+        'Quick task: the Assigned To options',
+        { lookupUrlPart: '/users/lookup', openBy: 'hover' }
+      )
+    );
+    // WHY: shared bounded+re-roll selector (2026-07-17) — was an unbounded
+    // textContent()+click() on a random option, same bug class.
+    await this.selectRandomOptionWithRetry(assignedToOptions, 'Assigned To set');
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.quickTaskAssignedToButton(),
+        'Quick task: the Assigned To button should show the picked user'
+      ).not.toHaveText(/Assigned To/, { timeout: config.timeouts.expect })
+    );
 
     // Priority — hover then click to open dropdown options
     logger.info(`Setting priority: ${data.priority}`);
-    const priorityBtn = this.quickTaskPriorityButton();
-    await priorityBtn.hover();
-    await this.page.waitForTimeout(500);
+    await this.quickTaskPriorityButton().hover();
     // WHY: Priority dropdown appears on hover — .priority-dropdown-options with .dropdown-option items
     const priorityContainer = this.page.locator('.priority-dropdown-options');
-    try {
-      await priorityContainer.waitFor({ state: 'visible', timeout: 5000 });
-      await priorityContainer.locator('.dropdown-option', { hasText: data.priority }).click();
-      logger.success(`Priority set: ${data.priority}`);
-    } catch {
-      // Fallback: try clicking the button first then select
-      await priorityBtn.click();
-      await this.page.waitForTimeout(500);
-      try {
-        await priorityContainer.waitFor({ state: 'visible', timeout: 3000 });
-        await priorityContainer.locator('.dropdown-option', { hasText: data.priority }).click();
-        logger.success(`Priority set via click fallback: ${data.priority}`);
-      } catch {
-        logger.warn(`Priority option not found — skipping`);
-      }
-    }
-    await this.page.waitForTimeout(300);
+    await this.withSessionExpiryRecovery(() =>
+      expect(priorityContainer, 'Quick task: the priority options should appear on hover').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    await priorityContainer
+      .locator('.dropdown-option', { hasText: data.priority })
+      .click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(priorityContainer, 'Quick task: the priority menu should close after the pick').toBeHidden({
+        timeout: config.timeouts.expect,
+      });
+      await expect(
+        this.quickTaskPriorityButton(),
+        `Quick task: the priority button should read "${data.priority}"`
+      ).toContainText(data.priority, { timeout: config.timeouts.expect });
+    });
+    logger.success(`Priority set: ${data.priority}`);
 
     // Description / task name via CKEditor
     logger.info('Filling task description (becomes task name in list)');
@@ -485,6 +488,15 @@ export class TasksPage extends BasePage {
     await editor.click();
     await editor.fill(data.name);
     logger.success('Quick task form filled');
+  }
+
+  // B6: the quick-task overlay must be gone after a save; fails by name when it stays
+  private async waitForQuickTaskFormClosed(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.quickTaskBackdrop(), 'The quick-task form should close after Add Task').toBeHidden({
+        timeout: config.timeouts.expect,
+      })
+    );
   }
 
   async saveQuickTask(): Promise<number | null> {
@@ -501,9 +513,8 @@ export class TasksPage extends BasePage {
       throw new Error('Quick task ID not captured after save — cannot proceed (save likely failed silently)');
     }
     // WHY: Quick task form closes after save — stays on same /sales/tasks/list URL
-    await this.quickTaskBackdrop()
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
+    // B6: the form must close (it used to be `.catch(() => {})`: a stuck overlay was only found by a later click)
+    await this.waitForQuickTaskFormClosed();
     await this.waitForListReady();
     logger.success(`Quick task saved (ID: ${id})`);
     return id;
@@ -521,10 +532,8 @@ export class TasksPage extends BasePage {
       );
     }
     // WHY: When saving from entity detail page — no list to wait for
-    await this.quickTaskBackdrop()
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {});
-    await this.page.waitForTimeout(1000);
+    // B6: the form closing is the signal (replaces a swallowed wait plus a 1 s pause)
+    await this.waitForQuickTaskFormClosed();
     logger.success(`Quick task saved from entity detail (ID: ${id})`);
     return id;
   }
@@ -553,44 +562,31 @@ export class TasksPage extends BasePage {
 
   async openDetailedTaskForm(): Promise<void> {
     logger.info('Opening Detailed Task form via dropdown');
-    // WHY: Retry up to 3 times — parallel workers can cause dropdown to close prematurely
-    let formOpened = false;
-    for (let i = 0; i < 3; i++) {
-      await this.click(this.addDropdownToggle(), 'add dropdown toggle');
-      await this.addDetailedTaskOption()
-        .waitFor({ state: 'visible', timeout: 5000 })
-        .catch(() => {});
-      const optionVisible = await this.addDetailedTaskOption()
-        .isVisible()
-        .catch(() => false);
-      if (!optionVisible) {
-        logger.warn(`Detailed task option not visible on attempt ${i + 1} — retrying`);
-        await this.page.waitForTimeout(1000);
-        continue;
-      }
-      await this.addDetailedTaskOption().click();
-      await this.detailedTaskModal()
-        .waitFor({ state: 'visible', timeout: 10000 })
-        .catch(() => {});
-      const modalVisible = await this.detailedTaskModal()
-        .isVisible()
-        .catch(() => false);
-      if (!modalVisible) {
-        logger.warn(`Detailed task modal not visible on attempt ${i + 1} — retrying`);
-        await this.page.waitForTimeout(1000);
-        continue;
-      }
-      try {
-        // WHY: Skeleton loader shows first — wait for actual name input to be ready
-        await this.taskNameInput().waitFor({ state: 'visible', timeout: 15000 });
-        formOpened = true;
-        break;
-      } catch {
-        logger.warn(`Task name input not visible on attempt ${i + 1} — retrying`);
-        await this.page.waitForTimeout(1000);
-      }
-    }
-    if (!formOpened) throw new Error('Detailed Task form did not open after 3 attempts');
+    // B6 (owner decision 2026-11-17): bounded waits, no retry loop (the old 3-attempt loop with 1 s pauses
+    // swallowed every wait with `.catch(() => {})`). Each step waits for the thing it needs and fails by name.
+    // Sandbox 44533064234 (tasks.rbac:360/385, 13:43:20Z, two workers at once): the app showed its 429 page ("Too many
+    // requests at once") when the Add dropdown was opened, right after a staging stall released. ADR 0014 allows a 429
+    // retry: withRateLimitRecovery clicks the app's own Refresh once and opens the menu once more (nothing else).
+    await this.withRateLimitRecovery(() =>
+      this.openMenuAndWaitForItem(
+        this.addDropdownToggle(),
+        '.dropdown-menu.show',
+        this.addDetailedTaskOption(),
+        'Add dropdown: the "Detailed Task" option'
+      )
+    );
+    await this.addDetailedTaskOption().click({ timeout: config.timeouts.expect });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.detailedTaskModal(), 'The Detailed Task modal should open').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    // WHY: Skeleton loader shows first — wait for actual name input to be ready
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.taskNameInput(), 'The Detailed Task form (Name input) should finish loading').toBeVisible({
+        timeout: 15000,
+      })
+    );
     logger.success('Detailed Task form opened');
   }
 
@@ -695,19 +691,17 @@ export class TasksPage extends BasePage {
     // WHY: Click control to open dropdown — default options load immediately (only 2 users)
     // Do NOT type — typing triggers API search which returns No Options for short names
     await control.click();
-    // WHY: Increased wait — staging env loads dropdown options slower than QA
-    await this.page.waitForTimeout(1500);
-    // WHY: Try both .is-invalid__option and generic react-select option selectors
-    // as the class name may differ between environments
+    // B6: no pause: the option wait below is the signal that the options loaded. Both option class names are
+    // matched at once (the class may differ between environments), so there is no instant isVisible() probe.
     const exactUserName = new RegExp(`^\\s*${this.escapeRegExp(userName)}\\s*$`);
-    let option = this.page.locator('.is-invalid__option').filter({ hasText: exactUserName }).first();
-    const isVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
-    if (!isVisible) {
-      logger.warn(`'.is-invalid__option' not found — trying generic react-select option`);
-      option = this.page.locator('[class*="__option"]').filter({ hasText: exactUserName }).first();
-    }
+    const option = this.page.locator('[class*="__option"]').filter({ hasText: exactUserName }).first();
     await option.waitFor({ state: 'visible', timeout: 15000 });
     await option.click();
+    await this.withSessionExpiryRecovery(() =>
+      expect(control, `Assigned To should show "${userName}" after the pick`).toContainText(userName, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Assigned to: ${userName}`);
   }
 
@@ -757,11 +751,20 @@ export class TasksPage extends BasePage {
     );
   }
 
-  async fillRelation(): Promise<void> {
+  async fillRelation(targets?: TaskRelationTargets): Promise<void> {
     logger.info('Filling Relation field — all entity types');
-    const entityTypes = ['Lead', 'Deal', 'Contact', 'Company'];
+    // run-owned records, never a random existing one another test may delete (see TaskRelationTargets)
+    const owned = targets ?? (await getTaskRelationTargets(this.page));
+    const entityTypes = ['Lead', 'Deal', 'Contact', 'Company'] as const;
+    const nameOf: Record<(typeof entityTypes)[number], string> = {
+      Lead: owned.lead,
+      Deal: owned.deal,
+      Contact: owned.contact,
+      Company: owned.company,
+    };
 
     for (const entityType of entityTypes) {
+      const targetName = nameOf[entityType];
       logger.info(`Selecting relation entity type: ${entityType}`);
 
       // Step 1: Open the entity type dropdown (relation type selector) and pick the type.
@@ -775,57 +778,64 @@ export class TasksPage extends BasePage {
 
       // Step 2: Click the entity search dropdown and search
       // WHY: After selecting entity type, a search dropdown appears — same as meetings
+      // B6 (staging probe 2026-11-17: all four types exist and answer a three-space search within ~25 ms): the
+      // search control and the results are awaited, not slept on.
       const searchControl = this.page
         .locator('div')
         .filter({ hasText: /^Search \.\.\.$/ })
         .last();
-      const searchVisible = await searchControl.isVisible().catch(() => false);
-      if (searchVisible) await searchControl.click();
-      await this.page.waitForTimeout(400);
+      await this.withSessionExpiryRecovery(() =>
+        expect(searchControl, `Relation: the ${entityType} search control should appear`).toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      );
+      await searchControl.click();
 
-      // Step 3: Type spaces to load first results, then try search terms on failure
-      const entitySearchInput = this.taskRelationTypeInput();
-      await entitySearchInput.fill('   ');
-      await this.page.waitForTimeout(1500);
-
-      const options = this.page.locator('.is-invalid__option');
-      let hasOptions = await options
-        .first()
-        .isVisible()
-        .catch(() => false);
-
-      if (!hasOptions) {
-        for (const term of ['a', 'e', 'the', 'inc', 'co']) {
-          await entitySearchInput.fill(term);
-          await this.page.waitForTimeout(1000);
-          hasOptions = await options
-            .first()
-            .isVisible()
-            .catch(() => false);
-          if (hasOptions) {
-            logger.info(`Found ${entityType} results with term: "${term}"`);
-            break;
-          }
-          await entitySearchInput.clear();
+      // Step 3: search for THIS run's record by name and pick it. The lookups the search sends are watched, so a
+      // miss says "sent, no answer" (staging hold), an HTTP status (429) or "never sent" (sandbox 44533064234,
+      // tasks.rbac:360: "none found" after a held lookup, with nothing to tell which). Count-bounded: a
+      // search that shows nothing is typed again (the lookup is answered from an index that can lag a create).
+      const lookupWatch = this.watchRequests(
+        (r) => r.method() === 'GET' && /^\/v1\/.*lookup/.test(new URL(r.url()).pathname),
+        (r) => {
+          const u = new URL(r.url());
+          const q = u.searchParams.get('name') ?? u.searchParams.get('q') ?? '';
+          return `GET ${u.pathname}${q ? ` q="${q.slice(0, 40)}"` : ''}`;
         }
+      );
+      // the Lead and Contact lookups query `firstName:<text>` (seen live: GET /v1/search/lead/lookup q="firstName:..."), so
+      // the full name never matches: type the first name (unique per run), then match the full name in the option
+      const searchText = entityType === 'Lead' || entityType === 'Contact' ? targetName.split(' ')[0] : targetName;
+      const option = this.page.locator('.is-invalid__option').filter({ hasText: targetName }).first();
+      try {
+        await this.withSessionExpiryRecovery(() =>
+          this.retryAttempts(this.retryConfig.retries, `Relation: the ${entityType} search for "${targetName}"`, async () => {
+            await this.taskRelationTypeInput().fill('');
+            await this.taskRelationTypeInput().fill(searchText);
+            await expect(
+              option,
+              `Relation: the ${entityType} search should list this run's record "${targetName}"`
+            ).toBeVisible({ timeout: config.timeouts.expect });
+          })
+        );
+      } catch (error) {
+        const lookups = lookupWatch.describe();
+        throw new Error(`${String(error)}\n  Lookups seen: ${lookups}`);
+      } finally {
+        lookupWatch.stop();
       }
-
-      // Step 4: Pick a random option
-      const count = await options.count().catch(() => 0);
-      if (count > 0) {
-        // WHY: shared bounded+re-roll selector (2026-07-17), capped to 5 as
-        // before — was an unbounded textContent()+click() on a random option.
-        await this.selectRandomOptionWithRetry(options, `Selected ${entityType} relation`, {
-          maxOptions: 5,
-        });
-        await this.page.waitForTimeout(300);
-      } else {
-        logger.warn(`No ${entityType} records found — skipping`);
-        await this.page.keyboard.press('Escape');
-      }
-      await this.page.waitForTimeout(600);
+      await option.click();
+      logger.success(`Selected ${entityType} relation: "${targetName}" (this run's record)`);
+      // the pick adds one relation row (each row has a trash icon)
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.detailedTaskModal().locator('i.fa-trash-alt'),
+          `Relation: a ${entityType} row should be added after the pick`
+        ).toHaveCount(entityTypes.indexOf(entityType) + 1, { timeout: config.timeouts.expect })
+      );
     }
   }
+
   private classifyTaskInaccessibleEntityError(
     status: number,
     body: TaskSaveErrorBody
@@ -841,14 +851,23 @@ export class TasksPage extends BasePage {
 
   async saveDetailedTask(): Promise<number | null> {
     logger.info('Saving Detailed Task');
-    const idPromise = this.captureIdFromResponse();
+    // ADR 0016 (B3, plan section 11 #4): ONE strict create wait armed before the click serves both the
+    // error classification and the id (it used to be two listeners, one capped at 20 s and one that
+    // ignored non-2xx answers); a missing id now names the create request's status/body or why no
+    // answer was seen.
+    const armedAt = Date.now();
     const responsePromise = this.armResponseWaitWithRecovery(
       (res) => /^\/v1\/tasks\/?$/.test(new URL(res.url()).pathname) && res.request().method() === 'POST',
       'saveDetailedTask (task create POST)',
-      20000
-    ).catch(() => null);
+      config.timeouts.navigation
+    );
+    let missedResponse: unknown = null;
+    const settledResponse = responsePromise.catch((error: unknown) => {
+      missedResponse = error;
+      return null;
+    });
     await this.click(this.detailedTaskSaveButton(), 'save button');
-    const response = await responsePromise;
+    const response = await settledResponse;
 
     if (response && response.status() >= 400) {
       const body = (await response.json().catch(() => ({}))) as TaskSaveErrorBody;
@@ -895,9 +914,24 @@ export class TasksPage extends BasePage {
       }
       throw err;
     }
-    const id = await idPromise;
+    let id: number | null = null;
+    if (response?.ok()) {
+      const created = (await response.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+      id = created?.id ?? created?.data?.id ?? null;
+      if (id) logger.success(`Captured task ID from POST response: ${id}`);
+    }
     if (!id) {
-      throw new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)');
+      logger.warn('Could not capture task ID from POST response — trying toast');
+      id = await this.captureIdFromToast();
+    }
+    if (!id) {
+      const detail = response
+        ? await this.describeMatchedResponse(response)
+        : this.describeMissedResponse(missedResponse, Date.now() - armedAt);
+      throw this.appendCreateDetail(
+        new Error('Detailed task ID not captured after save — cannot proceed (save likely failed silently)'),
+        detail
+      );
     }
     await this.detailedTaskModal()
       .waitFor({ state: 'hidden', timeout: 15000 })
@@ -923,19 +957,27 @@ export class TasksPage extends BasePage {
       logger.info(`Attempting to navigate to task by ID: ${taskId}`);
       await this.navigateTo(`${config.appUrl}/sales/tasks/list?id=${taskId}`);
       await this.waitForListReady();
-      const found = await this.taskListItemById(taskId)
-        .waitFor({ state: 'visible', timeout: config.timeouts.navigation })
-        .then(() => true)
-        .catch(() => false);
+      // WHY waitForRendered + one recovery (2026-11-04, FFRTK16, 2026-11-03 sandbox run): the list answered with the
+      // app's "Too many requests at once" page; the old 120 s wait ended in the name-search fallback below, whose bare
+      // click() then waited for the full 480 s test timeout. Now the rate-limit page is recognised within seconds,
+      // the page is reloaded once (the app's own advice), and the fallback click is bounded.
+      const listItem = this.taskListItemById(taskId);
+      const seen = async (): Promise<boolean> =>
+        this.waitForRendered(listItem, `Task ${taskId} list item`).then(() => true).catch(() => false);
+      let found = await seen();
+      if (!found && (await this.recoverIfRateLimitPage())) {
+        await this.waitForListReady();
+        found = await seen();
+      }
       if (found) {
-        await this.click(this.taskListItemById(taskId), `Task ${taskId} list item`);
+        await this.click(listItem, `Task ${taskId} list item`);
         logger.success(`Task ${taskId} opened via ID navigation`);
         return;
       }
       logger.warn(`Task ID ${taskId} not found via URL filter — falling back to name search`);
     }
     // Fallback to name search
-    await this.taskListItemByName(name).click();
+    await this.click(this.taskListItemByName(name), `task "${name}" list item`);
     logger.success(`Task "${name}" opened`);
   }
 
@@ -1007,7 +1049,12 @@ export class TasksPage extends BasePage {
     await dueDateInput.click({ clickCount: 3 });
     await dueDateInput.fill(formatted);
     await this.page.keyboard.press('Tab');
-    await this.page.waitForTimeout(500);
+    // B6: the committed value is the signal (replaces a 500 ms pause after the blur)
+    await this.withSessionExpiryRecovery(() =>
+      expect(dueDateInput, `Due date input should hold "${formatted}" after the blur`).toHaveValue(formatted, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Due date set to: ${formatted}`);
   }
 
@@ -1016,24 +1063,52 @@ export class TasksPage extends BasePage {
     // WHY: Relation rows use a trash icon (fal fa-trash-alt) to delete
     // Keep clicking the first visible trash icon until none remain
     const modal = this.detailedTaskModal();
+    const trashButtons = modal.locator('i.fa-trash-alt');
     let attempts = 0;
     while (attempts < 10) {
-      const trashBtn = modal.locator('i.fa-trash-alt').first();
-      const visible = await trashBtn.isVisible().catch(() => false);
-      if (!visible) break;
-      await trashBtn.click();
-      await this.page.waitForTimeout(300);
+      const remaining = await trashButtons.count();
+      if (remaining === 0) break;
+      await trashButtons.first().click();
+      // B6: the row is gone when the trash count drops by one (replaces a 300 ms pause per click)
+      await this.withSessionExpiryRecovery(() =>
+        expect(trashButtons, 'A relation row should be removed after its trash icon is clicked').toHaveCount(
+          remaining - 1,
+          { timeout: config.timeouts.expect }
+        )
+      );
       attempts++;
+    }
+    if ((await trashButtons.count()) > 0) {
+      throw new Error('clearAllRelations: relation rows are still present after 10 removals');
     }
     logger.success(`Cleared ${attempts} relation values`);
   }
 
   async saveEditedTask(): Promise<void> {
     logger.info('Saving edited task');
-    await this.click(this.detailedTaskSaveButton(), 'save button');
-    await this.assertNoFormErrors('task edit form');
+    // B6 (ADR 0017 save confirmation): the update's own answer (PUT/PATCH /v1/tasks/{id}), armed before the
+    // click, fails by name when missing or not 2xx. It used to look only for form errors and the modal closing,
+    // so a refused or never-sent save could pass. Then the modal must close.
+    const saved = await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
+      method: ['PUT', 'PATCH'],
+      urlRe: /^\/v1\/tasks\/\d+\/?$/,
+      description: 'Task update (PUT /v1/tasks/{id})',
+    });
+    await this.assertNoFormErrors('task edit form', saved);
     await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Task updated');
+  }
+
+  // B6 (staging trace 2026-11-17): marking a task complete, from the ellipsis or the detail panel, is
+  // PUT /v1/tasks/{id}/complete -> 200. Its answer is armed before the click and awaited (replaces 500 ms pauses
+  // that confirmed nothing); callers assert the resulting STATUS afterwards (a completed task may leave the
+  // default list, so list visibility proves nothing).
+  private async awaitTaskComplete(click: () => Promise<void>): Promise<void> {
+    await this.saveAndAwait(click, {
+      method: 'PUT',
+      urlRe: /^\/v1\/tasks\/\d+\/complete\/?$/,
+      description: 'Task mark complete (PUT /v1/tasks/{id}/complete)',
+    });
   }
 
   async markTaskAsComplete(taskId?: number | null): Promise<void> {
@@ -1045,15 +1120,15 @@ export class TasksPage extends BasePage {
       if (ellipsisVisible) {
         await ellipsis.click();
         await this.dropdownMenuMarkCompleteOption().waitFor({ state: 'visible', timeout: 5000 });
-        await this.dropdownMenuMarkCompleteOption().click();
-        await this.page.waitForTimeout(500);
+        await this.awaitTaskComplete(() => this.dropdownMenuMarkCompleteOption().click());
         logger.success('Task marked as complete via list item ellipsis');
         return;
       }
     }
     // Fallback: use the Mark as complete button in the detail panel header
-    await this.click(this.detailPanelMarkCompleteButton(), 'Mark as complete button');
-    await this.page.waitForTimeout(500);
+    await this.awaitTaskComplete(() =>
+      this.click(this.detailPanelMarkCompleteButton(), 'Mark as complete button')
+    );
     logger.success('Task marked as complete via detail panel button');
   }
 
@@ -1313,22 +1388,10 @@ export class TasksPage extends BasePage {
   async assertTaskNotInList(name: string): Promise<void> {
     logger.info(`Validating task absent: "${name}"`);
     await this.goToTasksList();
-    const searchVisible = await this.taskSearchInput()
-      .isVisible()
-      .catch(() => false);
-    if (searchVisible) {
-      // WHY: Quoted search returns exact matches only — if task is absent,
-      // list will be empty. More reliable than unquoted partial search.
-      await this.taskSearchInput().fill(`"${name}"`);
-      // WHY: Press Enter to trigger search
-      await this.taskSearchInput().press('Enter');
-      await this.armResponseWaitWithRecovery(
-        (res) => res.url().includes('/v1/tasks') && res.request().method() === 'GET',
-        'assertTaskNotInList (search GET)',
-        10000
-      ).catch(() => null);
-      await this.page.waitForTimeout(500);
-    }
+    // B6: positive control first: the search answered (so the list was queried and rendered) before the
+    // absence of the row means anything; a missing search input or answer fails by name
+    await this.searchTaskByName(name, 'assertTaskNotInList');
+    await this.waitForListReady();
     await this.withSessionExpiryRecovery(() =>
       expect(this.taskListItemByName(name)).toBeHidden({ timeout: 10000 })
     );
@@ -1372,13 +1435,17 @@ export class TasksPage extends BasePage {
     await noteEditor.waitFor({ state: 'visible', timeout: 10000 });
     await noteEditor.click();
     await noteEditor.fill(noteText);
-    await this.page.waitForTimeout(300);
 
     // WHY: Add button is disabled until text is typed — wait for it to be enabled
     const addBtn = notesSection.locator('button.btn-primary.d-block');
     await expect(addBtn).toBeEnabled({ timeout: 5000 });
-    await addBtn.click();
-    await this.page.waitForTimeout(1000);
+    // B6 (staging trace 2026-11-17: the add is POST /v1/notes/relation -> 200): its answer is armed before the
+    // click and awaited, replacing a 1 s pause; assertNoteAdded() then proves the text is listed.
+    await this.saveAndAwait(() => addBtn.click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/notes\/relation\/?$/,
+      description: 'Task note add (POST /v1/notes/relation)',
+    });
     logger.success(`Note added: "${noteText}"`);
   }
 
@@ -1388,35 +1455,45 @@ export class TasksPage extends BasePage {
     const viewNotesCta = this.page.locator('.view-notes-cta .cursor-pointer').first();
     await viewNotesCta.waitFor({ state: 'visible', timeout: 10000 });
     await viewNotesCta.scrollIntoViewIfNeeded();
-    await viewNotesCta.click();
-    await this.page.waitForTimeout(1500);
+    // B6 (staging trace 2026-11-17: expanding the notes loads GET /v1/tasks/{id}/notes): the answer is armed
+    // before each click and awaited instead of 1.5 s pauses
+    const notesLoaded = (): RegExp => /^\/v1\/tasks\/\d+\/notes\/?$/;
+    await this.saveAndAwait(() => viewNotesCta.click(), {
+      method: 'GET',
+      urlRe: notesLoaded(),
+      description: 'Task notes list (GET /v1/tasks/{id}/notes) after expanding',
+    });
     // WHY: After expanding, refresh to load latest notes
     const refreshBtn = this.page.locator('.view-notes-cta .fa-sync-alt');
-    const refreshVisible = await refreshBtn.isVisible().catch(() => false);
-    if (refreshVisible) {
-      await refreshBtn.click();
-      await this.page.waitForTimeout(1500);
+    if (await refreshBtn.isVisible().catch(() => false)) {
+      await this.saveAndAwait(() => refreshBtn.click(), {
+        method: 'GET',
+        urlRe: notesLoaded(),
+        description: 'Task notes list (GET /v1/tasks/{id}/notes) after refresh',
+      });
     }
     // WHY: Note text is inside iframe srcdoc — read contentDocument to verify exact text
     // This handles cases where multiple notes exist — we find OUR specific note
     const noteIframes = this.page.locator('.note-text-container iframe');
     await noteIframes.first().waitFor({ state: 'attached', timeout: 15000 });
-    await this.page.waitForTimeout(500);
-    const count = await noteIframes.count();
-    let found = false;
-    for (let i = 0; i < count; i++) {
-      const iframe = noteIframes.nth(i);
-      const noteText = await iframe.evaluate((el: HTMLIFrameElement) => {
-        return el.contentDocument?.body?.textContent?.trim() ?? '';
-      });
-      logger.info(`Note ${i} text: "${noteText}"`);
-      if (noteText.includes(expectedNoteText)) {
-        found = true;
-        logger.success(`Note confirmed: "${noteText}"`);
-        break;
-      }
-    }
-    if (!found) throw new Error(`Note "${expectedNoteText}" not found in any note iframe`);
+    // B6: poll for OUR note's text across the iframes (a one-shot read after a 500 ms pause could see empty iframes)
+    await expect
+      .poll(
+        async () => {
+          const count = await noteIframes.count();
+          for (let i = 0; i < count; i++) {
+            const text = await noteIframes
+              .nth(i)
+              .evaluate((el: HTMLIFrameElement) => el.contentDocument?.body?.textContent?.trim() ?? '')
+              .catch(() => '');
+            if (text.includes(expectedNoteText)) return true;
+          }
+          return false;
+        },
+        { timeout: config.timeouts.expect, message: `Note "${expectedNoteText}" should be listed in a note iframe` }
+      )
+      .toBe(true);
+    logger.success(`Note confirmed: "${expectedNoteText}"`);
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1454,20 +1531,23 @@ export class TasksPage extends BasePage {
     await this.clickEllipsisOption(taskId, 'Change Due Date');
     await this.detailedTaskModal().waitFor({ state: 'visible', timeout: 10000 });
     await this.fillDueDate(daysFromNow);
-    await this.click(this.detailedTaskSaveButton(), 'save button');
-    await this.assertNoFormErrors('change due date form');
+    // ADR 0016 (B3, plan section 11 #7): await the update's answer, then the modal closing.
+    const saved = await this.saveAndAwait(() => this.click(this.detailedTaskSaveButton(), 'save button'), {
+      method: ['PUT', 'PATCH'],
+      urlRe: new RegExp(`/v1/tasks/${taskId}$`),
+      description: `Task due-date update (PUT /v1/tasks/${taskId})`,
+    });
+    await this.assertNoFormErrors('change due date form', saved);
     await this.detailedTaskModal().waitFor({ state: 'hidden', timeout: 15000 });
     logger.success('Due date changed via ellipsis');
   }
 
   async markAsCompletedViaEllipsis(taskId: number): Promise<void> {
     logger.info(`Marking task ${taskId} as completed via ellipsis`);
-    await this.clickEllipsisOption(taskId, 'Mark as Completed');
-    // WHY: Refresh the list after marking complete to update status
-    await this.page.locator('button[data-original-title="Refresh"]').click();
-    await this.page.waitForTimeout(1500);
-    await this.waitForListReady();
-    logger.success('Task marked as completed and list refreshed');
+    // B6: the PUT /complete answer is the signal; the old Refresh click + 1.5 s pause is gone (the callers
+    // reopen the task by id and read its status, which is a fresh GET)
+    await this.awaitTaskComplete(() => this.clickEllipsisOption(taskId, 'Mark as Completed'));
+    logger.success('Task marked as completed');
   }
 
   async cloneTaskViaEllipsis(taskId: number): Promise<number | null> {
@@ -1518,16 +1598,27 @@ export class TasksPage extends BasePage {
     return id;
   }
 
+  // B6: the detail panel is open when its status control renders (the same element assertTaskStatusOnDetail
+  // reads); replaces fixed pauses after a list-item click in the RBAC specs
+  async waitForDetailPanel(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('#status span.title'), 'The task detail panel should open').toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+  }
+
   async assertTaskStatusOnDetail(taskId: number, expectedStatus: string): Promise<void> {
     logger.info(`Asserting task ${taskId} status is: ${expectedStatus}`);
     await this.openTaskInDetailPanel('', taskId);
     const statusEl = this.page.locator('#status span.title');
-    await statusEl.waitFor({ state: 'visible', timeout: 10000 });
-    const statusText = await statusEl.textContent();
-    if (!statusText?.includes(expectedStatus)) {
-      throw new Error(`Expected status "${expectedStatus}" but got "${statusText}"`);
-    }
-    logger.success(`Status confirmed: ${statusText}`);
+    // B6: auto-retrying assertion instead of a one-shot textContent() read
+    await this.withSessionExpiryRecovery(() =>
+      expect(statusEl, `Task ${taskId} status should be "${expectedStatus}"`).toContainText(expectedStatus, {
+        timeout: config.timeouts.expect,
+      })
+    );
+    logger.success(`Status confirmed: ${expectedStatus}`);
   }
 
   async assertDeleteOptionNotVisible(taskId: number): Promise<void> {

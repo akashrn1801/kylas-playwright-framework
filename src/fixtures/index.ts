@@ -20,6 +20,11 @@ import { ErrorCollector } from '../error-collector/ErrorCollector';
 import { AuthManager, registerPageForRecovery, isSessionExpiryPage } from '../auth/authManager';
 import { logger } from '../utils/logger';
 import { safeWaitForURL } from '../utils/navigation';
+import { redactTokens } from '../utils/apiClient';
+import { LeadApi, readAccessToken, deleteLeadAndConversion, reportLeadConversion, ListPreferences } from '../utils/leadApi';
+import { reportCreatedRecord } from '../utils/createdRecords';
+import { ShareRuleApi } from '../utils/shareRuleApi';
+import type { ShareEntityType } from '../core/sharePermissions';
 
 const stateFor = (role: string) =>
   path.join(__dirname, '../auth/storageStates', config.env, `${role}.json`);
@@ -27,16 +32,15 @@ const stateFor = (role: string) =>
 // ── Session expiry detection ─────────────────────────────────────────────────
 
 function attachSessionExpiryListener(page: Page, role: 'admin' | 'restricted', authManager: AuthManager): void {
-  // WHY: Watch for 401 responses during tests — these indicate session expiry
-  // When detected, clear the storage state so the NEXT test gets a fresh login
+  // WHY: a 401 or a sign-out redirect says THIS page lost its session; the saved file is shared by every worker,
+  // so it is cleared only when the backend rejects the saved token (ADR 0017, B5). One 401 on one endpoint, or
+  // an app-side sign-out while the token is still accepted, no longer makes every worker log in again.
   page.on('response', async (response) => {
     if (response.status() === 401) {
       const url = response.url();
       if (url.includes('/v1/') || url.includes('/api/')) {
-        logger.warn(`Session expiry detected for ${role} — 401 on ${url} — clearing storage state`);
-        await authManager.clearStorageState(role).catch(() => {});
-        // WHY: Reset validation cache so next test re-validates immediately
-        AuthManager['lastValidated'].delete(role);
+        logger.warn(`Session expiry suspected for ${role} — 401 on ${url}`);
+        await authManager.clearStorageStateIfRejected(role, `401 on ${new URL(url).pathname}`).catch(() => false);
       }
     }
   });
@@ -46,9 +50,8 @@ function attachSessionExpiryListener(page: Page, role: 'admin' | 'restricted', a
     if (frame === page.mainFrame()) {
       const url = frame.url();
       if (url.includes('/signIn') || url.includes('/login')) {
-        logger.warn(`Session expiry detected for ${role} — redirected to ${url}`);
-        authManager.clearStorageState(role).catch(() => {});
-        AuthManager['lastValidated'].delete(role);
+        logger.warn(`Session expiry suspected for ${role} — redirected to ${url}`);
+        authManager.clearStorageStateIfRejected(role, 'redirect to sign-in').catch(() => false);
       }
     }
   });
@@ -405,10 +408,7 @@ async function createRolePage(
   // param on every page object.
   registerPageForRecovery(page, role, authManager);
 
-  // WHY: Stagger restricted user initialization on CI to avoid concurrent session conflicts
-  if (role === 'restricted' && process.env.CI) {
-    await page.waitForTimeout(Math.floor(Math.random() * 3000));
-  }
+  // Login pacing is the cross-process login slot gate in src/auth/loginGate.ts (ADR 0016, S2), not a random sleep here.
 
   const maxAttempts = 2;
   let landed = false;
@@ -419,7 +419,10 @@ async function createRolePage(
   // relogin) intentionally goes back to the generic entry point, since a
   // full relogin already addresses a different failure class entirely and
   // has no reason to assume the same "resume last section" state applies.
-  let navigationTargetUrl = config.appUrl;
+  // ADR 0017 (B5): go straight to /sales/home. The bare origin made the app "resume the last visited section"
+  // (/setup), which cost a full race timeout plus a second navigation (24-45 s of setup in the sandbox data);
+  // the forced /sales/home retry already proved this target.
+  let navigationTargetUrl = `${config.appUrl.replace(/\/+$/, '')}/sales/home`;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const outcome = await navigateAndConfirmLoggedIn(
       page,
@@ -499,7 +502,9 @@ async function createRolePage(
       `${role} page did not land on /sales/ (outcome: ${outcome}, url: ${page.url()}) — ` +
         `forcing a fresh login and retrying (attempt ${attempt}/${maxAttempts})`
     );
-    await authManager.clearStorageState(role).catch(() => {});
+    // ADR 0017 (B5): this page's own landing is the evidence that ITS session is bad; the shared file is
+    // removed only if the backend rejects its token, and the login below overwrites it atomically anyway.
+    await authManager.clearStorageStateIfRejected(role, `${role} page landed on ${outcome}`).catch(() => false);
     AuthManager['lastValidated'].delete(role);
     try {
       await authManager.loginAndSaveState(role);
@@ -573,11 +578,48 @@ async function createRolePage(
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
+// WHY these fixtures exist but delete NOTHING by default (2026-10-30 decision): tests keep everything
+// they create and QA is cleaned in one go later. They still register every record they are given (so the
+// ID is logged and added to the test's annotations); the records are only deleted when
+// CLEANUP_TEST_DATA=1 (config.cleanupTestData). Even then only registered IDs are deleted — nothing here
+// ever searches for records to delete. Opt-in per test (a test that asks for `leadCleanup`) also keeps
+// the Reports specs' Lead totals (reports.spec.ts, reports.rbac.spec.ts) from shifting mid-run.
+export interface LeadCleanup {
+  /**
+   * Register a lead (the auth token is captured NOW from the given page, the lead owner's page, so the
+   * opt-in teardown still works if the page has crashed by then). At teardown the deal, contact and
+   * company its conversion created are logged (and, with CLEANUP_TEST_DATA=1, deleted before the lead).
+   */
+  track(page: Page, leadId: number): Promise<void>;
+  /**
+   * Register a task, meeting or call log a test created on a lead (they are not removed with the lead).
+   * Deleted at teardown only with CLEANUP_TEST_DATA=1; it was already logged when it was created.
+   */
+  trackRecord(page: Page, type: 'task' | 'meeting' | 'call log', id: number): Promise<void>;
+  /**
+   * Remember the page owner's current list preferences (sort, page size, view mode) and put them
+   * back at teardown ALWAYS (switch or not): they are the user's settings, not test data, and persist
+   * per user on the server, so a test that changes any of them would change every later list test.
+   */
+  restoreListPreferencesOnTeardown(page: Page): Promise<void>;
+}
+
+// WHY generic (entity type + rule id): every entity shares through the same share-rule API. Deleting a
+// record already removes its rules (confirmed live for leads: 0 rules left), so with CLEANUP_TEST_DATA=1
+// this is for the rule a test creates or changes on a record it does NOT delete, and for rules a test is
+// about to delete itself (a rule that is already gone — 404 — is fine).
+export interface ShareRuleCleanup {
+  /** Register a share rule (logged now; deleted at teardown only with CLEANUP_TEST_DATA=1). */
+  track(page: Page, entityType: ShareEntityType, ruleId: number): Promise<void>;
+}
+
 export type TestFixtures = {
   adminPage: Page;
   restrictedPage: Page;
   adminContext: BrowserContext;
   restrictedContext: BrowserContext;
+  leadCleanup: LeadCleanup;
+  shareRuleCleanup: ShareRuleCleanup;
 };
 
 export const test = base.extend<TestFixtures>({
@@ -599,6 +641,85 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext({ storageState: stateFor('restricted') });
     await use(context);
     await context.close();
+  },
+
+  shareRuleCleanup: async ({}, use) => {
+    const trackedRules: Array<{ token: string; entityType: ShareEntityType; ruleId: number }> = [];
+    await use({
+      track: async (page, entityType, ruleId) => {
+        reportCreatedRecord('share rule', ruleId);
+        trackedRules.push({ token: await readAccessToken(page), entityType, ruleId });
+      },
+    });
+    if (!config.cleanupTestData) return;
+    // Teardown never throws: a failed cleanup must not fail, or mask the failure of, the test.
+    for (const { token, entityType, ruleId } of trackedRules.reverse()) {
+      const api = await ShareRuleApi.forToken(token);
+      try {
+        const result = await api.deleteRule(ruleId);
+        if (!result.ok && result.status !== 404) {
+          logger.warn(`Share rule cleanup: could not delete ${entityType} rule ${ruleId} (HTTP ${result.status})`);
+        }
+      } catch (error) {
+        logger.warn(`Share rule cleanup: ${entityType} rule ${ruleId} was not cleaned up — ${redactTokens(String(error))}`);
+      } finally {
+        await api.dispose();
+      }
+    }
+  },
+
+  leadCleanup: async ({}, use) => {
+    const trackedLeads: Array<{ token: string; leadId: number }> = [];
+    const trackedRecords: Array<{ token: string; type: 'task' | 'meeting' | 'call log'; id: number }> = [];
+    const preferencesToRestore: Array<{ token: string; prefs: ListPreferences }> = [];
+    await use({
+      track: async (page, leadId) => {
+        trackedLeads.push({ token: await readAccessToken(page), leadId });
+      },
+      trackRecord: async (page, type, id) => {
+        trackedRecords.push({ token: await readAccessToken(page), type, id });
+      },
+      restoreListPreferencesOnTeardown: async (page) => {
+        const token = await readAccessToken(page);
+        const api = await LeadApi.forToken(token);
+        try {
+          preferencesToRestore.push({ token, prefs: await api.getListPreferences() });
+        } finally {
+          await api.dispose();
+        }
+      },
+    });
+    // Teardown never throws: a failed step must not fail, or mask the failure of, the test body.
+    for (const { token, leadId } of [...trackedLeads].reverse()) {
+      const api = await LeadApi.forToken(token);
+      await reportLeadConversion(api, leadId);
+      await api.dispose();
+    }
+    if (config.cleanupTestData) {
+      for (const { token, type, id } of trackedRecords.reverse()) {
+        const api = await LeadApi.forToken(token);
+        const remove = { task: api.deleteTask, meeting: api.deleteMeeting, 'call log': api.deleteCallLog }[type];
+        await remove
+          .call(api, id)
+          .then((result: { ok: boolean; status: number }) => {
+            if (!result.ok && result.status !== 404) logger.warn(`Cleanup: ${type} ${id} was not deleted (HTTP ${result.status})`);
+          })
+          .catch((error: unknown) => logger.warn(`Cleanup: ${type} ${id} was not deleted — ${redactTokens(String(error))}`));
+        await api.dispose();
+      }
+      for (const { token, leadId } of trackedLeads.reverse()) {
+        const api = await LeadApi.forToken(token);
+        await deleteLeadAndConversion(api, leadId);
+        await api.dispose();
+      }
+    }
+    for (const { token, prefs } of preferencesToRestore) {
+      const api = await LeadApi.forToken(token);
+      await api
+        .setListPreferences(prefs)
+        .catch((error) => logger.warn(`List preferences restore failed: ${redactTokens(String(error))}`));
+      await api.dispose();
+    }
   },
 });
 

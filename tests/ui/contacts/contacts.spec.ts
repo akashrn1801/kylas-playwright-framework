@@ -264,26 +264,13 @@ test.describe('Contacts', () => {
     await pipelineOption.click();
     // WHY: Fill estimated value — required when no product is added
     const estimatedValueInput = adminPage.locator('[id="1_21_input_estimatedValue"]');
-    if (await estimatedValueInput.isVisible().catch(() => false)) {
-      await estimatedValueInput.fill('50000');
-      logger.debug('Estimated value filled: 50000');
-    }
-    // WHY: hardened 2026-07-19 — bare '/deals'/'/deal' substring had no
-    // /reports/ exclusion, same ID-capture bug class already fixed at 10
-    // other call sites (found via self-audit; this one and the one below
-    // were missed because the original sweep only checked src/modules/,
-    // never tests/).
-    const dealSavePromise = adminPage.waitForResponse(
-      (res) =>
-        (res.url().includes('/deals') || res.url().includes('/deal')) &&
-        !res.url().includes('/reports/') &&
-        res.request().method() === 'POST' &&
-        (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
-    ).catch(() => null);
-    await adminPage.locator('#editEntityModal button.save-button').click();
-    await adminPage.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
-    await dealSavePromise;
+    // B6: a required field (no product is added): wait for it and fail by name, no instant isVisible() skip
+    await expect(estimatedValueInput, 'Add Deal: the Estimated Value field should be visible').toBeVisible({
+      timeout: 10000,
+    });
+    await estimatedValueInput.fill('50000');
+    logger.debug('Estimated value filled: 50000');
+    await contactsPage.saveDealFromAddDealModal();
     logger.success('Deal created for quotation test');
     // WHY: Navigate back to contact detail
     await contactsPage.searchAndOpenContact(contactData.firstName, contactId ?? undefined);
@@ -345,23 +332,8 @@ test.describe('Contacts', () => {
     await dealsPage.addProductRow();
     // WHY: Add 2 part payment installments
     await dealsPage.addPartPayments(2);
-    // WHY: Set up response listener BEFORE clicking save — response may arrive immediately
-    // WHY: hardened 2026-07-19 — same ID-capture bug class as above, found
-    // via self-audit (original sweep never checked tests/).
-    const dealIdPromise = adminPage.waitForResponse(
-      (res) =>
-        (res.url().includes('/deals') || res.url().includes('/deal')) &&
-        !res.url().includes('/reports/') &&
-        res.request().method() === 'POST' &&
-        (res.status() === 200 || res.status() === 201),
-      { timeout: 30000 }
-    ).then(async (res) => {
-      const body = await res.json().catch(() => ({}));
-      return body?.id ?? body?.data?.id ?? body?.dealId ?? null;
-    }).catch(() => null);
-    await adminPage.locator('#editEntityModal button.save-button').click();
-    await adminPage.locator('#editEntityModal').waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
-    const dealId = await dealIdPromise;
+    // B6: the save is confirmed by POST /v1/deals answering 2xx with the new id (see saveDealFromAddDealModal)
+    const dealId = await contactsPage.saveDealFromAddDealModal();
     expect(dealId).not.toBeNull();
     logger.success(`Deal created with ID: ${dealId}`);
     // WHY: Navigate back to contact detail and verify deal appears in Related Deals section

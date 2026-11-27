@@ -43,14 +43,18 @@ export interface MiscError {
 export type RecoveryEventKind =
   | 'rate-limit-page'
   | 'error-boundary-page'
-  | 'globalsetup-transient-retry';
+  | 'globalsetup-transient-retry'
+  // An API response with status 429 (2026-11-24): the app's rate limit answering a request, not the 429 PAGE. Seen by the
+  // response listener for every request, whatever the test then did with it.
+  | 'api-429';
 
 export interface RecoveryEvent {
   kind: RecoveryEventKind;
   // 'recovered' / 'failed' = the retried action after recovery succeeded /
-  // threw again; 'retrying' = a globalSetup retry is about to happen (its
-  // final outcome is the job's own pass/fail, not tracked per attempt).
-  outcome: 'recovered' | 'failed' | 'retrying';
+  // threw again (a fail-fast wait that found the 429 or error page also records 'failed'); 'retrying' = a globalSetup
+  // retry is about to happen (its final outcome is the job's own pass/fail, not tracked per attempt); 'observed' = an
+  // API 429 answer was seen (what the test did next is not known here).
+  outcome: 'recovered' | 'failed' | 'retrying' | 'observed';
   timestamp: string;
   testTitle?: string;
   detail?: string;
@@ -122,6 +126,11 @@ class ErrorCollectorSingleton {
 
   capture(error: Omit<MiscError, 'timestamp' | 'testTitle' | 'testFile'>): void {
     try {
+      // WHY counted BEFORE the noise filter (2026-11-24, sandbox build #235: "No 429 ... recorded in any shard" while
+      // meetings.rbac:263 got PUT /v1/meetings/14629 -> HTTP 429): "HTTP 429" is a NOISE pattern (rate limiting under load is
+      // not an app bug, so it must not be listed as an unexpected error), which dropped the response before anything could
+      // count it. It is still dropped as an error; this only adds the load-signal event.
+      if (error.statusCode === 429 || /HTTP 429/i.test(error.message)) this.recordApi429(error);
       if (isNoise(error.message, error.url)) return;
       // WHY: Filter ERR_ABORTED on non-CRM URLs — navigation aborts when page navigates away
       const isAbort = error.message && error.message.includes('ERR_ABORTED');
@@ -177,6 +186,17 @@ class ErrorCollectorSingleton {
       if (message?.includes('playwright') || message?.includes('Target page')) return;
       this.capture({ type: 'node-rejection', message });
     });
+  }
+
+  private recordApi429(error: Pick<MiscError, 'message' | 'url' | 'method'>): void {
+    try {
+      const key = `api-429:${error.method ?? ''}:${error.url ?? error.message.substring(0, 50)}`;
+      if (this.recentKeys.has(key)) return; // the same response seen by several page listeners
+      this.recentKeys.add(key);
+      setTimeout(() => this.recentKeys.delete(key), 2000);
+      const where = error.url ? error.url.replace(/[?#].*$/, '') : '';
+      this.recordRecoveryEvent({ kind: 'api-429', outcome: 'observed', detail: `${error.method ?? ''} ${where}`.trim() });
+    } catch {}
   }
 
   // WHY this can never throw or alter control flow: it is called from inside

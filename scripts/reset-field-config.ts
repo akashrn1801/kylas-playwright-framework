@@ -261,7 +261,7 @@ async function main(): Promise<void> {
   const authManager = new AuthManager(browser);
 
   // WHY a server-side check before any field work (local dry-run 2026-10-23,
-  // lead/cfFormFieldLimitText): AuthManager.isSessionValid() reports "still valid"
+  // lead/cfFormFieldLimitText): the former AuthManager.isSessionValid() (removed 2026-11-04, ADR 0016) reported "still valid"
   // when `/` lands on a /sales/ URL, and caches that verdict for 30 minutes, so a
   // token the backend rejects passes it. The first field then waited 60 s for the
   // "Lead" tab on each of its 3 attempts (each new context reused the same stale

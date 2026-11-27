@@ -49,7 +49,12 @@ export interface JobStats {
   // rendered email instead of an unexplained gap between "N jobs ran" and
   // `jobs.length`.
   incompleteJobCount: number;
+  // Earliest started_at over EVERY job of the run, in-progress ones included (the fallback for the run start when the run endpoint
+  // cannot be read; see RunTimes.ts).
+  firstJobStartedAt?: string;
 }
+
+import { isThirdPartyUrl } from '../error-collector/errorFilters';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
@@ -103,6 +108,20 @@ export async function fetchGitHubJobs(
   return jobs;
 }
 
+/** `run_started_at` of the workflow run (GitHub's own start of the run, after queueing), or null when it cannot be read. */
+export async function fetchGitHubRunStartedAt(repo: string, runId: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { run_started_at?: string | null };
+    return body.run_started_at && Number.isFinite(Date.parse(body.run_started_at)) ? new Date(body.run_started_at).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
 // WHY pure and separate from fetchGitHubJobs() above (this pipeline's own
 // established enrichment-layer convention — see docs/known-issues/reporting-and-notifications.md's
 // enrichment-convention entry, matching FailureDetailBuilder.ts's
@@ -111,6 +130,8 @@ export async function fetchGitHubJobs(
 export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {
   const jobs: JobTiming[] = [];
   let incompleteJobCount = 0;
+  const starts = rawJobs.map((j) => (j.startedAt ? Date.parse(j.startedAt) : NaN)).filter((t) => Number.isFinite(t));
+  const firstJobStartedAt = starts.length > 0 ? new Date(Math.min(...starts)).toISOString() : undefined;
   for (const j of rawJobs) {
     if (!j.startedAt || !j.completedAt) {
       incompleteJobCount += 1;
@@ -124,7 +145,7 @@ export function computeJobStats(rawJobs: GitHubJobEntry[]): JobStats {
     jobs.push({ name: j.name, startedAt: j.startedAt, completedAt: j.completedAt, durationMs });
   }
   const totalJobMinutes = Math.round(jobs.reduce((sum, j) => sum + j.durationMs, 0) / 60000);
-  return { jobs, totalJobMinutes, incompleteJobCount };
+  return { jobs, totalJobMinutes, incompleteJobCount, ...(firstJobStartedAt ? { firstJobStartedAt } : {}) };
 }
 
 // ===================== Cross-shard overlap detection (Phase 3 item #2, v1) =====================
@@ -219,6 +240,8 @@ export interface RecoveryEventLike {
   kind: string;
   outcome: string;
   timestamp: string;
+  // "POST https://host/path" for an api-429 event: the host tells a Kylas API throttle from a third party's (Sentry telemetry)
+  detail?: string;
 }
 
 export interface JobRecoveryRow {
@@ -227,6 +250,10 @@ export interface JobRecoveryRow {
   completedAt: string;
   durationMs: number;
   rateLimitPages: number;
+  // Kylas API responses with status 429 (not the page): kind 'api-429' from a host that is not a known third party. Real throttling.
+  rateLimitApi: number;
+  // 429s from third-party hosts the app calls (Sentry telemetry): background noise, not rate limiting of our tests.
+  rateLimitThirdParty: number;
   errorBoundaryPages: number;
   setupRetries: number;
   // recoveries whose own retried action threw again (the recovery did NOT save the test)
@@ -250,6 +277,8 @@ function jobMatchesShardLabel(jobName: string, label: string): boolean {
   if (formFields) {
     return jobName.toLowerCase().includes('formfields') && jobName.includes(`(${formFields[1]})`);
   }
+  // The rerun shard (2026-11-24): its misc-errors artifact is merged under "<env>-rerun".
+  if (/^[a-z]+-rerun$/i.test(label)) return /rerun/i.test(jobName);
   const core = label.match(/^[a-z]+-(\d+)$/i);
   if (core) {
     return !/formfields/i.test(jobName) && new RegExp(`\\(shard ${core[1]}/`).test(jobName);
@@ -292,6 +321,8 @@ export function buildJobRecoveryRows(
       completedAt: job.completedAt,
       durationMs: job.durationMs,
       rateLimitPages: events.filter((e) => e.kind === 'rate-limit-page').length,
+      rateLimitApi: events.filter((e) => e.kind === 'api-429' && !isThirdPartyUrl(e.detail)).length,
+      rateLimitThirdParty: events.filter((e) => e.kind === 'api-429' && isThirdPartyUrl(e.detail)).length,
       errorBoundaryPages: events.filter((e) => e.kind === 'error-boundary-page').length,
       setupRetries: events.filter((e) => e.kind === 'globalsetup-transient-retry').length,
       failedAfterRecovery: events.filter((e) => e.outcome === 'failed').length,

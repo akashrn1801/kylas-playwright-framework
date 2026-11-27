@@ -1,0 +1,157 @@
+/**
+ * Offline check of BasePage's fail-fast waits (waitForRendered(), explainAppErrorPage(), click()) against a local
+ * HTTP server and a real chromium: no Kylas environment, no login.
+ *
+ *   npm run check:fail-fast
+ *
+ * Each case reproduces a failure seen in the 2026-11-03 sandbox run (docs/known-issues, flaky-fix-3): a control that
+ * can never appear because the app shows its error screen or a page-critical GET answered 429, and a click covered by
+ * `<div class="app-error something-is-broken">`. They used to wait 120 s / the whole 480 s test timeout. Exit 1 on any
+ * failed check.
+ */
+import * as http from 'http';
+import { chromium, Locator } from '@playwright/test';
+import { BasePage } from '../src/core/BasePage';
+import { dismissCtrlKAnnouncement } from '../src/utils/announcementPopup';
+
+class Probe extends BasePage {
+  rendered(locator: Locator, description: string, timeout?: number): Promise<void> {
+    return this.waitForRendered(locator, description, timeout);
+  }
+  clicked(locator: Locator, description: string): Promise<void> {
+    return this.click(locator, description);
+  }
+}
+
+let failures = 0;
+const out = (line: string): void => {
+  process.stdout.write(`${line}\n`);
+};
+const check = (ok: boolean, what: string, detail = ''): void => {
+  if (!ok) failures += 1;
+  out(`${ok ? 'PASS' : 'FAIL'}  ${what}${!ok && detail ? `  -> ${detail}` : ''}`);
+};
+
+const page = (body: string, script = ''): string => `<html><body>${body}<script>${script}</script></body></html>`;
+const ctrlK = (title: string, delayMs = 0): string => {
+  const html = `<div class="shortcuts-intro-layer" style="position:fixed;left:0;top:0;right:0;bottom:0;background:#fff"><div class="shortcuts-intro" role="dialog" aria-modal="true" aria-labelledby="shortcuts-intro-title"><h2 id="shortcuts-intro-title">${title}</h2><button class="shortcuts-intro__primary" onclick="window.tried=true">Try it now</button><button class="shortcuts-intro__later" onclick="document.querySelector('.shortcuts-intro-layer').remove()">Maybe later</button></div></div>`;
+  return page('<button id="b" onclick="window.pressed=true">Type</button><div id="host"></div>', `setTimeout(function(){document.getElementById('host').innerHTML=${JSON.stringify(html)}},${delayMs})`);
+};
+const ROUTES: Record<string, string> = {
+  '/ctrlk': ctrlK('Do almost anything in Kylas with Ctrl K'),
+  '/ctrlk-late': ctrlK('Do almost anything in Kylas with Ctrl K', 1500),
+  '/ctrlk-other': ctrlK('Something else entirely'),
+  '/ok': page('<input name="x">'),
+  '/slow': page('<div id="m"></div>', "setTimeout(function(){document.getElementById('m').innerHTML='<input name=x>'},7000)"),
+  '/broken': page('<div class="app-error something-is-broken">Something is broken here</div>'),
+  '/skeleton': page('<div>skeleton</div>', "fetch('/v1/deals/1')"),
+  '/plan': page('<div id="plan-upgrade-modal" class="modal show" role="dialog" style="display:block"><div class="modal-title">Upgrade your plan</div><p>Record limit reached</p></div>'),
+  '/modal': page('<div class="modal show" role="dialog" style="display:block"><h5 class="modal-title">Confirm delete</h5></div>'),
+  '/covered': page('<button id="b">Type</button><div class="app-error something-is-broken" style="position:fixed;left:0;top:0;right:0;bottom:0;background:#fff">Something is broken here</div>'),
+};
+
+async function main(): Promise<void> {
+  const server = http.createServer((req, res) => {
+    if (req.url?.startsWith('/v1/deals/1')) {
+      res.statusCode = 429;
+      res.end('{}');
+      return;
+    }
+    res.setHeader('content-type', 'text/html');
+    res.end(ROUTES[req.url ?? ''] ?? '');
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${(server.address() as { port: number }).port}`;
+  const browser = await chromium.launch();
+  const pg = await browser.newPage();
+  const probe = new Probe(pg);
+  const input = pg.locator('input[name=x]');
+
+  const timed = async (path: string, fn: () => Promise<void>): Promise<{ ms: number; error?: Error }> => {
+    await pg.goto(base + path);
+    const started = Date.now();
+    try {
+      await fn();
+      return { ms: Date.now() - started };
+    } catch (error) {
+      return { ms: Date.now() - started, error: error as Error };
+    }
+  };
+
+  let r = await timed('/ok', () => probe.rendered(input, 'present control'));
+  check(!r.error && r.ms < 3000, 'a control that is there returns at once', `${r.ms} ms ${r.error?.message ?? ''}`);
+
+  r = await timed('/slow', () => probe.rendered(input, 'slow control', 30000));
+  check(!r.error && r.ms >= 6000 && r.ms < 12000, 'a control that renders after 7 s is still waited for (no false fail-fast)', `${r.ms} ms ${r.error?.message ?? ''}`);
+
+  r = await timed('/broken', () => probe.rendered(input, 'form behind the error screen', 60000));
+  check(!!r.error && /Something is broken/.test(r.error.message) && r.ms < 10000, 'the app error screen fails within seconds and names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/skeleton', () => probe.rendered(input, 'form whose data GET answers 429', 60000));
+  check(!!r.error && /GET \/v1\/deals\/\{id\} -> 429/.test(r.error.message) && r.ms < 25000, 'a 429 on the page\'s GET fails after the 15 s grace and names the request', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/skeleton', () => probe.rendered(input, 'short budget', 8000));
+  check(!!r.error && /Timeout 8000ms|Timeout \d+ms exceeded/.test(r.error.message), 'with a budget shorter than the grace the plain timeout error is unchanged', r.error?.message ?? 'no error');
+
+  r = await timed('/covered', () => probe.clicked(pg.locator('#b'), 'type dropdown'));
+  check(!!r.error && /error screen \("Something is broken"\)/.test(r.error.message) && r.ms < 25000, 'a click covered by the error screen fails in ~15 s (was 657 retries until the test timeout) and names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  // Plan-limit modal and other overlays (2026-11-26): named in the failure; a plain missing element stays plain.
+  r = await timed('/plan', () => probe.rendered(input, 'Add form behind the plan modal', 60000));
+  check(!!r.error && /Kylas showed 'Upgrade your plan' \(account plan limit reached\)/.test(r.error.message) && r.ms < 10000, 'the plan-upgrade modal fails within seconds and names its title', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/modal', () => probe.rendered(input, 'form behind another modal', 6000));
+  check(!!r.error && /a modal or overlay is open over the page \('Confirm delete'\)/.test(r.error.message) && !/plan limit/.test(r.error.message), 'another open modal is named by its title once the wait runs out, and is not called a plan limit', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/ok', () => probe.rendered(pg.locator('input[name=absent]'), 'control that is not on the page', 6000));
+  check(!!r.error && !/modal|overlay|plan limit/i.test(r.error.message), 'red sample: a normal missing element is reported as before, no modal or plan-limit wording', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  r = await timed('/plan', () => probe.clicked(pg.locator('#absent'), 'Add button behind the plan modal'));
+  check(!!r.error && /account plan limit reached/.test(r.error.message), 'a click that fails behind the plan-upgrade modal names it', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  // Ctrl K announcement (2026-11-27): only that exact pop-up is dismissed, once, by "Maybe later"; nothing else is touched.
+  const popupGone = (): Promise<boolean> => pg.locator('.shortcuts-intro').count().then((n) => n === 0);
+  await pg.goto(base + '/ctrlk');
+  let t0 = Date.now();
+  let dismissed = await dismissCtrlKAnnouncement(pg);
+  check(dismissed && (await popupGone()) && !(await pg.evaluate(() => (window as unknown as { tried?: boolean }).tried)), 'the Ctrl K pop-up is dismissed with "Maybe later" (never "Try it now")', `${Date.now() - t0} ms`);
+
+  t0 = Date.now();
+  await probe.navigateTo(base + '/ctrlk');
+  check(await popupGone(), 'navigateTo() dismisses the Ctrl K pop-up that is already there', `${Date.now() - t0} ms`);
+
+  r = await timed('/ctrlk-late', async () => {
+    await pg.locator('.shortcuts-intro').waitFor({ state: 'visible', timeout: 5000 });
+    await probe.clicked(pg.locator('#b'), 'Type button covered by the Ctrl K pop-up');
+  });
+  check(!r.error && (await popupGone()) && (await pg.evaluate(() => (window as unknown as { pressed?: boolean }).pressed === true)) && r.ms < 8000, 'a click covered by the Ctrl K pop-up dismisses it first (no 15 s click timeout) and then clicks the target', `${r.ms} ms ${r.error?.message ?? ''}`);
+
+  await pg.goto(base + '/ok');
+  t0 = Date.now();
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && Date.now() - t0 < 500, 'the page-ready guard on a page without the pop-up returns at once (no waiting)', `${Date.now() - t0} ms`);
+
+  await pg.goto(base + '/ctrlk-other');
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && !(await popupGone()), 'red sample: a pop-up with the same container but another title is NOT dismissed');
+  r = await timed('/ctrlk-other', () => probe.rendered(input, 'form behind a different announcement', 6000));
+  check(!!r.error && /a modal or overlay is open over the page \('Something else entirely'\)/.test(r.error.message) && (await pg.locator('.shortcuts-intro').count()) === 1, 'red sample: a different overlay still fails by name and stays open', `${r.ms} ms ${r.error?.message ?? 'no error'}`);
+
+  await pg.goto(base + '/plan');
+  dismissed = await dismissCtrlKAnnouncement(pg);
+  check(!dismissed && (await pg.locator('#plan-upgrade-modal').count()) === 1, 'red sample: the plan-upgrade modal is not touched by the guard');
+
+  const closed = await browser.newPage();
+  await closed.close();
+  check((await dismissCtrlKAnnouncement(closed)) === false, 'the guard never throws (closed page)');
+
+  await browser.close();
+  server.close();
+  out(failures === 0 ? '\ncheck:fail-fast — all checks passed' : `\ncheck:fail-fast — ${failures} check(s) FAILED`);
+  process.exitCode = failures === 0 ? 0 : 1;
+}
+
+main().catch((error) => {
+  out(`check:fail-fast crashed: ${String(error)}`);
+  process.exitCode = 1;
+});

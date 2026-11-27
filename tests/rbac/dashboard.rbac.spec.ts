@@ -17,7 +17,7 @@ import { logger } from '../../src/utils/logger';
 test.describe('Dashboard RBAC', () => {
   test('@smoke @prodSafe DB16 restricted user can view dashboard', async ({ restrictedPage }) => {
     const dashboardPage = new DashboardPage(restrictedPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     await dashboardPage.assertDefaultSectionsVisible();
     logger.success('DB16 passed');
   });
@@ -26,7 +26,7 @@ test.describe('Dashboard RBAC', () => {
     restrictedPage,
   }) => {
     const dashboardPage = new DashboardPage(restrictedPage);
-    await dashboardPage.goToDashboard();
+    await dashboardPage.goToDefaultDashboard();
     expect(await dashboardPage.hasEditOptionInGearMenu()).toBe(false);
     // WHY also asserted here, not just "no Edit": confirmed live (§2F) the
     // restricted user's gear menu on Default Dashboard has exactly ONE item

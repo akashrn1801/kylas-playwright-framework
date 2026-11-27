@@ -117,19 +117,10 @@ test.describe('Tasks', () => {
     await tasksPage.openTaskInDetailPanel(taskData.name, taskId);
     await tasksPage.markTaskAsComplete(taskId);
 
-    // WHY: After marking complete the task may move out of "My Tasks" view —
-    // verify it still exists by searching with ID filter
-    if (taskId) {
-      await tasksPage.searchTaskById(taskId);
-      const item = adminPage.locator(`li#task_${taskId}`);
-      const visible = await item.isVisible().catch(() => false);
-      if (!visible) {
-        // Task may have been removed from default view after completion — acceptable
-        logger.info(
-          `Task ${taskId} no longer in My Tasks view after completion — expected behaviour`
-        );
-      }
-    }
+    // WHY: a completed task may correctly leave the default (open tasks) list, so the STATUS is asserted on the
+    // task's own detail (opened by id), not its list visibility
+    await tasksPage.searchTaskById(taskId!);
+    await tasksPage.assertTaskStatusOnDetail(taskId!, 'Completed');
     logger.success('TK6 passed');
   });
 

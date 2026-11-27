@@ -1,0 +1,454 @@
+{
+ "modules": [
+  {
+   "name": "Call-logs",
+   "type": "RBAC",
+   "file": "rbac/call-logs.rbac.spec.ts",
+   "total": 27
+  },
+  {
+   "name": "Companies",
+   "type": "RBAC",
+   "file": "rbac/companies.rbac.spec.ts",
+   "total": 25
+  },
+  {
+   "name": "Companies — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/companyFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Contacts",
+   "type": "RBAC",
+   "file": "rbac/contacts.rbac.spec.ts",
+   "total": 22
+  },
+  {
+   "name": "Contacts — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/contactFieldLimits.rbac.spec.ts",
+   "total": 28
+  },
+  {
+   "name": "Dashboard",
+   "type": "RBAC",
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "total": 28
+  },
+  {
+   "name": "Deals",
+   "type": "RBAC",
+   "file": "rbac/deals.rbac.spec.ts",
+   "total": 30
+  },
+  {
+   "name": "Deals — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/dealFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Leads",
+   "type": "RBAC",
+   "file": "rbac/leads.rbac.spec.ts",
+   "total": 40
+  },
+  {
+   "name": "Leads — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/leadFieldLimits.rbac.spec.ts",
+   "total": 25
+  },
+  {
+   "name": "Meetings",
+   "type": "RBAC",
+   "file": "rbac/meetings.rbac.spec.ts",
+   "total": 12
+  },
+  {
+   "name": "ProductsAndServices",
+   "type": "RBAC",
+   "file": "rbac/ProductsAndServices.rbac.spec.ts",
+   "total": 7
+  },
+  {
+   "name": "ProductsAndServices — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/productsAndServicesFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Quotations",
+   "type": "RBAC",
+   "file": "rbac/quotations.rbac.spec.ts",
+   "total": 16
+  },
+  {
+   "name": "Reports",
+   "type": "RBAC",
+   "file": "rbac/reports.rbac.spec.ts",
+   "total": 27
+  },
+  {
+   "name": "Tasks",
+   "type": "RBAC",
+   "file": "rbac/tasks.rbac.spec.ts",
+   "total": 16
+  },
+  {
+   "name": "Tasks — Field Limits",
+   "type": "RBAC",
+   "file": "rbac/formFields/taskFieldLimits.rbac.spec.ts",
+   "total": 31
+  },
+  {
+   "name": "Call-logs",
+   "type": "UI",
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "total": 29
+  },
+  {
+   "name": "Companies",
+   "type": "UI",
+   "file": "ui/companies/companies.spec.ts",
+   "total": 23
+  },
+  {
+   "name": "Companies — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/companyFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Contacts",
+   "type": "UI",
+   "file": "ui/contacts/contacts.spec.ts",
+   "total": 22
+  },
+  {
+   "name": "Contacts — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/contactFieldLimits.spec.ts",
+   "total": 42
+  },
+  {
+   "name": "Dashboard",
+   "type": "UI",
+   "file": "ui/dashboard/dashboard.spec.ts",
+   "total": 33
+  },
+  {
+   "name": "Deals",
+   "type": "UI",
+   "file": "ui/deals/deals.spec.ts",
+   "total": 26
+  },
+  {
+   "name": "Deals — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/dealFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Leads",
+   "type": "UI",
+   "file": "ui/leads/leads.spec.ts",
+   "total": 40
+  },
+  {
+   "name": "Leads — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/leadFieldLimits.spec.ts",
+   "total": 42
+  },
+  {
+   "name": "Meetings",
+   "type": "UI",
+   "file": "ui/meetings/meetings.spec.ts",
+   "total": 17
+  },
+  {
+   "name": "ProductsAndServices",
+   "type": "UI",
+   "file": "ui/ProductsAndServices/ProductsAndServices.spec.ts",
+   "total": 9
+  },
+  {
+   "name": "ProductsAndServices — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/productsAndServicesFieldLimits.spec.ts",
+   "total": 39
+  },
+  {
+   "name": "Quotations",
+   "type": "UI",
+   "file": "ui/quotations/quotations.spec.ts",
+   "total": 23
+  },
+  {
+   "name": "Reports",
+   "type": "UI",
+   "file": "ui/reports/reports.spec.ts",
+   "total": 37
+  },
+  {
+   "name": "Tasks",
+   "type": "UI",
+   "file": "ui/tasks/tasks.spec.ts",
+   "total": 17
+  },
+  {
+   "name": "Tasks — Field Limits",
+   "type": "UI",
+   "file": "ui/formFields/taskFieldLimits.spec.ts",
+   "total": 39
+  }
+ ],
+ "named": [
+  {
+   "file": "ui/dashboard/dashboard.spec.ts",
+   "line": 720,
+   "title": "DB14 mark a dashboard as Primary, reload, confirm active + option disabled",
+   "kind": "flaky",
+   "module": "Dashboard",
+   "type": "UI",
+   "durationMs": 45000,
+   "error": {
+    "primary": "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: \"QA-Auto-Dashboard-1795589896508-WWFTWE\"\nReceived: \"Default Dashboard\"\n\n   at ../tests/ui/dashboard/dashboard.spec.ts:737\n\n  735 |       await dashboardPage.reloadPage();\n  736 |       await dashboardPage.assertDashboardLoaded();\n> 737 |       expect(await dashboardPage.getCurrentDashboardName()).toBe(data.name);\n      |                                                             ^\n  738 |       expect(await dashboardPage.isMarkAsPrimaryDisabled()).toBe(true);\n  739 |     } finally {",
+    "snippet": "   at ../tests/ui/dashboard/dashboard.spec.ts:737\n\n  735 |       await dashboardPage.reloadPage();\n  736 |       await dashboardPage.assertDashboardLoaded();\n> 737 |       expect(await dashboardPage.getCurrentDashboardName()).toBe(data.name);\n      |                                                             ^\n  738 |       expect(await dashboardPage.isMarkAsPrimaryDisabled()).toBe(true);\n  739 |     } finally {",
+    "stack": "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: \"QA-Auto-Dashboard-1795589896508-WWFTWE\"\nReceived: \"Default Dashboard\"\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/tests/ui/dashboard/dashboard.spec.ts:737:61"
+   }
+  },
+  {
+   "file": "ui/leads/leads.spec.ts",
+   "line": 904,
+   "title": "admin cannot create a lead with an e-mail that another lead already uses",
+   "kind": "recovered",
+   "module": "Leads",
+   "type": "UI",
+   "durationMs": 100000,
+   "error": {
+    "primary": "Error: The \"View Lead\" list should show the existing lead (search index lag)\n\nexpect(received).toContain(expected) // indexOf\n\nExpected value: 178996\nReceived array: []\n\nCall Log:\n- Timeout 60000ms exceeded while waiting on the predicate\n\n   at ../tests/ui/leads/leads.spec.ts:966\n\n  964 |           message: 'The \"View Lead\" list should show the existing lead (search index lag)',\n  965 |         })\n> 966 |         .toContain(created.id);\n      |          ^\n  967 |\n  968 |       await leadsPage.clickSaveExpectingClientValidation();",
+    "snippet": "   at ../tests/ui/leads/leads.spec.ts:966\n\n  964 |           message: 'The \"View Lead\" list should show the existing lead (search index lag)',\n  965 |         })\n> 966 |         .toContain(created.id);\n      |          ^\n  967 |\n  968 |       await leadsPage.clickSaveExpectingClientValidation();",
+    "stack": "Error: The \"View Lead\" list should show the existing lead (search index lag)\n\nexpect(received).toContain(expected) // indexOf\n\nExpected value: 178996\nReceived array: []\n\nCall Log:\n- Timeout 60000ms exceeded while waiting on the predicate\n    at /home/runner/work/kylas-playwright-framework/kylas-playwright-framework/tests/ui/leads/leads.spec.ts:966:10"
+   }
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 1827,
+   "title": "(API) restricted user cannot add notes on an admin lead shared read only",
+   "kind": "known-bug",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 20000
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 1875,
+   "title": "(API) restricted user cannot delete the admin's note on an admin lead shared read only",
+   "kind": "known-bug",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 20000
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 1935,
+   "title": "(API) restricted user cannot add tasks on an admin lead shared read only",
+   "kind": "known-bug",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 20000
+  },
+  {
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "line": 582,
+   "title": "admin should see validation errors for invalid call log custom field values and not save the call log",
+   "kind": "skipped",
+   "module": "Call-logs",
+   "type": "UI",
+   "durationMs": 0
+  },
+  {
+   "file": "rbac/quotations.rbac.spec.ts",
+   "line": 20,
+   "title": "restricted user should handle inaccessible entity error and retry successfully",
+   "kind": "passed",
+   "module": "Quotations",
+   "type": "RBAC",
+   "durationMs": 406099
+  },
+  {
+   "file": "rbac/quotations.rbac.spec.ts",
+   "line": 30,
+   "title": "restricted user should see and edit quotation when set as owner by admin",
+   "kind": "passed",
+   "module": "Quotations",
+   "type": "RBAC",
+   "durationMs": 370168
+  },
+  {
+   "file": "ui/reports/reports.spec.ts",
+   "line": 40,
+   "title": "admin should verify lead report count matches actual filtered entity count with drill-through showing exact records",
+   "kind": "passed",
+   "module": "Reports",
+   "type": "UI",
+   "durationMs": 366236
+  },
+  {
+   "file": "ui/reports/reports.spec.ts",
+   "line": 30,
+   "title": "admin should verify deal report count matches actual filtered entity count",
+   "kind": "passed",
+   "module": "Reports",
+   "type": "UI",
+   "durationMs": 353693
+  },
+  {
+   "file": "ui/leads/leads.spec.ts",
+   "line": 20,
+   "title": "admin edits a lead to add Company Lookup and Contact Lookup and verifies both on the detail page",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "UI",
+   "durationMs": 327677
+  },
+  {
+   "file": "rbac/ProductsAndServices.rbac.spec.ts",
+   "line": 20,
+   "title": "restricted user can select admin-owned active product fixture on a new deal",
+   "kind": "passed",
+   "module": "ProductsAndServices",
+   "type": "RBAC",
+   "durationMs": 318728
+  },
+  {
+   "file": "ui/reports/reports.spec.ts",
+   "line": 20,
+   "title": "admin should verify call log report count matches actual filtered entity count",
+   "kind": "passed",
+   "module": "Reports",
+   "type": "UI",
+   "durationMs": 312327
+  },
+  {
+   "file": "rbac/call-logs.rbac.spec.ts",
+   "line": 20,
+   "title": "Restricted user should create a Contact call log with optional Associated Deal and Outcome No Answer and verify both entity associations on detail panel",
+   "kind": "passed",
+   "module": "Call-logs",
+   "type": "RBAC",
+   "durationMs": 285083
+  },
+  {
+   "file": "ui/leads/leads.spec.ts",
+   "line": 30,
+   "title": "admin creates a lead selecting Company Lookup and Contact Lookup and verifies both on the detail page",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "UI",
+   "durationMs": 278377
+  },
+  {
+   "file": "rbac/call-logs.rbac.spec.ts",
+   "line": 30,
+   "title": "Restricted user should create a Deal call log with Outcome Rejected and verify Associated Contact mandatory, phone auto-populated, duration disabled",
+   "kind": "passed",
+   "module": "Call-logs",
+   "type": "RBAC",
+   "durationMs": 272603
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 20,
+   "title": "admin reassigns lead to restricted user and restricted becomes owner can edit and delete",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 254871
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 40,
+   "title": "admin shares lead Update permission restricted user sees edit button and only Clone in ellipsis",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 251380
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "line": 1194,
+   "title": "admin reassigns deal to restricted user and restricted becomes owner can edit and delete",
+   "kind": "passed",
+   "module": "Deals",
+   "type": "RBAC",
+   "durationMs": 239193
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 30,
+   "title": "admin shares lead with Note Task Meeting Call permissions and restricted user can do all four",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 237465
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "line": 20,
+   "title": "restricted user cannot see admin-owned deal",
+   "kind": "passed",
+   "module": "Deals",
+   "type": "RBAC",
+   "durationMs": 228382
+  },
+  {
+   "file": "ui/reports/reports.spec.ts",
+   "line": 3010,
+   "title": "admin should verify meeting report count matches actual filtered entity count",
+   "kind": "passed",
+   "module": "Reports",
+   "type": "UI",
+   "durationMs": 309219
+  },
+  {
+   "file": "ui/deals/deals.spec.ts",
+   "line": 3020,
+   "title": "admin should update a deal and mark payment as received",
+   "kind": "passed",
+   "module": "Deals",
+   "type": "UI",
+   "durationMs": 240728
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "line": 3030,
+   "title": "admin shares deal with Update Note Task Meeting permissions and restricted user can do all four",
+   "kind": "passed",
+   "module": "Deals",
+   "type": "RBAC",
+   "durationMs": 236243
+  },
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "line": 3040,
+   "title": "admin shares lead Task permission restricted user sees Tasks icon and can create task from lead detail",
+   "kind": "passed",
+   "module": "Leads",
+   "type": "RBAC",
+   "durationMs": 233457
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "line": 3050,
+   "title": "restricted user cannot edit admin-owned deal via direct URL",
+   "kind": "passed",
+   "module": "Deals",
+   "type": "RBAC",
+   "durationMs": 228206
+  }
+ ]
+}

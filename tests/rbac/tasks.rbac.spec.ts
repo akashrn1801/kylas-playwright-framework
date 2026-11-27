@@ -104,6 +104,9 @@ test.describe('Tasks RBAC', () => {
 
     await tasksPage.openTaskInDetailPanel(taskData.name, taskId);
     await tasksPage.markTaskAsComplete(taskId);
+    // WHY: a completed task may leave the default list, so assert the STATUS on the task's own detail
+    await tasksPage.searchTaskById(taskId!);
+    await tasksPage.assertTaskStatusOnDetail(taskId!, 'Completed');
     logger.success('Restricted user marked own task as complete');
     logger.success('TK16 passed');
   });
@@ -181,7 +184,7 @@ test.describe('Tasks RBAC', () => {
 
     // Open in detail panel
     await restrictedPage.locator(`li#task_${taskId}`).click();
-    await restrictedPage.waitForTimeout(800);
+    await restrictedTasks.waitForDetailPanel();
 
     // WHY: Unlike meetings where invitees cannot edit — tasks assigned to restricted
     // user are fully editable by them (Edit button visible in detail panel header)
@@ -293,7 +296,7 @@ test.describe('Tasks RBAC', () => {
 
     // Open task in detail panel
     await restrictedPage.locator(`li#task_${taskId}`).click();
-    await restrictedPage.waitForTimeout(800);
+    await restrictedTasks.waitForDetailPanel();
 
     // WHY: Restricted user is assignee — should be able to add notes
     // Adding a note does not trigger relation validation (no save of task fields)

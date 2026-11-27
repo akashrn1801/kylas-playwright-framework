@@ -1,4 +1,5 @@
-import { Page, expect, Locator, Response, Request } from '@playwright/test';
+import { Page, expect, Locator, Request } from '@playwright/test';
+import { isRetryableHttpStatus } from '../../utils/retryableStatus';
 import { BasePage } from '../../core/BasePage';
 import {
   LeadData,
@@ -7,6 +8,10 @@ import {
   LEAD_CUSTOM_FIELD_NAMES,
 } from '../../data/factories/leadFactory';
 import { config } from '../../../config/config';
+import { reportCreatedRecord } from '../../utils/createdRecords';
+import { recordKnownIssue } from '../../utils/knownIssue';
+import { LeadApi } from '../../utils/leadApi';
+import { uniqueEmail, uniquePhone } from '../../data/factories/uniqueValues';
 import { logger } from '../../utils/logger';
 
 // WHY: same rationale as CompaniesPage's TransientCompanySaveError (2026-07-21
@@ -17,7 +22,11 @@ import { logger } from '../../utils/logger';
 // 2026-07-22 after leads.rbac.spec.ts:38 hit the identical class live (see
 // captureLeadCreateOutcome()/createLead() for the classify+retry).
 class TransientLeadSaveError extends Error {
-  constructor(message: string) {
+  // ADR 0017 (B4): whether any create response was seen decides how the retry check treats an unknown answer
+  constructor(
+    message: string,
+    readonly noResponseObserved = false
+  ) {
     super(message);
     this.name = 'TransientLeadSaveError';
   }
@@ -42,6 +51,68 @@ export class LeadsPage extends BasePage {
   private readonly searchInput = (): Locator => this.page.locator('#fulltext-search');
 
   private readonly searchIcon = (): Locator => this.page.locator('svg:has(#Ic_Search)').first();
+
+  // ── List view controls (filter, page size, sort, bulk bar, smart lists, view mode) ──
+  // WHY these hooks: ids confirmed live 2026-10-30 and none is position-generated —
+  // `check_<leadId>` is keyed by the record, `#totalRecords` / `#sortedBy` are fixed.
+  private readonly filterButton = (): Locator => this.page.locator('#filter-action');
+
+  private readonly filterPanel = (): Locator => this.page.locator('#filterModal');
+
+  private readonly filterFieldPicker = (): Locator =>
+    this.filterPanel().locator('.select__control').first();
+
+  private readonly listDataRows = (): Locator =>
+    this.page.locator('.rt-tr[role="row"]:has(input[id^="check_"]:not(#check_all))');
+
+  private readonly rowCheckboxControl = (leadId: number): Locator =>
+    this.page.locator(`.custom-control:has(#check_${leadId})`);
+
+  private readonly listTotalRecords = (): Locator => this.page.locator('#totalRecords').first();
+
+  private readonly listFooterRange = (): Locator => this.page.locator('#totalRecords').last();
+
+  private readonly listSortedBy = (): Locator => this.page.locator('#sortedBy');
+
+  private readonly pageSizeControl = (): Locator =>
+    this.page.locator('#page-sise-select').locator('xpath=ancestor::div[contains(@class,"control")]');
+
+  private readonly viewModeControl = (): Locator =>
+    this.page.locator('#listing-view').locator('xpath=ancestor::div[contains(@class,"control")]');
+
+  private readonly smartListCaret = (): Locator =>
+    this.page.locator('#selectedSmartList .fa-caret-down');
+
+  private readonly smartListModal = (): Locator => this.page.locator('#smartListModal');
+
+  private readonly kanbanColumnHeaders = (): Locator =>
+    this.page.locator('.kanban-board .kanban-column-header');
+
+  // WHY a text filter, not getByRole: the buttons carry an icon, so their accessible name is not
+  // exactly the label (confirmed live: role + exact name found nothing).
+  private readonly bulkActionButton = (label: string): Locator =>
+    this.page
+      .locator('button')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(label)}\\s*$`) })
+      .first();
+
+  // The lead's name in the detail header: empty until the lead has loaded (confirmed live, QA)
+  private readonly leadHeaderName = (): Locator => this.page.locator('.d-flex.min-width-0 > .text-truncate').first();
+
+  private readonly selectedLeadsBanner = (count: number): Locator =>
+    this.page.getByText(`${count} Lead${count === 1 ? '' : 's'} selected`, { exact: true });
+
+  // ── Notes card (right panel) ──
+  private readonly notesCard = (): Locator =>
+    this.page
+      .locator('.card')
+      .filter({ has: this.page.locator('h2').filter({ hasText: /^\s*Notes\s*$/ }) })
+      .first();
+
+  private readonly noteItems = (): Locator => this.notesCard().locator('.note.card');
+
+  // ── Convert confirmation (shown only when nothing is ticked) ──
+  private readonly convertConfirmModal = (): Locator => this.page.locator('#confirmModal');
 
   private readonly searchLoader = (): Locator => this.page.locator('.spinner, .loader, .loading');
 
@@ -575,7 +646,14 @@ export class LeadsPage extends BasePage {
       return;
     }
     await nav.click();
-    await this.page.waitForTimeout(500);
+    // B6: the next steps need the custom-field inputs. The fill helpers skip a field that is not in the DOM
+    // (B8 defect, behaviour unchanged here), so wait for them instead of a pause; a tenant without custom
+    // fields falls through after the bound.
+    await this.page
+      .locator('[id*="_input_cf"]')
+      .first()
+      .waitFor({ state: 'attached', timeout: 5000 })
+      .catch(() => logger.warn('No custom-field inputs found after the Other Details click'));
   }
 
   // WHY: fills the Campaign Information section — Campaign and Source are
@@ -967,29 +1045,34 @@ export class LeadsPage extends BasePage {
   ): Promise<void> {
     const tab = this.otherDetailsDetailPageTab();
     const valueLocator = this.page.locator(`[id="cf${fieldName}"] .title`);
-    const maxAttempts = 4;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        if (await tab.isVisible({ timeout: config.timeouts.navigation }).catch(() => false)) {
-          await tab.click();
-        }
-        await this.revealDetailCarouselSlideFor(`cf${fieldName}`);
-        await expect(
-          valueLocator,
-          `Lookup "${description}": expected "${expectedValue}" on the detail page`
-        ).toContainText(expectedValue, { timeout: config.timeouts.expect });
-        logger.success(`Lookup "${description}" verified on detail page: "${expectedValue}"`);
-        return;
-      } catch (error) {
-        lastError = error;
-        // Let the late post-load re-render (which resets the active tab)
-        // settle, then re-activate and re-verify on the next iteration.
-        await this.page.waitForTimeout(1500);
-      }
-    }
-    throw new Error(
-      `Lookup "${description}": value "${expectedValue}" was not verified on the detail page after ${maxAttempts} attempts — ${String(lastError)}`
+    // B6: ONE assertion (the 4x re-activate-and-retry loop on assertion failure is gone). activateDetailTab()
+    // waits for the tab strip, which renders with the detail layout (about 1.5 s after the lead itself).
+    await this.activateDetailTab(tab, 'Other Details');
+    await this.revealDetailCarouselSlideFor(`cf${fieldName}`);
+    await expect(
+      valueLocator,
+      `Lookup "${description}": expected "${expectedValue}" on the detail page`
+    ).toContainText(expectedValue, { timeout: config.timeouts.expect });
+    logger.success(`Lookup "${description}" verified on detail page: "${expectedValue}"`);
+  }
+
+  // B6: click a detail tab and know it is the active one (trace: the link goes from "nav-item nav-link" to
+  // "nav-item nav-link active" about 0.5 s after the click) instead of pausing.
+  private async activateDetailTab(tab: Locator, name: string): Promise<void> {
+    // the strip renders after the detail layout, about 1.5 s after the lead itself (restricted-user trace); an
+    // instant isVisible() saw no tab, nothing was clicked and the value container never appeared (rbac:1094).
+    // Waiting on the tab is the signal that works in every flow: a resource-timeline check of the layout
+    // request does not (the timeline buffer fills in a long single-page session, ui:636).
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should appear on the detail page`).toBeVisible({
+        timeout: config.timeouts.navigation,
+      })
+    );
+    await tab.click();
+    await this.withSessionExpiryRecovery(() =>
+      expect(tab, `"${name}" detail tab should be active after the click`).toHaveClass(/active/, {
+        timeout: config.timeouts.expect,
+      })
     );
   }
 
@@ -998,24 +1081,18 @@ export class LeadsPage extends BasePage {
 
     await this.fill(this.searchInput(), searchText, 'search input');
 
-    await Promise.all([this.waitForSearchApi(), this.click(this.searchIcon(), 'search icon')]);
+    // B6 (staging probe 2026-11-17): the list search is `POST /v1/search/lead?...` -> 200. The old wait matched a
+    // `GET` on any URL containing "search", which never occurs: every search waited its full 15 s, its miss
+    // was swallowed and a failed search went unnoticed. Armed before the click and strict (status, code and
+    // message when the answer is not 2xx).
+    await this.saveAndAwait(() => this.click(this.searchIcon(), 'search icon'), {
+      method: 'POST',
+      urlRe: /^\/v1\/search\/lead\/?$/,
+      description: 'lead search (POST /v1/search/lead)',
+      timeout: 15000,
+    });
 
     await this.waitForLoaderToDisappear();
-  }
-
-  private async waitForSearchApi(): Promise<Response | null> {
-    try {
-      return await this.armResponseWaitWithRecovery(
-        (response) =>
-          response.url().includes('search') &&
-          response.request().method() === 'GET' &&
-          response.status() === 200,
-        'lead search API',
-        15000
-      );
-    } catch {
-      return null;
-    }
   }
 
   private async captureLeadIdFromResponse(): Promise<number | null> {
@@ -1046,6 +1123,7 @@ export class LeadsPage extends BasePage {
       const leadId = body?.id ?? body?.data?.id ?? null;
 
       logger.success(`Captured lead ID: ${leadId}`);
+      reportCreatedRecord('lead', leadId);
 
       return leadId;
     } catch (error) {
@@ -1088,6 +1166,11 @@ export class LeadsPage extends BasePage {
     noResponseObserved: boolean;
     detail: string;
   }> {
+    // WHY (KI-71, 2026-11-19): the timeout could not say "sent, no answer" from "never sent". Diagnostics only: the
+    // transient classification and the check-before-retry in createLead() (ADR 0017) are unchanged.
+    const createWatch = this.watchRequests(
+      (r) => r.method() === 'POST' && r.url().includes('/v1/leads') && !r.url().includes('/reports/')
+    );
     try {
       const response = await this.armResponseWaitWithRecovery(
         (res) =>
@@ -1104,6 +1187,7 @@ export class LeadsPage extends BasePage {
           (body?.data as { id?: number } | undefined)?.id ??
           null) as number | null;
         logger.success(`Captured lead ID: ${id} from ${response.url()}`);
+        reportCreatedRecord('lead', id);
         return {
           id,
           transient: false,
@@ -1114,12 +1198,7 @@ export class LeadsPage extends BasePage {
       const message = String((body as { message?: unknown })?.message ?? '');
       const fieldErrors = (body as { fieldErrors?: unknown })?.fieldErrors;
       const hasFieldErrors = Array.isArray(fieldErrors) && fieldErrors.length > 0;
-      const transient =
-        !hasFieldErrors &&
-        (status >= 500 ||
-          /unexpected error occurred|internal server error|something didn't work as expected/i.test(
-            message
-          ));
+      const transient = !hasFieldErrors && isRetryableHttpStatus(status);
       logger.warn(
         `Lead create returned HTTP ${status} (message: "${message}", ` +
           `fieldErrors: ${hasFieldErrors ? 'present' : 'none'}) — classified as ` +
@@ -1157,35 +1236,30 @@ export class LeadsPage extends BasePage {
         id: null,
         transient: true,
         noResponseObserved: true,
-        detail: this.describeMissedResponse(error, config.timeouts.navigation),
+        detail: this.describeMissedResponse(error, config.timeouts.navigation, createWatch),
       };
+    } finally {
+      createWatch.stop();
     }
   }
 
   private async retryFindLead(firstName: string): Promise<boolean> {
-    const currentConfig = this.retryConfig;
-
-    for (let attempt = 1; attempt <= currentConfig.retries; attempt++) {
-      logger.info(`Search attempt ${attempt}/${currentConfig.retries}`);
-
-      await this.goToLeadsList();
-
-      await this.performSearch(firstName);
-
-      const found = await this.waitForSearchResults(firstName);
-
-      if (found) {
-        logger.success('Lead found');
-
-        return true;
-      }
-
-      if (attempt < currentConfig.retries) {
-        await this.page.waitForTimeout(currentConfig.wait);
-      }
-    }
-
-    return false;
+    const { retries } = this.retryConfig;
+    // B6: the real condition is the lead's row in the search results after a fresh list + search (a new lead
+    // can lag in the search index); retryAttempts repeats that with its own backoff inside the budget the fixed
+    // retries x (5 s results wait + pause) took, instead of a fixed pause between attempts
+    await this.withSessionExpiryRecovery(() =>
+      this.retryAttempts(retries, `Lead "${firstName}" search`, async () => {
+        logger.info(`Searching lead: ${firstName}`);
+        await this.goToLeadsList();
+        await this.performSearch(firstName);
+        if (!(await this.waitForSearchResults(firstName))) {
+          throw new Error(`Lead "${firstName}" is not in the search results yet`);
+        }
+      })
+    );
+    logger.success('Lead found');
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1593,112 +1667,48 @@ export class LeadsPage extends BasePage {
     logger.success(`Pipeline stage changed to: ${newStage}`);
   }
 
-  // WHY this exists at all — real, DIRECTLY CAUGHT root cause, 2026-09-22,
-  // superseding the "genuinely unexplained real-environment condition"
-  // conclusion this codebase's own history had previously settled on for
-  // FFL36 (see leadFieldLimits.spec.ts's own extensive WHY comment on
-  // saveAndCaptureLeadId()'s maxAttempts — that conclusion is now known to
-  // be incomplete, not wrong about the SYMPTOM, but wrong about WHERE the
-  // problem lives): a fresh diagnostic pass (captureNetworkDuringSave(),
-  // instrumenting every request/response/requestfailed event around the
-  // exact save-button click) caught this live, 4 times in a row in one
-  // single run, with byte-for-byte identical evidence every time — a
-  // COMPLETE ABSENCE of any request to `/v1/leads` for the full 60-second
-  // wait, not a slow or failed one. Only third-party background noise
-  // (headway/stripe/viasocket) appears in the captured window. Combined
-  // with zero captured `pageerror`/`console-error` events in the same
-  // window (ruling out an uncaught client-side exception inside the click
-  // handler) and Playwright's own click() resolving cleanly (ruling out a
-  // stuck/covered/disabled element at click time, which Playwright's own
-  // actionability checks would have thrown on) — the only evidence-
-  // consistent explanation left is that the click event itself is being
-  // intercepted/swallowed SOMEWHERE between the browser dispatching it and
-  // React's own bubble-phase delegated handler ever seeing it. This is the
-  // exact same failure family already confirmed and fixed once in this
-  // codebase for a different element (a react-select menu) — see
-  // `docs/PATTERNS.md` P13: the `viasocket.com` chatbot
-  // widget, embedded on every page, is confirmed to perform its own async
-  // DOM/event work shortly after page interactions; the captured evidence
-  // here directly shows its own `embedfrontend.viasocket.com/cdn-cgi/
-  // zaraz/t` tracking call firing within ~1s of the Save click on one of
-  // the four captured occurrences. §18's own fix for the react-select case
-  // was a "verify the effect actually landed, retry if not" pattern rather
-  // than a longer wait — this applies the identical shape to the Save
-  // button: verify a real network EFFECT of the click (a REQUEST being
-  // initiated, not a response — the response is what the existing 60s
-  // wait already covers) within a short window, and retry the click itself
-  // (not a full form reset) if it didn't.
-  //
-  // WHY this is purely additive, never a new failure mode: the caller's
-  // own captureLeadCreateOutcome() response-wait is armed BEFORE this is
-  // called and keeps running throughout — if every click-verify attempt
-  // here is exhausted with no request ever observed, this simply returns
-  // and the pre-existing 60s response-wait/TransientLeadSaveError
-  // classification takes over exactly as it did before this fix existed.
-  // WHY a 4-second verify window: real successful saves are directly
-  // evidenced elsewhere in this same investigation to complete in as
-  // little as 239ms — 4s is generous margin above genuine success timing
-  // while being 15x faster than waiting out the old 60s-per-attempt cost
-  // on a click that, per the evidence above, was never going to produce a
-  // request at all. WHY retrying the SAME still-open form rather than
-  // resetting: the click itself is the suspected failure point, not the
-  // form's own state — re-clicking the same button is the minimal,
-  // targeted remedy; a full reset is already the existing, proven fallback
-  // one layer up (saveAndCaptureLeadId()/createLead()) if this exhausts.
+  // Clicks Save once and waits for the app's own answer to it. See the comment inside for why there is no re-click (ADR 0017, B4).
   private async clickSaveButtonAndVerifyRequestFires(): Promise<void> {
-    const CLICK_VERIFY_WINDOW_MS = 4000;
-    const MAX_CLICK_ATTEMPTS = 3;
+    // ADR 0017 (B4): ONE click. The old loop re-clicked Save up to 3 times when no create request
+    // showed within 4 s; a re-click after a slow (not lost) first click is a double submit. The click is
+    // now followed by a wait for ANY of the app's own answers: the create request, Save disabled or gone
+    // (the form is submitting or closed), or an inline validation error. If none can be seen, nothing is
+    // clicked again: the caller's response wait (60 s) and its named classification take over.
+    const EFFECT_WINDOW_MS = config.timeouts.expect;
     const isCreateLeadRequest = (req: Request): boolean =>
       req.url().includes('/v1/leads') &&
       !req.url().includes('/reports/') &&
       req.method() === 'POST';
 
-    for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
-      const requestFiredPromise = this.page
-        .waitForRequest(isCreateLeadRequest, { timeout: CLICK_VERIFY_WINDOW_MS })
+    let requestFired = false;
+    const onRequest = (req: Request): void => {
+      if (isCreateLeadRequest(req)) requestFired = true;
+    };
+    this.page.on('request', onRequest);
+    try {
+      // the css-1dsbpcp overlay was seen blocking this Save click (FFL15), see
+      // waitForClickTargetUnobstructed()
+      await this.waitForClickTargetUnobstructed(this.saveButton());
+      await this.click(this.saveButton(), 'save button');
+      const decided = await expect
+        .poll(
+          async () =>
+            requestFired ||
+            (await this.page.locator('button[type="submit"].save-button:enabled').count()) === 0 ||
+            (await this.page.locator('input.is-invalid:visible, .invalid-feedback:visible').count()) > 0,
+          { timeout: EFFECT_WINDOW_MS }
+        )
+        .toBe(true)
         .then(() => true)
         .catch(() => false);
-      // WHY this wait (added 2026-09-22, real live evidence): the exact
-      // `css-1dsbpcp` overlay already root-caused and fixed for the Multi
-      // Pick List reopen-click (BasePage.ts's waitForClickTargetUnobstructed())
-      // was independently observed live blocking THIS Save button click too —
-      // `TimeoutError: locator.click: Timeout 15000ms exceeded... <div
-      // class="css-1dsbpcp"></div> from <div class="css-qh6yz6">…</div>
-      // subtree intercepts pointer events`, confirmed via a real FFL15
-      // failure. Proof this overlay is not scoped to one widget — see that
-      // method's own updated WHY comment.
-      await this.waitForClickTargetUnobstructed(this.saveButton());
-      await this.click(
-        this.saveButton(),
-        `save button (click-verify attempt ${attempt}/${MAX_CLICK_ATTEMPTS})`
-      );
-      const requestFired = await requestFiredPromise;
-      if (requestFired) return;
-      // WHY this message's cause is now stated as confirmed, not open
-      // (root-caused 2026-09-22 via direct log evidence — see
-      // fillLeadCustomFields()'s WHY comment): the app's real onClick
-      // handler fires (confirmed via prior live React fiber instrumentation)
-      // but correctly declines to submit because a real, genuine inline
-      // validation error is present — most commonly a custom field's value
-      // (typically a leftover, unrelated-to-this-test-case random default
-      // from generateLeadData()) violating an account-wide min/max/regex
-      // constraint some earlier or concurrent test configured on that field.
-      // This is the app behaving correctly, not a click race or a backend
-      // flake — see saveLead()'s own updated formError-priority handling
-      // immediately below, which now surfaces this real error directly
-      // instead of letting it be misclassified as transient.
-      logger.warn(
-        `Save button click resolved but no create-lead request was observed within ` +
-          `${CLICK_VERIFY_WINDOW_MS}ms (attempt ${attempt}/${MAX_CLICK_ATTEMPTS}) — most likely a real, ` +
-          'genuine inline validation error is blocking submission (see the form-error check right ' +
-          'after this exhausts)' +
-          (attempt < MAX_CLICK_ATTEMPTS ? ' — retrying the click on the same, still-open form' : '')
-      );
+      if (decided) return;
+    } finally {
+      this.page.off('request', onRequest);
     }
     logger.warn(
-      `Save button click-verify exhausted ${MAX_CLICK_ATTEMPTS} attempts with no create-lead request ` +
-        'observed — falling through to the existing response-wait, which will classify this as transient ' +
-        'if it times out'
+      `Save was clicked once; within ${EFFECT_WINDOW_MS}ms no create-lead request, no disabled/closed Save and ` +
+        'no inline validation error was seen. Not clicking again (double-submit risk): the response wait ' +
+        'below classifies the outcome.'
     );
   }
 
@@ -1760,7 +1770,8 @@ export class LeadsPage extends BasePage {
     // for a transient is itself just a generic message.
     if (outcome.transient) {
       throw new TransientLeadSaveError(
-        `Lead create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`
+        `Lead create hit a transient backend error (no field-level validation) — retryable: ${outcome.detail}`,
+        outcome.noResponseObserved
       );
     }
 
@@ -1996,10 +2007,77 @@ export class LeadsPage extends BasePage {
   // method's own WHY comment. createLead()'s own retry/save control flow is
   // completely untouched; only what gets FILLED changes. Every existing
   // caller omits `options` and gets the original, unmodified behavior.
+  // WHY (2026-10-30): the account rejects a lead whose e-mail or phone another lead already has, and tests keep
+  // everything they create. The values come from uniqueValues.ts, but the phone space is small, so before the
+  // form is filled the app is asked (`has-duplicates`, answered from the database at once). A used value is
+  // replaced by a new one (at most 5 times, then it fails loudly); the caller's data object is updated so what
+  // it asserts afterwards is what was typed. The check is a safety net: if the page has no session token yet it
+  // is skipped with a warning, and so is an answer that is not OK (hasDuplicate() returns null and logs it):
+  // the form's own duplicate error still stops a collision.
+  private async ensureContactValuesUnused(data: LeadData): Promise<void> {
+    let api: LeadApi;
+    try {
+      api = await LeadApi.forPage(this.page);
+    } catch (error) {
+      logger.warn(`Duplicate pre-check skipped: no session token on this page (${String(error).split('\n')[0]})`);
+      return;
+    }
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const emailUsed = data.email ? (await api.hasDuplicate('emails', data.email)) === true : false;
+        const phoneUsed = data.phone ? (await api.hasDuplicate('phoneNumbers', data.phone)) === true : false;
+        if (!emailUsed && !phoneUsed) return;
+        if (attempt >= 5) {
+          throw new Error(`Test data collision: e-mail ${data.email} / phone ${data.phone} are already used by a lead`);
+        }
+        logger.warn(`Lead test data already used (e-mail: ${emailUsed}, phone: ${phoneUsed}) — generating new values`);
+        if (emailUsed) data.email = uniqueEmail('lead');
+        if (phoneUsed) data.phone = uniquePhone();
+      }
+    } finally {
+      await api.dispose();
+    }
+  }
+
+  // ADR 0017 (B4): check first, then decide. A create whose answer was missed or was a 5xx may still
+  // have written the lead, and retrying would double-create it. `has-duplicates` is answered from the
+  // database at once (not the search index), so it tells whether the attempt's e-mail/phone is used now.
+  // Used -> fail by name, no retry. Unknown (no value to ask about, or the endpoint does not answer) ->
+  // retry only when the backend ANSWERED with a retryable status (ADR 0014 section 1); a create with no
+  // answer at all cannot be told apart from a written lead, so it fails by name instead of guessing.
+  private async assertLeadNotCreatedBeforeRetry(data: LeadData, cause: TransientLeadSaveError): Promise<void> {
+    let used: boolean | null = null;
+    try {
+      const api = await LeadApi.forPage(this.page);
+      try {
+        const emailUsed = data.email ? await api.hasDuplicate('emails', data.email) : null;
+        const phoneUsed = data.phone ? await api.hasDuplicate('phoneNumbers', data.phone) : null;
+        used = emailUsed === true || phoneUsed === true ? true : emailUsed === false || phoneUsed === false ? false : null;
+      } finally {
+        await api.dispose();
+      }
+    } catch (error) {
+      logger.warn(`Lead existence check unavailable: ${String(error).split('\n')[0]}`);
+    }
+    if (used === true) {
+      throw new Error(
+        `Lead create did not give a usable answer, but a lead with e-mail ${data.email} / phone ${data.phone} ` +
+          `already exists, so the create went through; not retrying (a retry would create a duplicate). ${cause.message}`
+      );
+    }
+    if (used === null && cause.noResponseObserved) {
+      throw new Error(
+        `Lead create got no response and whether the lead was written cannot be checked (has-duplicates ` +
+          `unavailable); not retrying blind. ${cause.message}`
+      );
+    }
+  }
+
   async createLead(
     data: LeadData,
     options?: { minimal?: boolean; onlyCustomField?: LeadCustomFieldKey; onlyCustomFieldName?: string }
   ): Promise<number | null> {
+    await this.ensureContactValuesUnused(data);
     return this.withSessionExpiryRetry(async () => {
       // WHY the bounded transient-retry (ported 2026-07-22 from
       // CompaniesPage.createCompany after leads.rbac.spec.ts:38 hit the
@@ -2017,6 +2095,7 @@ export class LeadsPage extends BasePage {
           return await this.saveLead();
         } catch (error) {
           if (error instanceof TransientLeadSaveError && attempt < maxAttempts) {
+            await this.assertLeadNotCreatedBeforeRetry(attemptData, error);
             logger.warn(
               `Lead create hit a transient backend error (attempt ${attempt}/${maxAttempts}) — ` +
                 're-navigating and retrying the whole create'
@@ -2059,8 +2138,11 @@ export class LeadsPage extends BasePage {
 
       await this.waitForLeadDetailsPage();
 
-      await expect(this.firstNameInput()).toHaveValue(data.firstName, {
-        timeout: 10000,
+      // WHY body text, not firstNameInput(): confirmed live (see assertLeadUpdated()) that
+      // input[name="firstName"] exists only on the create/edit FORM, never on the detail page —
+      // this ID branch was dead code until the callers started passing the ID.
+      await expect(this.page.locator('body')).toContainText(data.firstName, {
+        timeout: 15000,
       });
 
       logger.success(`Lead verified: ${data.firstName}`);
@@ -2205,25 +2287,32 @@ export class LeadsPage extends BasePage {
 
   async assertLeadDeletedById(leadId: number): Promise<void> {
     logger.info(`Asserting lead ${leadId} is deleted`);
-    // WHY: Navigate to detail URL — deleted lead shows error toast or redirects
+    // B6: positive control first, then the specific not-found state (staging trace of a deleted lead: the lead
+    // GET answers 404 with code 000010, the URL stays on details/<id>, the page shows "Not Found" and "the
+    // record doesn't seem to exists or you don't have enough permissions"). The old check passed on ANY
+    // redirect or any body text matching /exist|permission/, even before the page had loaded.
+    const leadGet = this.armResponseWaitWithRecovery(
+      (res) =>
+        new URL(res.url()).pathname === `/v1/leads/${leadId}` && res.request().method() === 'GET',
+      `assertLeadDeletedById: lead ${leadId} GET`,
+      config.timeouts.navigation
+    );
+    leadGet.catch(() => undefined);
     await this.navigateTo(`${config.appUrl}/sales/leads/details/${leadId}`);
-    await this.page.waitForTimeout(2000);
-    const url = this.page.url();
-    // WHY: Check either URL redirected away OR error toast/message is visible
-    const urlRedirected = !url.includes(`/leads/details/${leadId}`);
-    const errorVisible = await this.page
-      .locator('.toast-error, .alert-danger, [class*="error"]')
-      .filter({ hasText: /doesn't|does not|exist|permission/i })
-      .first()
-      .isVisible()
-      .catch(() => false);
-    // WHY: Also check page content for error message
-    const pageText = await this.page
-      .locator('body')
-      .textContent()
-      .catch(() => '');
-    const hasErrorText = /doesn't|does not|exist|permission/i.test(pageText ?? '');
-    expect(urlRedirected || errorVisible || hasErrorText).toBeTruthy();
+    const response = await leadGet;
+    const body = (await response.json().catch(() => ({}))) as { code?: string };
+    expect(
+      { status: response.status(), code: body.code },
+      `Lead ${leadId} should answer 404 / code 000010 (not found) after the delete`
+    ).toEqual({ status: 404, code: '000010' });
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(this.page.getByText('Not Found', { exact: true }).first()).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+      await expect(this.page.getByText(/record doesn.t seem to exists?/i).first()).toBeVisible({
+        timeout: config.timeouts.expect,
+      });
+    });
     logger.success(`Lead ${leadId} confirmed deleted`);
   }
 
@@ -2231,7 +2320,7 @@ export class LeadsPage extends BasePage {
   // Clone
   // ──────────────────────────────────────────────────────────
 
-  async cloneLead(): Promise<number | null> {
+  async cloneLead(original?: { firstName: string }): Promise<number | null> {
     logger.info('Cloning lead via ellipsis menu');
     await this.clickEllipsisOption('Clone');
     // WHY the prior claim below was WRONG, disproven live (2026-09-07): this
@@ -2245,28 +2334,37 @@ export class LeadsPage extends BasePage {
     // Email exists" backend rejection. saveButton() becoming visible is NOT
     // a reliable proxy for the email field's own pre-fill having committed.
     await this.saveButton().waitFor({ state: 'visible', timeout: 15000 });
-    // WHY the Last Name pre-fill is awaited before anything is edited or saved
-    // (2026-10-16, sandbox run 38855451748 shard 3/5, leads.spec.ts:175 attempt
-    // 1): the failed attempt's clone (ID captured from the save response, and
-    // its detail page shows the clone's own `clone<ts>@testkylas.com` email)
-    // was saved with the UNCHANGED last name — the detail page header read
-    // "Miss. Levi Kutch(#169947)", no "Copy" — and 25 re-reads over 15s never
-    // saw it change. saveButton() becoming visible is not proof the form's
-    // "<lastName> Copy" pre-fill has committed (the same class as the email
-    // pre-fill race documented above, and as DealsPage.cloneDeal()'s Name wait,
-    // docs/PATTERNS.md P5). Mechanism for THIS failure is inferred from that
-    // analogy plus the saved result, not observed directly (trace not pulled).
-    // Fails loudly here if "Copy" never appears — both callers (L35, L23)
-    // assert "Copy" in the saved last name anyway, so saving without it can
-    // only fail later and less clearly.
-    const cloneFormT0 = Date.now();
+    // Main checks (must pass): the Clone form is open and carries the original lead's data. The form is a modal on
+    // the lead's detail page (the URL does not change), headed "Clone Lead".
     await this.withSessionExpiryRecovery(() =>
       expect(
-        this.lastNameInput(),
-        'Clone lead form Last Name should be pre-filled with "Copy" before Save is clicked'
-      ).toHaveValue(/Copy/, { timeout: 20000 })
+        // WHY not getByRole: the app's modal heading has no accessible name (snapshot: `heading [level=2]: Clone Lead`)
+        this.page.locator('h2').filter({ hasText: /^\s*Clone Lead\s*$/ }),
+        'The Clone Lead form should open'
+      ).toBeVisible({ timeout: 15000 })
     );
-    logger.debug(`Clone lead form Last Name pre-filled ("Copy") at +${Date.now() - cloneFormT0}ms`);
+    if (original) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.firstNameInput(), 'Clone form should carry the original lead\'s first name').toHaveValue(
+          original.firstName,
+          { timeout: 20000 }
+        )
+      );
+    }
+    // KI-67 (owner decision 2026-11-17): the " Copy" suffix on Last Name is OBSERVED, never a failure. The app sets
+    // it in the form's own change and sometimes loses it to its form reinitialize (probe: INITIALIZE(42 keys) landing
+    // after CHANGE lastName, 1 of 39 traced opens); the form's first render already holds the final value, so a
+    // short grace is enough. Last Name must have a value before the form is used.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.lastNameInput(), 'Clone form Last Name should be filled').not.toHaveValue('', { timeout: 20000 })
+    );
+    const copyPrefilled = await expect(this.lastNameInput())
+      .toHaveValue(/ Copy$/, { timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!copyPrefilled) {
+      recordKnownIssue('KI-67', "clone Copy prefill lost to the app's form reinitialize race (Last Name has no \" Copy\")");
+    }
     // WHY: Change email to unique value — same email as original causes
     // duplicate error. WHY waitFor('visible') instead of a one-shot
     // isVisible() (the bug fixed here): isVisible() returns an instant,
@@ -2297,8 +2395,7 @@ export class LeadsPage extends BasePage {
           'Clone email field visible but pre-fill value not observed in time — proceeding anyway'
         )
       );
-      const timestamp = Date.now();
-      const newEmail = `clone${timestamp}@testkylas.com`;
+      const newEmail = uniqueEmail('clone');
       await emailInput.fill(newEmail);
       // WHY verified (rule 3 + the same async-commit-race class already
       // hardened for ContactsPage.cloneContact()): confirm the fill()
@@ -2328,8 +2425,7 @@ export class LeadsPage extends BasePage {
       .then(() => true)
       .catch(() => false);
     if (phoneFieldReady) {
-      const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
-      const phone = ['6', '7', '8', '9'][Math.floor(Math.random() * 4)] + digits;
+      const phone = uniquePhone();
       await phoneInput.click({ clickCount: 3 });
       await phoneInput.press('Control+a');
       await phoneInput.fill('');
@@ -2348,11 +2444,19 @@ export class LeadsPage extends BasePage {
         'Clone phone field never became visible — skipping (may not exist for this entity)'
       );
     }
-    // WHY: Capture POST response before saving
-    const cloneIdPromise = this.captureLeadIdFromResponse();
-    await this.click(this.saveButton(), 'clone save button');
+    // B6 (ADR 0017 save confirmation, leads clone x24 diagnostic): the clone's own answer, armed before the click.
+    // The old id capture matched only a 200/201 POST, so a refused save (staging answered 400 code 000000
+    // "Unexpected error occurred!!" in one run) was never seen: it waited 60 s and then reported "save likely
+    // failed silently". Now a missing or non-2xx answer fails at once, naming status, code and message.
+    const cloneResponse = await this.saveAndAwait(() => this.click(this.saveButton(), 'clone save button'), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/?$/,
+      description: 'Lead clone save (POST /v1/leads)',
+    });
+    const cloneBody = (await cloneResponse.json().catch(() => null)) as { id?: number; data?: { id?: number } } | null;
+    const clonedId = cloneBody?.id ?? cloneBody?.data?.id ?? null;
+    reportCreatedRecord('lead', clonedId);
     await this.assertNoFormErrors('clone lead form');
-    const clonedId = await cloneIdPromise;
     // WHY: Confirmed live (2026-07-07) — same fail-fast guard as saveLead() above.
     if (!clonedId) {
       throw new Error(
@@ -2405,8 +2509,18 @@ export class LeadsPage extends BasePage {
       // network response is observed, not once React has re-rendered the DOM
       // with it. A one-shot body.innerText() read right after can race ahead
       // of the render. Use an auto-retrying assertion instead of a fixed sleep.
-      await expect(this.page.locator('body')).toContainText(clonedLastName, { timeout: 15000 });
-      logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      // Main check: the clone's own detail page shows the original lead's last name. The " Copy" suffix is
+      // observed only (KI-67, see cloneLead): without it the clone keeps the original last name.
+      await expect(this.page.locator('body')).toContainText(originalLastName, { timeout: 15000 });
+      const hasCopy = await expect(this.page.locator('body'))
+        .toContainText(clonedLastName, { timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
+      if (hasCopy) {
+        logger.success(`Cloned lead found with lastName: ${clonedLastName}`);
+      } else {
+        recordKnownIssue('KI-67', `cloned lead ${clonedId} was saved without " Copy" in its Last Name`);
+      }
       return;
     }
     logger.warn('Cloned lead ID not available — falling back to list search');
@@ -2449,12 +2563,11 @@ export class LeadsPage extends BasePage {
       await closeLeadToggle.waitFor({ state: 'visible', timeout: 10000 });
     }
     await closeLeadToggle.click();
-    await this.page.waitForTimeout(500);
+    // B6: no pauses here: the menu item and then the popup are each waited for as elements below
     // WHY: Click the stage option from the dropdown
     const stageItem = this.closeLeadDropdownItem(stage);
     await stageItem.waitFor({ state: 'visible', timeout: 5000 });
     await stageItem.click();
-    await this.page.waitForTimeout(500);
     // WHY: All stages show a confirmation popup — for Closed stages select random reason
     let selectedReason = '';
     if (stage !== 'Won') {
@@ -2472,8 +2585,18 @@ export class LeadsPage extends BasePage {
       logger.info(`Selected reason: ${selectedReason}`);
     }
     await this.stagePopupYesButton().waitFor({ state: 'visible', timeout: 5000 });
-    await this.stagePopupYesButton().click();
-    await this.page.waitForTimeout(1000);
+    // B6: the app's answer to Yes is POST /v1/leads/{id}/pipeline-stages/{stageId}/activate (200 in the traced
+    // run, then the lead is refetched); fail by name if it is missing or not 2xx, then wait for the popup to close
+    await this.saveAndAwait(() => this.stagePopupYesButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/pipeline-stages\/\d+\/activate\/?$/,
+      description: 'Lead stage change (POST /v1/leads/{id}/pipeline-stages/{stageId}/activate)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The stage popup should close after Yes').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead marked as: ${stage} — reason: ${selectedReason}`);
     return selectedReason;
   }
@@ -2492,8 +2615,20 @@ export class LeadsPage extends BasePage {
 
   async convertLeadToAll(dealName: string): Promise<void> {
     logger.info(`Converting lead to Deal+Contact+Company — deal name: ${dealName}`);
+    await this.waitForTenantUsageLoaded();
     await this.clickEllipsisOption('Convert');
-    await this.page.waitForTimeout(1500);
+    // B6: the Convert dialog is rendered once its first entity checkbox is there
+    await this.page.locator('#entity_deals').waitFor({ state: 'visible', timeout: 10000 });
+    // B6 (leads full run 1, ui:1275): each ticked section renders its own details form after its layout loads
+    // (contact fields about 0.75 s, company about 0.85 s after the tick). Ticking the next one or touching a
+    // "Show auto-mapped fields" toggle before that left the Contact section without its form: the first toggle's
+    // lookups reset it (radios unselected, toggle gone) and the third toggle never existed. The old 500 ms
+    // pauses covered it; the real signal is the section's key field being visible.
+    const sectionReady: Record<string, string> = {
+      entity_deals: '[id="1_11_input_deal.details.name"]',
+      entity_contacts: '[id="2_13_input_contact.details.lastName"]',
+      entity_companies: '[id="3_11_input_company.details.name"]',
+    };
     // WHY: Check Deal, Contact, Company checkboxes — unchecked by default
     for (const id of ['entity_deals', 'entity_contacts', 'entity_companies']) {
       const checkbox = this.page.locator(`#${id}`);
@@ -2501,10 +2636,14 @@ export class LeadsPage extends BasePage {
       if (!isChecked) {
         const label = this.page.locator(`label[for="${id}"]`).first();
         await label.click();
-        await this.page.waitForTimeout(500);
+        // B6: the tick is applied (its section renders from it)
+        await this.withSessionExpiryRecovery(() =>
+          expect(checkbox, `Convert: "${id}" should be ticked`).toBeChecked({ timeout: config.timeouts.expect })
+        );
       }
+      // the section's form has rendered (whether it was just ticked or already on)
+      await this.page.locator(sectionReady[id]).waitFor({ state: 'visible', timeout: config.timeouts.expect });
     }
-    await this.page.waitForTimeout(500);
     // WHY: Enable Show auto-mapped fields for all entities
     const autoMappedToggles = this.page.locator('#auto_mapped');
     const autoMappedCount = await autoMappedToggles.count();
@@ -2513,10 +2652,13 @@ export class LeadsPage extends BasePage {
       const isChecked = await toggle.isChecked().catch(() => false);
       if (!isChecked) {
         await toggle.locator('xpath=parent::div').locator('label').click();
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, 'Convert: "Show auto-mapped fields" should be on').toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
       }
     }
-    await this.page.waitForTimeout(500);
     // WHY: Fill mandatory deal name
     await this.convertDealNameInput().waitFor({ state: 'visible', timeout: 10000 });
     await this.convertDealNameInput().fill(dealName);
@@ -2559,10 +2701,16 @@ export class LeadsPage extends BasePage {
     const addProductBtn = this.page.locator('span.add-new-product').first();
     if (await addProductBtn.isVisible().catch(() => false)) {
       await addProductBtn.scrollIntoViewIfNeeded();
-      await addProductBtn.click();
-      await this.page.waitForTimeout(500);
-      // WHY: Click last product dropdown indicator to open product options
       const allIndicators = this.page.locator('.look-up.col-3 .is-invalid__indicator');
+      const indicatorsBefore = await allIndicators.count();
+      await addProductBtn.click();
+      // B6: the new row's control exists before `.last()` is used (else it would be the previous row's)
+      await this.withSessionExpiryRecovery(() =>
+        expect(allIndicators, 'Convert: the added product row should render').toHaveCount(indicatorsBefore + 1, {
+          timeout: config.timeouts.expect,
+        })
+      );
+      // WHY: Click last product dropdown indicator to open product options
       await allIndicators.last().waitFor({ state: 'visible', timeout: 10000 });
       await allIndicators.last().scrollIntoViewIfNeeded();
       await allIndicators.last().click({ force: true });
@@ -2579,14 +2727,14 @@ export class LeadsPage extends BasePage {
       const count = await productOptions.count();
       const randomIndex = Math.floor(Math.random() * count);
       await productOptions.nth(randomIndex).click();
-      await this.page.waitForTimeout(500);
+      // B6: the pick is applied when the menu closes
+      await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
       logger.debug('Product added to convert deal');
       // WHY: Add part payment after product is added
       const addPaymentBtn = this.page.locator('button.btn-add-payment-full').first();
       if (await addPaymentBtn.isVisible().catch(() => false)) {
         await addPaymentBtn.scrollIntoViewIfNeeded();
         await addPaymentBtn.click();
-        await this.page.waitForTimeout(500);
         // WHY: Installments modal appears — fill 1 installment and confirm
         const installmentsModal = this.page.locator('.installments-modal');
         await installmentsModal.waitFor({ state: 'visible', timeout: 10000 });
@@ -2595,14 +2743,29 @@ export class LeadsPage extends BasePage {
         await installmentsInput.fill('1');
         await this.page.getByRole('button', { name: 'Confirm' }).click();
         await installmentsModal.waitFor({ state: 'hidden', timeout: 10000 });
-        await this.page.waitForTimeout(500);
+        // B6: the part-payments summary renders in the same update as the modal closing (baseline trace)
+        await this.page.locator('.part-payments-summary').first().waitFor({ state: 'visible', timeout: 10000 });
         logger.debug('Part payment added with 1 installment');
       }
     }
     // WHY: Click Convert button to submit
     await this.convertButton().waitFor({ state: 'visible', timeout: 10000 });
-    await this.convertButton().click();
-    await this.page.waitForTimeout(3000);
+    // B6: the app's answer to Convert is POST /v1/leads/{id}/convert (200 in the traced run). It used to be
+    // clicked blind and followed by a 3 s pause, so a refused convert went unnoticed here. Now it fails by
+    // name when the answer is missing or not 2xx; then the result dialog must appear.
+    await this.saveAndAwait(() => this.convertButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/convert\/?$/,
+      description: 'Lead convert (POST /v1/leads/{id}/convert)',
+    });
+    // the app answers with a "Lead successfully converted" result dialog (screenshot: Deal / Contact / Company
+    // cards and Done): that is the visible confirmation, not the dialog closing
+    await this.withSessionExpiryRecovery(() =>
+      expect(
+        this.page.getByText('Lead successfully converted'),
+        'The "Lead successfully converted" dialog should appear after Convert'
+      ).toBeVisible({ timeout: config.timeouts.expect })
+    );
     logger.success(`Lead converted — deal: ${dealName}`);
   }
 
@@ -2619,65 +2782,41 @@ export class LeadsPage extends BasePage {
   // WHY: escapeRegExp() moved to BasePage (2026-07-16) — was duplicated
   // privately across Tasks/Companies/Contacts/Leads/Deals; now inherited.
 
-  // WHY the bounded retry (root-caused 2026-07-22 from real ~9min hangs that
-  // stalled a full-suite regression run across many share-based RBAC tests):
-  // `shareTypeControl.click()` / `userOption.click()` (selecting "User") were
-  // raw, UNBOUNDED clicks — same "click registers, handler race" class as
-  // clickAddCompany/selectFromContactDropdown/selectFromIsInvalidControl. If
-  // userOption.click() didn't register, shareToUserInput()
-  // (`[id="undefined_undefinedundefined_input_toId"]`) never mounts, and the
-  // immediately-following `.fill()` (also unbounded) hangs until the outer
-  // test timeout — matching the observed pattern exactly ("Share search
-  // term" logged, then a multi-minute gap, then failure). Fixed with the
-  // same shape as the other 3 fixes: bound every click to
-  // config.timeouts.expect and retry the whole open-type-dropdown ->
-  // select-User -> wait-for-search-input sequence up to 3 times. Same fix
-  // applied identically to shareCompany/shareContact/shareDeal.
+  // B6 (owner decision 2026-11-17): one bounded pass, no retry loop. The missed "User" click (root-caused
+  // 2026-07-22: a pick that did not register left shareToUserInput() unmounted and a raw fill() hung ~9 min) is
+  // prevented by waiting (menu open, option visible and enabled, one click, then the control must show "User"),
+  // and fails by name if it did not take. Same shape as CompaniesPage.openUserShareTypeSearch().
   private async openUserShareTypeSearch(shareTypeControl: Locator): Promise<void> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await shareTypeControl.click({ timeout: config.timeouts.expect });
-        const userOption = this.page
-          .locator('.is-invalid__option')
-          .filter({ hasText: 'User' })
-          .first();
-        await userOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
-        await userOption.click({ timeout: config.timeouts.expect });
-        await this.shareToUserInput().waitFor({
-          state: 'visible',
-          timeout: config.timeouts.expect,
-        });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(
-          `Share-type "User" selection attempt ${attempt}/${maxAttempts} failed: ${String(error)} — ` +
-            'closing any stuck menu and retrying'
-        );
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
-    }
-    throw new Error(
-      `openUserShareTypeSearch: failed to select "User" share type after ${maxAttempts} attempts — ` +
-        `${String(lastError)}`
-    );
+    await shareTypeControl.click({ timeout: config.timeouts.expect });
+    const userOption = this.page.locator('.is-invalid__option').filter({ hasText: 'User' }).first();
+    await expect(userOption, 'Share dialog: the "User" share-type option should be visible (menu open)').toBeVisible({
+      timeout: config.timeouts.expect,
+    });
+    await expect(userOption, 'Share dialog: the "User" share-type option should be enabled').toBeEnabled({
+      timeout: config.timeouts.expect,
+    });
+    await userOption.click({ timeout: config.timeouts.expect });
+    await this.ensureReactSelectMenuClosed('Share-type "User" selection', shareTypeControl);
+    await expect(
+      shareTypeControl.locator('.is-invalid__single-value'),
+      'Share dialog: the share-type control should show "User" after the pick'
+    ).toHaveText('User', { timeout: config.timeouts.expect });
+    await expect(
+      this.shareToUserInput(),
+      'Share dialog: the user search input should appear after picking "User"'
+    ).toBeVisible({ timeout: config.timeouts.expect });
   }
 
   async shareLead(restrictedUserName: string, permissions: string[] = []): Promise<void> {
     logger.info(`Sharing lead with: ${restrictedUserName}, permissions: ${permissions.join(',')}`);
     await this.clickEllipsisOption('Share');
-    await this.page.waitForTimeout(1000);
-    // WHY: Click the Share To type dropdown control — opens User/Team options
+    // WHY: Click the Share To type dropdown control (the modal control is waited for just below) — opens User/Team options
     const shareTypeControl = this.page
       .locator('.modal.show')
       .locator('.is-invalid__control')
       .first();
     await shareTypeControl.waitFor({ state: 'visible', timeout: 10000 });
     await this.openUserShareTypeSearch(shareTypeControl);
-    await this.page.waitForTimeout(500);
     // WHY: Search requires minimum 3 characters
     // Strategy: find first word with >= 3 chars, fallback to first 3 chars of full name
     const words = restrictedUserName.trim().split(' ');
@@ -2690,7 +2829,8 @@ export class LeadsPage extends BasePage {
     // genuinely-just-created user's search-index propagation a real chance
     // to catch up instead of failing fast on one 5s window.
     await this.selectUserOptionWithRetry(this.shareToUserInput(), searchTerm, restrictedUserName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     // WHY: Enable specific permissions — use JS click on label sibling of input
     for (const permission of permissions) {
       const toggle = this.sharePermissionToggle(permission);
@@ -2702,22 +2842,30 @@ export class LeadsPage extends BasePage {
           const label = input?.parentElement?.querySelector('label') as HTMLElement;
           label?.click();
         }, permission);
-        await this.page.waitForTimeout(300);
+        await this.withSessionExpiryRecovery(() =>
+          expect(toggle, `Share: permission "${permission}" should be on`).toBeChecked({
+            timeout: config.timeouts.expect,
+          })
+        );
         logger.debug(`Permission ${permission} toggled`);
       }
     }
     await this.shareConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the share-API response wait BEFORE clicking — confirms the
-    // server actually processed the permission change instead of a blind sleep.
-    const shareResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/leads\/\d+\/share$/) !== null && res.request().method() === 'POST',
-      'lead share response',
-      15000
-    ).catch(() => null);
-    await this.shareConfirmButton().click();
-    await shareResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the share's own answer, armed before the click. It used to end in
+    // `.catch(() => null)`, so a missed or refused share carried on and broke the RBAC steps that follow;
+    // now it fails by name when the answer is missing or not 2xx. Then the share dialog must close.
+    const shareResponse = await this.saveAndAwait(() => this.shareConfirmButton().click(), {
+      method: 'POST',
+      urlRe: /^\/v1\/leads\/\d+\/share\/?$/,
+      description: 'Lead share (POST /v1/leads/{id}/share)',
+    });
+    const sharedBody = (await shareResponse.json().catch(() => null)) as { id?: number } | null;
+    reportCreatedRecord('share rule', sharedBody?.id);
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The share dialog should close after Share').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead shared with: ${restrictedUserName}`);
   }
 
@@ -2728,30 +2876,32 @@ export class LeadsPage extends BasePage {
   async reassignLead(userDisplayName: string): Promise<void> {
     logger.info(`Reassigning lead to: ${userDisplayName}`);
     await this.clickEllipsisOption('Reassign');
-    await this.page.waitForTimeout(500);
-    // WHY: Search requires minimum 3 characters
+    // WHY: Search requires minimum 3 characters (the dialog input is waited for just below)
     const words = userDisplayName.trim().split(' ');
     const validWord = words.find((w) => w.length >= 3) ?? userDisplayName.trim().substring(0, 3);
     logger.debug(`Reassign search term: "${validWord}" (from: "${userDisplayName}")`);
     await this.reassignUserInput().waitFor({ state: 'visible', timeout: 5000 });
     await this.reassignUserInput().fill(validWord);
-    await this.page.waitForTimeout(800);
+    // B6: no pause: selectUserOptionWithRetry() below waits for the matching user option
     // WHY selectUserOptionWithRetry() — see shareLead()'s identical comment
     // for the full evidence (2026-07-30).
     await this.selectUserOptionWithRetry(this.reassignUserInput(), validWord, userDisplayName);
-    await this.page.waitForTimeout(500);
+    // B6: the pick is applied when the user menu closes
+    await this.page.locator('.is-invalid__menu').first().waitFor({ state: 'hidden', timeout: 5000 });
     await this.reassignConfirmButton().waitFor({ state: 'visible', timeout: 5000 });
-    // WHY: Register the reassign-API (owner change) response wait BEFORE
-    // clicking — confirms ownership actually changed server-side.
-    const reassignResponsePromise = this.armResponseWaitWithRecovery(
-      (res) =>
-        res.url().match(/\/v1\/leads\/\d+\/owner$/) !== null && res.request().method() === 'PUT',
-      'lead reassign response',
-      15000
-    ).catch(() => null);
-    await this.reassignConfirmButton().click();
-    await reassignResponsePromise;
-    await this.page.waitForTimeout(300);
+    // B6 (ADR 0017 save confirmation): the owner change's own answer (PUT /v1/leads/{id}/owner), armed before
+    // the click. It used to be awaited but its result ignored (`.catch(() => null)`), so a refused reassign
+    // carried on; now it fails by name when missing or not 2xx. Then the dialog must close.
+    await this.saveAndAwait(() => this.reassignConfirmButton().click(), {
+      method: 'PUT',
+      urlRe: /^\/v1\/leads\/\d+\/owner\/?$/,
+      description: 'Lead reassign (PUT /v1/leads/{id}/owner)',
+    });
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.modal.show'), 'The reassign dialog should close after Reassign').toHaveCount(0, {
+        timeout: config.timeouts.expect,
+      })
+    );
     logger.success(`Lead reassigned to: ${userDisplayName}`);
   }
 
@@ -2770,8 +2920,8 @@ export class LeadsPage extends BasePage {
   async assertDetailTabContent(tabId: string, expectedValues: string[]): Promise<void> {
     logger.info(`Asserting tab ${tabId} content`);
     // WHY: Click tab by ID, then check active pane text content
-    await this.page.locator(`#${tabId}`).click();
-    await this.page.waitForTimeout(800);
+    await this.activateDetailTab(this.page.locator(`#${tabId}`), tabId);
+    await expect(this.detailTabPane(), `Tab ${tabId} pane should be visible`).toBeVisible({ timeout: config.timeouts.expect });
     const paneText = ((await this.detailTabPane().textContent()) ?? '').toLowerCase();
     for (const value of expectedValues) {
       // WHY: Compare lowercase — detail page may display in different case
@@ -2814,6 +2964,16 @@ export class LeadsPage extends BasePage {
   // second call on an already-disabled toggle is a documented no-op.
   async skipIfCustomFieldsAbsent(): Promise<void> {
     await this.disableRequiredFieldsToggle();
+    // WHY fail on QA: every Lead custom field is known to exist there (live layout, 2026-10-30), so a
+    // missing one means a field was removed or renamed — a skip would report that as "passed". Other
+    // environments do not have these fields yet, so there the whole test skips with a reason.
+    if (config.env === 'qa') {
+      const names = Object.values(LEAD_CUSTOM_FIELD_NAMES);
+      const presence = await Promise.all(names.map((name) => this.isCustomFieldPresent(name)));
+      const missing = names.filter((_, index) => !presence[index]);
+      expect(missing, 'Lead custom fields missing from the QA create/edit form').toEqual([]);
+      return;
+    }
     await this.skipDedicatedCustomFieldTestIfAbsent(Object.values(LEAD_CUSTOM_FIELD_NAMES), 'Lead');
   }
 
@@ -2843,8 +3003,7 @@ export class LeadsPage extends BasePage {
       tab,
       '"Other Details" tab did not appear on the detail page — custom field verification cannot proceed'
     ).toBeVisible({ timeout: config.timeouts.navigation });
-    await tab.click();
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Other Details');
 
     const cf = data.customFields;
     await this.assertCustomFieldOnDetail(
@@ -2954,12 +3113,10 @@ export class LeadsPage extends BasePage {
       // Location tab (nav-tab1-tab). Container ids match the internal field
       // names directly, same convention as requirementCurrency/requirementBudget
       // below — not guessed, read straight off the live DOM.
-      await this.page.locator('#nav-tab0-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab0-tab'), 'Communication');
       await this.assertFieldOnDetailByContainerId('timezone', data.timezone, 'Timezone');
 
-      await this.page.locator('#nav-tab1-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab1-tab'), 'Location');
       await this.assertFieldOnDetailByContainerId('country', data.country, 'Country');
 
       // WHY: confirmed live (2026-07-17) — all 5 Professional-section fields
@@ -2968,8 +3125,7 @@ export class LeadsPage extends BasePage {
       // a plain number with no currency formatting (confirmed: "8475910", not
       // "INR 84.7L" or similar) — String(data.companyAnnualRevenue) is correct
       // as-is, no special formatting needed.
-      await this.page.locator('#nav-tab3-tab').click();
-      await this.page.waitForTimeout(500);
+      await this.activateDetailTab(this.page.locator('#nav-tab3-tab'), 'Professional');
       await this.assertFieldOnDetailByContainerId(
         'companyIndustry',
         data.companyIndustry,
@@ -3002,8 +3158,7 @@ export class LeadsPage extends BasePage {
       tab,
       '"Requirement" tab did not appear on the detail page — standard field verification cannot proceed'
     ).toBeVisible({ timeout: config.timeouts.navigation });
-    await tab.click();
-    await this.page.waitForTimeout(500);
+    await this.activateDetailTab(tab, 'Requirement');
 
     // WHY: confirmed live (2026-07-17) — container id "requirementName"
     // matches the field's internal name, same convention as the other
@@ -3038,8 +3193,46 @@ export class LeadsPage extends BasePage {
     logger.info(`Clicking right panel icon: ${title}`);
     const icon = this.rightPanelIcon(title);
     await icon.waitFor({ state: 'visible', timeout: 10000 });
+    if (title !== 'Notes') {
+      await icon.click();
+      // the section the icon opens shows its title in a card header (same signal as
+      // ContactsPage.assertDetailTabContent)
+      await this.withSessionExpiryRecovery(() =>
+        expect(
+          this.page
+            .locator('.card-header')
+            .filter({ has: this.page.locator('h2').filter({ hasText: title }) })
+            .first()
+        ).toBeVisible({ timeout: config.timeouts.expect })
+      );
+      logger.success(`Right panel icon clicked: ${title}`);
+      return;
+    }
+    // WHY the lead's name must be on screen first (root-caused 2026-11-02, leads.rbac:411 flaky on sandbox
+    // staging; reproduced by delaying GET /v1/leads/{id} by 6 s): the Notes panel asks for the note list
+    // the moment it opens, and builds that request from the lead the page has loaded. Opened before the
+    // lead arrived, the request had no `targetEntityOwnerId`, the server answered 400 and the panel never
+    // asked again. The header shows the lead's name only once the lead is loaded, so that is the ready
+    // signal; nothing is reloaded or retried.
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.leadHeaderName(), 'Lead header name (lead details loaded)').toHaveText(/\S/, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+    const listResponse = this.page.waitForResponse(
+      (res) => /\/notes\/relation\?/.test(res.url()) && res.request().method() === 'GET',
+      { timeout: config.timeouts.expect }
+    );
     await icon.click();
-    await this.page.waitForTimeout(500);
+    const response = await listResponse;
+    // A 400 here means the app refused the list although the lead had fully loaded: not worked around,
+    // reported with the request so it can be raised as an app issue.
+    if (!response.ok()) {
+      throw new Error(
+        `Notes panel list request failed after the lead details had loaded (possible app issue): ` +
+          `${await this.describeMatchedResponse(response)} — ${response.url()}`
+      );
+    }
     logger.success(`Right panel icon clicked: ${title}`);
   }
 
@@ -3091,5 +3284,535 @@ export class LeadsPage extends BasePage {
       expect(this.rightPanelIcon(title)).toBeHidden({ timeout: 5000 })
     );
     logger.success(`Right panel icon not visible: ${title}`);
+  }
+  // ──────────────────────────────────────────────────────────
+  // Detail page: menus, pipeline attach, convert without entities
+  // ──────────────────────────────────────────────────────────
+
+  async getEllipsisOptions(): Promise<string[]> {
+    await this.openEllipsisMenu();
+    const items = this.page.locator('.dropdown-menu.show .dropdown-item');
+    await expect(items.first()).toBeVisible({ timeout: config.timeouts.expect });
+    return (await items.allTextContents()).map((text) => text.trim()).filter(Boolean);
+  }
+
+  async assertEllipsisOptionVisible(optionText: string): Promise<void> {
+    logger.info(`Asserting ellipsis option visible: ${optionText}`);
+    await this.openEllipsisMenu();
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.ellipsisMenuItem(optionText)).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    logger.success(`Ellipsis option visible: ${optionText}`);
+  }
+
+  async assertEllipsisOptions(expected: string[]): Promise<void> {
+    logger.info(`Asserting ellipsis options equal: ${expected.join(', ')}`);
+    const actual = await this.getEllipsisOptions();
+    expect(actual, 'Ellipsis menu options').toEqual(expected);
+    logger.success('Ellipsis options match');
+  }
+
+  // WHY a separate method from convertLeadToAll(): with no entity ticked the app asks for a
+  // confirmation first ("You are about to convert a Lead without creating a
+  // Deal/Contact/Company, please confirm") and only then sends POST /v1/leads/{id}/convert
+  // with an empty body — confirmed live 2026-10-30.
+  async convertLeadWithoutEntities(): Promise<void> {
+    logger.info('Converting lead without creating a Deal/Contact/Company');
+    await this.clickEllipsisOption('Convert');
+    await this.convertButton().waitFor({ state: 'visible', timeout: 10000 });
+    await this.click(this.convertButton(), 'convert button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.convertConfirmModal()).toContainText('without creating a Deal/Contact/Company', {
+        timeout: config.timeouts.expect,
+      })
+    );
+    const convertResponsePromise = this.armResponseWaitWithRecovery(
+      (res) =>
+        res.url().match(/\/v1\/leads\/\d+\/convert$/) !== null && res.request().method() === 'POST',
+      'lead convert response',
+      15000
+    );
+    // WHY a text filter, not getByRole: the confirm modal carries aria-hidden="true" while it is
+    // shown (confirmed live), and role queries skip aria-hidden subtrees.
+    await this.click(this.convertConfirmModal().locator('button').filter({ hasText: 'Yes, I confirm' }), 'confirm convert');
+    const response = await convertResponsePromise;
+    expect(response.status(), 'POST /v1/leads/{id}/convert should succeed').toBe(200);
+    logger.success('Lead converted without entities');
+  }
+
+  async assertCloseLeadControlVisible(visible: boolean): Promise<void> {
+    logger.info(`Asserting Close Lead control ${visible ? 'visible' : 'absent'}`);
+    await this.withSessionExpiryRecovery(() =>
+      visible
+        ? expect(this.closeLeadToggleButton()).toBeVisible({ timeout: config.timeouts.expect })
+        : expect(this.closeLeadToggleButton()).toHaveCount(0, { timeout: config.timeouts.expect })
+    );
+    logger.success(`Close Lead control ${visible ? 'visible' : 'absent'}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Create form: rejected saves, secondary e-mail
+  // ──────────────────────────────────────────────────────────
+
+  // WHY returns the response instead of throwing: callers that EXPECT a rejection need the
+  // status and the body's error code/details to assert on; saveLead() is for the success path.
+  async clickSaveAndCaptureCreateResponse(): Promise<{
+    status: number;
+    body: { code?: string; message?: string; errorDetails?: Array<{ field: string | null; message: string }> };
+  }> {
+    const createResponsePromise = this.armResponseWaitWithRecovery(
+      // WHY the optional trailing slash: the app posts to /v1/leads/ (confirmed live 2026-10-30)
+      (res) => res.url().match(/\/v1\/leads\/?(?:\?|$)/) !== null && res.request().method() === 'POST',
+      'lead create response',
+      config.timeouts.navigation
+    );
+    await this.waitForClickTargetUnobstructed(this.saveButton());
+    await this.click(this.saveButton(), 'save button');
+    const response = await createResponsePromise;
+    return { status: response.status(), body: await response.json().catch(() => ({})) };
+  }
+
+  // WHY index: the form renders one "Add Email" row per click, `emails[0]` then `emails[1]`…
+  async addEmail(index: number, value: string): Promise<void> {
+    logger.info(`Adding e-mail #${index + 1}`);
+    await this.click(this.addEmailButton(), 'add email button');
+    const emailInput = this.page.locator(`input[name="emails[${index}].value"]`);
+    await this.withSessionExpiryRecovery(() =>
+      expect(emailInput).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    await this.fill(emailInput, value, `email ${index + 1}`);
+    logger.success(`E-mail #${index + 1} filled`);
+  }
+
+  // WHY scoped to the field's own form-group: the form keeps every field's error on screen at
+  // once, so a page-wide text match would be satisfied by an error belonging to another field.
+  async assertFieldInlineError(fieldName: string, expectedMessage: string): Promise<void> {
+    const field = this.page.locator(`input[name="${fieldName}"]`).first();
+    await field.blur();
+    const error = field
+      .locator('xpath=ancestor::div[contains(@class,"form-group") or contains(@class,"email-row")][1]')
+      .locator('.invalid-feedback, .help-text.error')
+      .filter({ hasText: expectedMessage });
+    await this.withSessionExpiryRecovery(() =>
+      expect(error.first(), `Expected inline error "${expectedMessage}" for ${fieldName}`).toBeVisible({
+        timeout: config.timeouts.expect,
+      })
+    );
+    logger.success(`Inline error for ${fieldName}: "${expectedMessage}"`);
+  }
+
+  // WHY no response wait: with client-side validation errors on screen the app sends nothing,
+  // so there is no create response to wait for (callers assert that no POST fired).
+  async clickSaveExpectingClientValidation(): Promise<void> {
+    await this.waitForClickTargetUnobstructed(this.saveButton());
+    await this.click(this.saveButton(), 'save button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.saveButton()).toBeVisible({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async fillFormField(fieldName: string, value: string): Promise<void> {
+    const field = this.page.locator(`input[name="${fieldName}"]`).first();
+    await field.scrollIntoViewIfNeeded();
+    await this.fill(field, value, fieldName);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // List view: filter, page size, sort, selection, bulk actions, smart lists, view mode
+  // ──────────────────────────────────────────────────────────
+
+  async waitForListData(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.listDataRows().first()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+  }
+
+  async getFirstListLeadId(): Promise<number> {
+    const checkboxId = await this.listDataRows().first().locator('input[id^="check_"]').getAttribute('id');
+    const match = checkboxId?.match(/^check_(\d+)$/);
+    if (!match) throw new Error(`getFirstListLeadId: unexpected checkbox id "${checkboxId}"`);
+    return Number(match[1]);
+  }
+
+  async getListRowCount(): Promise<number> {
+    return this.listDataRows().count();
+  }
+
+  async getListTotalRecords(): Promise<number> {
+    const text = (await this.listTotalRecords().innerText()).replace(/,/g, '');
+    const match = text.match(/(\d+)\s+items?/);
+    if (!match) throw new Error(`getListTotalRecords: unexpected total text "${text}"`);
+    return Number(match[1]);
+  }
+
+  async getListFooterText(): Promise<string> {
+    return (await this.listFooterRange().innerText()).trim();
+  }
+
+  async getListSortedByText(): Promise<string> {
+    return (await this.listSortedBy().innerText()).trim();
+  }
+
+  async getAvailablePageSizes(): Promise<number[]> {
+    const options = await this.openReactSelectAndWaitForOptions(this.pageSizeControl(), 'page size');
+    const sizes = (await options.allTextContents()).map((text) => Number(text.trim()));
+    await this.page.keyboard.press('Escape');
+    return sizes;
+  }
+
+  async selectPageSize(size: number): Promise<void> {
+    logger.info(`Selecting page size: ${size}`);
+    await this.selectReactSelectOptionByName(this.pageSizeControl(), String(size), 'page size');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.pageSizeControl()).toContainText(String(size), { timeout: config.timeouts.expect })
+    );
+    logger.success(`Page size set to ${size}`);
+  }
+
+  async getListColumnValues(columnHeader: string): Promise<string[]> {
+    // WHY first: the table is rebuilt after a sort or page-size change, and its header row is empty
+    // while it reloads
+    await this.waitForListData();
+    // WHY by position: header cells and row cells are in the same order (cell 0 is the
+    // selection checkbox in both), confirmed live on 18 columns.
+    const headers = (await this.page.locator('.rt-thead .rt-th').allInnerTexts()).map((t) => t.trim());
+    const headerIndex = headers.indexOf(columnHeader);
+    if (headerIndex < 0) {
+      throw new Error(`getListColumnValues: column "${columnHeader}" not shown (shown: ${headers.join(', ')})`);
+    }
+    const cells = this.listDataRows().locator(`.rt-td:nth-child(${headerIndex + 1})`);
+    return (await cells.allTextContents()).map((text) => text.trim());
+  }
+
+  async sortListByColumn(columnHeader: string): Promise<void> {
+    logger.info(`Sorting list by: ${columnHeader}`);
+    const before = await this.getListSortedByText();
+    await this.click(
+      this.page.locator('.sort-header').filter({ hasText: columnHeader }).first(),
+      `sort header ${columnHeader}`
+    );
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.listSortedBy()).not.toHaveText(before, { timeout: config.timeouts.expect })
+    );
+    logger.success(`Sorted: ${await this.getListSortedByText()}`);
+  }
+
+  // WHY apply() waits for the total to change away from the unfiltered value only when the
+  // caller says so: the filtered total can legitimately equal the unfiltered one.
+  async filterListBy(fieldLabel: string, value: string): Promise<void> {
+    logger.info(`Filtering list: ${fieldLabel} contains "${value}"`);
+    await this.click(this.filterButton(), 'filter button');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.filterPanel()).toBeVisible({ timeout: config.timeouts.expect })
+    );
+    await this.click(this.filterFieldPicker(), 'filter field picker');
+    const fieldOption = this.page
+      .locator('.select__option')
+      .filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) })
+      .first();
+    await fieldOption.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await this.click(fieldOption, 'filter field option');
+    await this.fill(this.filterPanel().getByPlaceholder('Enter value'), value, 'filter value');
+    await this.click(this.filterPanel().getByText('Apply', { exact: true }), 'apply filter');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.filterPanel()).toBeHidden({ timeout: config.timeouts.expect })
+    );
+    await this.waitForLoaderToDisappear();
+    logger.success(`Filter applied: ${fieldLabel} contains "${value}"`);
+  }
+
+  async selectLeadRow(leadId: number): Promise<void> {
+    await this.click(this.rowCheckboxControl(leadId), 'row checkbox');
+    await expect(this.page.locator(`#check_${leadId}`)).toBeChecked({ timeout: config.timeouts.expect });
+  }
+
+  async deselectLeadRow(leadId: number): Promise<void> {
+    await this.click(this.rowCheckboxControl(leadId), 'row checkbox');
+    await expect(this.page.locator(`#check_${leadId}`)).not.toBeChecked({ timeout: config.timeouts.expect });
+  }
+
+  async assertSelectedLeadCount(count: number): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.selectedLeadsBanner(count)).toBeVisible({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async assertBulkActionsVisible(labels: string[]): Promise<void> {
+    for (const label of labels) {
+      await this.withSessionExpiryRecovery(() =>
+        expect(this.bulkActionButton(label), `Bulk action "${label}"`).toBeVisible({
+          timeout: config.timeouts.expect,
+        })
+      );
+    }
+  }
+
+  async assertBulkBarHidden(): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.bulkActionButton('Export')).toBeHidden({ timeout: config.timeouts.expect })
+    );
+  }
+
+  // WHY the "I understand" acknowledgement is part of the method: the dialog's Update button
+  // stays inert until it is ticked. The dialog also offers "Execute Workflows" / "Execute Score
+  // Rules" switches — this method deliberately never touches them.
+  async bulkUpdateTextField(fieldLabel: string, fieldInternalName: string, value: string): Promise<void> {
+    logger.info(`Bulk updating ${fieldLabel}`);
+    await this.click(this.bulkActionButton('Update'), 'bulk update');
+    const dialog = this.page.locator('.modal.show');
+    await expect(dialog).toContainText('Please select the fields that needs to be updated', {
+      timeout: config.timeouts.expect,
+    });
+    await this.click(dialog.getByText('Choose', { exact: true }), 'bulk field chooser');
+    await this.page.keyboard.type(fieldLabel);
+    await this.click(this.reactSelectOpenOptions().filter({ hasText: new RegExp(`^\\s*${this.escapeRegExp(fieldLabel)}\\s*$`) }).first(), 'bulk field option');
+    await this.fill(dialog.locator(`input[name="${fieldInternalName}"]`), value, fieldLabel);
+    await this.click(dialog.locator('label').filter({ hasText: 'I understand' }).first(), 'bulk acknowledgement');
+    const jobResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/bulk-action-jobs$/) !== null && res.request().method() === 'POST',
+      'bulk update job',
+      15000
+    );
+    await this.click(dialog.locator('button').filter({ hasText: /^Update$/ }).first(), 'bulk update confirm');
+    const response = await jobResponsePromise;
+    expect(response.status(), 'POST /v1/bulk-action-jobs (update) should be accepted').toBe(201);
+    logger.success(`Bulk update submitted for ${fieldLabel}`);
+  }
+
+  async bulkDeleteSelected(expectedCount: number): Promise<void> {
+    logger.info(`Bulk deleting ${expectedCount} selected leads`);
+    await this.click(this.bulkActionButton('Delete'), 'bulk delete');
+    const dialog = this.page.locator('.modal.show');
+    await expect(dialog).toContainText(`Are you sure you want to delete ${expectedCount} Lead`, {
+      timeout: config.timeouts.expect,
+    });
+    const jobResponsePromise = this.armResponseWaitWithRecovery(
+      (res) => res.url().match(/\/v1\/bulk-action-jobs$/) !== null && res.request().method() === 'POST',
+      'bulk delete job',
+      15000
+    );
+    await this.click(dialog.locator('button').filter({ hasText: /^\s*Delete\s*$/ }), 'bulk delete confirm');
+    const response = await jobResponsePromise;
+    expect(response.status(), 'POST /v1/bulk-action-jobs (delete) should be accepted').toBe(201);
+    logger.success('Bulk delete submitted');
+  }
+
+  async openSmartListManager(): Promise<void> {
+    await this.click(this.smartListCaret(), 'smart list caret');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.smartListModal()).toContainText('Manage Smart Lists', { timeout: config.timeouts.expect })
+    );
+  }
+
+  // WHY every page: the dialog shows 10 lists per page ("12 items" → 2 pages), and "All leads" /
+  // "All my leads" are on the second one. WHY it waits for a row: the title and "12 items" render
+  // before the rows do.
+  async getSmartListManagerText(): Promise<string> {
+    // The rows are not table rows, so readiness is read from the text: the header line "Description"
+    // is followed by the first list name once the rows have rendered
+    const readRows = async (changedFrom?: string): Promise<string> => {
+      let rows = '';
+      await this.withSessionExpiryRecovery(() =>
+        expect
+          .poll(
+            async () => {
+              const text = await this.smartListModal().innerText();
+              rows = text.split(/Description/i).slice(1).join(' ').trim();
+              return rows.length > 0 && rows !== changedFrom;
+            },
+            { timeout: config.timeouts.expect, message: 'Smart list rows should render' }
+          )
+          .toBe(true)
+      );
+      return rows;
+    };
+    let rows = await readRows();
+    let text = await this.smartListModal().innerText();
+    const pageLinks = this.smartListModal().locator('ul.pagination a.page-link').filter({ hasText: /^\d+$/ });
+    const pageCount = await pageLinks.count();
+    for (let pageNumber = 2; pageNumber <= pageCount; pageNumber++) {
+      await this.click(pageLinks.filter({ hasText: new RegExp(`^${pageNumber}$`) }), 'smart list page link');
+      rows = await readRows(rows);
+      text += `\n${await this.smartListModal().innerText()}`;
+    }
+    return text;
+  }
+
+  async closeSmartListManager(): Promise<void> {
+    await this.click(this.smartListModal().locator('button.close'), 'close smart list dialog');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.smartListModal()).toBeHidden({ timeout: config.timeouts.expect })
+    );
+  }
+
+  async getRowMenuOptions(leadId: number): Promise<string[]> {
+    const row = this.listDataRows().filter({ has: this.page.locator(`#check_${leadId}`) });
+    await this.withSessionExpiryRecovery(() =>
+      expect(row).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    await row.hover();
+    await this.click(row.locator('.text-format-dd button.dropdown-toggle'), 'row menu toggle');
+    const items = this.page.locator('.dropdown-menu.show .dropdown-item');
+    await expect(items.first()).toBeVisible({ timeout: config.timeouts.expect });
+    const options = (await items.allTextContents()).map((text) => text.trim()).filter(Boolean);
+    await this.page.keyboard.press('Escape');
+    return options;
+  }
+
+  async openListViewMode(mode: 'List View' | 'Kanban View'): Promise<void> {
+    logger.info(`Switching list view mode to: ${mode}`);
+    await this.selectReactSelectOptionByName(this.viewModeControl(), mode, 'view mode');
+    logger.success(`View mode: ${mode}`);
+  }
+
+  async getKanbanStageHeaders(): Promise<string[]> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.kanbanColumnHeaders().first()).toBeVisible({ timeout: config.timeouts.navigation })
+    );
+    return (await this.kanbanColumnHeaders().allTextContents()).map((text) => text.replace(/\s+/g, ' ').trim());
+  }
+
+  // WHY counts per column (not a card search): the board lazy-loads and is not ordered by recency,
+  // so a specific card cannot be expected among the first few — a filter narrows the board and the
+  // per-column counts then say which stage each matching lead is in.
+  async getKanbanStageCounts(): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const header of await this.getKanbanStageHeaders()) {
+      const match = header.match(/^(.*?)\s*\((\d+)\)$/);
+      if (!match) throw new Error(`getKanbanStageCounts: unexpected column header "${header}"`);
+      counts[match[1].trim()] = Number(match[2]);
+    }
+    return counts;
+  }
+
+  // WHY not "inside the column": the cards are not children of the column elements in the DOM
+  // (confirmed live), so which stage a card belongs to is read from the per-column counts instead
+  // (getKanbanStageCounts) while the board is filtered down to the lead.
+  async assertKanbanCardShown(leadId: number): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.page.locator('.kanban-board .kanban-card').filter({ hasText: `(#${leadId})` })).toHaveCount(1, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+  }
+  // ──────────────────────────────────────────────────────────
+  // Right panel: notes, and readiness of the detail page
+  // ──────────────────────────────────────────────────────────
+
+  // WHY: the Convert dialog's Deal section reads the tenant's plan usage the moment Deal is ticked.
+  // On a page opened by direct URL that usage arrives a few seconds AFTER the page is otherwise
+  // ready, and ticking Deal first crashes the dialog ("Cannot read properties of null (reading
+  // 'addons')", seen in a failing trace: GET /v1/tenants/usage answered 0.3 s after the Deal tick).
+  // The resource timeline says whether the response has already arrived on this document.
+  async waitForTenantUsageLoaded(): Promise<void> {
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate(() =>
+            performance.getEntriesByType('resource').some((entry) => entry.name.includes('/v1/tenants/usage'))
+          ),
+        { timeout: config.timeouts.navigation, message: 'Tenant usage should have loaded on the lead detail page' }
+      )
+      .toBe(true);
+  }
+
+  async getNoteCount(): Promise<number> {
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.notesCard().locator('.react-loading-skeleton')).toHaveCount(0, { timeout: 15000 })
+    );
+    return this.noteItems().count();
+  }
+
+  // WHY counts inside the Notes card: a generic row selector also matched unrelated elements, so the
+  // note is proven saved by the card holding exactly one more note than before (skeleton rows that
+  // share the note wrapper are waited out first).
+  async addNote(text: string): Promise<void> {
+    logger.info('Adding a note from the lead detail panel');
+    const baseline = await this.getNoteCount();
+    await this.click(this.notesCard().locator('textarea.notes-textarea'), 'notes textarea');
+    const editor = this.notesCard().getByRole('textbox', { name: 'Rich Text Editor, main' });
+    await editor.waitFor({ state: 'visible', timeout: config.timeouts.expect });
+    await editor.fill(text, { timeout: config.timeouts.expect });
+    await this.click(this.notesCard().getByText('Add', { exact: true }), 'add note');
+    await this.withSessionExpiryRecovery(() =>
+      expect(this.noteItems(), 'Note count after adding').toHaveCount(baseline + 1, {
+        timeout: config.timeouts.navigation,
+      })
+    );
+    const leadId = this.page.url().match(/\/leads\/details\/(\d+)/)?.[1];
+    // a note has no id of its own here: report it against the lead it sits on
+    reportCreatedRecord('note', leadId ? `on lead ${leadId}` : null, leadId ? `${config.appUrl}/sales/leads/details/${leadId}` : undefined);
+    logger.success('Note added');
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Create form: error summary and the duplicate "View Lead" link
+  // ──────────────────────────────────────────────────────────
+
+  // The summary at the bottom of the form shows ONE error at a time ("<Field label> <message>") with
+  // its position among all errors, e.g. "(1/1)". Confirmed live for a duplicate e-mail and for a
+  // too-long last name.
+  async assertFormErrorSummary(expectedMessage: string, totalErrors = 1): Promise<void> {
+    const summary = this.editModal().locator('.bottom-section .helptext-wrapper');
+    await this.withSessionExpiryRecovery(async () => {
+      await expect(summary.locator('p.help-text.error'), 'Form error summary text').toHaveText(expectedMessage, {
+        timeout: config.timeouts.expect,
+      });
+      await expect(summary, 'Form error summary count').toContainText(`(1/${totalErrors})`, {
+        timeout: config.timeouts.expect,
+      });
+    });
+    logger.success(`Form summary: "${expectedMessage}" (1/${totalErrors})`);
+  }
+
+  private readonly viewLeadLink = (): Locator =>
+    this.editModal().locator('a').filter({ hasText: 'View Lead' }).first();
+
+  // The link under a duplicate-e-mail error opens the Leads list filtered to that e-mail, in a new tab
+  async assertViewLeadLinkTargets(email: string): Promise<void> {
+    const link = this.viewLeadLink();
+    await expect(link).toBeVisible({ timeout: config.timeouts.expect });
+    await expect(link).toHaveAttribute(
+      'href',
+      `/sales/leads/list?emails=equal&emails=${encodeURIComponent(email)}`
+    );
+    await expect(link).toHaveAttribute('target', '_blank');
+  }
+
+  // Opens the "View Lead" link and returns the ids of the leads that list shows (empty while the
+  // search index has not caught up). The new tab is closed again.
+  async getLeadIdsListedByViewLeadLink(): Promise<number[]> {
+    const [listTab] = await Promise.all([
+      this.page.context().waitForEvent('page', { timeout: config.timeouts.expect }),
+      this.viewLeadLink().click(),
+    ]);
+    try {
+      // Evidence for the next failure: which request fills this list and what it answered (the e-mail filter may differ from the API search)
+      listTab.on('response', (res) => {
+        if (/\/v1\/search\/lead/.test(res.url()) && res.request().method() === 'POST') {
+          logger.info(`View Lead list request: POST ${res.url()} -> HTTP ${res.status()} body ${(res.request().postData() ?? '').slice(0, 300)}`);
+        }
+      });
+      await listTab.waitForLoadState('domcontentloaded');
+      await expect(listTab.locator('#totalRecords').first()).toBeVisible({ timeout: config.timeouts.navigation });
+      const checkboxIds = await listTab
+        .locator('.rt-tr[role="row"] input[id^="check_"]:not(#check_all)')
+        .evaluateAll((inputs) => inputs.map((input) => input.id));
+      return checkboxIds.map((id) => Number(id.replace('check_', '')));
+    } finally {
+      await listTab.close();
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Detail page: what a lead's access level shows
+  // ──────────────────────────────────────────────────────────
+
+  async assertEditButtonVisible(visible: boolean): Promise<void> {
+    await this.withSessionExpiryRecovery(() =>
+      visible
+        ? expect(this.editIconButton()).toBeVisible({ timeout: config.timeouts.expect })
+        : expect(this.editIconButton()).toHaveCount(0, { timeout: config.timeouts.expect })
+    );
   }
 }

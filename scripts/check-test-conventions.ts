@@ -99,6 +99,28 @@ function isTestRegistrationCall(node: ts.CallExpression): boolean {
   return false;
 }
 
+/** True when a call's arguments hold a details object with annotation { type: 'skip-reason', description: <non-empty> }. */
+function hasSkipReasonAnnotation(call: ts.CallExpression): boolean {
+  const isNonEmpty = (n: ts.Expression): boolean => (ts.isStringLiteralLike(n) ? n.text.trim().length > 0 : ts.isTemplateExpression(n) || ts.isIdentifier(n));
+  const annotationOk = (n: ts.Expression): boolean => {
+    if (ts.isArrayLiteralExpression(n)) return n.elements.some((e) => annotationOk(e));
+    if (!ts.isObjectLiteralExpression(n)) return false;
+    let type = false;
+    let description = false;
+    for (const p of n.properties) {
+      if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name))) continue;
+      if (p.name.text === 'type' && ts.isStringLiteralLike(p.initializer) && p.initializer.text === 'skip-reason') type = true;
+      if (p.name.text === 'description' && isNonEmpty(p.initializer)) description = true;
+    }
+    return type && description;
+  };
+  return call.arguments.slice(1).some(
+    (a) =>
+      ts.isObjectLiteralExpression(a) &&
+      a.properties.some((p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'annotation' && annotationOk(p.initializer))
+  );
+}
+
 function forEachDescendant(node: ts.Node, cb: (n: ts.Node) => void): void {
   cb(node);
   ts.forEachChild(node, (child) => forEachDescendant(child, cb));
@@ -148,6 +170,21 @@ function checkFile(
     const titleArg = node.arguments[0];
     if (!titleArg || !ts.isStringLiteralLike(titleArg)) return; // can't check a computed/dynamic title
     const title = titleArg.text;
+
+    // Rule 6: an unconditional test.skip('title', ...) / test.fixme('title', ...) must say why. Playwright reports no reason for
+    // this form (the reason lives only in a code comment), so the email's Skipped Tests section read "No reason given"
+    // (build #235). The details form puts it in the report: test.skip('title', { annotation: { type: 'skip-reason', description:
+    // '...' } }, async () => {...}). Checked with Playwright 1.60 (--list).
+    if (ts.isPropertyAccessExpression(node.expression) && (node.expression.name.text === 'skip' || node.expression.name.text === 'fixme')) {
+      if (!hasSkipReasonAnnotation(node)) {
+        violations.push({
+          rule: 'skip-without-reason',
+          file: relPath,
+          line: lineOf(sourceFile, node),
+          message: `${node.expression.name.text}("${title}") has no reason in the report — pass { annotation: { type: 'skip-reason', description: '<why, and what re-enables it>' } } as the second argument`,
+        });
+      }
+    }
 
     // Rule 1: every test must carry at least one @tag
     if (!/@\w+/.test(title)) {

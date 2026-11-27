@@ -47,6 +47,15 @@ function randomHolderId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
+// WHY a fixture timeout for the lock wait (2026-11-04, taskFieldLimits.rbac FFRTK9/FFRTK21 in the 2026-11-03 sandbox
+// run): the lock is taken in a test-scoped fixture, and by default fixture setup counts against the test's own
+// timeout. A test that hung while holding the lock (FFRTK6 and FFRTK16 each held it for their full 480 s) left the
+// next test of the file waiting for the lock for ~7.5 minutes, so it got only 32-41 s of its own 480 s budget and
+// "timed out" without having done anything. With 2 workers a test waits for at most ONE holder, which can legitimately
+// hold the lock for at most its own test timeout (480 s), so the wait gets that plus a margin as its own budget, and
+// the test then has its full test timeout. A wait beyond this fails with "while setting up formFieldLock".
+export const LOCK_WAIT_FIXTURE_TIMEOUT_MS = 600000;
+
 export interface FormFieldLock {
   /** Runs `fn()` while holding this entity's exclusive form-field-config lock. */
   withLock<T>(fn: () => Promise<T>): Promise<T>;
@@ -63,7 +72,9 @@ export interface FormFieldLock {
 // dependency on FormFieldsConfigPage at all — keeping it decoupled means a
 // future caller can key the lock however makes sense for its own file
 // layout without this factory needing to know about entity config shapes.
-export function createFormFieldLock(entityKey: string): FormFieldLock {
+export function createFormFieldLock(entityKey: string, options: { waitBudgetMs?: number } = {}): FormFieldLock {
+  // Default is the fixture's own budget; a shorter one exists only so the named wait failure can be proven offline.
+  const waitBudgetMs = options.waitBudgetMs ?? LOCK_WAIT_FIXTURE_TIMEOUT_MS;
   const LOCK_DIR = path.join(__dirname, '../../../.locks', config.env);
   const LOCK_PATH = path.join(LOCK_DIR, `${entityKey}-form-fields.lock`);
   const LOCK_MARKER_PATH = path.join(LOCK_PATH, 'holder.txt');
@@ -146,8 +157,30 @@ export function createFormFieldLock(entityKey: string): FormFieldLock {
     acquiredAtMs: number;
   }
 
+  // ADR 0016 (B2): the wait ends with a message naming the holder and how long it has held the lock, a little before
+  // the fixture's own timeout would end it with the anonymous "while setting up formFieldLock".
+  const LOCK_WAIT_NAMED_FAILURE_MARGIN_MS = 15000;
+  function describeLockHolder(): string {
+    let marker = 'marker unreadable';
+    try {
+      marker = fs.readFileSync(LOCK_MARKER_PATH, 'utf8').trim();
+    } catch {
+      /* the holder released between the failed acquire and this read */
+    }
+    const heartbeatAtMs = readLockHeartbeatAtMs();
+    const heartbeat = heartbeatAtMs === null ? 'no heartbeat recorded' : `last heartbeat ${Math.round((Date.now() - heartbeatAtMs) / 1000)}s ago`;
+    return `${marker} (${heartbeat})`;
+  }
+
   async function acquireLockInner(holderId: string, ticketId: string): Promise<LockAcquisition> {
+    const waitStartedAtMs = Date.now();
     while (true) {
+      if (Date.now() - waitStartedAtMs > waitBudgetMs - LOCK_WAIT_NAMED_FAILURE_MARGIN_MS) {
+        throw new Error(
+          `[formFieldLock:${entityKey}] ${holderId} waited ${Math.round((Date.now() - waitStartedAtMs) / 1000)}s for the lock and gave up; ` +
+            `current holder: ${describeLockHolder()}. The holder is another test still running (it keeps heartbeating), not a stale lock.`
+        );
+      }
       refreshTicket(ticketId);
       if (!isMyTicketAtFront(ticketId)) {
         await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
@@ -262,7 +295,7 @@ export function createFormFieldLock(entityKey: string): FormFieldLock {
           await use();
         });
       },
-      { auto: true, scope: 'test' },
+      { auto: true, scope: 'test', timeout: LOCK_WAIT_FIXTURE_TIMEOUT_MS },
     ],
   });
 

@@ -1,0 +1,72 @@
+{
+ "version": 1,
+ "ran": false,
+ "reason": "none",
+ "runId": "45630312674",
+ "runAttempt": 1,
+ "maxTests": 60,
+ "retries": 0,
+ "includeFlaky": false,
+ "candidates": 0,
+ "recovered": 0,
+ "stillFailing": 0,
+ "firstRun": {
+  "passed": 934,
+  "failed": 0,
+  "flaky": 8,
+  "skipped": 1,
+  "didNotRun": 0,
+  "total": 943
+ },
+ "afterRerun": {
+  "passed": 934,
+  "failed": 0,
+  "flaky": 8,
+  "skipped": 1,
+  "didNotRun": 0,
+  "total": 943
+ },
+ "rows": [],
+ "excluded": [
+  {
+   "file": "rbac/leads.rbac.spec.ts",
+   "title": "admin shares lead Task permission restricted user sees Tasks icon and can create task from lead detail",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "ui/leads/leads.spec.ts",
+   "title": "admin should change pipeline stage while updating a lead",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "rbac/meetings.rbac.spec.ts",
+   "title": "restricted user should reschedule their own meeting",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "title": "DB22 restricted user: create disposable dashboard, delete it, confirm gone after reload",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "rbac/dashboard.rbac.spec.ts",
+   "title": "DB23 restricted user: remove a dashlet, Cancel instead of Save, confirm restored",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "rbac/deals.rbac.spec.ts",
+   "title": "restricted user should auto-reveal a hidden field immediately after editing it, without re-toggling",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "ui/call-logs/call-logs.spec.ts",
+   "title": "admin should create a lead call log with outcome connected, verify duration enabled, add note during create, verify toaster and detail panel",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  },
+  {
+   "file": "ui/contacts/contacts.spec.ts",
+   "title": "admin should see owner field on contact detail page",
+   "reason": "flaky tests are not rerun (RERUN_INCLUDE_FLAKY off)"
+  }
+ ]
+}
