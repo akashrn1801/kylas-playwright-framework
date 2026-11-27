@@ -1,3 +1,4 @@
+import { dismissCtrlKAnnouncement } from '../utils/announcementPopup';
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { config, buildApiUrl } from '../../config/config';
 import { logger } from '../utils/logger';
@@ -349,6 +350,8 @@ export class AuthManager {
       logger.info(`Login successful for role: ${role}`);
 
       await this.dismissPopupIfPresent(page);
+      // 2026-11-27: Kylas's Ctrl K announcement shows a few seconds after login in every environment; dismissed before the state is saved so it carries it.
+      await dismissCtrlKAnnouncement(page, 8000);
 
       const stateFile = this.getStorageStateFile(role);
 
@@ -732,6 +735,8 @@ export class AuthManager {
       await page.locator('#loginBtn').click();
       await page.waitForURL(/sales\//, { timeout: 90000, waitUntil: 'domcontentloaded' });
       await this.dismissPopupIfPresent(page);
+      // 2026-11-27: Kylas's Ctrl K announcement shows a few seconds after login in every environment; dismissed before the state is saved so it carries it.
+      await dismissCtrlKAnnouncement(page, 8000);
     });
 
     await this.withFileLock(role, async () => {

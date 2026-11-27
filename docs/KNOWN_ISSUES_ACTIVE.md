@@ -3,7 +3,7 @@
 > **Purpose:** The only list of OPEN problems in this repo — one short entry each. Resolved history lives in [known-issues/](./known-issues/README.md); real Kylas product bugs are tracked outside this repo.
 > **Read when:** triaging a failure ("is this already known?"), picking up follow-up work, or closing/adding an issue at the end of a task (Definition of Done step 3).
 > **Size budget:** 30k chars (hard cap 60k)
-> **Last verified:** 2026-11-26 @ 3c48a02
+> **Last verified:** 2026-11-27 @ aad153e
 
 **Rules.** Open items only. Entry ≤ 8 lines: Status · Since · What · Evidence / next check · History link. IDs (`KI-nn`) are stable — never renumber. When an item is closed, move a ≤15-line summary to its topic file (template in [CONTRIBUTING_TESTS.md](./CONTRIBUTING_TESTS.md#size-policy)) and delete the entry here. Status: **open** (confirmed, not fixed) · **inconclusive** (investigated, no root cause; do not re-close without new evidence) · **unverified** (carried over, not re-checked against the repo on the date above).
 
@@ -45,6 +45,11 @@
 - **Proof (007005):** shard 5 picked contact "Shaun Jakubowski" at 13:38:05; shard 4's contacts.rbac:572 created it 13:37:17 and deleted it 13:38:11-13; the task POST got 400 `007005` "Contact not found". 007003 is the same for a lead (delete not seen in my logs).
 - **Fix:** `TasksPage.fillRelation` uses only run-owned records (`TaskRelationTargets`: one lead, deal, contact, company per account and worker, deleted by no test), found by name with a lookup watcher (leads/contacts by first name: the lookup queries `firstName:`).
 - **Same run:** the 429 pages came at the end of an all-worker stall (KI-71), not from extra retries (none logged). The Add dropdown now reloads once on the 429 page; missed saves name "NEVER SENT" / "SENT but NO ANSWER"; a missed contact update is checked before a second save. **Open:** a limiter change is unproven; the quotations list-layout 429 is not recovered.
+
+### KI-78 — Ctrl K "Keyboard shortcuts" announcement covers the page (QA, 2026-11-27)
+- **Status:** worked around in code, **verified on QA 2026-11-27** (9 create tests passed, `--workers=2 --retries=0`, "Dismissed the Ctrl K announcement pop-up" logged 9 times; stale-session case verified offline only) · **Since:** 2026-11-27 (dev smoke run 45807808557: 15 of 51 failed, "a modal or overlay is open over the page ('Do almost anything in Kylas with Ctrl K')")
+- **Probed live (QA, admin and restricted, fresh Chromium profile):** `div.shortcuts-intro[role=dialog]`; buttons Try it now / See all shortcuts / Maybe later / Shortcut settings; no X, no "don't show again". Shown on every load and navigation until "Maybe later"; that writes `kylas.keyboardShortcuts={"seen":[userId]}`, carried by `storageState`; a brand-new login shows it again (not server-side). Not known: whether staging/prod have it yet (login waits up to 8 s for it there).
+- **Fix:** `src/utils/announcementPopup.ts`; unknown overlays and the plan modal (KI-76) are untouched. Headless re-auth states carry no flag, so the in-page guard is the safety net.
 
 ### KI-77 — Billing usage has no refresh time, and live search totals differ from the billing counts (QA, 2026-11-26)
 - **Status:** open, observed on QA, not reported to Kylas · **Since:** 2026-11-26
