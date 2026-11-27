@@ -1,6 +1,7 @@
 import { config } from '../../config/config';
 import { Page, Locator, Request, Response, errors, expect, test } from '@playwright/test';
 import { logger } from '../utils/logger';
+import { dismissCtrlKAnnouncement } from '../utils/announcementPopup';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
@@ -119,6 +120,7 @@ export class BasePage {
   async navigateTo(url: string): Promise<void> {
     logger.info(`Navigating to: ${url}`);
     await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+    await dismissCtrlKAnnouncement(this.page);
     if (isPageRegisteredForRecovery(this.page) && (await isSessionExpiryPage(this.page))) {
       logger.warn(
         `Navigation to "${url}" landed on a signIn/login or Forbidden page — attempting one-time session recovery`
@@ -821,6 +823,8 @@ export class BasePage {
           // ADR 0016 (B1): only a timeout means "not there yet". Anything else (strict-mode violation, closed page
           // or context) cannot change by waiting and used to spin here until the budget ran out.
           if (!(error instanceof errors.TimeoutError)) throw error;
+          // The Ctrl K announcement (2026-11-27) is dismissed, not reported; one presence check, no waiting. Only that exact pop-up.
+          if (await dismissCtrlKAnnouncement(this.page)) continue;
           // The app-wide error screen and the rate-limit page are checked each slice; a "Something is broken" message
           // inside one widget is NOT a reason to give up on a control that lives elsewhere, so it is only named when the
           // wait has run out (below).
@@ -897,6 +901,8 @@ export class BasePage {
       // Without a timeout, waitFor inherits the test timeout (up to 600s) — the test
       // then hangs until Playwright teardown instead of failing with an actionable error.
       await this.waitForRendered(locator, description);
+      // One presence check, no waiting (2026-11-27): the Ctrl K pop-up can show seconds after load and would cover the target for the whole click timeout.
+      await dismissCtrlKAnnouncement(this.page);
       await locator.click({ timeout: 15000, force });
     } catch (error) {
       // WHY: mid-test session recovery (2026-07-09) — confirmed live and via
@@ -921,6 +927,10 @@ export class BasePage {
       // the moment a click ever failed while genuinely on that page's
       // expected signIn state. See isPageRegisteredForRecovery()'s own
       // comment for the full explanation.
+      if (await dismissCtrlKAnnouncement(this.page)) {
+        await locator.click({ timeout: 15000, force });
+        return;
+      }
       if (!isPageRegisteredForRecovery(this.page) || !(await isSessionExpiryPage(this.page))) {
         throw await this.explainAppErrorPage(description, error);
       }
