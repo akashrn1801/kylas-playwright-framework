@@ -46,6 +46,11 @@
 - **Fix:** `TasksPage.fillRelation` uses only run-owned records (`TaskRelationTargets`: one lead, deal, contact, company per account and worker, deleted by no test), found by name with a lookup watcher (leads/contacts by first name: the lookup queries `firstName:`).
 - **Same run:** the 429 pages came at the end of an all-worker stall (KI-71), not from extra retries (none logged). The Add dropdown now reloads once on the 429 page; missed saves name "NEVER SENT" / "SENT but NO ANSWER"; a missed contact update is checked before a second save. **Open:** a limiter change is unproven; the quotations list-layout 429 is not recovered.
 
+### KI-78 — Ctrl K "Keyboard shortcuts" announcement covers the page (QA, 2026-11-27)
+- **Status:** worked around in code, **verified on QA 2026-11-27** (9 create tests passed, `--workers=2 --retries=0`, "Dismissed the Ctrl K announcement pop-up" logged 9 times; stale-session case verified offline only) · **Since:** 2026-11-27 (dev smoke run 45807808557: 15 of 51 failed, "a modal or overlay is open over the page ('Do almost anything in Kylas with Ctrl K')")
+- **Probed live (QA, admin and restricted, fresh Chromium profile):** `div.shortcuts-intro[role=dialog]`; buttons Try it now / See all shortcuts / Maybe later / Shortcut settings; no X, no "don't show again". Shown on every load and navigation until "Maybe later"; that writes `kylas.keyboardShortcuts={"seen":[userId]}`, carried by `storageState`; a brand-new login shows it again (not server-side). Not known: whether staging/prod have it yet (login waits up to 8 s for it there).
+- **Fix:** `src/utils/announcementPopup.ts`; unknown overlays and the plan modal (KI-76) are untouched. Headless re-auth states carry no flag, so the in-page guard is the safety net.
+
 ### KI-77 — Billing usage has no refresh time, and live search totals differ from the billing counts (QA, 2026-11-26)
 - **Status:** open, observed on QA, not reported to Kylas · **Since:** 2026-11-26
 - **What:** `GET /v1/tenants/usage` `updatedAt` equals `renewalAt` (21 May 2027) on every read, so it is not a refresh time; the page's "Data shown until" shows today's date. Tasks, meetings, call logs and quotations: live search total = billing count; leads, deals, contacts, companies: 410, 1, 36, 40 lower (search index); notes 2,805 against 561.
