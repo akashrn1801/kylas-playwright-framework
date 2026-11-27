@@ -194,6 +194,18 @@ jobs:
             exit 1
           fi
           echo "Test count: $TEST_COUNT"
+          # WHY (2026-11-27, run 45942780971): a selective path target of ~450
+          # tests ran as ONE shard and hit the 3h limit; only the literal
+          # "--grep @regression" is sharded. A selective target above the
+          # threshold in escalate-selective-target.sh escalates to it, with
+          # the full formFields entity list (what detect-tests.sh's Rule 1
+          # writes), so the branch below treats it exactly like a core change.
+          ESCALATION=$(bash .github/scripts/escalate-selective-target.sh "$TARGET" "$TEST_COUNT")
+          if echo "$ESCALATION" | grep -q '^escalated=true$'; then
+            TARGET=$(echo "$ESCALATION" | grep '^target=' | cut -d'=' -f2-)
+            DETECT_FF_ENTITIES_JSON=$(echo "$ESCALATION" | grep '^formfields_entities_json=' | cut -d'=' -f2-)
+            echo "Escalated target: $TARGET | formFields entities: $DETECT_FF_ENTITIES_JSON"
+          fi
           # WHY this exact string match (2026-09-09, unchanged): "--grep
           # @regression" is the literal, only string detect-tests.sh's Rule 1
           # (core framework file changed) emits — the same escalation that
@@ -202,7 +214,9 @@ jobs:
           # paths) produces a materially smaller target that has never
           # approached the timeout ceiling AND always runs as a single shard
           # (SHARD_TOTAL=1 below) — so only THIS one branch can ever actually
-          # split tests across more than one GitHub Actions runner.
+          # split tests across more than one GitHub Actions runner. Since
+          # 2026-11-27 a selective target above the threshold in
+          # escalate-selective-target.sh is escalated to this branch above.
           #
           # WHY the formFields carve-out (scripts/plan-shards.ts /
           # run_formfields_track) has two entry points (2026-09-29, widened

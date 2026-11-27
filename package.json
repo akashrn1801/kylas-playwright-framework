@@ -55,6 +55,7 @@
     "check:scenarios": "ts-node scripts/check-scenarios.ts",
     "check:rerun": "ts-node scripts/check-rerun.ts && ts-node scripts/check-rerun-scenarios.ts",
     "check:formfields-matrix-sync": "ts-node scripts/check-formfields-matrix-sync.ts",
+    "check:selective-escalation": "ts-node scripts/check-selective-escalation.ts",
     "reset:field-config": "ts-node scripts/reset-field-config.ts",
     "format": "prettier --write .",
     "clean": "rm -rf test-results reports/ allure-results",
